@@ -1,0 +1,682 @@
+using System;
+using System.Collections.Generic;
+using ProtoBuf;
+using Vintagestory.API.Client;
+using Vintagestory.API.Server;
+using Vintagestory.API.MathTools;
+using Layout.Guide;
+
+namespace Layout.Network
+{
+    // ===============================================================================================
+    //  Layout networking — wire protocol (Module 4)
+    // ===============================================================================================
+    //
+    //  WIRE FORMAT — protobuf DTOs, not JSON.
+    //  Vintage Story serialises mod packets with protobuf-net, so every packet and every nested payload
+    //  here is a [ProtoContract] type that protobuf-net turns straight into compact binary. This is the
+    //  faster-on-both-ends choice the project settled on: a guide crosses the wire as a flat DTO and is
+    //  serialised exactly once. (The rejected alternative — embedding a Newtonsoft JSON string inside a
+    //  packet — would serialise twice and lean on reflection-heavy JSON on the server and every client.)
+    //
+    //  ENCODING CONVENTIONS (kept deliberately lean and version-stable):
+    //    • Enums travel as int (GuideShapeType / ProjectionMode / PlaneAxis already carry pinned values,
+    //      so the int is a stable contract). DTO enum-ish fields are int, cast at the boundary.
+    //    • A Guid travels as its 16-byte form (Guid.ToByteArray), the leanest unambiguous encoding.
+    //    • A position travels as three doubles, in the same world units a Vec3d holds. No Vec3d ever
+    //      goes on the wire directly — Vec3Dto pins the exact three fields we want.
+    //    • The full control-point list (phantoms included) is sent verbatim, mirroring how the guide is
+    //      persisted, so a client's mirror is an exact copy of the server's record. Phantom positions are
+    //      deterministic, so even before a client re-derives them the data is already correct.
+    //
+    //  PROTO MEMBER NUMBERS are append-only per type: never renumber or reuse a [ProtoMember] index once
+    //  shipped, exactly as the data-model enums are append-only. New fields take the next free number.
+    //
+    //  REGISTRATION ORDER IS A CONTRACT. A VS network channel identifies a message by its registration
+    //  order, so the server and client MUST register the same packet types in the same order or the IDs
+    //  desync and packets are mis-routed. Both handlers call the single RegisterMessageTypes() below to
+    //  make that impossible to get wrong.
+    // ===============================================================================================
+
+    // ----------------------------------------------------------------------------------------------
+    //  Shared constants + id helpers
+    // ----------------------------------------------------------------------------------------------
+
+    /// <summary>Channel name and protocol version, shared by both handlers.</summary>
+    public static class LayoutChannel
+    {
+        /// <summary>The network channel name. Must match on server and client.</summary>
+        public const string Name = "layout";
+
+        /// <summary>
+        /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
+        /// future client can detect a mismatch; informational for now (there is only one version).
+        /// </summary>
+        public const int ProtocolVersion = 1;
+    }
+
+    /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
+    internal static class NetIds
+    {
+        public static byte[] ToBytes(Guid id) => id.ToByteArray();
+
+        public static Guid ToGuid(byte[] bytes) =>
+            bytes != null && bytes.Length == 16 ? new Guid(bytes) : Guid.Empty;
+    }
+
+    // ----------------------------------------------------------------------------------------------
+    //  Payload DTOs (nested inside packets; never registered as channel messages themselves)
+    // ----------------------------------------------------------------------------------------------
+
+    /// <summary>A world position as three doubles — the only form a position takes on the wire.</summary>
+    [ProtoContract]
+    public class Vec3Dto
+    {
+        [ProtoMember(1)] public double X;
+        [ProtoMember(2)] public double Y;
+        [ProtoMember(3)] public double Z;
+
+        public Vec3Dto() { }
+
+        public Vec3Dto(double x, double y, double z) { X = x; Y = y; Z = z; }
+
+        /// <summary>Projects a Vec3d (null → origin). The source is read-only; nothing is aliased.</summary>
+        public static Vec3Dto From(Vec3d v) => v == null ? new Vec3Dto() : new Vec3Dto(v.X, v.Y, v.Z);
+
+        /// <summary>Builds a fresh, owned Vec3d from this DTO.</summary>
+        public Vec3d ToVec3d() => new Vec3d(X, Y, Z);
+    }
+
+    /// <summary>One control point: its position plus the four role flags. Phantoms are included.</summary>
+    [ProtoContract]
+    public class ControlPointDto
+    {
+        [ProtoMember(1)] public Vec3Dto Position;
+        [ProtoMember(2)] public bool IsLocked;
+        [ProtoMember(3)] public bool IsPhantom;
+        [ProtoMember(4)] public bool IsAnchor;
+        [ProtoMember(5)] public bool IsPrimary;
+
+        public ControlPointDto() { }
+
+        public static ControlPointDto From(ControlPoint cp)
+        {
+            if (cp == null) return new ControlPointDto { Position = new Vec3Dto() };
+            return new ControlPointDto
+            {
+                Position = Vec3Dto.From(cp.WorldPosition),
+                IsLocked = cp.IsLocked,
+                IsPhantom = cp.IsPhantom,
+                IsAnchor = cp.IsAnchor,
+                IsPrimary = cp.IsPrimary
+            };
+        }
+
+        /// <summary>Builds an owned ControlPoint (position deep-copied via the ControlPoint constructor).</summary>
+        public ControlPoint ToControlPoint()
+        {
+            Vec3d pos = Position != null ? Position.ToVec3d() : new Vec3d();
+            return new ControlPoint(pos, IsLocked, IsPhantom, IsAnchor, IsPrimary);
+        }
+    }
+
+    /// <summary>A whole guide record, flattened for the wire. Maps 1:1 to <see cref="GuideData"/>.</summary>
+    [ProtoContract]
+    public class GuideDataDto
+    {
+        [ProtoMember(1)] public byte[] IdBytes;
+        [ProtoMember(2)] public int ShapeType;
+        [ProtoMember(3)] public ControlPointDto[] ControlPoints;
+        [ProtoMember(4)] public int VoxelScale;
+        [ProtoMember(5)] public bool IsHidden;
+        [ProtoMember(6)] public int Projection;
+        [ProtoMember(7)] public int PlaneAxis;
+        [ProtoMember(8)] public int PlaneOffset;
+        [ProtoMember(9)] public bool IsFilled;
+        [ProtoMember(10)] public int DataVersion;
+        // Session-8 additive fields (protobuf: safe to append, absent = 0 = None / X→remapped below)
+        [ProtoMember(11)] public int Constraint;
+        [ProtoMember(12)] public int ShapePlaneAxis;
+
+        public GuideDataDto() { }
+
+        public static GuideDataDto From(GuideData g)
+        {
+            var points = g.ControlPoints ?? new List<ControlPoint>();
+            var dtoPoints = new ControlPointDto[points.Count];
+            for (int i = 0; i < points.Count; i++) dtoPoints[i] = ControlPointDto.From(points[i]);
+
+            return new GuideDataDto
+            {
+                IdBytes = NetIds.ToBytes(g.Id),
+                ShapeType = (int)g.ShapeType,
+                ControlPoints = dtoPoints,
+                VoxelScale = g.VoxelScale,
+                IsHidden = g.IsHidden,
+                Projection = (int)g.Projection,
+                PlaneAxis = (int)g.Plane.FlattenedAxis,
+                PlaneOffset = g.Plane.PlaneOffset,
+                IsFilled = g.IsFilled,
+                DataVersion = g.DataVersion,
+                Constraint = (int)g.Constraint,
+                ShapePlaneAxis = (int)g.ShapePlaneAxis
+            };
+        }
+
+        /// <summary>
+        /// Rebuilds an owned <see cref="GuideData"/> from the wire. The server-assigned Id is preserved
+        /// (so this does NOT go through <see cref="GuideData.Create"/>, which would mint a new Id). The
+        /// control-point list is rebuilt with fresh ControlPoint instances, ready for the renderer to adopt
+        /// by reference and re-derive phantoms against.
+        /// </summary>
+        public GuideData ToGuideData()
+        {
+            var dtoPoints = ControlPoints ?? Array.Empty<ControlPointDto>();
+            var points = new List<ControlPoint>(dtoPoints.Length);
+            for (int i = 0; i < dtoPoints.Length; i++)
+            {
+                ControlPointDto cp = dtoPoints[i];
+                points.Add(cp != null ? cp.ToControlPoint() : new ControlPoint());
+            }
+
+            return new GuideData
+            {
+                Id = NetIds.ToGuid(IdBytes),
+                ShapeType = (GuideShapeType)ShapeType,
+                ControlPoints = points,
+                VoxelScale = VoxelScale,
+                IsHidden = IsHidden,
+                Projection = (ProjectionMode)Projection,
+                Plane = new ProjectionPlane((PlaneAxis)PlaneAxis, PlaneOffset),
+                IsFilled = IsFilled,
+                DataVersion = DataVersion,
+                Constraint = (ShapeConstraint)Constraint,
+                ShapePlaneAxis = (PlaneAxis)ShapePlaneAxis
+            };
+        }
+    }
+
+    /// <summary>The render settings carried in a create request. Maps to <see cref="GuideRenderSettings"/>.</summary>
+    [ProtoContract]
+    public class RenderSettingsDto
+    {
+        [ProtoMember(1)] public int Scale;
+        [ProtoMember(2)] public int Mode;
+        [ProtoMember(3)] public int PlaneAxis;
+        [ProtoMember(4)] public int PlaneOffset;
+        [ProtoMember(5)] public bool Filled;
+
+        public RenderSettingsDto() { }
+
+        public static RenderSettingsDto From(GuideRenderSettings s) => new RenderSettingsDto
+        {
+            Scale = s.Scale,
+            Mode = (int)s.Mode,
+            PlaneAxis = (int)s.Plane.FlattenedAxis,
+            PlaneOffset = s.Plane.PlaneOffset,
+            Filled = s.Filled
+        };
+
+        public GuideRenderSettings ToRenderSettings() => new GuideRenderSettings(
+            Scale,
+            (ProjectionMode)Mode,
+            new ProjectionPlane((PlaneAxis)PlaneAxis, PlaneOffset),
+            Filled);
+    }
+
+    /// <summary>One element of a control-point update: which point (by index) moves, and to where.</summary>
+    [ProtoContract]
+    public class ControlPointEditDto
+    {
+        [ProtoMember(1)] public int Index;
+        [ProtoMember(2)] public Vec3Dto Position;
+
+        public ControlPointEditDto() { }
+
+        public ControlPointEditDto(int index, Vec3Dto position) { Index = index; Position = position; }
+    }
+
+    // ----------------------------------------------------------------------------------------------
+    //  Packets — server → client
+    // ----------------------------------------------------------------------------------------------
+
+    /// <summary>S→C. The full world state sent to a player on join: every guide plus the active caps.</summary>
+    [ProtoContract]
+    public class GuideBulkSyncPacket
+    {
+        [ProtoMember(1)] public GuideDataDto[] Guides;
+        [ProtoMember(2)] public int PerGuideVoxelCap;
+        [ProtoMember(3)] public int TotalVoxelCap;
+        [ProtoMember(4)] public int ProtocolVersion;
+
+        public GuideBulkSyncPacket() { }
+
+        public GuideBulkSyncPacket(GuideDataDto[] guides, int perGuideVoxelCap, int totalVoxelCap)
+        {
+            Guides = guides;
+            PerGuideVoxelCap = perGuideVoxelCap;
+            TotalVoxelCap = totalVoxelCap;
+            ProtocolVersion = LayoutChannel.ProtocolVersion;
+        }
+    }
+
+    /// <summary>
+    /// S→C. A guide's full current state. Sent on create, as the generic broadcast after an undo/redo,
+    /// and as a corrective resync. The client treats it as an upsert (add or replace by Id).
+    /// </summary>
+    [ProtoContract]
+    public class GuideCreatePacket
+    {
+        [ProtoMember(1)] public GuideDataDto Guide;
+
+        public GuideCreatePacket() { }
+
+        public GuideCreatePacket(GuideDataDto guide) { Guide = guide; }
+    }
+
+    /// <summary>S→C. The authoritative lock state of a guide: the holder UID, or null/empty when free.</summary>
+    [ProtoContract]
+    public class GuideLockStatePacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public string HolderUid;
+
+        public GuideLockStatePacket() { }
+
+        public GuideLockStatePacket(Guid guideId, string holderUid)
+        {
+            GuideIdBytes = NetIds.ToBytes(guideId);
+            HolderUid = holderUid;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
+    /// <summary>S→C. Another player has placed a draft start anchor; render it as a green dot.</summary>
+    [ProtoContract]
+    public class DraftAnchorBroadcastPacket
+    {
+        [ProtoMember(1)] public string PlayerUid;
+        [ProtoMember(2)] public Vec3Dto Start;
+
+        public DraftAnchorBroadcastPacket() { }
+
+        public DraftAnchorBroadcastPacket(string playerUid, Vec3Dto start) { PlayerUid = playerUid; Start = start; }
+    }
+
+    /// <summary>S→C. A player's draft anchor is gone (completed, cancelled, or they disconnected).</summary>
+    [ProtoContract]
+    public class DraftAnchorRemovePacket
+    {
+        [ProtoMember(1)] public string PlayerUid;
+
+        public DraftAnchorRemovePacket() { }
+
+        public DraftAnchorRemovePacket(string playerUid) { PlayerUid = playerUid; }
+    }
+
+    /// <summary>S→C. A mutation the player attempted would exceed a voxel cap; here are the figures.</summary>
+    [ProtoContract]
+    public class VoxelCapWarningPacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public int CurrentCount;
+        [ProtoMember(3)] public int Cap;
+
+        public VoxelCapWarningPacket() { }
+
+        public VoxelCapWarningPacket(Guid guideId, int currentCount, int cap)
+        {
+            GuideIdBytes = NetIds.ToBytes(guideId);
+            CurrentCount = currentCount;
+            Cap = cap;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
+    // ----------------------------------------------------------------------------------------------
+    //  Packets — client → server
+    // ----------------------------------------------------------------------------------------------
+
+    /// <summary>C→S. The second click of a placement: two foot points + settings. The server builds the guide.</summary>
+    [ProtoContract]
+    public class GuideCreateRequestPacket
+    {
+        [ProtoMember(1)] public Vec3Dto Start;
+        [ProtoMember(2)] public Vec3Dto End;
+        [ProtoMember(3)] public RenderSettingsDto Settings;
+        // Session-8 additive: which primitive/constraint to build, and the intrinsic plane for the
+        // ellipse family (from the first click's block face). Absent = 0 = Arch / None / X→see server.
+        [ProtoMember(4)] public int ShapeType;
+        [ProtoMember(5)] public int Constraint;
+        [ProtoMember(6)] public int ShapePlaneAxis;
+
+        public GuideCreateRequestPacket() { }
+
+        public GuideCreateRequestPacket(Vec3Dto start, Vec3Dto end, RenderSettingsDto settings,
+            int shapeType = 0, int constraint = 0, int shapePlaneAxis = 0)
+        {
+            Start = start;
+            End = end;
+            Settings = settings;
+            ShapeType = shapeType;
+            Constraint = constraint;
+            ShapePlaneAxis = shapePlaneAxis;
+        }
+    }
+
+    /// <summary>C→S. Request the edit lock on a guide.</summary>
+    [ProtoContract]
+    public class GuideGrabPacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+
+        public GuideGrabPacket() { }
+
+        public GuideGrabPacket(Guid guideId) { GuideIdBytes = NetIds.ToBytes(guideId); }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
+    /// <summary>C→S. Release the edit lock on a guide (also the commit point for a drag's undo entry).</summary>
+    [ProtoContract]
+    public class GuideReleasePacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+
+        public GuideReleasePacket() { }
+
+        public GuideReleasePacket(Guid guideId) { GuideIdBytes = NetIds.ToBytes(guideId); }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
+    /// <summary>
+    /// C→S. Cancel (rather than commit) the sender's in-progress grab on this guide — the Session-8
+    /// right-click-cancels contract. The server restores every dragged point to its pre-drag origin, or,
+    /// if the grab began as a body insert, REMOVES the inserted point entirely (insert + grab were one
+    /// gesture, so cancel undoes the whole gesture); either way no undo command is recorded, the drag
+    /// session is discarded, and the lock is released. The server knows which case applies from its own
+    /// drag-session bookkeeping — the client sends nothing but the guide id.
+    /// </summary>
+    [ProtoContract]
+    public class GuideCancelGrabPacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+
+        public GuideCancelGrabPacket() { }
+
+        public GuideCancelGrabPacket(Guid guideId) { GuideIdBytes = NetIds.ToBytes(guideId); }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
+    /// <summary>C→S. The local player's draft start anchor (broadcast to others as a dot).</summary>
+    [ProtoContract]
+    public class DraftStartPacket
+    {
+        [ProtoMember(1)] public Vec3Dto Start;
+        [ProtoMember(2)] public RenderSettingsDto Settings;
+
+        public DraftStartPacket() { }
+
+        public DraftStartPacket(Vec3Dto start, RenderSettingsDto settings) { Start = start; Settings = settings; }
+    }
+
+    /// <summary>C→S. Cancel the local player's draft (player implied by the connection).</summary>
+    [ProtoContract]
+    public class DraftCancelPacket
+    {
+        public DraftCancelPacket() { }
+    }
+
+    /// <summary>C→S. Undo the requesting player's most recent action (player implied).</summary>
+    [ProtoContract]
+    public class UndoRequestPacket
+    {
+        public UndoRequestPacket() { }
+    }
+
+    /// <summary>C→S. Redo the requesting player's most recently undone action (player implied).</summary>
+    [ProtoContract]
+    public class RedoRequestPacket
+    {
+        public RedoRequestPacket() { }
+    }
+
+    // ----------------------------------------------------------------------------------------------
+    //  Packets — bidirectional (C→S as a request, S→C as the authoritative broadcast)
+    // ----------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Both directions. C→S: the points the lock-holder is moving. S→C: the same edits, now authoritative,
+    /// for every client to apply. The whole drag coalesces into one undo entry on release (see the server
+    /// handler), so live updates carry no command of their own.
+    /// </summary>
+    [ProtoContract]
+    public class GuideUpdatePacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public ControlPointEditDto[] Edits;
+
+        public GuideUpdatePacket() { }
+
+        public GuideUpdatePacket(Guid guideId, ControlPointEditDto[] edits)
+        {
+            GuideIdBytes = NetIds.ToBytes(guideId);
+            Edits = edits;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
+    /// <summary>
+    /// Both directions. C→S: insert a body point at the clicked position (the server derives the curve
+    /// parameter and the landing index). S→C: the authoritative landing index + position for clients to
+    /// insert. Index is unused on the C→S leg (server computes it).
+    /// </summary>
+    [ProtoContract]
+    public class GuideInsertPointPacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public int Index;
+        [ProtoMember(3)] public Vec3Dto Position;
+
+        /// <summary>
+        /// Session-8 (additive field): when true this is a LOCK-IN-PLACE insert — the server snaps the
+        /// position to the curve, creates the point born-locked, and does NOT retain the edit lock (no
+        /// grab follows). When false (the default, and the meaning of every pre-existing packet): the
+        /// classic body insert that is itself the start of a grab.
+        /// </summary>
+        [ProtoMember(4)] public bool Locked;
+
+        public GuideInsertPointPacket() { }
+
+        public GuideInsertPointPacket(Guid guideId, int index, Vec3Dto position, bool locked = false)
+        {
+            GuideIdBytes = NetIds.ToBytes(guideId);
+            Index = index;
+            Position = position;
+            Locked = locked;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
+    /// <summary>Both directions. C→S: dispel a guide. S→C: a guide was removed; drop it.</summary>
+    [ProtoContract]
+    public class GuideDeletePacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+
+        public GuideDeletePacket() { }
+
+        public GuideDeletePacket(Guid guideId) { GuideIdBytes = NetIds.ToBytes(guideId); }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
+    /// <summary>Both directions. Toggle a guide's hidden flag.</summary>
+    [ProtoContract]
+    public class GuideHidePacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public bool Hidden;
+
+        public GuideHidePacket() { }
+
+        public GuideHidePacket(Guid guideId, bool hidden)
+        {
+            GuideIdBytes = NetIds.ToBytes(guideId);
+            Hidden = hidden;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
+    /// <summary>Both directions. Set a control point's locked-constraint flag.</summary>
+    [ProtoContract]
+    public class GuideLockPointPacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public int Index;
+        [ProtoMember(3)] public bool Locked;
+
+        public GuideLockPointPacket() { }
+
+        public GuideLockPointPacket(Guid guideId, int index, bool locked)
+        {
+            GuideIdBytes = NetIds.ToBytes(guideId);
+            Index = index;
+            Locked = locked;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
+    /// <summary>Both directions. Change a guide's voxel scale.</summary>
+    [ProtoContract]
+    public class GuideRescalePacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public int Scale;
+
+        public GuideRescalePacket() { }
+
+        public GuideRescalePacket(Guid guideId, int scale)
+        {
+            GuideIdBytes = NetIds.ToBytes(guideId);
+            Scale = scale;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
+    /// <summary>Both directions. Set a guide's projection mode and plane together.</summary>
+    [ProtoContract]
+    public class GuideSetProjectionPacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public int Mode;
+        [ProtoMember(3)] public int PlaneAxis;
+        [ProtoMember(4)] public int PlaneOffset;
+
+        public GuideSetProjectionPacket() { }
+
+        public GuideSetProjectionPacket(Guid guideId, int mode, int planeAxis, int planeOffset)
+        {
+            GuideIdBytes = NetIds.ToBytes(guideId);
+            Mode = mode;
+            PlaneAxis = planeAxis;
+            PlaneOffset = planeOffset;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+
+        public ProjectionPlane ResolvePlane() => new ProjectionPlane((PlaneAxis)PlaneAxis, PlaneOffset);
+    }
+
+    /// <summary>Both directions. Toggle a guide's filled flag (hollow vs filled).</summary>
+    [ProtoContract]
+    public class GuideSetFilledPacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public bool Filled;
+
+        public GuideSetFilledPacket() { }
+
+        public GuideSetFilledPacket(Guid guideId, bool filled)
+        {
+            GuideIdBytes = NetIds.ToBytes(guideId);
+            Filled = filled;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
+    // ----------------------------------------------------------------------------------------------
+    //  Registration — the single source of truth for type order on BOTH sides
+    // ----------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Registers every Layout packet type on a channel, in one fixed order. Both the server and the client
+    /// handler call this on their channel so the message-id assignment is identical on both ends. A side
+    /// only sets handlers for the packets it receives, but BOTH sides must register the full set here, or
+    /// the per-message ids would not line up. APPEND new packet types at the end only — never reorder.
+    /// </summary>
+    public static class LayoutPackets
+    {
+        // Overload resolution sends each handler to the right one: the server handler holds an
+        // IServerNetworkChannel, the client handler an IClientNetworkChannel. The two bodies MUST register
+        // the same types in the same order (the body is generated from RegistrationOrder() so they cannot
+        // drift). The non-generic RegisterMessageType(Type) overload is used so the single ordered list
+        // below is the only source of truth.
+
+        /// <summary>Server-side registration. Call from ServerNetworkHandler with its channel.</summary>
+        public static void RegisterMessageTypes(IServerNetworkChannel channel)
+        {
+            foreach (Type t in RegistrationOrder()) channel.RegisterMessageType(t);
+        }
+
+        /// <summary>Client-side registration. Call from ClientNetworkHandler with its channel.</summary>
+        public static void RegisterMessageTypes(IClientNetworkChannel channel)
+        {
+            foreach (Type t in RegistrationOrder()) channel.RegisterMessageType(t);
+        }
+
+        /// <summary>
+        /// The one fixed packet order, shared by both sides so message ids line up. APPEND new packet types
+        /// at the end only — never reorder or remove, exactly like the pinned enum values.
+        /// </summary>
+        private static Type[] RegistrationOrder() => new[]
+        {
+            // server → client
+            typeof(GuideBulkSyncPacket),
+            typeof(GuideCreatePacket),
+            typeof(GuideLockStatePacket),
+            typeof(DraftAnchorBroadcastPacket),
+            typeof(DraftAnchorRemovePacket),
+            typeof(VoxelCapWarningPacket),
+            // client → server
+            typeof(GuideCreateRequestPacket),
+            typeof(GuideGrabPacket),
+            typeof(GuideReleasePacket),
+            typeof(DraftStartPacket),
+            typeof(DraftCancelPacket),
+            typeof(UndoRequestPacket),
+            typeof(RedoRequestPacket),
+            // bidirectional
+            typeof(GuideUpdatePacket),
+            typeof(GuideInsertPointPacket),
+            typeof(GuideDeletePacket),
+            typeof(GuideHidePacket),
+            typeof(GuideLockPointPacket),
+            typeof(GuideRescalePacket),
+            typeof(GuideSetProjectionPacket),
+            typeof(GuideSetFilledPacket),
+            // Session-8 additions (append-only, per the rule above)
+            typeof(GuideCancelGrabPacket)
+        };
+    }
+}

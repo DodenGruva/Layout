@@ -1,0 +1,74 @@
+using System.Collections.Generic;
+using Vintagestory.API.MathTools;
+using Layout.Guide;
+
+namespace Layout.Shapes
+{
+    /// <summary>
+    /// The single construction point for shapes (Session 8) — every `new ArchShape(...)` call site in
+    /// GuideManager and GuideRenderer routes through here now that there is more than one primitive, so
+    /// adding a shape touches exactly this file plus the shape itself. Unknown/legacy type values fall
+    /// back to the arch (forward-compatible with saves from newer versions, per the pinned-enum rule).
+    /// </summary>
+    public static class ShapeFactory
+    {
+        /// <summary>Builds a brand-new shape from the two draft clicks.</summary>
+        public static IGuideShape Create(
+            GuideShapeType type, ShapeConstraint constraint, PlaneAxis shapePlaneAxis, Vec3d start, Vec3d end)
+        {
+            switch (type)
+            {
+                case GuideShapeType.Ellipse:
+                    return new EllipseShape(start, end, shapePlaneAxis, constraint);
+                case GuideShapeType.Line:
+                    return new LineShape(start, end);
+                case GuideShapeType.Triangle:
+                    return new TriangleShape(start, end, shapePlaneAxis, constraint);
+                case GuideShapeType.Rectangle:
+                    return new RectangleShape(start, end, shapePlaneAxis, constraint);
+                default:
+                    return new ArchShape(start, end, constraint: constraint);
+            }
+        }
+
+        /// <summary>
+        /// Rebuilds a shape as a behavioural view over an EXISTING list (load / restore / mirror path).
+        /// The list is adopted by reference — the GuideData↔shape shared-list binding, unchanged.
+        /// </summary>
+        public static IGuideShape Adopt(GuideData g)
+        {
+            switch (g.ShapeType)
+            {
+                case GuideShapeType.Ellipse:
+                    return new EllipseShape(g.ControlPoints, g.ShapePlaneAxis, g.Constraint);
+                case GuideShapeType.Line:
+                    return new LineShape(g.ControlPoints);
+                case GuideShapeType.Triangle:
+                    return new TriangleShape(g.ControlPoints, g.ShapePlaneAxis, g.Constraint);
+                case GuideShapeType.Rectangle:
+                    return new RectangleShape(g.ControlPoints, g.ShapePlaneAxis, g.Constraint);
+                default:
+                    return new ArchShape(g.ControlPoints, constraint: g.Constraint);
+            }
+        }
+
+        /// <summary>Adopt for transient lists that have no GuideData (the renderer's draft ghost).</summary>
+        public static IGuideShape Adopt(
+            GuideShapeType type, ShapeConstraint constraint, PlaneAxis shapePlaneAxis, List<ControlPoint> points)
+        {
+            switch (type)
+            {
+                case GuideShapeType.Ellipse:
+                    return new EllipseShape(points, shapePlaneAxis, constraint);
+                case GuideShapeType.Line:
+                    return new LineShape(points);
+                case GuideShapeType.Triangle:
+                    return new TriangleShape(points, shapePlaneAxis, constraint);
+                case GuideShapeType.Rectangle:
+                    return new RectangleShape(points, shapePlaneAxis, constraint);
+                default:
+                    return new ArchShape(points, constraint: constraint);
+            }
+        }
+    }
+}

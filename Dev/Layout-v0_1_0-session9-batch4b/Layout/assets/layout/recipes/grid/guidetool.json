@@ -1,0 +1,11 @@
+{
+  "ingredientPattern": "SSS,NNN,SSS",
+  "ingredients": {
+    "S": { "type": "item", "code": "game:stick" },
+    "N": { "type": "item", "code": "game:nugget-*" }
+  },
+  "width": 3,
+  "height": 3,
+  "shapeless": false,
+  "output": { "type": "item", "code": "guidetool" }
+}
