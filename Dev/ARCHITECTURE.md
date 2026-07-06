@@ -1,15 +1,20 @@
-# Layout — Architecture Document (v2.6)
+# Layout — Architecture Document (v2.7)
 
-**Supersedes v2.5 — Session-9 delta.** v2.5 consolidated five revisions into the **Settled Decisions
-Register** below. v2.6 folds in **Session 9**: the extended shape catalog (line, triangle ×3,
-rectangle/square), the **Divisions** visual overlay, and the **slave-regime** rework of soft-point flow. The
-register and flows below are updated in place; the one-paragraph Session-9 changelog directly under this
-header is the quick delta.
+**Supersedes v2.6 — Session-10 delta.** v2.5 consolidated five revisions into the **Settled Decisions
+Register** below; v2.6 folded in **Session 9** (extended shape catalog, Divisions overlay, slave-regime
+flow). v2.7 folds in **Session 10**: the **icon-tile GUI** (custom Cairo glyphs, native-style scale icons,
+compact square tiles), the **B-S10-1 fix** (surface-guide reload shift — unloaded-chunk-aware air-side
+probe), the **divisions scroll-wheel** on the game's native number input, a **third tool mode — Edit**
+(the setting rows act on the selected guide, replacing the appended per-guide section), and **paired
+division markers** on off-cell boundaries. The register and flows below are updated in place; the changelogs
+under this header are the quick deltas.
 
 > **Fidelity note (v2.6).** The Session-9 additions were reconstructed from the working conversation during
-> the Claude Code migration, not regenerated from source. Identifiers introduced by Session 9 (new class /
-> packet / enum-member names, DataVersion) should be confirmed against the code; they are also tagged in
-> `PROJECT_STATUS.md` / `TODO.md` / `SESSION_9.md` with **⚠ verify**. The design decisions are reliable.
+> the Claude Code migration, not regenerated from source. **Verification pass completed 2026-07-05:** every
+> Session-9 identifier (new class / packet / enum-member names, DataVersion, file count) was checked against
+> the code on disk and confirmed accurate — the reconstruction held up. The former **⚠ verify** tags have
+> been resolved in place here and in `PROJECT_STATUS.md` / `TODO.md` / `SESSION_9.md`. The one stale item was
+> this document's own file count and shape-catalog snippets (§1/§2), corrected below.
 
 **Where the project stands:** Layout v0.1.x is a built, playtested mod **deployed to real-played game worlds**
 (through Session 9). All seven modules, the Session-8 capability wave, and the Session-9 catalog/divisions/
@@ -19,13 +24,41 @@ the targeted voxel is often not the one locked and the guide still shifts; it is
 
 ---
 
+## Changelog — v2.6 → v2.7 (Session 10; full record in `SESSION_10.md`)
+
+- **Icon-tile GUI:** every option row is now compact SQUARE icon tiles (42 px) — new
+  **`UI/LayoutToolIcons.cs`** draws Cairo glyphs registered in `capi.Gui.Icons.CustomIcons`; stock
+  `GuiElementToggleButton`s render them, so the exclusive-toggle plumbing is unchanged. Hover shows the
+  option name. Delete-mode greying = native `Enabled=false`. New reference: `Lib\cairo-sharp.dll`.
+- **Scale icons copy the game's native scheme:** an N×N grid of squares where **N is the voxel count**
+  (1×1 smallest … 16×16 = a full block, drawn as ONE solid square filling the button); 4×4+ run
+  edge-to-edge. Names are voxel counts, not fractions.
+- **B-S10-1 FIXED (playtest-confirmed):** surface guides no longer shift behind block faces on reload —
+  the air-side probe detects unloaded chunks and a 500 ms re-probe tick rebuilds once the area loads
+  (see the Rendering register entry).
+- **Divisions scroll-wheel (deferred Session-9 TODO) DONE (playtest-confirmed):** dropdown removed; the
+  field is the native `GuiElementNumberInput` (built-in wheel + spinner buttons, `IntMode`, ±1/notch). The
+  first attempt — a plain-text-field + dialog wheel override — failed (text inputs have no native wheel
+  handler). **0.1.13** floors it at 0: the number input has no min, so `OnDivisionsTyped` snaps the display
+  back on clamp (never shows negative or over-`MaxDivisions`).
+- **Third tool mode — Edit (0.1.13):** `ToolMode` is now `Create · Edit · Delete`. In Edit the main setting
+  rows act on the SELECTED guide (network senders) instead of the tool defaults, so per-guide editing no
+  longer expands the panel with a separate section. Edit clicks **select only** (no reshaping); geometry
+  editing stays in Create. See the Interaction-model register entry.
+- **Division markers pair on off-cell boundaries (0.1.13):** `ShapeGeometry.ClaimMarkerPaired` claims the two
+  near-tied cells when a boundary lands between voxels — the arch apex's even-span treatment, generalised.
+- **Process:** every revision bumps `modinfo.json` and ships as a new `Layout<version>.zip` (0.1.10 → 0.1.11
+  → 0.1.12 → 0.1.13 this session); older zips are never overwritten.
+
+---
+
 ## Changelog — v2.5 → v2.6 (Session 9)
 
 - **Shape catalog extended (F1 first wave):** **Line** (two anchors, no fill), **Triangle** (two base
   anchors + a born, draggable apex; free = scalene) with **Right / Equilateral / Isosceles** apex-derivation
   constraints, and **Rectangle** (two diagonal corners stored, other two derived) with the **Square**
   constraint. `GuideShapeType` and `ShapeConstraint` extended (pinned, append-only). New shared
-  **`ShapeGeometry`** helper (planar frame + marker-claim). **DataVersion 4 → 5.** ⚠ verify identifiers.
+  **`ShapeGeometry`** helper (planar frame + marker-claim). **DataVersion 4 → 5.** *(identifiers verified.)*
 - **Body-click policy generalized:** only the **arch (free spline) family** takes body inserts; every other
   parametric shape (ellipse, line, triangle, rectangle) maps a body click to the **nearest handle**
   (left = grab, right = lock-toggle).
@@ -33,7 +66,7 @@ the targeted voxel is often not the one locked and the guide still shifts; it is
   arc-length boundaries (**magenta**, `VoxelRenderType.Division`), computed **renderer-side**
   (`DivisionMarks.Apply`) as a pure recolor that never touches geometry, counts, or caps.
   `GuideData.Divisions`; additive DTO fields; `GuideSetDivisionsPacket`; `SetDivisionsCommand`;
-  `GuideManager.SetDivisions` (clamp + persist, no cap check); `MaxDivisions = 256`. ⚠ verify identifiers.
+  `GuideManager.SetDivisions` (clamp + persist, no cap check); `MaxDivisions = 256`. *(identifiers verified.)*
 - **Soft-point flow → slave-regime (supersedes the v2.5 proportional-only model):** an **interior grab**
   (held point unlocked, non-anchor) slaves every other unlocked point **onto the defining curve at its
   station with zero offset** — the apex genuinely contributes no pull; a **structural grab** (anchor or
@@ -56,7 +89,7 @@ server-side with server-authoritative networking. A guide is only *referenced of
 never bound to it, and is visible-but-untargetable when the tool isn't held, so it never interferes with the
 blocks underneath.
 
-The tool is a held item with an F-key **tile menu** (Create/Delete mode, the shape picker, voxel scale
+The tool is a held item with an F-key **tile menu** (Create/Edit/Delete mode, the shape picker, voxel scale
 1×1×1–16×16×16 defaulting to the finest to match chisel resolution, projection, plane, fill); all interaction
 uses first-person clicks and crosshair targeting rather than transform gizmos. The **shape catalog** is
 arch · half-circle · circle · ellipse, built on the primitives+constraints model (a half-circle is an arch
@@ -84,11 +117,16 @@ The distillate of five design revisions and two playtest cycles. Each entry is a
 reason it won. Reversing any of these needs an explicit call from the human, not a fresh session's instinct.
 
 ### Interaction model
-- **Two modes only: Create | Delete.** Left-click priority chain: release grab → second foot (a draft
-  outranks guide targeting) → precise point grab → body insert+grab in one gesture → first anchor.
-  Right-click is the universal cancel (fresh insert-born point removed; pre-existing point snaps back),
-  draft discard, idle point lock-toggle, idle body **lock-in-place insert** (point born locked on the curve;
-  two undo steps). Replaced the earlier Create/Edit/Lock/Dispel scheme — modes fought the flow.
+- **Three modes: Create | Edit | Delete** (Session 10; was two). **Create** owns ALL geometry — left-click
+  priority chain: release grab → second foot (a draft outranks guide targeting) → precise point grab → body
+  insert+grab in one gesture → first anchor; right-click is the universal cancel / draft discard / idle point
+  lock-toggle / idle body **lock-in-place insert** (point born locked on the curve; two undo steps).
+  **Edit** is settings-only: left-click **selects** the guide under the crosshair (empty click deselects) and
+  the GUI's setting rows then act on that selected guide — **no grab/insert/lock**, so a select-click can
+  never reshape. **Delete** dispels (left-click). This restored an Edit mode (the earlier Create/Edit/Lock/
+  Dispel scheme was collapsed to two in Session 8 because modes fought the flow; the new Edit adds no geometry
+  verbs, so it doesn't). Settled reason: per-guide editing via the buttons needed a home that didn't expand
+  the panel with a separate section.
 - **No grab snap radius.** Precision is the tool's ethos; a near-miss on the body inserts (that's intent,
   not error), and the accepted miss-case is a stray anchor + right-click.
 - **Targeting tests the sampled curve, not control-point chords** (per-guide fingerprint-cached polylines).
@@ -119,8 +157,8 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 
 ### Data & wire
 - **Pinned, append-only enums** everywhere a value crosses wire or disk; **default-driven migration** via
-  `DataVersion` (currently **5** ⚠ verify: v5 added `Divisions`; v4 added `Constraint`, `ShapePlaneAxis`;
-  v3 added `CreatorUid`).
+  `DataVersion` (currently **5**, verified: v5 added `Divisions`; v4 added `Constraint`, `ShapePlaneAxis`;
+  v3 added `CreatorUid`; v2 added `Projection`/`Plane`/`IsFilled`).
 - **Protobuf DTOs are the wire format; JSON is the save format** — never mixed. Packet registration is one
   fixed shared order, **append-only**. POCOs are mapped to DTOs, never sent raw.
 - **The index seam:** only control-point indices cross the network/undo boundary
@@ -142,7 +180,7 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   triangle's apex and the rectangle's far corners are **born/derived** from the two clicks, so no shape needs
   a 3-click draft. **Constraints are derivation rules:** the triangle apex slides (right → perpendicular at
   first click; isosceles → base bisector) or is fully derived (equilateral), and the rectangle's derived
-  corners track the diagonal (square → dominant component). ⚠ verify against the shape files.
+  corners track the diagonal (square → dominant component). *(verified against the shape files.)*
 - **Break gestures (v1):** equilateral-triangle apex-drag breaks to a free triangle, and circle minor-handle
   drag breaks to an ellipse (the absorb-or-break pattern). **Right / isosceles / square have no break
   gesture** — their constrained drags always absorb; they live as separate catalog tiles.
@@ -166,10 +204,16 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   full-bright; a **real white texture** (generated 2×2, asset fallback — id 0 samples garbage); the full
   pos+**uv**+rgba vertex layout with uv (0,0). Each element was a genuine independent playtest bug.
 - **Single-voxel nearest-claim markers** (anchors/apex/locked/grabbed-White), precedence Locked > Primary >
-  Anchor; the apex claims **2 voxels on even spans** (a lone voxel reads off-center by half a cell).
+  Anchor > Division; the apex claims **2 voxels on even spans** (a lone voxel reads off-center by half a
+  cell). **Division marks share that even-span pairing** (Session 10, `ShapeGeometry.ClaimMarkerPaired`): a
+  boundary landing between two voxels claims both, so the equal parts read even; boundaries on a cell centre
+  stay single.
 - **Surface guides render as paper-thin slabs (0.01)** hugging the wall face on the **air side** (world
   solidity probe; majority fallback) with a **plane-axis-only** inset; volumetric anti-z-fight via a
-  whole-mesh 0.003-block camera nudge per frame.
+  whole-mesh 0.003-block camera nudge per frame. **The air-side probe tolerates the world-load race
+  (Session 10):** if a probed cell's chunk isn't loaded yet, the guide's side is *provisional* and a
+  low-frequency re-probe tick rebuilds it once the neighbourhood loads — otherwise a guide meshed before its
+  blocks arrived sank behind the face on reload (B-S10-1).
 - **Settled guides always render at their true scale**; `ChooseRenderScale` coarsening (8,000-voxel cap) is
   a **draft-ghost-only** courtesy — it once leaked into placed guides and permanently degraded them.
 - **Leaving Surface bakes the flattened positions into the control points** (undoable, full-state
@@ -205,10 +249,16 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   clients on join so the pre-check matches enforcement.
 - **Client `layout-client.json`:** remembers scale / projection / fill / **shape + constraint** (validated
   pairs) plus the six opacities; client-retained, never synced. **Default scale 1** (chisel-matched).
-- **The tile GUI:** every control is a row of exclusive toggle tiles; the **main rows are permanent tool
-  defaults and never change meaning** (Mode, the shape picker, the Favorites placeholder strip, Scale,
-  Projection, Plane, Fill); selecting a guide appends a separate Selected-guide section (own tiles +
-  **Deselect**); **Delete mode ghosts everything but Mode** (~22% alpha, unlit, input-guarded). F-modal
+- **The tile GUI (icon form since Session 10):** every control is a row of exclusive SQUARE ICON tiles
+  (custom Cairo glyphs — `LayoutToolIcons` — rendered by stock toggle buttons; hover names the option).
+  **Mode-aware rows (Session 10, replacing the appended Selected-guide section):** in **Create** the rows are
+  the tool defaults for the next guide (Mode, shape picker, Favorites strip, Scale, Projection, Plane, Fill,
+  Divisions); in **Edit** the SAME rows (plus **Visibility**, minus the shape picker/Favorites) act on the
+  selected guide via the network senders — greyed with a "click a guide" prompt when none is selected, with a
+  compact guide-info line + **Deselect**; **Delete disables everything but Mode** (native `Enabled=false` dim
+  + ghost labels). The panel therefore never grows a second section on selection. **Scale icons = the game's
+  native N×N-grid scheme, N = voxel count** (16× = one solid block). **Divisions = a native number input**
+  (wheel ±1, spinners, typed, floored at 0, clamped to `MaxDivisions`) — the one non-icon control. F-modal
   press-to-open, not the vanilla radial. Draft settings are **live** — mid-draft changes apply to the ghost
   and the completed guide.
 - **Hotkeys are rebindable and inert unless the tool is held** (Ctrl+Z/Y never hijack other UIs). Item art
@@ -236,11 +286,11 @@ Layout/
     ├── Items/
     │   └── ItemGuideTool.cs
     ├── Guide/                            [pure data]
-    │   ├── GuideData.cs                  [DataVersion 5 ⚠ verify]
+    │   ├── GuideData.cs                  [DataVersion 5]
     │   ├── ControlPoint.cs
-    │   ├── VoxelPosition.cs
-    │   ├── GuideShapeType.cs             [Arch, Ellipse]
-    │   ├── ShapeConstraint.cs            [None, SemiCircle, Circle]
+    │   ├── VoxelPosition.cs              [VoxelRenderType: … Grabbed, Division (magenta, S9)]
+    │   ├── GuideShapeType.cs             [Arch, Ellipse, Line, Triangle, Rectangle]
+    │   ├── ShapeConstraint.cs            [None, SemiCircle, Circle, Right, Equilateral, Isosceles, Square]
     │   ├── ProjectionMode.cs
     │   ├── ProjectionPlane.cs
     │   └── GuideRenderSettings.cs
@@ -249,8 +299,13 @@ Layout/
     │   ├── CatmullRomSpline.cs
     │   ├── ArchShape.cs                  [free spline + SemiCircle arc mode + ruled fill]
     │   ├── EllipseShape.cs               [closed planar primitive; Circle = constraint]
+    │   ├── LineShape.cs                  [S9: two anchors, no fill, insert no-op]
+    │   ├── TriangleShape.cs              [S9: base anchors + born apex; Right/Equilateral/Isosceles]
+    │   ├── RectangleShape.cs             [S9: diagonal corners stored, other two derived; Square]
+    │   ├── ShapeGeometry.cs              [S9: shared planar frame + nearest-claim marker helper]
     │   ├── ShapeFactory.cs               [the single shape construction point]
-    │   ├── SoftPointFlow.cs              [proportional frame-relative flow; runs on both sides]
+    │   ├── SoftPointFlow.cs              [S9: slave-regime (interior grabs) + proportional (structural); both sides]
+    │   ├── DivisionMarks.cs              [S9: renderer-side equal-part recolor; MaxDivisions = 256]
     │   └── VoxelMarch.cs                 [shared cell marching, spline-identical quantise]
     ├── Systems/
     │   ├── GuideManager.cs
@@ -264,7 +319,8 @@ Layout/
     │   ├── ServerNetworkHandler.cs
     │   └── ClientNetworkHandler.cs
     ├── UI/
-    │   ├── GuideToolGui.cs               [tile GUI]
+    │   ├── GuideToolGui.cs               [icon-tile GUI (S10)]
+    │   ├── LayoutToolIcons.cs            [S10: Cairo glyphs → CustomIcons registry]
     │   └── GuideHud.cs
     ├── Config/
     │   ├── LayoutServerConfig.cs
@@ -284,10 +340,13 @@ Layout/
             ├── HideGuideCommand.cs
             ├── SetProjectionCommand.cs   [optional pre-bake point snapshot]
             ├── SetFilledCommand.cs
+            ├── SetDivisionsCommand.cs    [S9: old/new count; undo/redo re-applies]
             └── BreakConstraintCommand.cs
 ```
 
-**43 source files.** Namespaces match folders: `Layout`, `Layout.Guide`, `Layout.Shapes`, `Layout.Systems`,
+**50 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
+ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 in Session 10: LayoutToolIcons). Namespaces match
+folders: `Layout`, `Layout.Guide`, `Layout.Shapes`, `Layout.Systems`,
 `Layout.Network`, `Layout.UI`, `Layout.Config`, `Layout.Items`, `Layout.Client`, `Layout.Undo`,
 `Layout.Undo.Commands`. (`UndoManager` is the one file whose folder differs from its namespace: it lives in
 `src/Systems/` as `Layout.Systems.UndoManager`.)
@@ -313,8 +372,8 @@ GuideData {
     ProjectionPlane   Plane             // the Surface PROJECTION plane (≠ ShapePlaneAxis)
     bool              IsFilled          // hollow vs filled (Tier 2, built)
     string            CreatorUid        // nullable; bookkeeping only, never ownership, never wired
-    int               DataVersion       // 5 ⚠ verify; older saves migrate by defaults
-    int               Divisions          // Session 9: visual equal-parts count (0/1 = none). ⚠ verify
+    int               DataVersion       // 5 (const CurrentDataVersion); older saves migrate by defaults
+    int               Divisions          // Session 9: visual equal-parts count (0/1 = none)
 }
 ```
 
@@ -339,7 +398,7 @@ ControlPoint {
 ```
 VoxelPosition {
     int X, Y, Z            // 1/16-block units (world × 16), lower corner, scale-independent
-    VoxelRenderType Type   // Normal | Locked | Primary | Anchor | Grabbed | Division (magenta, S9) ⚠ verify
+    VoxelRenderType Type   // Normal | Locked | Primary | Anchor | Grabbed | Division (magenta, S9)
 }
 ```
 In Surface mode the same struct renders as a paper-thin slab on the plane.
@@ -348,17 +407,19 @@ In Surface mode the same struct renders as a paper-thin slab on the plane.
 Pinned, append-only. Constrained variants are **not** types; fill is **not** a type.
 
 ```
-enum GuideShapeType  { Arch = 0, Ellipse = 1 }
-enum ShapeConstraint { None = 0, SemiCircle = 1, Circle = 2 }
+enum GuideShapeType  { Arch = 0, Ellipse = 1, Line = 2, Triangle = 3, Rectangle = 4 }
+enum ShapeConstraint { None = 0, SemiCircle = 1, Circle = 2, Right = 3, Equilateral = 4, Isosceles = 5, Square = 6 }
 ```
-The four-entry catalog: Arch = (Arch, None) · Half-circle = (Arch, SemiCircle) · Ellipse = (Ellipse, None) ·
-Circle = (Ellipse, Circle).
+The eleven-tile catalog (type, constraint): Arch = (Arch, None) · Half-circle = (Arch, SemiCircle) ·
+Circle = (Ellipse, Circle) · Ellipse = (Ellipse, None) · Line = (Line, None) · Triangle = (Triangle, None) ·
+Right = (Triangle, Right) · Equilateral = (Triangle, Equilateral) · Isosceles = (Triangle, Isosceles) ·
+Rectangle = (Rectangle, None) · Square = (Rectangle, Square).
 
 ### ProjectionMode / ProjectionPlane / GuideRenderSettings
 Unchanged since v2: `ProjectionMode { Volumetric, Surface }`; `ProjectionPlane` = a `PlaneAxis`
 (X = 0, Y = 1, Z = 2) + an offset in 1/16-block units, with `Horizontal` / `VerticalNorthSouth` /
 `VerticalEastWest` factories and a `Default`; `GuideRenderSettings` bundles scale + projection + plane + fill
-for creation requests and the draft ghost.
++ divisions (S9) for creation requests and the draft ghost.
 
 ---
 
@@ -377,10 +438,11 @@ GUI; clicks route to the controller.
 The interaction brain, per-tick while held (30 ms):
 - **Left-click priority chain (Create):** release grab → second foot → point grab (radius
   `max(0.10, voxel)`) → body hit (arch family: insert+grab in one gesture; ellipse family: nearest-handle
-  grab) → first anchor. **Delete:** dispel the aimed guide.
-- **Right-click:** cancel grab (insert-born point removed; pre-existing point snaps back via
+  grab) → first anchor. **Edit:** release grab → SELECT the aimed guide (empty click deselects) — select-only,
+  no grab/insert/lock. **Delete:** dispel the aimed guide.
+- **Right-click (Create only):** cancel grab (insert-born point removed; pre-existing point snaps back via
   `GuideCancelGrabPacket`); discard draft; idle point → lock toggle; idle body → lock-in-place insert
-  (ellipse family: nearest-handle lock toggle).
+  (ellipse family: nearest-handle lock toggle). Edit/Delete have no right-click action.
 - **Targeting** tests real points plus the **sampled curve** (`IGuideShape.SampleCurve`), cached per guide
   behind a content fingerprint (count + coordinate sum + constraint) — resampled only on change.
 - **Drag:** raycast target (anchors need a block; interior points retained-depth), local mirror preview +
@@ -432,9 +494,12 @@ by design. Fill = radial-fan disc.
 
 **`ShapeFactory.cs`** — `Create` (two clicks) / `Adopt` (existing list or GuideData); the only construction
 point. **`VoxelMarch.cs`** — shared point-sequence → cell marching, mirroring the spline's quantise exactly.
-**`SoftPointFlow.cs`** — capture (station + frame-local, length-scaled offset per soft point, from pre-move
-positions, once per drag) and non-mutating reflow; identical code runs server-side (composed into the same
-edit batch as the grabbed point) and client-side (drag preview).
+**`SoftPointFlow.cs`** — `Capture(pts, grabbedIndex)` folds the held point into the baseline, then selects
+the regime: an **interior grab** (held point unlocked, non-anchor) slaves each soft point onto the curve at
+its station with **zero offset**; a **structural grab** (anchor/lock) keeps the station + frame-local,
+length-scaled offset. Reflow is non-mutating; identical code runs server-side (composed into the same edit
+batch as the grabbed point) and client-side (drag preview). Three capture call sites: server move handler,
+client `StartGrab`, client insert-adoption.
 
 ### Systems
 
@@ -489,7 +554,7 @@ ints, Guids as 16 bytes, positions as three doubles, full point lists verbatim (
 | `GuideUpdatePacket` | S→C, C→S | Guide ID + edit array (client sends its one; server broadcasts the composed batch incl. soft-flow edits) |
 | `GuideInsertPointPacket` | S→C, C→S | Guide ID + index + position (+ `Locked` for lock-in-place) |
 | `GuideCancelGrabPacket` | C→S | Cancel the grab: restore origins / remove an insert-born point |
-| `GuideDeletePacket` / `GuideHidePacket` / `GuideLockPointPacket` / `GuideRescalePacket` / `GuideSetProjectionPacket` / `GuideSetFilledPacket` | S→C, C→S | The atomic ops |
+| `GuideDeletePacket` / `GuideHidePacket` / `GuideLockPointPacket` / `GuideRescalePacket` / `GuideSetProjectionPacket` / `GuideSetFilledPacket` / `GuideSetDivisionsPacket` (S9) | S→C, C→S | The atomic ops (divisions = pure visual recolor) |
 | `GuideGrabPacket` / `GuideReleasePacket` / `GuideLockStatePacket` | C→S / S→C | Edit-lock lifecycle |
 | `DraftStartPacket` / `DraftCancelPacket` / `DraftAnchorBroadcastPacket` / `DraftAnchorRemovePacket` | mixed | Draft lifecycle (anchor dot only) |
 | `UndoRequestPacket` / `RedoRequestPacket` / `VoxelCapWarningPacket` | C→S / S→C | Undo + cap warnings |
@@ -508,15 +573,24 @@ writes server state.
 
 ### UI
 
-**`GuideToolGui.cs`** — the tile GUI (modal, F, press-to-open). Every control is a row of exclusive toggle
-tiles. **Main rows are permanent tool defaults:** Mode (Create/Delete) · Shape (the initial-shape picker:
-Arch · Half-circle · Circle · Ellipse) · the **Favorites placeholder strip** (inset well + "coming soon";
-the feature is deferred) · Scale · Projection · Plane (with Auto in the tool context) · Fill. Selecting a
-guide appends a separate **Selected-guide section** (own scale/projection/plane/fill/visibility tiles acting
-via the send API, its own lock-state header, and a **Deselect** button); shape is shown read-only there
-(live guides reshape by grabbing). **Delete mode ghosts every row but Mode** (~22%-alpha ghost fonts, no lit
-tiles, input guard). Remote edits to the selected guide relight tiles in place; row-set changes defer a
-recompose (never per-frame).
+**`GuideToolGui.cs`** — the tile GUI (modal, F, press-to-open; icon form since Session 10). Every control is
+a row of exclusive SQUARE ICON tiles (42 px; hover names the option). **Mode-aware rows (Session 10):** the
+Mode row (Create/Edit/Delete) is always live; the rest re-bind by mode. **Create:** tool defaults for the
+next guide — Shape (the 11-glyph picker grid) · Favorites strip · Scale (native N×N voxel-count icons; 16× =
+one solid block) · Projection · Plane · Fill · Divisions. **Edit:** the SAME Scale/Projection/Plane/Fill/
+Divisions rows plus **Visibility** (no shape picker/Favorites) act on the SELECTED guide via the send API,
+with a compact guide-info line + **Deselect**; greyed with a "click a guide" prompt when none is selected —
+so the panel never grows a second section. **Delete:** every row but Mode disabled (native `Enabled=false` +
+ghost labels). Divisions is a native `GuiElementNumberInput` (wheel ±1 — element-native plus a dialog-level
+hover fallback in `OnMouseWheel` — spinner buttons, typed input, floored at 0, clamped to `MaxDivisions`;
+`OnDivisionsTyped` snaps the display back on clamp). Remote edits to the Edit-mode selected guide relight
+the (shared-key) tiles in place; row-set changes defer a recompose (never per-frame).
+
+**`LayoutToolIcons.cs`** (Session 10) — every GUI glyph, drawn with Cairo and registered once (client start)
+in `capi.Gui.Icons.CustomIcons`: the 11 shape glyphs (the arch is an open elliptical dome — the true
+Catmull-Rom silhouette), mode/projection/fill/visibility pairs, plane cubes (active face filled), and the
+scale grids (`DrawScaleGrid(n)` + `DrawScaleFullBlock`). Uniform aspect-preserving design-box mapping;
+strokes/fills take the button's tint, so normal/hover/pressed states come free.
 
 **`GuideHud.cs`** — mode (+ the picked shape in Create) · scale · projection/plane · fill · live ↔/↕
 dimensions in voxels and blocks (draft and examined guide, factory-built shapes, fill-aware) · examined
@@ -546,7 +620,7 @@ Move/insert confirm the point is still where the command left it, so they never 
 
 ---
 
-## 5. Key Interaction Flows (the two-mode scheme)
+## 5. Key Interaction Flows (the three-mode scheme)
 
 ### Targeting (all clicks)
 A raycast resolves to the voxel cell on the first block face at the current scale. **Anchors require a valid
@@ -582,7 +656,14 @@ Guides are referenced off blocks only at placement — never bound; removing the
    point born locked exactly ON the curve; two undo steps); on an ellipse-family body → nearest-handle lock
    toggle.
 
-### Projection, plane, fill (F-menu tiles — tool defaults or the Selected-guide section)
+### Editing a placed guide (Edit mode — Session 10)
+Switch the Mode row to **Edit**, then **left-click a guide to select it** (empty click deselects; select-only
+— no reshaping). The F-menu's Scale / Projection / Plane / Fill / Divisions / Visibility rows now drive THAT
+guide through the send API (`SendRescale` / `SendSetProjection` / `SendSetFilled` / `SendSetDivisions` /
+`SendHide`) instead of the tool defaults — no separate panel section, so the GUI never expands. Reshaping
+(grab / insert / lock) stays in **Create**.
+
+### Projection, plane, fill (F-menu tiles — tool defaults in Create, the selected guide in Edit)
 Volumetric ↔ Surface: switching a guide **to** Volumetric bakes the flattened positions into its points
 (what you saw is what you get; single undo step; full-state broadcast); switching back **to** Surface
 restores its stored plane. Plane and Fill apply atomically with cap re-checks (turning Fill on can be
@@ -590,7 +671,7 @@ rejected over cap and rolls back). All rebuild every client's mesh via the norma
 
 ### Delete mode
 Left-click a guide → dispel (no client-side lock pre-check — the server owns exclusivity and the admin
-override). The GUI's other rows ghost out.
+override). The GUI's other rows disable.
 
 ### Undo / redo
 Ctrl+Z / Ctrl+Y (inert unless the tool is held) → the server finds the player's most recent still-valid
@@ -632,7 +713,8 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
 
 ---
 
-This v2.5 document is the authoritative plan, consolidated to current state: **Layout v0.1.0, in real play**
-on live game worlds. Arches, half-circles, circles, and ellipses place, preview, reshape, fill, lock/unlock,
-and project onto surfaces in live multiplayer against VS 1.22.3 / .NET 10. History lives in the v2.4 copy;
-status, flagged decisions, and the punch-list live in `PROJECT_STATUS.md` and `OUTSTANDING_ITEMS.md`.
+This v2.6 document is the authoritative plan, consolidated to current state: **Layout v0.1.x, in real play**
+on live game worlds. Arches, half-circles, circles, ellipses, lines, triangles (+ right/equilateral/isosceles),
+and rectangles (+ square) place, preview, reshape, fill, lock/unlock, divide, and project onto surfaces in
+live multiplayer against VS 1.22.3 / .NET 10. History lives in the v2.4 copy; status, flagged decisions, and
+the punch-list live in `PROJECT_STATUS.md` and `TODO.md` (renamed from `OUTSTANDING_ITEMS.md`).

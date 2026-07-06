@@ -1,0 +1,65 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Matches the Vintage Story 1.22 runtime (.NET 10), which you already have installed. -->
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <AssemblyName>Layout</AssemblyName>
+    <RootNamespace>Layout</RootNamespace>
+    <Nullable>disable</Nullable>
+    <!-- This is a compile-check only: we are not packaging a runnable mod yet. -->
+  </PropertyGroup>
+
+  <!-- =============================================================== -->
+  <!--  Path to YOUR Vintage Story INSTALL folder - the folder that   -->
+  <!--  contains VintagestoryAPI.dll (and a Lib\ subfolder).          -->
+  <!--                                                                 -->
+  <!--  On Windows the game installs here by default, so this is       -->
+  <!--  already filled in with your username:                         -->
+  <!--    C:\Users\Zech\AppData\Roaming\Vintagestory                   -->
+  <!--                                                                 -->
+  <!--  NOTE: this is the INSTALL folder (game .exe + .dll files),     -->
+  <!--  NOT the data folder (which is ...\VintagestoryData and holds   -->
+  <!--  your saves/mods). If your game is installed somewhere else,    -->
+  <!--  change the one line below to point at it.                      -->
+  <!-- =============================================================== -->
+  <PropertyGroup>
+    <VintagestoryDir>C:\Users\Zech\AppData\Roaming\Vintagestory</VintagestoryDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The Vintage Story API: MathTools (Vec3d), Server (ICoreServerAPI), etc. -->
+    <Reference Include="VintagestoryAPI">
+      <HintPath>$(VintagestoryDir)\VintagestoryAPI.dll</HintPath>
+      <!-- 'false' = reference the game's DLL in place; do not copy it into our output. -->
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Newtonsoft.Json: used by GuideManager to serialize guide data for save/load.   -->
+    <!-- Vintage Story ships this in its Lib\ subfolder. If the build reports it cannot -->
+    <!-- find this file, check whether your install keeps Newtonsoft.Json.dll directly  -->
+    <!-- in the install root instead, and drop "\Lib" from the path below.              -->
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(VintagestoryDir)\Lib\Newtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- protobuf-net: used by the Network layer (Module 4) to serialize packets, exactly as     -->
+    <!-- Vintage Story serializes its own network messages. It ships in the game's Lib\ subfolder -->
+    <!-- alongside Newtonsoft.Json. If the build reports it cannot find this file, check whether   -->
+    <!-- your install keeps protobuf-net.dll directly in the install root instead, and if so drop  -->
+    <!-- "\Lib" from the HintPath below.                                                           -->
+    <Reference Include="protobuf-net">
+      <HintPath>$(VintagestoryDir)\Lib\protobuf-net.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- cairo-sharp: the GUI's 2D vector drawing (Cairo.Context), used by LayoutToolIcons to draw the -->
+    <!-- shape/toggle glyphs. Ships in the game's Lib\ subfolder alongside Newtonsoft/protobuf.        -->
+    <Reference Include="cairo-sharp">
+      <HintPath>$(VintagestoryDir)\Lib\cairo-sharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

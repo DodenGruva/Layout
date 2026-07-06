@@ -5,9 +5,15 @@
 > Session 9 changed. It picks up exactly where `PROJECT_STATUS.md` (Session-8 end, v0.1.0 batch5d) left off.
 >
 > **Fidelity note.** This was reconstructed from the working conversation, not regenerated from the code on
-> disk. Items tagged **⚠ verify** are specifics (file counts, DataVersion numbers, batch labels, exact
-> class/packet/method names) that should be confirmed against the actual source before being treated as
-> authoritative. The *narrative* — what was built and why — is reliable; the *identifiers* may need checking.
+> disk. **Verified against source on 2026-07-05 — every ⚠-tagged identifier checked out; nothing was wrong.**
+> Confirmed against the code: `GuideShapeType` = {Arch, Ellipse, Line, Triangle, Rectangle};
+> `ShapeConstraint` = {None, SemiCircle, Circle, Right, Equilateral, Isosceles, Square}; `DataVersion` = 5
+> (`GuideData.CurrentDataVersion`); `SoftPointFlow.Capture(pts, grabbedIndex)` with the slave/structural
+> regime split; new files `LineShape`, `TriangleShape`, `RectangleShape`, `ShapeGeometry`, `DivisionMarks`,
+> `SetDivisionsCommand` (49 source files total); `GuideSetDivisionsPacket` present in `PacketTypes.cs` **and**
+> registered; `DivisionMarks.Apply` (renderer-side, `MaxDivisions = 256`); `GuideManager.SetDivisions`;
+> `DefaultDivisions` in `LayoutClientConfig`; `VoxelRenderType.Division` (magenta). The inline ⚠ tags below
+> are left struck-through-in-spirit (removed) with the confirmed identifier noted.
 
 ---
 
@@ -38,17 +44,18 @@ else — the apex and every other unlocked point should behave as if they don't 
 
 **The iterations (in order):**
 
-1. **Trigger generalized** ⚠ verify — flow previously fired only when a *structural* point was dragged;
+1. **Trigger generalized** *(confirmed)* — flow previously fired only when a *structural* point was dragged;
    changed so flow fires on **every** drag, with the **held point folded into the baseline**. This fixed the
    "no flow at all when dragging a soft point" case (the apex froze because nothing recomputed it). The
    canonical case — insert between apex and anchor, then drag — required the **insert-adoption path** to also
-   capture flow, which it now does. ⚠ verify (`SoftPointFlow.Capture` signature gained a grabbed-index
-   parameter; three call sites: server move handler, client `StartGrab`, client insert-adoption).
-2. **Curved baseline** ⚠ verify — the flow baseline became a **centripetal Catmull-Rom through
+   capture flow, which it now does. **Confirmed in code:** `SoftPointFlow.Capture(pts, grabbedIndex)` gained
+   the grabbed-index parameter; three call sites exist — server move handler (`ServerNetworkHandler` line
+   ~443), client `StartGrab` (~579), client insert-adoption (~700).
+2. **Curved baseline** *(confirmed — `SampleBaselineCurve`, centripetal α=0.5 with mirrored phantom ends)* — the flow baseline became a **centripetal Catmull-Rom through
    anchors+locked+held** (densely sampled, mirrored phantom ends), replacing straight chord segments.
    Rationale: against straight chords an apex's captured offset encoded nearly the whole arch height, so it
    kept "pulling." This reduced but did not eliminate the resistance.
-3. **Slave-regime (the settled model)** ⚠ verify — the decisive change. **Two regimes:**
+3. **Slave-regime (the settled model)** *(confirmed — `Capture` sets zero offsets on an interior grab)* — the decisive change. **Two regimes:**
    - **Interior grab** (held point is unlocked, non-anchor): the curve is defined by structural + hand only;
      every other unlocked point is **slaved directly onto that curve at its station with ZERO offset** — the
      apex genuinely contributes no pull. Visible consequence, intended and confirmed: grab a tall arch's body
@@ -60,7 +67,7 @@ else — the apex and every other unlocked point should behave as if they don't 
    **Flagged (Claude's call, playtest to arbitrate):** the regime split itself — anchor drags preserve shape,
    interior drags slave. Human confirmed grabbing was "MUCH better" after this.
 
-**Related fix — chord-invariant phantom drop** ⚠ verify — the arch's phantom end-tangent points were derived
+**Related fix — chord-invariant phantom drop** *(confirmed — `ArchShape`: `drop = Max(MinPhantomDrop, 0.4·chord)`)* — the arch's phantom end-tangent points were derived
 by **reflecting the neighbor knot's height**, so inserting/locking a point near a foot re-derived the phantom
 and **re-tilted the whole curve** (a whole-arch lurch from one click). Changed to derive the phantom drop from
 the **anchor chord** (0.4×chord), invariant under interior operations. A fresh arch is pixel-identical (apex
@@ -74,18 +81,18 @@ helped but did **not** fully resolve B-S9-1 (see below).
 Shipped the remaining first-wave catalog. All use the **same two-click gesture** and route through the
 existing `ShapeFactory` / constraint / fill / wire / GUI-tile plumbing.
 
-- **Line** — two anchors; no interior points, no fill; insert is a defensive no-op. ⚠ verify (`LineShape`).
+- **Line** — two anchors; no interior points, no fill; insert is a defensive no-op. *(confirmed: `LineShape`.)*
 - **Triangle** — two clicked **base anchors + a real draggable apex** born at the equilateral position; free
-  = scalene. Constraints are apex-derivation rules: ⚠ verify
+  = scalene. Constraints are apex-derivation rules *(confirmed: `TriangleShape`, apex = control point index 2)*:
   - **Right** — 90° at the first click; apex slides on the perpendicular at that anchor.
   - **Equilateral** — apex fully derived (√3/2·base on the bisector); dragging it **breaks to free** (the
     circle→ellipse absorb-or-break pattern).
   - **Isosceles** — apex slides on the base's perpendicular bisector.
 - **Rectangle** — the two clicks are **diagonal corners** (stored); the other two derive in the intrinsic
-  plane and render as markers. **Square** = constraint (sides track the dominant diagonal component). ⚠ verify
-  (`RectangleShape`).
+  plane and render as markers (Primary/green). **Square** = constraint (sides track the dominant diagonal
+  component). *(confirmed: `RectangleShape`; derived corners painted `VoxelRenderType.Primary`.)*
 
-**Cross-cutting:** ⚠ verify
+**Cross-cutting:** *(all confirmed against source)*
 - New shared helper **`ShapeGeometry`** (planar-frame derivation + nearest-claim marker placement, extracted
   from the ellipse recipe).
 - `GuideShapeType` extended (Line / Triangle / Rectangle appended, pinned values).
@@ -104,12 +111,12 @@ existing `ShapeFactory` / constraint / fill / wire / GUI-tile plumbing.
 
 A **purely visual** equal-parts reference overlay, per guide. Never affects geometry, counts, or caps.
 
-- **What it does** ⚠ verify — recolors the voxels at the N-equal-part boundaries **by arc length** along the
+- **What it does** *(confirmed)* — recolors the voxels at the N-equal-part boundaries **by arc length** along the
   guide's curve/perimeter. Marks are **magenta** (`VoxelRenderType.Division`, appended). Open shapes get the
   N−1 interior boundaries; closed loops get all N (the seam mark yields to the anchor marker by precedence).
 - **Where it's computed** — **renderer-side**, after the shape produces its cells (`DivisionMarks.Apply`);
-  it's a recolor of existing cells, so shapes/caps/counts are untouched. ⚠ verify
-- **Data / wire / undo** ⚠ verify — `GuideData.Divisions` (int; 0/1 = none); DataVersion 5 carries it;
+  it's a recolor of existing cells, so shapes/caps/counts are untouched. *(confirmed: `DivisionMarks.Apply`, called from `GuideRenderer`.)*
+- **Data / wire / undo** *(confirmed)* — `GuideData.Divisions` (int; 0/1 = none); DataVersion 5 carries it;
   `RenderSettingsDto` + `GuideDataDto` additive fields; new `GuideSetDivisionsPacket` (both directions);
   new `SetDivisionsCommand`; `GuideManager.SetDivisions` (pure recolor — clamp + persist, no cap check).
   `MaxDivisions = 256` clamp. **Note:** the packet class was accidentally omitted in the first build pass
@@ -117,8 +124,8 @@ A **purely visual** equal-parts reference overlay, per guide. Never affects geom
   glance that it's present and registered.
 - **GUI** — a **preset dropdown + a type-in field** (stock VS has no editable combobox, so the "editable
   dropdown" was built as this composite). Present in both the tool-defaults section and the per-guide
-  Selected-guide section. ⚠ verify
-- **Config** — `DefaultDivisions` in `layout-client.json`, seeded/persisted through the mod system. ⚠ verify
+  Selected-guide section. *(confirmed: `GuideToolGui.AddDivisionsControl`; the preset dropdown is still present — the scroll-wheel request that removes it is not yet built.)*
+- **Config** — `DefaultDivisions` in `layout-client.json`, seeded/persisted through the mod system. *(confirmed: `LayoutClientConfig.DefaultDivisions`, clamped 0..`MaxDivisions`.)*
 
 ---
 
@@ -161,5 +168,5 @@ steps on a selected guide).
 1. **Fix B-S9-1** with the ray-vs-voxel-box picking approach — it's the top open bug and blocks the
    "guide only moves when I move it" invariant.
 2. **Build the divisions scroll-wheel change** (small, fully specced above).
-3. Verify every **⚠ verify** identifier in this doc against the code on disk (ideal first task in Claude Code,
-   which can read the source directly).
+3. ~~Verify every **⚠ verify** identifier in this doc against the code on disk.~~ **DONE 2026-07-05** — all
+   confirmed accurate; tags resolved in place (see the fidelity note above for the confirmed-identifier list).
