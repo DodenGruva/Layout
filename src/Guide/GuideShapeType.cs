@@ -34,12 +34,24 @@ namespace Layout.Guide
         /// Rectangle (Session 9): the two clicks are its DIAGONAL corners (stored); the other two corners
         /// derive in the intrinsic plane. Square = this + Square constraint.
         /// </summary>
-        Rectangle = 4
+        Rectangle = 4,
+
+        /// <summary>
+        /// Regular polygon (Session 11): the two clicks span the shape along an axis of symmetry — the
+        /// first click is a VERTEX, the second the point of the perimeter diametrically opposite it (a
+        /// vertex for even side counts, the far edge's midpoint for odd). Side count lives in
+        /// <see cref="GuideData.Sides"/>.
+        /// </summary>
+        Polygon = 5,
+
+        /// <summary>
+        /// Free-Shape (Session 11, 0.1.15): an irregular polyline — every draft click chains another
+        /// straight segment; clicking the LAST placed corner finishes it open, clicking the FIRST closes
+        /// it into a loop (<see cref="GuideData.IsClosed"/>). All clicked corners are anchors.
+        /// </summary>
+        FreeShape = 6
 
         // Reserved for future shapes — append only, never renumber:
-        // Dome     = 3,
-        // Cylinder = 4,
-        // Roof     = 5,
-        // Tunnel   = 6,
+        // Dome, Cylinder, Roof, Tunnel ...
     }
 }

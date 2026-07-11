@@ -148,8 +148,19 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   parametric ring has nothing to insert. *(Flagged for review, like all Session-8 ellipse ergonomics.)*
 - **Comatose grabs:** tool swap suspends a grab (lock + one-undo-entry drag persist server-side), never
   releases it; re-equip validates and resumes. Players need to place ladders mid-drag.
-- **SHIFT cardinal constraint** in two places: drafting the second foot (level + cardinal from the first)
-  and re-grabbing an anchor (same snap, referenced to the guide's **other** anchor).
+- **CTRL cardinal constraint** (Session 11, human-directed — moved from SHIFT) in two places: drafting the
+  second foot (level + cardinal from the first) and re-grabbing an anchor (same snap, referenced to the
+  guide's **other** anchor).
+- **SHIFT is context-dependent** (Session 11, human-requested; supersedes "SHIFT = cardinal"): **while
+  drafting**, holding SHIFT inverts the ghost upside-down (arch opens downward; equilateral apex mirrors
+  below the base) and the completing click bakes it — except on a THREE-click triangle's apex stage, where
+  SHIFT **centres the apex on the base** (0.1.15), and on a **Free-Shape chain**, where SHIFT pins the next
+  segment **VERTICAL** off the previous corner (0.1.16; CTRL stays horizontal, SHIFT wins if both);
+  **on a placed guide**, SHIFT+left-click **springs it
+  back to its as-placed form** (points + constraint restored from the creation snapshot, one undo step).
+  Prerequisite delivered with it: **every shape defaults "up"** regardless of click order (`ShapeGeometry`'s
+  frame perpendicular is sign-normalised world-up; constrained triangle re-derivations preserve the apex's
+  current side instead of forcing one).
 - **Raycast targeting throughout:** anchors require a block target; interior points snap to blocks or move
   at retained grab-depth in air; no scroll-wheel grab-distance (scroll reserved).
 - **Guides are visible but untargetable when the tool isn't held** — pure mesh draws, no selection/collision
@@ -157,8 +168,10 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 
 ### Data & wire
 - **Pinned, append-only enums** everywhere a value crosses wire or disk; **default-driven migration** via
-  `DataVersion` (currently **5**, verified: v5 added `Divisions`; v4 added `Constraint`, `ShapePlaneAxis`;
-  v3 added `CreatorUid`; v2 added `Projection`/`Plane`/`IsFilled`).
+  `DataVersion` (currently **7**: v7 added `IsClosed` (Free-Shape loop flag); v6 added `Sides` + the
+  as-placed spring-back snapshot (`OriginalControlPoints`/`OriginalConstraint` — persisted, never wired);
+  v5 added `Divisions`; v4 added `Constraint`, `ShapePlaneAxis`; v3 added `CreatorUid`; v2 added
+  `Projection`/`Plane`/`IsFilled`).
 - **Protobuf DTOs are the wire format; JSON is the save format** — never mixed. Packet registration is one
   fixed shared order, **append-only**. POCOs are mapped to DTOs, never sent raw.
 - **The index seam:** only control-point indices cross the network/undo boundary
@@ -175,12 +188,22 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 - **Primitives + constraint modifiers, not a flat enum of near-duplicates** (square = rectangle+constraint,
   circle = ellipse+constraint, half-circle = arch+constraint, and the triangle constraints below). Keeps
   `GuideShapeType` short and lets future favorites store {type + constraint} pairs.
-- **The catalog (Session-9 state):** arch, half-circle, circle, ellipse, **line, triangle (+ right /
-  equilateral / isosceles), rectangle (+ square)**. All placed with the **same two-click gesture**; the
-  triangle's apex and the rectangle's far corners are **born/derived** from the two clicks, so no shape needs
-  a 3-click draft. **Constraints are derivation rules:** the triangle apex slides (right → perpendicular at
-  first click; isosceles → base bisector) or is fully derived (equilateral), and the rectangle's derived
-  corners track the diagonal (square → dominant component). *(verified against the shape files.)*
+- **The catalog (Session-11 state, 0.1.15):** arch, half-circle, circle, ellipse, **line, triangle
+  (+ right / equilateral / isosceles), rectangle (+ square), polygon (regular N-gon, side count = per-guide
+  data, 3–24), Free-Shape (irregular polyline)**. **Placement is two clicks for every shape EXCEPT the
+  free/right/isosceles triangles (THREE: anchor · anchor · height — SHIFT on the third click centres the
+  apex on the base) and the Free-Shape (UNBOUNDED chained clicks, ≤64: click the LAST placed corner to
+  finish open, the FIRST corner (≥3) to close the loop; the aim snaps onto those targets)** — the human
+  explicitly reopened the old "every shape is two clicks" rule in Session 11. Right-click steps any
+  multi-click draft back one click. Equilateral stays two-click (its apex is fully derived). The polygon's
+  two clicks span vertex → opposite perimeter point, so the shape exactly spans the gesture and both
+  anchors sit ON the outline. **Constraints are derivation rules:** the triangle apex slides (right →
+  perpendicular at first click; isosceles → base bisector) or is fully derived (equilateral), and the
+  rectangle's derived corners track the diagonal (square → dominant component).
+- **Body-insert policy (0.1.15 revision):** the arch family AND the Free-Shape take body inserts
+  (`TakesBodyInserts`); every other shape is parametric — body clicks map to the nearest handle. The
+  Free-Shape's inserts are plain straight-line corners (no spline, no soft flow); its fill is DEFERRED
+  (irregular outlines can be concave; the Fill toggle is currently inert on it).
 - **Break gestures (v1):** equilateral-triangle apex-drag breaks to a free triangle, and circle minor-handle
   drag breaks to an ellipse (the absorb-or-break pattern). **Right / isosceles / square have no break
   gesture** — their constrained drags always absorb; they live as separate catalog tiles.
@@ -248,12 +271,20 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   (0/negative = unlimited; **construction-time injection — edits need a server restart**). Caps sync to
   clients on join so the pre-check matches enforcement.
 - **Client `layout-client.json`:** remembers scale / projection / fill / **shape + constraint** (validated
-  pairs) plus the six opacities; client-retained, never synced. **Default scale 1** (chisel-matched).
+  pairs) / divisions / **sides** plus the six opacities and (Session 11) the **pinned favorite shape codes
+  (up to FOUR since 0.1.15; hard-kept — never auto-padded)**; client-retained, never synced. **Default
+  scale 1** (chisel-matched).
 - **The tile GUI (icon form since Session 10):** every control is a row of exclusive SQUARE ICON tiles
-  (custom Cairo glyphs — `LayoutToolIcons` — rendered by stock toggle buttons; hover names the option).
-  **Mode-aware rows (Session 10, replacing the appended Selected-guide section):** in **Create** the rows are
-  the tool defaults for the next guide (Mode, shape picker, Favorites strip, Scale, Projection, Plane, Fill,
-  Divisions); in **Edit** the SAME rows (plus **Visibility**, minus the shape picker/Favorites) act on the
+  (custom Cairo glyphs — `LayoutToolIcons` — rendered by stock toggle buttons; hover names the option,
+  auto-sized since Session 11). **Mode-aware rows (Session 10, replacing the appended Selected-guide
+  section):** in **Create** the rows are the tool defaults for the next guide (Mode — **with the 0.1.15
+  Current Shape chip at its far right: a permanently-lit, guide-body-YELLOW glyph of the picked shape** —
+  the shape picker — **0.1.15: FOUR hard-kept pinned slots + a ▾ catalog fold-out; right-click PINS into a
+  free slot (never evicts; message when full) or UNPINS a pinned tile (drawn in the Current-Shape YELLOW
+  in the catalog since 0.1.17); empty slots show placeholders; the separate Favorites strip is gone** —
+  Scale, Projection+Fill (one row since 0.1.17; **Fill greys out on a Free-Shape**, where fill is
+  deferred), Plane, Divisions+Sides-on-polygon (one row)); in
+  **Edit** the SAME rows (plus **Visibility**, minus the shape picker) act on the
   selected guide via the network senders — greyed with a "click a guide" prompt when none is selected, with a
   compact guide-info line + **Deselect**; **Delete disables everything but Mode** (native `Enabled=false` dim
   + ghost labels). The panel therefore never grows a second section on selection. **Scale icons = the game's
@@ -344,8 +375,9 @@ Layout/
             └── BreakConstraintCommand.cs
 ```
 
-**50 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
-ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 in Session 10: LayoutToolIcons). Namespaces match
+**54 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
+ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 in Session 10: LayoutToolIcons; + 4 in Session 11:
+PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape). Namespaces match
 folders: `Layout`, `Layout.Guide`, `Layout.Shapes`, `Layout.Systems`,
 `Layout.Network`, `Layout.UI`, `Layout.Config`, `Layout.Items`, `Layout.Client`, `Layout.Undo`,
 `Layout.Undo.Commands`. (`UndoManager` is the one file whose folder differs from its namespace: it lives in
@@ -372,8 +404,12 @@ GuideData {
     ProjectionPlane   Plane             // the Surface PROJECTION plane (≠ ShapePlaneAxis)
     bool              IsFilled          // hollow vs filled (Tier 2, built)
     string            CreatorUid        // nullable; bookkeeping only, never ownership, never wired
-    int               DataVersion       // 5 (const CurrentDataVersion); older saves migrate by defaults
+    int               DataVersion       // 6 (const CurrentDataVersion); older saves migrate by defaults
     int               Divisions          // Session 9: visual equal-parts count (0/1 = none)
+    int               Sides              // Session 11: polygon side count (3–24; 0 on other shapes)
+    bool              IsClosed           // Session 11 (0.1.15): Free-Shape loop flag (false elsewhere)
+    List<ControlPoint> OriginalControlPoints  // Session 11: as-placed snapshot for SHIFT spring-back
+    ShapeConstraint   OriginalConstraint     //   (persisted, NEVER wired; null on pre-0.1.14 guides)
 }
 ```
 
@@ -574,27 +610,40 @@ writes server state.
 ### UI
 
 **`GuideToolGui.cs`** — the tile GUI (modal, F, press-to-open; icon form since Session 10). Every control is
-a row of exclusive SQUARE ICON tiles (42 px; hover names the option). **Mode-aware rows (Session 10):** the
-Mode row (Create/Edit/Delete) is always live; the rest re-bind by mode. **Create:** tool defaults for the
-next guide — Shape (the 11-glyph picker grid) · Favorites strip · Scale (native N×N voxel-count icons; 16× =
-one solid block) · Projection · Plane · Fill · Divisions. **Edit:** the SAME Scale/Projection/Plane/Fill/
-Divisions rows plus **Visibility** (no shape picker/Favorites) act on the SELECTED guide via the send API,
-with a compact guide-info line + **Deselect**; greyed with a "click a guide" prompt when none is selected —
-so the panel never grows a second section. **Delete:** every row but Mode disabled (native `Enabled=false` +
-ghost labels). Divisions is a native `GuiElementNumberInput` (wheel ±1 — element-native plus a dialog-level
-hover fallback in `OnMouseWheel` — spinner buttons, typed input, floored at 0, clamped to `MaxDivisions`;
-`OnDivisionsTyped` snaps the display back on clamp). Remote edits to the Edit-mode selected guide relight
-the (shared-key) tiles in place; row-set changes defer a recompose (never per-frame).
+a row of exclusive SQUARE ICON tiles (42 px; hover names the option, auto-sized to the text since Session
+11). **Mode-aware rows (Session 10):** the Mode row (Create/Edit/Delete) is always live; the rest re-bind by
+mode. **Create:** tool defaults for the next guide — the Mode row's far-right **Current Shape chip
+(0.1.15: always lit, guide-body yellow, hover names the pick — visible even when the selection isn't on a
+slot)** · Shape (**0.1.15: FOUR hard-kept pinned slots + a ▾
+expand tile that unfolds the full 13-shape catalog; right-click stars a shape into a FREE slot — never
+evicts, message when full — or unstars a starred tile (★ badge in the catalog; empty slots show faint
+placeholders); selecting from the catalog folds it away; the pins persist in `layout-client.json` — the old
+Favorites strip is gone, the slots ARE the favorites**) · Scale (native N×N voxel-count icons; 16× = one
+solid block) ·
+Projection · Plane · Fill · Divisions · **Sides (polygon only)**. **Edit:** the SAME
+Scale/Projection/Plane/Fill/Divisions (+ Sides on a polygon) rows plus **Visibility** (no shape picker) act
+on the SELECTED guide via the send API, with a compact guide-info line + **Deselect**; greyed with a "click
+a guide" prompt when none is selected — so the panel never grows a second section. **Delete:** every row but
+Mode disabled (native `Enabled=false` + ghost labels). Divisions and Sides are native
+`GuiElementNumberInput`s (wheel ±1 — element-native plus a dialog-level hover fallback in `OnMouseWheel` —
+spinner buttons, typed input, clamped to their ranges: 0–256 and 3–24; `OnNumberTyped` snaps the display
+back on clamp, and tolerates transient under-min typing in the Sides field). Remote edits to the Edit-mode
+selected guide relight the (shared-key) tiles in place; row-set changes defer a recompose (never per-frame).
 
 **`LayoutToolIcons.cs`** (Session 10) — every GUI glyph, drawn with Cairo and registered once (client start)
-in `capi.Gui.Icons.CustomIcons`: the 11 shape glyphs (the arch is an open elliptical dome — the true
-Catmull-Rom silhouette), mode/projection/fill/visibility pairs, plane cubes (active face filled), and the
-scale grids (`DrawScaleGrid(n)` + `DrawScaleFullBlock`). Uniform aspect-preserving design-box mapping;
-strokes/fills take the button's tint, so normal/hover/pressed states come free.
+in `capi.Gui.Icons.CustomIcons`: the 13 shape glyphs (the arch is an open elliptical dome — the true
+Catmull-Rom silhouette; the polygon a point-up pentagon; the Free-Shape an irregular dotted-corner
+outline), the picker's expand chevrons (▾/▴), the empty-slot placeholder, and (0.1.15) per-shape
+**"-star"** (★-badged pinned catalog tiles) and **"-current"** (fixed guide-body-yellow, for the Current
+Shape chip) wrapper variants, plus mode/projection/fill/visibility pairs, plane cubes (active face filled),
+and the scale grids (`DrawScaleGrid(n)` + `DrawScaleFullBlock`). Uniform aspect-preserving design-box
+mapping; strokes/fills take the button's tint, so normal/hover/pressed states come free.
 
 **`GuideHud.cs`** — mode (+ the picked shape in Create) · scale · projection/plane · fill · live ↔/↕
 dimensions in voxels and blocks (draft and examined guide, factory-built shapes, fill-aware) · examined
-guide's id, lock, count, cap bar (`Cap: 62%` + ⚠ from the warning packet).
+guide's id, lock, count, cap bar (`Cap: 62%` + ⚠ from the warning packet) · **the Current Shape chip
+(0.1.16): the same always-lit yellow glyph as the F-menu's, top-right of the panel in Create mode,
+recomposed on shape/mode changes.**
 
 ### Undo
 
@@ -604,7 +653,9 @@ guide's id, lock, count, cap bar (`Cap: 62%` + ⚠ from the warning packet).
 snapshots) · MoveControlPoint (before/after; one per drag per moved point, soft-flow included) ·
 InsertControlPoint (landing index refreshed on re-insert) · LockPoint · RescaleGuide · HideGuide ·
 SetProjection (**+ optional pre-bake point snapshot**; undo restores mode/plane then the points) ·
-SetFilled · **BreakConstraint** (pre-break constraint + points; undo restores both, redo re-breaks).
+SetFilled · **BreakConstraint** (pre-break constraint + points; undo restores both, redo re-breaks) ·
+**SetSides** (S11: old/new polygon side count) · **SpringBack** (S11: pre/post point+constraint snapshots
+around a SHIFT spring-back; undo restores the distorted form).
 Move/insert confirm the point is still where the command left it, so they never clobber another player's edit.
 
 ---
@@ -629,21 +680,30 @@ block target.** Guide targeting tests real control points (precise, `max(0.10, v
 override available); the first click of any draft also fixes the ellipse family's **intrinsic** plane.
 Guides are referenced off blocks only at placement — never bound; removing the block changes nothing.
 
-### Creating a guide (any shape — same two clicks)
+### Creating a guide (two clicks; free/right/isosceles triangles take three)
 1. Pick the shape on the F-menu tiles (or keep the remembered default). **First click:** draft starts,
    plane axis captured, `DraftStartPacket` → others see an anchor dot; the acting player gets the live ghost
    (full placed-guide pipeline: colors, scale, Surface slabs, far-foot Blue/Indigo, the picked shape).
-2. Settings changed mid-draft apply live to the ghost. **SHIFT** snaps the second foot level-and-cardinal.
-3. **Second click:** client cap pre-check (factory shape, filled-aware) → `GuideCreateRequestPacket` (two
-   points + settings + shape/constraint/plane) → server builds via the factory, stores, records
-   `CreateGuideCommand`, broadcasts full state. Right-click at any point discards the draft.
+2. Settings changed mid-draft apply live to the ghost. **CTRL** snaps the aimed foot level-and-cardinal
+   (Session 11 — moved from SHIFT); **SHIFT** live-inverts the ghost upside-down (arch family +
+   equilateral).
+3. **Completing click:** client cap pre-check (factory shape, filled-aware) → `GuideCreateRequestPacket`
+   (points + settings + shape/constraint/plane + Session-11 inverted/sides/apex) → server builds via the
+   factory, stores (stamping the as-placed spring-back snapshot), records `CreateGuideCommand`, broadcasts
+   full state. **Three-click triangles:** the second click stores the base's far end (client-side only);
+   the ghost's apex then tracks the crosshair — **SHIFT centres it on the base (0.1.15)** — and the THIRD
+   click completes. **Free-Shape (0.1.15):** every click chains a corner (CTRL snaps relative to the
+   PREVIOUS corner); clicking the LAST corner finishes open, the FIRST (≥3) closes the loop; the full
+   chain + closed flag cross in the create request. Right-click steps any multi-click draft back one click
+   (chains retract a corner, triangles the base end; otherwise the draft is discarded).
 
 ### Grabbing and reshaping (Create mode)
 1. **Left-click a point** → grab (lock acquired, `GuideLockStatePacket` broadcast). **Left-click the body:**
    arch family → the server inserts a point at the nearest curve parameter and the client adopts it as a
    grab in one gesture (a constrained guide **breaks first** — one undo command, one full-state broadcast
    carrying both changes); ellipse family → the nearest handle is grabbed instead.
-2. **Dragging:** anchors snap to block faces (SHIFT → cardinal line through the other anchor); interior
+2. **Dragging:** anchors snap to block faces (CTRL → cardinal line through the other anchor; Session 11 —
+   SHIFT+left-click on a guide is now spring-back-to-original instead of a grab); interior
    points move at retained depth. The client previews locally at full fidelity — including **soft-point
    flow** (unlocked interior points flowing proportionally with the structural baseline) and any constraint
    break (mirror constraint cleared at grab start). Throttled sends (~100 ms); the server composes the

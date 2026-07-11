@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Newtonsoft.Json;
 using Layout.Guide;
 
@@ -39,6 +40,20 @@ namespace Layout.Config
         /// <summary>Session 9: default equal-part division marks for new guides (0/1 = none).</summary>
         public int DefaultDivisions { get; set; } = 0;
 
+        /// <summary>Session 11: the polygon side count the tool starts with (3..24).</summary>
+        public int DefaultSides { get; set; } = 6;
+
+        /// <summary>
+        /// Session 11: the pinned shapes filling the picker's slots (up to FOUR since 0.1.15), as the
+        /// GUI's shape codes (each maps to a {type + constraint} pair, e.g. "halfcircle" = Arch +
+        /// SemiCircle). HARD-KEPT (0.1.15, human-directed): starring never evicts — right-click a starred
+        /// tile to unstar it and free the slot; fewer than four is fine (empty slots show as faint
+        /// placeholders). Unknown codes are dropped at load; the list is never re-padded.
+        /// </summary>
+        [JsonProperty("favoriteShapes")]
+        public List<string> FavoriteShapes { get; set; } =
+            new List<string> { "arch", "halfcircle", "circle", "line" };
+
         // ------------------------------------------------------------------------------------------
         //  Guide opacities (Session-8, item 2): every voxel-type alpha is a client visual preference,
         //  hand-tunable here without a rebuild. 0 = invisible, 1 = solid. Applied once at client start
@@ -78,12 +93,27 @@ namespace Layout.Config
                 DefaultProjection != (int)ProjectionMode.Surface)
                 DefaultProjection = (int)ProjectionMode.Volumetric;
 
-            if (DefaultShape < (int)GuideShapeType.Arch || DefaultShape > (int)GuideShapeType.Rectangle)
+            if (DefaultShape < (int)GuideShapeType.Arch || DefaultShape > (int)GuideShapeType.FreeShape)
                 DefaultShape = (int)GuideShapeType.Arch;
             if (!Systems.DraftManager.IsValidPair((GuideShapeType)DefaultShape, (ShapeConstraint)DefaultConstraint))
                 DefaultConstraint = (int)ShapeConstraint.None;
             if (DefaultDivisions < 0) DefaultDivisions = 0;
             if (DefaultDivisions > Shapes.DivisionMarks.MaxDivisions) DefaultDivisions = Shapes.DivisionMarks.MaxDivisions;
+            DefaultSides = Shapes.PolygonShape.ClampSides(DefaultSides);
+
+            // Favorites (0.1.15, hard-kept): keep only codes the GUI knows, dedupe, cap at four slots.
+            // Deliberately NO padding — an unstar stays unstarred across restarts.
+            var seen = new HashSet<string>();
+            var valid = new List<string>(4);
+            if (FavoriteShapes != null)
+                foreach (string code in FavoriteShapes)
+                {
+                    string c = code?.Trim().ToLowerInvariant();
+                    if (string.IsNullOrEmpty(c) || !UI.GuideToolGui.IsKnownShapeCode(c) || !seen.Add(c)) continue;
+                    valid.Add(c);
+                    if (valid.Count == 4) break;
+                }
+            FavoriteShapes = valid;
 
             OpacityBody = ClampAlpha(OpacityBody, 0.5f);
             OpacityLocked = ClampAlpha(OpacityLocked, 0.5f);

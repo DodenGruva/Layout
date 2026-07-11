@@ -51,8 +51,13 @@ namespace Layout.Guide
         /// </summary>
         /// Version 4 (Session 8) added <see cref="Constraint"/> and <see cref="ShapePlaneAxis"/>; version 5
         /// (Session 9) added <see cref="Divisions"/>. Older records load via defaults (None / Y / 0) —
-        /// default-driven migration again.
-        public const int CurrentDataVersion = 5;
+        /// default-driven migration again. Version 6 (Session 11) added <see cref="Sides"/> (polygon side
+        /// count) and the as-placed snapshot (<see cref="OriginalControlPoints"/> +
+        /// <see cref="OriginalConstraint"/>) behind SHIFT spring-back; older records load with a null
+        /// snapshot (spring-back reports "no original recorded" for them) — default-driven migration.
+        /// Version 7 (Session 11, 0.1.15) added <see cref="IsClosed"/> for the Free-Shape (default false —
+        /// harmless on every earlier shape).
+        public const int CurrentDataVersion = 7;
 
         /// <summary>The voxel edge lengths a guide may use, in 1/16-block units (1 → 1/16 block, 16 → 1 block).</summary>
         public static readonly int[] ValidVoxelScales = { 1, 2, 4, 8, 16 };
@@ -72,6 +77,31 @@ namespace Layout.Guide
         /// counts, or caps. 0 or 1 = no divisions.
         /// </summary>
         public int Divisions { get; set; }
+
+        /// <summary>
+        /// Session 11: the regular polygon's side count. Only meaningful when <see cref="ShapeType"/> is
+        /// <see cref="GuideShapeType.Polygon"/>; carried (0) but ignored by every other shape.
+        /// </summary>
+        public int Sides { get; set; }
+
+        /// <summary>
+        /// Session 11 (0.1.15): whether a Free-Shape loops back to its first corner (drafted by clicking
+        /// the first anchor). Fixed at creation. Carried (false) but ignored by every other shape.
+        /// </summary>
+        public bool IsClosed { get; set; }
+
+        /// <summary>
+        /// Session 11 (SHIFT spring-back): a deep, immutable snapshot of the control points exactly as the
+        /// guide was FIRST PLACED, so hand distortions can be undone back to the pristine geometry at any
+        /// later time. Persisted with the save; deliberately NOT sent over the wire (the server executes
+        /// spring-back; clients only request it). Null on guides that predate 0.1.14 — spring-back is
+        /// simply unavailable for those.
+        /// </summary>
+        public List<ControlPoint> OriginalControlPoints { get; set; }
+
+        /// <summary>The constraint the guide was first placed with, restored together with
+        /// <see cref="OriginalControlPoints"/> on spring-back (a broken circle springs back to a circle).</summary>
+        public ShapeConstraint OriginalConstraint { get; set; }
 
         /// <summary>
         /// The INTRINSIC geometry plane of planar closed shapes (the ellipse family): the axis normal to
@@ -127,6 +157,10 @@ namespace Layout.Guide
             Constraint = ShapeConstraint.None;
             ShapePlaneAxis = PlaneAxis.Y;
             Divisions = 0;
+            Sides = 0;
+            IsClosed = false;
+            OriginalControlPoints = null;      // null = no as-placed snapshot (pre-0.1.14 records)
+            OriginalConstraint = ShapeConstraint.None;
             ControlPoints = new List<ControlPoint>();
             VoxelScale = 1;
             IsHidden = false;
@@ -160,12 +194,20 @@ namespace Layout.Guide
             bool isFilled = false,
             ShapeConstraint constraint = ShapeConstraint.None,
             PlaneAxis shapePlaneAxis = PlaneAxis.Y,
-            int divisions = 0)
+            int divisions = 0,
+            int sides = 0,
+            bool isClosed = false)
         {
             if (controlPoints == null) throw new ArgumentNullException(nameof(controlPoints));
             if (!IsValidVoxelScale(voxelScale))
                 throw new ArgumentOutOfRangeException(
                     nameof(voxelScale), voxelScale, "Voxel scale must be one of 1, 2, 4, 8, 16.");
+
+            // The as-placed snapshot for SHIFT spring-back: taken at the ONE moment a guide is born, from
+            // the fully-derived spine (the caller applies any third-click apex BEFORE building the record).
+            var original = new List<ControlPoint>(controlPoints.Count);
+            foreach (var cp in controlPoints)
+                original.Add(cp == null ? new ControlPoint() : cp.Clone());
 
             return new GuideData
             {
@@ -174,6 +216,10 @@ namespace Layout.Guide
                 Constraint = constraint,
                 ShapePlaneAxis = shapePlaneAxis,
                 Divisions = divisions,
+                Sides = sides,
+                IsClosed = isClosed,
+                OriginalControlPoints = original,
+                OriginalConstraint = constraint,
                 ControlPoints = controlPoints,                 // adopted by reference — shared with the shape
                 VoxelScale = voxelScale,
                 IsHidden = false,
@@ -206,6 +252,14 @@ namespace Layout.Guide
             foreach (var cp in ControlPoints)
                 pointsCopy.Add(cp == null ? new ControlPoint() : cp.Clone());
 
+            List<ControlPoint> originalCopy = null;
+            if (OriginalControlPoints != null)
+            {
+                originalCopy = new List<ControlPoint>(OriginalControlPoints.Count);
+                foreach (var cp in OriginalControlPoints)
+                    originalCopy.Add(cp == null ? new ControlPoint() : cp.Clone());
+            }
+
             return new GuideData
             {
                 Id = Id,
@@ -213,6 +267,10 @@ namespace Layout.Guide
                 Constraint = Constraint,
                 ShapePlaneAxis = ShapePlaneAxis,
                 Divisions = Divisions,
+                Sides = Sides,
+                IsClosed = IsClosed,
+                OriginalControlPoints = originalCopy,
+                OriginalConstraint = OriginalConstraint,
                 ControlPoints = pointsCopy,
                 VoxelScale = VoxelScale,
                 IsHidden = IsHidden,

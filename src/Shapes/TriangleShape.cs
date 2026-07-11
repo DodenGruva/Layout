@@ -38,8 +38,13 @@ namespace Layout.Shapes
 
         public ShapeConstraint Constraint => _constraint;
 
-        /// <summary>Creates a fresh triangle from the two draft clicks (the base).</summary>
-        public TriangleShape(Vec3d a, Vec3d b, PlaneAxis planeAxis, ShapeConstraint constraint)
+        /// <summary>
+        /// Creates a fresh triangle from the two draft clicks (the base). <paramref name="inverted"/>
+        /// (SHIFT at placement, Session 11) mirrors the born apex to the other side of the base; with
+        /// default-up frames that means opening downward instead of up.
+        /// </summary>
+        public TriangleShape(Vec3d a, Vec3d b, PlaneAxis planeAxis, ShapeConstraint constraint,
+            bool inverted = false)
         {
             _preferredAxis = planeAxis;
             _constraint = ValidConstraint(constraint);
@@ -49,7 +54,7 @@ namespace Layout.Shapes
                 new ControlPoint(new Vec3d(b.X, b.Y, b.Z), isAnchor: true),
                 new ControlPoint(new Vec3d(a.X, a.Y, a.Z), isPrimary: true)   // placed properly just below
             };
-            DeriveApex(initial: true);
+            DeriveApex(initial: true, initialSide: inverted ? -1.0 : 1.0);
         }
 
         /// <summary>Adopts an existing list (load/wire path). Shared by reference, never copied.</summary>
@@ -80,7 +85,14 @@ namespace Layout.Shapes
         /// Puts V where the current constraint says it belongs after an A/B move (or at creation).
         /// Free triangles leave V untouched except at creation (born equilateral).
         /// </summary>
-        private void DeriveApex(bool initial = false)
+        /// <remarks>
+        /// SIDE-PRESERVING (Session 11). Re-derivation used to take the ABSOLUTE height/leg along m̂,
+        /// which silently flipped an inverted (below-the-base) apex back up on the next base move. The
+        /// projections are now SIGNED: whichever side of the base the apex currently lives on, it stays
+        /// on — the sign is read from the stored geometry, so it persists and syncs for free. At creation
+        /// <paramref name="initialSide"/> (+1 up / −1 the SHIFT-inverted side) decides instead.
+        /// </remarks>
+        private void DeriveApex(bool initial = false, double initialSide = 1.0)
         {
             if (_controlPoints.Count < 3) return;
             Vec3d a = _controlPoints[0].WorldPosition, b = _controlPoints[1].WorldPosition;
@@ -89,27 +101,36 @@ namespace Layout.Shapes
             Vec3d mid = ShapeGeometry.Lerp(a, b, 0.5);
             Vec3d v = _controlPoints[2].WorldPosition;
 
+            // Signed offset with a minimum magnitude: keeps the apex's current side (0 counts as up).
+            static double Signed(double dot, double min)
+            {
+                double side = dot < 0 ? -1.0 : 1.0;
+                return side * Math.Max(min, Math.Abs(dot));
+            }
+
             switch (_constraint)
             {
                 case ShapeConstraint.Equilateral:
                 {
-                    double h = Math.Sqrt(3) / 2.0 * baseLen;
+                    double side = initial ? initialSide
+                        : (ShapeGeometry.Dot(new Vec3d(v.X - mid.X, v.Y - mid.Y, v.Z - mid.Z), m) < 0 ? -1.0 : 1.0);
+                    double h = side * Math.Sqrt(3) / 2.0 * baseLen;
                     _controlPoints[2].SetPosition(mid.X + m.X * h, mid.Y + m.Y * h, mid.Z + m.Z * h);
                     return;
                 }
                 case ShapeConstraint.Isosceles:
                 {
-                    double h = initial ? Math.Sqrt(3) / 2.0 * baseLen
-                        : Math.Max(MinLeg, Math.Abs(ShapeGeometry.Dot(
-                            new Vec3d(v.X - mid.X, v.Y - mid.Y, v.Z - mid.Z), m)));
+                    double h = initial ? initialSide * Math.Sqrt(3) / 2.0 * baseLen
+                        : Signed(ShapeGeometry.Dot(
+                            new Vec3d(v.X - mid.X, v.Y - mid.Y, v.Z - mid.Z), m), MinLeg);
                     _controlPoints[2].SetPosition(mid.X + m.X * h, mid.Y + m.Y * h, mid.Z + m.Z * h);
                     return;
                 }
                 case ShapeConstraint.Right:
                 {
-                    double leg = initial ? baseLen
-                        : Math.Max(MinLeg, Math.Abs(ShapeGeometry.Dot(
-                            new Vec3d(v.X - a.X, v.Y - a.Y, v.Z - a.Z), m)));
+                    double leg = initial ? initialSide * baseLen
+                        : Signed(ShapeGeometry.Dot(
+                            new Vec3d(v.X - a.X, v.Y - a.Y, v.Z - a.Z), m), MinLeg);
                     _controlPoints[2].SetPosition(a.X + m.X * leg, a.Y + m.Y * leg, a.Z + m.Z * leg);
                     return;
                 }
@@ -117,7 +138,7 @@ namespace Layout.Shapes
                 {
                     if (initial)
                     {
-                        double h = Math.Sqrt(3) / 2.0 * baseLen;
+                        double h = initialSide * Math.Sqrt(3) / 2.0 * baseLen;
                         _controlPoints[2].SetPosition(mid.X + m.X * h, mid.Y + m.Y * h, mid.Z + m.Z * h);
                     }
                     return;

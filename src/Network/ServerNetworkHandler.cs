@@ -136,6 +136,8 @@ namespace Layout.Network
                 .SetMessageHandler<GuideSetProjectionPacket>(OnSetProjection)
                 .SetMessageHandler<GuideSetFilledPacket>(OnSetFilled)
                 .SetMessageHandler<GuideSetDivisionsPacket>(OnSetDivisions)
+                .SetMessageHandler<GuideSetSidesPacket>(OnSetSides)
+                .SetMessageHandler<GuideSpringBackPacket>(OnSpringBack)
                 .SetMessageHandler<DraftStartPacket>(OnDraftStart)
                 .SetMessageHandler<DraftCancelPacket>(OnDraftCancel)
                 .SetMessageHandler<UndoRequestPacket>(OnUndo)
@@ -202,8 +204,22 @@ namespace Layout.Network
             var shapeType = (GuideShapeType)p.ShapeType;
             var constraint = (ShapeConstraint)p.Constraint;
             var planeAxis = (PlaneAxis)p.ShapePlaneAxis;
+
+            // 0.1.15: the Free-Shape's corner chain (validated: every entry present, count sane).
+            List<Vec3d> chain = null;
+            if (p.Chain != null && p.Chain.Length >= 2 && p.Chain.Length <= Shapes.FreeShape.MaxCorners)
+            {
+                chain = new List<Vec3d>(p.Chain.Length);
+                foreach (Vec3Dto c in p.Chain)
+                {
+                    if (c == null) { chain = null; break; }
+                    chain.Add(c.ToVec3d());
+                }
+            }
+
             GuideOperationResult result = _guides.CreateGuide(
-                start, end, settings, shapeType, constraint, planeAxis, fromPlayer.PlayerUID);
+                start, end, settings, shapeType, constraint, planeAxis, fromPlayer.PlayerUID,
+                p.Apex?.ToVec3d(), p.Inverted, p.Sides, chain, p.Closed);
             switch (result.Status)
             {
                 case GuideOpStatus.Success:
@@ -749,6 +765,59 @@ namespace Layout.Network
             {
                 _undo.Record(fromPlayer.PlayerUID, new SetDivisionsCommand(id, oldDivisions, result.Guide.Divisions));
                 _channel.BroadcastPacket(new GuideSetDivisionsPacket(id, result.Guide.Divisions));
+            }
+            else HandleNonSuccessToggle(fromPlayer, id, result, g);
+        }
+
+        private void OnSetSides(IServerPlayer fromPlayer, GuideSetSidesPacket p)
+        {
+            if (DeniedByPrivilege(fromPlayer)) return;
+            Guid id = p.GuideId();
+            if (!_guides.TryGetGuide(id, out GuideData g)) { _channel.SendPacket(new GuideDeletePacket(id), fromPlayer); return; }
+            if (BlockedByEditLock(fromPlayer, id)) return;
+
+            int oldSides = g.Sides;
+            GuideOperationResult result = _guides.SetSides(id, p.Sides);
+            if (result.Status == GuideOpStatus.Success)
+            {
+                if (result.Guide.Sides != oldSides)
+                {
+                    _undo.Record(fromPlayer.PlayerUID, new SetSidesCommand(id, oldSides, result.Guide.Sides));
+                    _channel.BroadcastPacket(new GuideSetSidesPacket(id, result.Guide.Sides));
+                }
+            }
+            else HandleNonSuccessToggle(fromPlayer, id, result, g);
+        }
+
+        // SHIFT+click spring-back (Session 11): restore the as-placed control points + constraint, as one
+        // undo step. Geometry is rewritten wholesale, so the broadcast is the generic full-state upsert.
+        // The full-exclusivity gate applies — it's an atomic op like the toggles.
+        private void OnSpringBack(IServerPlayer fromPlayer, GuideSpringBackPacket p)
+        {
+            if (DeniedByPrivilege(fromPlayer)) return;
+            Guid id = p.GuideId();
+            if (!_guides.TryGetGuide(id, out GuideData g)) { _channel.SendPacket(new GuideDeletePacket(id), fromPlayer); return; }
+            if (BlockedByEditLock(fromPlayer, id)) return;
+
+            if (g.OriginalControlPoints == null || g.OriginalControlPoints.Count == 0)
+            {
+                fromPlayer.SendIngameError("layout-nooriginal",
+                    "This guide has no recorded original form (it was placed before spring-back existed).");
+                return;
+            }
+
+            // Snapshot the distorted form BEFORE restoring, so the spring-back is one clean undo step.
+            ShapeConstraint beforeConstraint = g.Constraint;
+            var beforePoints = new List<ControlPoint>(g.ControlPoints.Count);
+            foreach (var cp in g.ControlPoints) beforePoints.Add(cp.Clone());
+
+            GuideOperationResult result = _guides.SpringBackToOriginal(id);
+            if (result.Status == GuideOpStatus.Success)
+            {
+                _undo.Record(fromPlayer.PlayerUID, new SpringBackCommand(
+                    id, beforeConstraint, beforePoints,
+                    result.Guide.Constraint, result.Guide.ControlPoints));
+                _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
             }
             else HandleNonSuccessToggle(fromPlayer, id, result, g);
         }

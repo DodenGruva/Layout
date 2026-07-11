@@ -138,6 +138,10 @@ namespace Layout.Network
         [ProtoMember(11)] public int Constraint;
         [ProtoMember(12)] public int ShapePlaneAxis;
         [ProtoMember(13)] public int Divisions;      // Session-9 additive: visual division marks
+        [ProtoMember(14)] public int Sides;          // Session-11 additive: polygon side count
+        [ProtoMember(15)] public bool IsClosed;      // Session-11 (0.1.15) additive: Free-Shape loop flag
+        // (The as-placed spring-back snapshot deliberately does NOT cross the wire: the server executes
+        //  spring-back; clients only ever request it by guide id.)
 
         public GuideDataDto() { }
 
@@ -161,7 +165,9 @@ namespace Layout.Network
                 DataVersion = g.DataVersion,
                 Constraint = (int)g.Constraint,
                 ShapePlaneAxis = (int)g.ShapePlaneAxis,
-                Divisions = g.Divisions
+                Divisions = g.Divisions,
+                Sides = g.Sides,
+                IsClosed = g.IsClosed
             };
         }
 
@@ -194,7 +200,9 @@ namespace Layout.Network
                 DataVersion = DataVersion,
                 Constraint = (ShapeConstraint)Constraint,
                 ShapePlaneAxis = (PlaneAxis)ShapePlaneAxis,
-                Divisions = Divisions
+                Divisions = Divisions,
+                Sides = Sides,
+                IsClosed = IsClosed
             };
         }
     }
@@ -358,11 +366,22 @@ namespace Layout.Network
         [ProtoMember(4)] public int ShapeType;
         [ProtoMember(5)] public int Constraint;
         [ProtoMember(6)] public int ShapePlaneAxis;
+        // Session-11 additive: SHIFT-at-placement inversion (upside-down arch/triangle), the polygon side
+        // count, and the third click of a 3-click triangle (null = no apex click; the shape derives one).
+        [ProtoMember(7)] public bool Inverted;
+        [ProtoMember(8)] public int Sides;
+        [ProtoMember(9)] public Vec3Dto Apex;
+        // Session-11 (0.1.15) additive: the Free-Shape's full corner chain (Start/End still carry the
+        // first/last corners for the legacy fields) and whether it closed back onto corner 0.
+        [ProtoMember(10)] public Vec3Dto[] Chain;
+        [ProtoMember(11)] public bool Closed;
 
         public GuideCreateRequestPacket() { }
 
         public GuideCreateRequestPacket(Vec3Dto start, Vec3Dto end, RenderSettingsDto settings,
-            int shapeType = 0, int constraint = 0, int shapePlaneAxis = 0)
+            int shapeType = 0, int constraint = 0, int shapePlaneAxis = 0,
+            bool inverted = false, int sides = 0, Vec3Dto apex = null,
+            Vec3Dto[] chain = null, bool closed = false)
         {
             Start = start;
             End = end;
@@ -370,6 +389,11 @@ namespace Layout.Network
             ShapeType = shapeType;
             Constraint = constraint;
             ShapePlaneAxis = shapePlaneAxis;
+            Inverted = inverted;
+            Sides = sides;
+            Apex = apex;
+            Chain = chain;
+            Closed = closed;
         }
     }
 
@@ -416,6 +440,45 @@ namespace Layout.Network
             GuideIdBytes = NetIds.ToBytes(guideId);
             Divisions = divisions;
         }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
+    /// <summary>
+    /// Both ways: set a polygon guide's side count (Session 11). C→S requests; S→C broadcasts the applied
+    /// (clamped) value. Mirrors <see cref="GuideSetDivisionsPacket"/>.
+    /// </summary>
+    [ProtoContract]
+    public class GuideSetSidesPacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public int Sides;
+
+        public GuideSetSidesPacket() { }
+
+        public GuideSetSidesPacket(Guid guideId, int sides)
+        {
+            GuideIdBytes = NetIds.ToBytes(guideId);
+            Sides = sides;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
+    /// <summary>
+    /// C→S. SHIFT+click on a placed guide (Session 11): spring the guide back to its as-placed form —
+    /// the server restores the original control points + constraint recorded at creation, as one undo
+    /// step, and broadcasts the guide's full state. Guides placed before the snapshot existed get an
+    /// in-game error instead.
+    /// </summary>
+    [ProtoContract]
+    public class GuideSpringBackPacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+
+        public GuideSpringBackPacket() { }
+
+        public GuideSpringBackPacket(Guid guideId) { GuideIdBytes = NetIds.ToBytes(guideId); }
 
         public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
     }
@@ -706,7 +769,10 @@ namespace Layout.Network
             // Session-8 additions (append-only, per the rule above)
             typeof(GuideCancelGrabPacket),
             // Session-9 additions
-            typeof(GuideSetDivisionsPacket)
+            typeof(GuideSetDivisionsPacket),
+            // Session-11 additions
+            typeof(GuideSetSidesPacket),
+            typeof(GuideSpringBackPacket)
         };
     }
 }

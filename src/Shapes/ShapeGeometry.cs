@@ -18,6 +18,15 @@ namespace Layout.Shapes
         /// normal is the preferred axis with û projected out, with axis fallbacks when parallel.
         /// False when a≈b.
         /// </summary>
+        /// <remarks>
+        /// DEFAULT-UP (Session 11, human-requested): m̂'s SIGN used to follow the anchor order (Cross of
+        /// the derived normal with û flips when a and b swap), so a shape whose "up" derives from +m̂ —
+        /// notably a fresh triangle's apex — spawned upside-down depending on which way the base was
+        /// clicked. m̂ is now sign-normalised: world-up-biased when it has any vertical component, and
+        /// deterministically axis-biased (+Z, then +X) when it lies flat (a shape drawn on the ground,
+        /// where no direction is "up"). Placement order can no longer flip a shape; SHIFT-at-placement is
+        /// the one way to invert.
+        /// </remarks>
         public static bool TryGetFrame(Vec3d a, Vec3d b, PlaneAxis preferredAxis,
             out Vec3d uHat, out Vec3d mHat, out double baseLen)
         {
@@ -31,6 +40,14 @@ namespace Layout.Shapes
                    ?? ProjectOutAndNormalise(AxisVec(PlaneAxis.Y), uHat)
                    ?? ProjectOutAndNormalise(AxisVec(PlaneAxis.X), uHat);
             mHat = Cross(n, uHat);
+
+            const double eps = 1e-9;
+            if (mHat.Y < -eps
+                || (Math.Abs(mHat.Y) <= eps && (mHat.Z < -eps
+                || (Math.Abs(mHat.Z) <= eps && mHat.X < -eps))))
+            {
+                mHat.X = -mHat.X; mHat.Y = -mHat.Y; mHat.Z = -mHat.Z;
+            }
             return true;
         }
 

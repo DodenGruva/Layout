@@ -64,15 +64,16 @@ namespace Layout.Shapes
         /// into a GuideData via <see cref="ControlPoints"/> to persist the guide.
         /// </summary>
         public ArchShape(Vec3d start, Vec3d end, double alpha = 0.5,
-            ShapeConstraint constraint = ShapeConstraint.None)
+            ShapeConstraint constraint = ShapeConstraint.None, bool inverted = false)
         {
             _alpha = ClampAlpha(alpha);
             _constraint = constraint == ShapeConstraint.SemiCircle ? ShapeConstraint.SemiCircle : ShapeConstraint.None;
-            _controlPoints = BuildInitialSpine(start, end);
+            _controlPoints = BuildInitialSpine(start, end, inverted);
             if (_constraint == ShapeConstraint.SemiCircle)
             {
                 // A half-circle stores only its feet — the arc (and its apex marker) derives from them, so
-                // the free apex control point is dropped. Spine: [phantom, A, B, phantom].
+                // the free apex control point is dropped. Spine: [phantom, A, B, phantom]. The opening
+                // direction survives the removal because the phantoms carry it (see RecalculatePhantomsOn).
                 _controlPoints.RemoveAt(2);
                 RecalculatePhantomPoints();
             }
@@ -330,13 +331,15 @@ namespace Layout.Shapes
 
         // --- construction helpers --------------------------------------------------------------
 
-        private List<ControlPoint> BuildInitialSpine(Vec3d start, Vec3d end)
+        private List<ControlPoint> BuildInitialSpine(Vec3d start, Vec3d end, bool inverted = false)
         {
             double mxp = (start.X + end.X) / 2.0;
             double myp = (start.Y + end.Y) / 2.0;
             double mzp = (start.Z + end.Z) / 2.0;
             double span = Distance(start, end);
-            var apex = new Vec3d(mxp, myp + ApexHeightFraction * span, mzp);
+            // SHIFT-inverted (Session 11): the apex is born BELOW the chord — the arch opens downward.
+            double rise = (inverted ? -1.0 : 1.0) * ApexHeightFraction * span;
+            var apex = new Vec3d(mxp, myp + rise, mzp);
 
             var list = new List<ControlPoint>(5)
             {
@@ -361,6 +364,32 @@ namespace Layout.Shapes
             Vec3d endAnchor = list[n - 2].WorldPosition;
             Vec3d endNeighbor = list[n - 3].WorldPosition;
 
+            // OPENING DIRECTION (Session 11, SHIFT-invert). The phantoms used to drop unconditionally
+            // BELOW the feet (up-opening arches only); a downward-opening arch needs them ABOVE so the
+            // curve still departs the feet vertically, toward its own body. The side is derived from the
+            // stored geometry, so it persists, syncs, and survives every re-derivation:
+            //   • interior points present → their average height vs the anchors' decides (an arch whose
+            //     body sits below its feet opens downward);
+            //   • no interior (the semicircle's [phantom, A, B, phantom] spine) → the phantoms KEEP the
+            //     side they already have (they were seeded correctly at construction, before the derived
+            //     apex was removed).
+            double openSign = 1.0;                              // +1 = opens up (phantoms below the feet)
+            if (n >= 5)
+            {
+                double interiorY = 0;
+                for (int i = 2; i <= n - 3; i++) interiorY += list[i].WorldPosition.Y;
+                interiorY /= n - 4;
+                double anchorY = (startAnchor.Y + endAnchor.Y) * 0.5;
+                const double eps = 1e-9;
+                if (interiorY < anchorY - eps) openSign = -1.0;
+            }
+            else
+            {
+                double phantomY = (list[0].WorldPosition.Y + list[n - 1].WorldPosition.Y) * 0.5;
+                double anchorY = (startAnchor.Y + endAnchor.Y) * 0.5;
+                if (phantomY > anchorY) openSign = -1.0;        // phantoms above = a downward arc
+            }
+
             // Session-9 batch-3 revision ("the entire arch shifts when I lock a voxel"): the phantom DROP
             // is now derived from the ANCHOR CHORD, not reflected from the neighbor's height. The old
             // reflection made the feet's tangent tension a function of whichever knot happened to sit next
@@ -375,7 +404,7 @@ namespace Layout.Shapes
             // so a small residual parameterisation effect near a foot remains when its neighbor changes;
             // the dominant shift term is gone.
             double chord = Distance(startAnchor, endAnchor);
-            double drop = Math.Max(MinPhantomDrop, ApexHeightFraction * chord);
+            double drop = openSign * Math.Max(MinPhantomDrop, ApexHeightFraction * chord);
 
             Vec3d p0 = VerticalFootPhantom(startAnchor, startNeighbor, drop);
             Vec3d pEnd = VerticalFootPhantom(endAnchor, endNeighbor, drop);
@@ -385,8 +414,9 @@ namespace Layout.Shapes
         }
 
         // Places a phantom so the spline's secant tangent at the foot is purely vertical: matching the
-        // neighbor's X/Z zeroes the horizontal tangent; the chord-derived drop sets a stable downward
-        // (into-ground) handle magnitude.
+        // neighbor's X/Z zeroes the horizontal tangent; the chord-derived drop sets a stable handle
+        // magnitude away from the body (below the feet for an up-opening arch, above for an inverted one —
+        // the caller passes the drop pre-signed).
         private static Vec3d VerticalFootPhantom(Vec3d anchor, Vec3d neighbor, double drop)
         {
             return new Vec3d(neighbor.X, anchor.Y - drop, neighbor.Z);
@@ -498,7 +528,9 @@ namespace Layout.Shapes
 
         // The half-circle's frame: centre and radius from the feet; the arc rises along the in-plane
         // perpendicular that points most upward (flipped if needed so arches open toward the sky). A
-        // vertical foot chord falls back to a horizontal arc direction.
+        // vertical foot chord falls back to a horizontal arc direction. SHIFT-inverted half-circles
+        // (Session 11) open downward instead: the stored phantoms carry the side (they sit ABOVE the feet
+        // on an inverted arc — see RecalculatePhantomsOn), and the arc direction follows them.
         private bool TryGetArcFrame(out Vec3d center, out Vec3d uAxis, out Vec3d upAxis, out double radius)
         {
             center = uAxis = upAxis = null; radius = 0;
@@ -516,6 +548,17 @@ namespace Layout.Shapes
             if (plen < 1e-6) { px = 1.0 - ux * ux; py = -uy * ux; pz = -uz * ux; plen = Math.Sqrt(px * px + py * py + pz * pz); }
             if (plen < 1e-6) return false;
             upAxis = new Vec3d(px / plen, py / plen, pz / plen);
+
+            // Inverted arc: phantoms above the feet → mirror the arc to the other side of the chord.
+            if (_controlPoints.Count >= 4 && _controlPoints[0].IsPhantom)
+            {
+                double phantomY = (_controlPoints[0].WorldPosition.Y
+                    + _controlPoints[_controlPoints.Count - 1].WorldPosition.Y) * 0.5;
+                if (phantomY > (a.Y + b.Y) * 0.5)
+                {
+                    upAxis.X = -upAxis.X; upAxis.Y = -upAxis.Y; upAxis.Z = -upAxis.Z;
+                }
+            }
             return true;
         }
 

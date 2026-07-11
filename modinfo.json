@@ -2,7 +2,7 @@
   "type": "code",
   "modid": "layout",
   "name": "Layout",
-  "version": "0.1.13",
+  "version": "0.1.19",
   "authors": [ "Zech" ],
   "description": "Voxel-resolution construction planning — place translucent, world-shared guides to lay out builds before you place a single block.",
   "dependencies": {

@@ -272,7 +272,12 @@ namespace Layout.Systems
             GuideShapeType shapeType = GuideShapeType.Arch,
             ShapeConstraint constraint = ShapeConstraint.None,
             PlaneAxis shapePlaneAxis = PlaneAxis.Y,
-            string creatorUid = null)
+            string creatorUid = null,
+            Vec3d thirdPoint = null,
+            bool inverted = false,
+            int sides = 0,
+            IReadOnlyList<Vec3d> chain = null,
+            bool closed = false)
         {
             if (start == null || end == null) return GuideOperationResult.Invalid();
             if (!GuideData.IsValidVoxelScale(settings.Scale)) return GuideOperationResult.Invalid();
@@ -283,7 +288,18 @@ namespace Layout.Systems
             if (_maxGuidesPerPlayer > 0 && creatorUid != null && CountGuidesBy(creatorUid) >= _maxGuidesPerPlayer)
                 return GuideOperationResult.OverGuideCount(null, CountGuidesBy(creatorUid), _maxGuidesPerPlayer);
 
-            IGuideShape shape = ShapeFactory.Create(shapeType, constraint, shapePlaneAxis, start, end);
+            IGuideShape shape = ShapeFactory.Create(shapeType, constraint, shapePlaneAxis, start, end,
+                inverted, sides, chain, closed);
+
+            // Three-click triangle (Session 11): the third click IS the apex. Applied before the record is
+            // built so the as-placed snapshot captures the true placed form. Equilateral never sends one
+            // (its apex is fully derived); ignore a third point there defensively.
+            if (thirdPoint != null && shapeType == GuideShapeType.Triangle
+                && shape.Constraint != ShapeConstraint.Equilateral && shape.ControlPoints.Count > 2)
+            {
+                shape.MoveControlPoint(2, thirdPoint);
+            }
+
             var data = GuideData.Create(
                 shapeType,
                 shape.ControlPoints,            // adopted by reference — guide and shape share one list
@@ -293,7 +309,9 @@ namespace Layout.Systems
                 settings.Filled,
                 shape.Constraint,               // the shape may have rejected an inapplicable constraint
                 shapePlaneAxis,
-                settings.Divisions);
+                settings.Divisions,
+                shapeType == GuideShapeType.Polygon ? Shapes.PolygonShape.ClampSides(sides) : 0,
+                shape is Shapes.FreeShape fs && fs.IsClosed);
             data.CreatorUid = creatorUid;
 
             int count = shape.GetVoxelCount(data.VoxelScale, data.IsFilled);
@@ -510,23 +528,29 @@ namespace Layout.Systems
             // positions are baked into the control points at the moment Surface is left: the volumetric
             // guide IS the shape you were looking at, where you were looking at it. Undoable (the server
             // handler snapshots the pre-bake points into the projection command).
-            // [Flagged: points bake to the exact plane coordinate, which quantises to the plane's
-            //  positive-side cell; on a wall whose solid side is positive this can sit one cell into the
-            //  wall at coarse scales — revisit with an air-side probe if it shows in play.]
+            //
+            // AIR-SIDE BAKE (Session 11 — the B-S10-2 fix). Baking to the EXACT plane coordinate quantised
+            // to the plane's positive-side cell regardless of which side was air, so on a negative-facing
+            // wall the volume grew INTO the block. The bake now probes world solidity on both sides of the
+            // plane (the server-side mirror of the renderer's decal-side probe) and nudges every baked
+            // point HALF A VOXEL into the airier side — exactly where a fresh Volumetric placement against
+            // that face would put its anchors — so the volume grows out of the wall, into the open air.
             List<ControlPoint> bakeRollback = null;
             if (oldMode == ProjectionMode.Surface && mode == ProjectionMode.Volumetric)
             {
                 bakeRollback = SnapshotPoints(g);
                 double planeCoord = oldPlane.PlaneOffset / 16.0;
+                double bakeCoord = planeCoord
+                    + ProbeAirSide(g, oldPlane) * (g.VoxelScale / 16.0) * 0.5;
                 foreach (ControlPoint cp in g.ControlPoints)
                 {
                     if (cp == null || cp.IsPhantom) continue;
                     Vec3d w = cp.WorldPosition;
                     switch (oldPlane.FlattenedAxis)
                     {
-                        case PlaneAxis.X: cp.SetPosition(planeCoord, w.Y, w.Z); break;
-                        case PlaneAxis.Z: cp.SetPosition(w.X, w.Y, planeCoord); break;
-                        default:          cp.SetPosition(w.X, planeCoord, w.Z); break;
+                        case PlaneAxis.X: cp.SetPosition(bakeCoord, w.Y, w.Z); break;
+                        case PlaneAxis.Z: cp.SetPosition(w.X, w.Y, bakeCoord); break;
+                        default:          cp.SetPosition(w.X, bakeCoord, w.Z); break;
                     }
                 }
                 shape.RecalculatePhantomPoints();
@@ -547,6 +571,85 @@ namespace Layout.Systems
             StoreCount(id, count);
             Persist();
             return GuideOperationResult.Success(g, count);
+        }
+
+        // Which side of a Surface plane is open air, by world solidity at the guide's own points: probes
+        // the block half a block out on each side of the plane at every non-phantom control point and
+        // votes. +1 = the positive side is airier, −1 = the negative side. Ties (free-floating planes,
+        // fully buried, or unloaded chunks) fall back to +1 — the pre-fix behaviour, harmless there.
+        // This is the server-side mirror of the renderer's CountSolidProbes decal-side vote (B-S10-2).
+        private int ProbeAirSide(GuideData g, ProjectionPlane plane)
+        {
+            var accessor = _sapi.World?.BlockAccessor;
+            if (accessor == null) return 1;
+
+            double planeCoord = plane.PlaneOffset / 16.0;
+            int solidsPos = 0, solidsNeg = 0;
+            foreach (ControlPoint cp in g.ControlPoints)
+            {
+                if (cp == null || cp.IsPhantom) continue;
+                Vec3d w = cp.WorldPosition;
+                for (int side = 0; side < 2; side++)
+                {
+                    double c = planeCoord + (side == 0 ? 0.5 : -0.5);
+                    double wx = plane.FlattenedAxis == PlaneAxis.X ? c : w.X;
+                    double wy = plane.FlattenedAxis == PlaneAxis.Y ? c : w.Y;
+                    double wz = plane.FlattenedAxis == PlaneAxis.Z ? c : w.Z;
+                    var pos = new BlockPos((int)Math.Floor(wx), (int)Math.Floor(wy), (int)Math.Floor(wz));
+                    if (accessor.GetChunkAtBlockPos(pos) == null) continue;   // unloaded: no vote
+                    var block = accessor.GetBlock(pos);
+                    if (block != null && block.Id != 0)
+                    {
+                        if (side == 0) solidsPos++; else solidsNeg++;
+                    }
+                }
+            }
+            return solidsPos <= solidsNeg ? 1 : -1;
+        }
+
+        /// <summary>
+        /// Session 11: sets a polygon guide's side count (re-derives the outline; anchors are untouched).
+        /// Clamped to the polygon's 3..24 range; re-counts and reverts on a cap breach, since more sides
+        /// mean more perimeter voxels. Rejects non-polygon guides.
+        /// </summary>
+        public GuideOperationResult SetSides(Guid id, int sides)
+        {
+            if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
+            if (g.ShapeType != GuideShapeType.Polygon) return GuideOperationResult.Invalid(g);
+
+            int oldSides = g.Sides;
+            int clamped = Shapes.PolygonShape.ClampSides(sides);
+            if (clamped == oldSides)
+                return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var c0) ? c0 : 0);
+
+            g.Sides = clamped;
+            IGuideShape shape = ShapeFactory.Adopt(g);          // side count is baked into the shape view
+            _shapes[id] = shape;
+
+            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            if (WouldExceedCaps(id, count, out int cap))
+            {
+                g.Sides = oldSides;
+                _shapes[id] = ShapeFactory.Adopt(g);
+                return GuideOperationResult.OverCap(g, count, cap);
+            }
+
+            StoreCount(id, count);
+            Persist();
+            return GuideOperationResult.Success(g, count);
+        }
+
+        /// <summary>
+        /// Session 11 (SHIFT spring-back): restores the guide's control points AND constraint to the
+        /// as-placed snapshot captured at creation. Returns Invalid when the guide predates the snapshot
+        /// (nothing recorded to spring back to). The caller owns undo recording and broadcasting, as ever.
+        /// </summary>
+        public GuideOperationResult SpringBackToOriginal(Guid id)
+        {
+            if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
+            if (g.OriginalControlPoints == null || g.OriginalControlPoints.Count == 0)
+                return GuideOperationResult.Invalid(g);
+            return RestoreConstraint(id, g.OriginalConstraint, g.OriginalControlPoints);
         }
 
         /// <summary>

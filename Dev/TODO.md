@@ -10,15 +10,75 @@
 
 ---
 
-## ⭐ Top of the list (Session-10 end)
+## ⭐ Top of the list (Session-11 end, v0.1.19)
 
-1. **The human's Session-10 backlog** (7 items) is the queued agenda — see **"Requested next — human
-   backlog"** below and the ordered plan in **"Next session — start here."** Item 1 of it is bug **B-S10-2**
-   (Surface→Volumetric bake direction).
-2. **B-S9-1 — Lock-in-place still broken (UNRESOLVED; the top *bug*, but parked by the human as "not
-   gamebreaking").** See OPEN BUGS. Best next step: **ray-vs-voxel-box first-hit picking**.
-3. ~~Divisions scroll-wheel~~ **DONE (0.1.12, confirmed; floored at 0 in 0.1.13)** · ~~Verify ⚠ tags~~ **DONE
-   2026-07-05** — see Resolved sections.
+1. **B-S9-1 — Lock-in-place (UNRESOLVED; the headline for next session, human-confirmed).** Right-clicking
+   to lock often locks an adjacent voxel and the guide visibly shifts. Untried fix: **ray-vs-voxel-box
+   first-hit picking** so the aimed cell is authoritative. See OPEN BUGS.
+2. **Playtest-confirm 0.1.19** (tiny: pin/unpin wording; Fill greys out on the Free-Shape). Everything
+   through **0.1.18 is playtest-CONFIRMED** (human-verified in-session, iteratively).
+3. Remaining flagged decisions (11a–11r, 16a–16d in `SESSION_11.md`): 11a (spring-back restores POSITION)
+   was reviewed and **confirmed good**; 11n (Fill on Free-Shape) resolved by greying the button in 0.1.19.
+   The rest are cosmetic — walk them opportunistically.
+
+**Standing workflow rule (session end, human-set — also in CLAUDE.md):** ship a NEW zip per code
+iteration, but do NOT update docs (TODO/ARCHITECTURE/PROJECT_STATUS/SESSION/memory) until the human says
+so. Warn the human before any context trim if the docs are stale.
+
+---
+
+## Resolved in Session 11, batches 3–5 (0.1.16 → 0.1.19) — `SESSION_11.md` §13/§15
+## (0.1.16–0.1.18 playtest-CONFIRMED; 0.1.19 pending)
+
+- **0.1.16:** Sides hard floor at 3 · catalog 5-wide + white separator · corner ★ badges · Create header
+  shape name right-aligned · the HUD's Current Shape chip · Delete mode greys every TILE ("-ghost" glyph
+  variants) · Free-Shape SHIFT = vertical segment · zips relocated to `..\Layout Zips\` (0.1.10+ history).
+- **0.1.17:** Fill onto the Projection row · Sides onto the Divisions row · title-bar dead space removed ·
+  favorites shown as YELLOW glyphs (the ★ was too small).
+- **0.1.18:** Fill tiles snapped to the column grid · number fields narrowed (no "Sides" wrap) · Edit-mode
+  text rewrite + periods/capitalisation pass.
+- **0.1.19:** pin/unpin vocabulary everywhere · Fill greyed out on the Free-Shape (closes flag 11n).
+
+---
+
+## Resolved in Session 11, second batch (0.1.15) — record in `SESSION_11.md` §10; **playtest-CONFIRMED**
+## ("This was tested. Good work." — refinements it spawned are the 0.1.16 batch above)
+
+- **Favorites hard-kept (human redesign after playing 0.1.14):** FOUR slots; starring fills a free slot and
+  never evicts (message when full); right-click unstars (slot or catalog); ★ badges on starred catalog
+  tiles; empty slots show placeholders; no auto-padding of existing configs.
+- **Current Shape chip:** permanently-lit, guide-body-yellow glyph of the picked shape at the far right of
+  the Mode row — you can see an off-slot selection without reading anything.
+- **SHIFT on the triangle's apex click = centred apex** (perpendicular bisector, live on the ghost).
+- **Free-Shape (13th catalog entry):** chained straight segments; click-last finishes open / click-first
+  (≥3) closes; right-click steps back a corner; CTRL snaps to the previous corner; body inserts like the
+  arch; fill deferred; corner cap 64. `IsClosed` → **DataVersion 7**; additive Chain/Closed on the create
+  request; **54 source files** (+ FreeShape.cs).
+
+---
+
+## Resolved in Session 11, first batch (0.1.14) — full record in `SESSION_11.md`; **playtest-CONFIRMED**
+## (bake, keys, triangle, polygon; picker superseded by the 0.1.15 redesign above)
+
+**The whole Session-10 human backlog, plus both small tweaks:**
+
+- **B-S10-2 FIXED (code-complete):** the Surface→Volumetric bake probes world solidity on both sides of the
+  plane (server-side mirror of the renderer's decal probe) and bakes points half a voxel into the AIR side —
+  the volume grows out of the wall now, not into it. (`GuideManager.ProbeAirSide`; flagged item #15 closed.)
+- **Shape picker = 3 pinned favorite slots + ▾ catalog fold-out; starring = right-click a catalog tile.**
+  Pins persist in `layout-client.json`. Favorites strip deleted; **F2 delivered in this form.**
+- **Triangle = three clicks** (anchor · anchor · height; ghost apex tracks the crosshair; right-click steps
+  the draft back one click). Equilateral stays two-click. Supersedes flagged decision #2.
+- **CTRL = the cardinal constraint** (was SHIFT), drafting + anchor re-grabs.
+- **SHIFT = invert while drafting** (upside-down arch / equilateral; live on the ghost) **and spring-back on
+  a placed guide** (SHIFT+left-click restores the as-placed points + constraint from a creation snapshot;
+  one undo step; old-save guides politely refuse). Prerequisite shipped: **all shapes default "up"**
+  regardless of click order (sign-normalised frames; side-preserving constraint re-derivation).
+- **Polygon (N-gon):** vertex → opposite-perimeter-point gesture, 3–24 sides as per-guide data with a Sides
+  number row (Create + Edit), cap-checked `SetSides`, undoable, own glyph. F1's "next catalog addition" done.
+- **Tooltips auto-size** (`AddAutoSizeHoverText`); **Surface slabs 0.01 → 0.0025** (75% thinner).
+- **DataVersion 5 → 6** (`Sides` + the never-wired spring-back snapshot). Wire: additive create-request
+  fields + `GuideSetSidesPacket` + `GuideSpringBackPacket`, appended in order. **53 source files** (+3).
 
 ---
 
@@ -77,22 +137,17 @@ CELL is authoritative. Secondary: phantom neighbor-X/Z tracking when locking nea
 reparameterization from the inserted knot. Parked at the human's direction ("make note of this bug, but let's
 move on for now").
 
-**B-S10-2 — Surface→Volumetric bake grows the WRONG way (into the block). (Human-reported, Session-10 end.)**
-Place a Surface guide on a block face, then switch it to Volumetric: the guide's voxels extend *into the
-block* instead of out into the open air. Intended: the volume should grow from the surface layer outward, the
-same direction the Surface decal faced (into the air the player is standing in). This is the concrete,
-now-a-bug form of flagged item #15 ("bake cell-side" — baked points land on the plane's positive-side cell
-regardless of which side is air). **Likely fix:** the Surface-exit bake in `GuideManager.SetProjection`
-should choose the air side via a server-side solidity probe mirroring the renderer's `CountSolidProbes`
-(the renderer already knows the air side for the decal; the bake needs the same knowledge). Parked (queued,
-not started).
+~~**B-S10-2 — Surface→Volumetric bake grows the WRONG way (into the block).**~~ **FIXED in 0.1.14 and
+PLAYTEST-CONFIRMED ("This was fixed" — human, same session).** The bake runs exactly the fix this entry
+proposed: a server-side solidity probe mirroring the renderer's `CountSolidProbes` picks the air side, and
+baked points land half a voxel into it (`GuideManager.ProbeAirSide`). (Was flagged item #15 — closed.)
 
 ---
 
-## Requested next — human backlog (queued Session-10 end)
+## Requested next — human backlog (queued Session-10 end) — ✅ ALL DELIVERED IN 0.1.14
 
-A batch the human queued at Session-10 end; **none started**. Item 1 of their list is the bug **B-S10-2**
-above. The rest (their items 2–7):
+Every item below shipped in Session 11 (see the Resolved section above and `SESSION_11.md`; awaiting
+playtest). Kept for the record of what was asked:
 
 - **F1b — Polygon (N-gon).** Implement the regular-polygon shape (arbitrary side count) — the next catalog
   addition already sketched in F1 below. Same two-click gesture + a side-count control (like Divisions).
@@ -152,6 +207,17 @@ above. The rest (their items 2–7):
 
 Made under the standing "decide, note for review" rule; each is cheap to reverse. None block play.
 
+**Session-11 additions — full text in `SESSION_11.md` §8 (11a–11j) and §11 (11k–11r):** spring-back
+restores the as-placed POSITION too (11a) · spring-back vs a baked Surface exit (11b) · spring-back skips
+the cap check (11c) · ~~newest pin evicts (11d)~~ superseded by the 0.1.15 hard-kept model · catalog folds
+shut on select (11e) · legacy below-the-feet arches re-derive phantoms toward the body (11f) · sides not
+restored by spring-back (11g) · draft right-click steps back per-click (11h) · invert is live-while-held
+(11i) · N=3/N=4 polygons overlap the constraint tiles (11j) · chip at the far right of the Mode row, not
+touching + (11k) · Free-Shape finish is position-based, ~1.5-cell snap (11l) · 64-corner cap (11m) · Fill
+toggle inert on Free-Shapes (11n) · no auto-added 4th pin on upgrade (11o) · ★ badge catalog-only (11p) ·
+others still see only your first chain corner (11q) · Free-Shape can hand-draw triangles/rectangles —
+deliberate (11r).
+
 **Session-10 additions (the icon UI pass; partially reviewed in play already):**
 
 0f. **Edit mode is SELECT-ONLY** — clicking a guide in Edit selects it for the button-driven settings but
@@ -173,9 +239,8 @@ Made under the standing "decide, note for review" rule; each is cheap to reverse
 1. **Soft-flow regime split** (slave for interior grabs, shape-preserving for structural grabs). The decisive
    fix for "the apex acts like a pin." Human confirmed grabbing "MUCH better"; the split itself is Claude's
    call and can be revisited.
-2. **Triangle gesture: 2 clicks + a born apex** (base anchors placed, apex spawned at the equilateral
-   position), rather than a 3-click draft. Keeps every shape on the same two-click gesture. **→ Human
-   reopened this (Session-10 backlog): change to a THREE-click anchor·anchor·height placement.**
+2. ~~**Triangle gesture: 2 clicks + a born apex.**~~ **Superseded (Session 11, 0.1.14):** the human reopened
+   it and the THREE-click anchor·anchor·height placement is now built (Equilateral stays two-click).
 3. **Right / Isosceles / Square have no break gesture in v1** — their constrained drags always absorb
    (slide/resize), so they never demote to the free parent. They live as separate catalog tiles (like
    circle/ellipse). Equilateral *does* break (apex drag → free triangle).
@@ -199,12 +264,12 @@ Made under the standing "decide, note for review" rule; each is cheap to reverse
 12. ~~**The appended Selected-guide section itself.**~~ **Superseded (Session 10, 0.1.13):** the appended
     section is gone; per-guide editing now happens in the new **Edit mode**, reusing the main rows (see
     Resolved / flag 0f).
-13. **SHIFT re-grab constraint reference = the guide's OTHER ANCHOR** (reproduces the drafting feel).
+13. **Re-grab constraint reference = the guide's OTHER ANCHOR** (reproduces the drafting feel). *(Session
+    11: the key is CTRL now; the reference-point decision itself is unchanged.)*
 14. **Circle → ellipse is the break floor** — an ellipse does not break further into a free closed spline in
     v1 (terminate-at-ellipse).
-15. **Bake cell-side** — baked points land on the plane's positive-side cell; on walls whose solid side is
-    positive this can sit one cell into the wall at coarse scales. Upgrade: server-side air-probe mirroring
-    the renderer's solid-probe. **→ Now a reported bug: B-S10-2 (Surface→Volumetric grows into the block).**
+15. ~~**Bake cell-side.**~~ **CLOSED (Session 11, 0.1.14):** became bug B-S10-2 and got exactly the proposed
+    fix — the server-side air-probe bake (`GuideManager.ProbeAirSide`). Awaiting playtest.
 16. **Proportional soft flow (structural-grab regime)** — deserves a stretch/shrink/rotate torture test on an
     arch with several inserted points.
 
@@ -234,17 +299,15 @@ Made under the standing "decide, note for review" rule; each is cheap to reverse
 ### F1. Remaining shape catalog — ✅ FIRST WAVE DONE (Session 9)
 **Built this session:** Line, Triangle (+ Right / Equilateral / Isosceles), Rectangle (+ Square). *(Verified
 against `GuideShapeType` = {Arch,Ellipse,Line,Triangle,Rectangle}, `ShapeConstraint` =
-{None,SemiCircle,Circle,Right,Equilateral,Isosceles,Square}, and the shape files — all present.)* **Still
-open / suggested:** N-gon (regular
-polygon, arbitrary side count) as the natural next catalog addition. The **planar-vs-3D decision remains
-SETTLED: 3D volumes (spheres, cones…) are in scope LATER**; current shapes stay planar (per-shape plane is in
-the contracts via `ShapePlaneAxis`).
+{None,SemiCircle,Circle,Right,Equilateral,Isosceles,Square}, and the shape files — all present.)*
+**SECOND WAVE (Session 11): Polygon (regular N-gon, 3–24 sides) — DONE (0.1.14, awaiting playtest).** The
+**planar-vs-3D decision remains SETTLED: 3D volumes (spheres, cones…) are in scope LATER**; current shapes
+stay planar (per-shape plane is in the contracts via `ShapePlaneAxis`).
 
-### F2. Favorites — REDESIGNED per the Session-10 backlog
-**Superseded by the human's Session-10 request:** drop the separate Favorites strip entirely; instead,
-**starring a shape fills one of the 3 initial shape-picker slots** (the picker becomes 3 buttons + an expand
-arrow — see the backlog). Persist per-player in `layout-client.json` as **{type + constraint}** triples. The
-old placeholder-row idea is retired.
+### F2. Favorites — ✅ DELIVERED (Session 11, 0.1.14; awaiting playtest)
+Built exactly as the human redesigned it: the picker is 3 pinned slots + a ▾ catalog fold-out; right-click a
+catalog tile to pin (newest pin = slot 1). Persisted per-player in `layout-client.json` as shape codes
+(each code = a {type + constraint} pair). The old placeholder row is deleted.
 
 ### F3. Re-constrain op (idea, unrequested)
 The inverse of a break: a menu action to snap a free shape back under a constraint (arch → half-circle,
@@ -255,18 +318,18 @@ Park until asked.
 
 ## Next session — start here
 
-**The human's Session-10 backlog is the agenda** (see "Requested next — human backlog" above). A sensible
-order:
+**Everything through 0.1.18 is playtest-confirmed; 0.1.19 (pin/unpin wording + Fill greyed on Free-Shape)
+awaits a quick look.** The agenda, human-set:
 
-1. **B-S10-2** — Surface→Volumetric bake grows into the block; make it grow into the air (a self-contained
-   bug, good warm-up). Then the rest of the backlog:
-2. **Shape picker → 3 buttons + expand arrow**, and **Favorites = the 3 slots** (one GUI design; do together).
-3. **Triangle → 3-click** (anchor·anchor·height) — needs a two-point draft in `DraftManager`.
-4. **SHIFT → CTRL** for the cardinal constraint, then **SHIFT = spring-back-to-original**.
-5. **Polygon (N-gon).**
-6. **B-S9-1** (lock-in-place, ray-vs-voxel-box) — still the top *bug*, but parked by the human; slot it when
-   they want it.
-7. **Walk the remaining flagged list** with the human when convenient.
+1. **B-S9-1 — the lock-in-place bug is the HEADLINE.** Attempt the untried fix: ray-vs-voxel-box first-hit
+   picking so the aimed cell is authoritative (see OPEN BUGS for the full history of attempts).
+2. Confirm 0.1.19's two tiny changes in passing.
+3. Then, if asked: Free-Shape fill (needs a concave-safe method — deliberately deferred, rare-use);
+   broadcasting the whole Free-Shape draft chain to other players (11q); **F3 re-constrain op**; 3D volumes
+   (settled-in-scope-LATER).
+
+**Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;
+docs are updated ONLY when the human says so; warn before a context trim if docs are stale.
 
 ---
 

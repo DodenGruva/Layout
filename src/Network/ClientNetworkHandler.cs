@@ -100,6 +100,7 @@ namespace Layout.Network
                 .SetMessageHandler<GuideSetProjectionPacket>(OnSetProjection)
                 .SetMessageHandler<GuideSetFilledPacket>(OnSetFilled)
                 .SetMessageHandler<GuideSetDivisionsPacket>(OnSetDivisions)
+                .SetMessageHandler<GuideSetSidesPacket>(OnSetSides)
                 .SetMessageHandler<GuideLockStatePacket>(OnLockState)
                 .SetMessageHandler<DraftAnchorBroadcastPacket>(OnDraftAnchorBroadcast)
                 .SetMessageHandler<DraftAnchorRemovePacket>(OnDraftAnchorRemove)
@@ -222,6 +223,13 @@ namespace Layout.Network
             GuideAddedOrUpdated?.Invoke(g);   // renderer repaints the marks via the normal rebuild
         }
 
+        private void OnSetSides(GuideSetSidesPacket p)
+        {
+            if (!_guides.TryGetValue(p.GuideId(), out GuideData g)) return;
+            g.Sides = p.Sides;
+            GuideAddedOrUpdated?.Invoke(g);   // the polygon re-derives its outline on the rebuild
+        }
+
         // ==========================================================================================
         //  Receive: lock state, drafts, warnings
         // ==========================================================================================
@@ -256,14 +264,30 @@ namespace Layout.Network
         //  Send: the requests the held tool makes (Module 7 wires these to clicks / keybinds)
         // ==========================================================================================
 
-        /// <summary>Send the completed placement: two foot points + settings. The server builds the guide.</summary>
+        /// <summary>
+        /// Send the completed placement: two foot points + settings (+ Session 11: the SHIFT inversion
+        /// flag, the polygon side count, a three-click triangle's apex, and — 0.1.15 — the Free-Shape's
+        /// full corner chain + closed flag). The server builds the guide.
+        /// </summary>
         public void SendCreateRequest(Vec3d start, Vec3d end, GuideRenderSettings settings,
             GuideShapeType shapeType = GuideShapeType.Arch,
             ShapeConstraint constraint = ShapeConstraint.None,
-            PlaneAxis shapePlaneAxis = PlaneAxis.Y) =>
+            PlaneAxis shapePlaneAxis = PlaneAxis.Y,
+            bool inverted = false, int sides = 0, Vec3d apex = null,
+            IReadOnlyList<Vec3d> chain = null, bool closed = false)
+        {
+            Vec3Dto[] chainDto = null;
+            if (chain != null && chain.Count > 0)
+            {
+                chainDto = new Vec3Dto[chain.Count];
+                for (int i = 0; i < chain.Count; i++) chainDto[i] = Vec3Dto.From(chain[i]);
+            }
             _channel.SendPacket(new GuideCreateRequestPacket(
                 Vec3Dto.From(start), Vec3Dto.From(end), RenderSettingsDto.From(settings),
-                (int)shapeType, (int)constraint, (int)shapePlaneAxis));
+                (int)shapeType, (int)constraint, (int)shapePlaneAxis,
+                inverted, sides, apex == null ? null : Vec3Dto.From(apex),
+                chainDto, closed));
+        }
 
         /// <summary>Broadcast the local draft start anchor to other players.</summary>
         public void SendDraftStart(Vec3d start, GuideRenderSettings settings) =>
@@ -328,6 +352,12 @@ namespace Layout.Network
 
         /// <summary>Session 9: set a guide's equal-part division marks (purely visual).</summary>
         public void SendSetDivisions(Guid guideId, int divisions) => _channel.SendPacket(new GuideSetDivisionsPacket(guideId, divisions));
+
+        /// <summary>Session 11: set a polygon guide's side count.</summary>
+        public void SendSetSides(Guid guideId, int sides) => _channel.SendPacket(new GuideSetSidesPacket(guideId, sides));
+
+        /// <summary>Session 11: spring a guide back to its as-placed form (SHIFT+click).</summary>
+        public void SendSpringBack(Guid guideId) => _channel.SendPacket(new GuideSpringBackPacket(guideId));
 
         /// <summary>Undo the local player's most recent action.</summary>
         public void SendUndo() => _channel.SendPacket(new UndoRequestPacket());

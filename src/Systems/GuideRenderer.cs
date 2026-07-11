@@ -81,11 +81,13 @@ namespace Layout.Systems
         // server will build — including the Blue/Indigo far-foot coplanarity shade while aiming.
         private MeshRef _draftPreviewMesh;
         private Vec3d _draftPreviewOrigin;
-        private Vec3d _previewStart, _previewEnd;
+        private Vec3d _previewStart, _previewEnd, _previewApex;
         private GuideRenderSettings _previewSettings;
         private GuideShapeType _previewShapeType = GuideShapeType.Arch;      // Session 8: shape is part of
         private ShapeConstraint _previewConstraint = ShapeConstraint.None;   //   the ghost's rebuild key
         private PlaneAxis _previewPlaneAxis = PlaneAxis.Y;
+        private int _previewSides;                                           // Session 11: polygon ghosts
+        private bool _previewInverted;                                       // Session 11: SHIFT-invert ghosts
         private bool _hasPreviewKey;
 
         private readonly Dictionary<Guid, GuideMesh> _guideMeshes = new Dictionary<Guid, GuideMesh>();
@@ -301,7 +303,8 @@ namespace Layout.Systems
         public void SetDraftPreview(Vec3d start, Vec3d end, GuideRenderSettings settings,
             GuideShapeType shapeType = GuideShapeType.Arch,
             ShapeConstraint constraint = ShapeConstraint.None,
-            PlaneAxis shapePlaneAxis = PlaneAxis.Y)
+            PlaneAxis shapePlaneAxis = PlaneAxis.Y,
+            int sides = 0, bool inverted = false, Vec3d apex = null)
         {
             if (_disposed || start == null || end == null) return;
 
@@ -309,16 +312,77 @@ namespace Layout.Systems
                 && _previewSettings.Equals(settings)
                 && _previewShapeType == shapeType && _previewConstraint == constraint
                 && _previewPlaneAxis == shapePlaneAxis
+                && _previewSides == sides && _previewInverted == inverted
                 && SamePos(_previewStart, start)
-                && SamePos(_previewEnd, end)) return;
+                && SamePos(_previewEnd, end)
+                && (apex == null ? _previewApex == null
+                    : _previewApex != null && SamePos(_previewApex, apex))) return;
 
             _previewShapeType = shapeType; _previewConstraint = constraint; _previewPlaneAxis = shapePlaneAxis;
-            IGuideShape shape = ShapeFactory.Create(shapeType, constraint, shapePlaneAxis, start, end);
+            _previewSides = sides; _previewInverted = inverted;
+            IGuideShape shape = ShapeFactory.Create(shapeType, constraint, shapePlaneAxis, start, end,
+                inverted, sides);
+            // A three-click triangle mid-draft: the ghost's apex tracks the crosshair (Session 11).
+            if (apex != null && shapeType == GuideShapeType.Triangle
+                && constraint != ShapeConstraint.Equilateral && shape.ControlPoints.Count > 2)
+            {
+                shape.MoveControlPoint(2, apex);
+            }
+            if (!UploadPreviewMesh(shape, settings)) return;
+
+            _previewStart = new Vec3d(start.X, start.Y, start.Z);
+            _previewEnd = new Vec3d(end.X, end.Y, end.Z);
+            _previewApex = apex == null ? null : new Vec3d(apex.X, apex.Y, apex.Z);
+            _previewSettings = settings;
+            _hasPreviewKey = true;
+        }
+
+        // Free-Shape chain ghost (0.1.15): the placed corners + (unless closing) a live segment to the
+        // crosshair, previewed through the exact placed-guide pipeline. Rebuild-keyed on a cheap corner
+        // fingerprint so per-tick calls are free while nothing moves.
+        private double _previewChainFp;
+
+        /// <summary>
+        /// Shows (or updates) the Free-Shape draft ghost: <paramref name="chain"/> = the placed corners;
+        /// <paramref name="aim"/> = the live crosshair corner (null when <paramref name="closing"/> —
+        /// the aim has snapped onto the first corner and the ghost previews the CLOSED loop instead).
+        /// </summary>
+        public void SetDraftChainPreview(List<Vec3d> chain, Vec3d aim, bool closing,
+            GuideRenderSettings settings)
+        {
+            if (_disposed || chain == null || chain.Count == 0) return;
+
+            var corners = new List<Vec3d>(chain.Count + 1);
+            corners.AddRange(chain);
+            if (!closing && aim != null) corners.Add(aim);
+            if (corners.Count < 2) { ClearDraftPreview(); return; }
+
+            double fp = corners.Count * 1000.0 + (closing ? 0.5 : 0.0);
+            foreach (Vec3d p in corners) fp += p.X + p.Y * 3.0 + p.Z * 7.0;
+            if (_hasPreviewKey && _previewShapeType == GuideShapeType.FreeShape
+                && _previewSettings.Equals(settings) && _previewChainFp == fp) return;
+
+            _previewShapeType = GuideShapeType.FreeShape;
+            _previewConstraint = ShapeConstraint.None;
+            _previewChainFp = fp;
+            _previewStart = _previewEnd = _previewApex = null;   // the chain fp is this ghost's whole key
+
+            IGuideShape shape = new FreeShape(corners, closing);
+            if (!UploadPreviewMesh(shape, settings)) return;
+
+            _previewSettings = settings;
+            _hasPreviewKey = true;
+        }
+
+        // The shared draft-ghost tail: scale choice, voxel sampling, division marks, Surface flattening,
+        // mesh build + upload. Returns false when the shape sampled to nothing (preview cleared).
+        private bool UploadPreviewMesh(IGuideShape shape, GuideRenderSettings settings)
+        {
             int renderScale = ChooseRenderScale(shape, settings.Scale, settings.Filled);
             List<VoxelPosition> voxels = shape.GetVoxelPositions(renderScale, settings.Filled);
             if (settings.Divisions > 1)
                 DivisionMarks.Apply(voxels, shape.SampleCurve(128), settings.Divisions, renderScale);
-            if (voxels.Count == 0) { ClearDraftPreview(); return; }
+            if (voxels.Count == 0) { ClearDraftPreview(); return false; }
 
             // The ghost previews Surface projection faithfully too: flattened + paper-thin slab + inset,
             // same as the real thing.
@@ -345,11 +409,7 @@ namespace Layout.Systems
             if (_draftPreviewMesh != null) _capi.Render.DeleteMesh(_draftPreviewMesh);
             _draftPreviewMesh = _capi.Render.UploadMesh(data);
             _draftPreviewOrigin = origin;
-
-            _previewStart = new Vec3d(start.X, start.Y, start.Z);
-            _previewEnd = new Vec3d(end.X, end.Y, end.Z);
-            _previewSettings = settings;
-            _hasPreviewKey = true;
+            return true;
         }
 
         /// <summary>Removes the draft ghost (draft completed, cancelled, aim lost, or tool put away).</summary>
@@ -378,7 +438,10 @@ namespace Layout.Systems
         // World-unit thickness of a Surface guide's paper-thin slab (Session-8 finding: the flattened voxel
         // sits in the AIR cell — right side, but a full-depth cube there floats off the wall; only a
         // paper-thin slab hugging the wall face reads as a decal). Tune by eye in-game.
-        private const float SurfaceSlabThicknessWorld = 0.01f;
+        // Session 11 (human-requested): 0.01 → 0.0025 (a quarter of the old thickness — the slabs read
+        // less like tiles stuck ON the wall). The anti-z-fight SurfacePlaneInset still holds the slab off
+        // the wall: t = min(thickness, edge − 2·inset) keeps the pair valid at every scale.
+        private const float SurfaceSlabThicknessWorld = 0.0025f;
 
         // Render-time realisation of Surface projection (Module 7; the shape-level Surface sampler remains
         // the eventual home, per the TODO in RebuildGuide). In-game findings that shaped it:

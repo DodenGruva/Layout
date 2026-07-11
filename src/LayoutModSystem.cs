@@ -167,6 +167,7 @@ namespace Layout
             Draft.SetShape((GuideShapeType)ClientConfig.DefaultShape,
                            (ShapeConstraint)ClientConfig.DefaultConstraint);
             Draft.SetDivisions(ClientConfig.DefaultDivisions);
+            Draft.SetSides(ClientConfig.DefaultSides);
 
             // The one ClientNetworkHandler (mirror + send-API). On every bulk sync (join), push the server's
             // per-guide cap into the placement pre-check so client and server agree on the same figure.
@@ -179,7 +180,7 @@ namespace Layout
             // The two dialogs share the same DraftManager + ClientNetworkHandler (the Module-6 contract).
             // They are constructed ready but stay closed: the controller shows the HUD on equip and opens
             // the GUI on F.
-            ToolGui = new GuideToolGui(capi, Draft, ClientNet);
+            ToolGui = new GuideToolGui(capi, Draft, ClientNet, ClientConfig);   // config carries the pinned favorites
             Hud = new GuideHud(capi, Draft, ClientNet);
 
             // The aim-controller: per-tick raycast + click routing while the tool is held. It (not the
@@ -236,6 +237,9 @@ namespace Layout
             ClientConfig.DefaultShape = (int)Draft.Shape;
             ClientConfig.DefaultConstraint = (int)Draft.Constraint;
             ClientConfig.DefaultDivisions = Draft.Divisions;
+            ClientConfig.DefaultSides = Draft.Sides;
+            // The pinned favorites live in ClientConfig directly (the GUI mutates that list in place), so
+            // they ride along with this same store call.
 
             try
             {

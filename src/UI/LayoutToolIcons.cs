@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Cairo;
 using Vintagestory.API.Client;
 
@@ -36,6 +37,27 @@ namespace Layout.UI
         public const string Isosceles = "layout-isosceles";
         public const string Rectangle = "layout-rectangle";
         public const string Square = "layout-square";
+        public const string Polygon = "layout-polygon";
+        public const string FreeShapeIcon = "layout-freeshape";
+
+        /// <summary>The shape picker's expand/collapse tile (Session 11): ▾ closed, ▴ open.</summary>
+        public const string ExpandDown = "layout-expand-down";
+        public const string ExpandUp = "layout-expand-up";
+
+        /// <summary>An empty favorite slot (0.1.15): a faint placeholder square.</summary>
+        public const string EmptySlot = "layout-empty-slot";
+
+        /// <summary>
+        /// Suffix variants registered for every shape glyph (0.1.15): "&lt;name&gt;-star" draws the glyph
+        /// with a small ★ badge (a pinned favorite in the catalog); "&lt;name&gt;-current" draws it in the
+        /// guide-body YELLOW regardless of button tint (the always-lit current-shape chip). 0.1.16 adds
+        /// "&lt;name&gt;-ghost" for EVERY layout glyph — the same drawing at a fraction of its alpha, the
+        /// visual for Delete-mode disabled tiles (the stock button's Enabled=false dims its chrome but not
+        /// a custom icon face, which is why the tiles didn't read as greyed).
+        /// </summary>
+        public const string StarSuffix = "-star";
+        public const string CurrentSuffix = "-current";
+        public const string GhostSuffix = "-ghost";
 
         public const string ModeCreate = "layout-mode-create";
         public const string ModeEdit = "layout-mode-edit";
@@ -79,6 +101,32 @@ namespace Layout.UI
             reg[Isosceles] = DrawIsosceles;
             reg[Rectangle] = DrawRectangle;
             reg[Square] = DrawSquare;
+            reg[Polygon] = DrawPolygon;
+            reg[FreeShapeIcon] = DrawFreeShape;
+            reg[ExpandDown] = (ctx, x, y, w, h, rgba) => DrawExpandChevron(ctx, x, y, w, h, rgba, down: true);
+            reg[ExpandUp] = (ctx, x, y, w, h, rgba) => DrawExpandChevron(ctx, x, y, w, h, rgba, down: false);
+            reg[EmptySlot] = DrawEmptySlot;
+
+            // 0.1.15: per-shape "-star" (pinned badge) and "-current" (always-yellow chip) variants.
+            foreach (string shapeName in new[]
+            {
+                Arch, HalfCircle, Circle, Ellipse, Line, Triangle, RightTri, Equilateral,
+                Isosceles, Rectangle, Square, Polygon, FreeShapeIcon
+            })
+            {
+                var baseDrawer = reg[shapeName];
+                reg[shapeName + StarSuffix] = (ctx, x, y, w, h, rgba) =>
+                {
+                    baseDrawer(ctx, x, y, w, h, rgba);
+                    DrawStarBadge(ctx, x, y, w, h, rgba);
+                };
+                reg[shapeName + CurrentSuffix] = (ctx, x, y, w, h, rgba) =>
+                {
+                    // Guide-body yellow, dimming with whatever alpha the button passes (disabled states).
+                    double a = rgba != null && rgba.Length >= 4 ? rgba[3] : 1.0;
+                    baseDrawer(ctx, x, y, w, h, new[] { 1.0, 0.88, 0.15, a });
+                };
+            }
 
             reg[ModeCreate] = DrawModeCreate;
             reg[ModeEdit] = DrawModeEdit;
@@ -103,6 +151,24 @@ namespace Layout.UI
             reg[Scale4] = (ctx, x, y, w, h, rgba) => DrawScaleGrid(ctx, x, y, w, h, rgba, 4);
             reg[Scale8] = (ctx, x, y, w, h, rgba) => DrawScaleGrid(ctx, x, y, w, h, rgba, 8);
             reg[Scale16] = DrawScaleFullBlock;
+
+            // 0.1.16: a "-ghost" variant of EVERY layout glyph registered above (shapes, star/current
+            // variants, toggles, planes, scale grids, chevrons) — the same drawing at ~a quarter alpha,
+            // used by every disabled tile so Delete mode reads properly greyed (the stock button's
+            // Enabled=false dims its chrome but not a custom icon face). MUST run last so it wraps the
+            // full set; filtered to our prefix (CustomIcons is a shared, cross-mod dictionary).
+            foreach (string name in new List<string>(reg.Keys))
+            {
+                if (!name.StartsWith("layout-") || name.EndsWith(GhostSuffix)) continue;
+                var baseDrawer = reg[name];
+                reg[name + GhostSuffix] = (ctx, x, y, w, h, rgba) =>
+                {
+                    double[] dim = rgba != null && rgba.Length >= 4
+                        ? new[] { rgba[0], rgba[1], rgba[2], rgba[3] * 0.25 }
+                        : new[] { 1.0, 1.0, 1.0, 0.25 };
+                    baseDrawer(ctx, x, y, w, h, dim);
+                };
+            }
 
             _registered = true;
         }
@@ -264,6 +330,83 @@ namespace Layout.UI
             Pen(ctx, rgba, c.L(2.6));
             ctx.Rectangle(c.X(19), c.Y(18), c.L(38), c.L(38));
             ctx.Stroke();
+        }
+
+        private static void DrawPolygon(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            // A regular pentagon, point-up — reads as "N-gon" at tile size (a hexagon reads as a cell).
+            var c = new Canvas(x, y, w, h, 76);
+            Pen(ctx, rgba, c.L(2.6));
+            const int n = 5;
+            double cx = 38, cy = 38.5, r = 23;
+            for (int k = 0; k <= n; k++)
+            {
+                double ang = -Math.PI / 2 + 2 * Math.PI * k / n;      // vertex 0 at the top
+                double px = cx + r * Math.Cos(ang), py = cy + r * Math.Sin(ang);
+                if (k == 0) ctx.MoveTo(c.X(px), c.Y(py)); else ctx.LineTo(c.X(px), c.Y(py));
+            }
+            ctx.ClosePath();
+            ctx.Stroke();
+        }
+
+        // The shape picker's expand tile: a bold chevron (▾ collapsed / ▴ expanded).
+        private static void DrawExpandChevron(Context ctx, int x, int y, float w, float h, double[] rgba, bool down)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(3.4));
+            double yTip = down ? 38 : 22, yBase = down ? 22 : 38;
+            ctx.MoveTo(c.X(17), c.Y(yBase));
+            ctx.LineTo(c.X(30), c.Y(yTip));
+            ctx.LineTo(c.X(43), c.Y(yBase));
+            ctx.Stroke();
+        }
+
+        // The Free-Shape (0.1.15): an irregular closed pentagon-ish outline — clearly hand-drawn, not
+        // any of the regular primitives; corner dots hint that every corner is a clicked anchor.
+        private static void DrawFreeShape(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 76);
+            Pen(ctx, rgba, c.L(2.6));
+            double[] uv = { 20, 24, 52, 15, 61, 40, 40, 60, 15, 50 };
+            ctx.MoveTo(c.X(uv[0]), c.Y(uv[1]));
+            for (int i = 2; i + 1 < uv.Length; i += 2) ctx.LineTo(c.X(uv[i]), c.Y(uv[i + 1]));
+            ctx.ClosePath();
+            ctx.Stroke();
+            SetColor(ctx, rgba, 1.0);
+            for (int i = 0; i + 1 < uv.Length; i += 2)
+            {
+                ctx.Arc(c.X(uv[i]), c.Y(uv[i + 1]), c.L(3.0), 0, 2 * Math.PI);
+                ctx.Fill();
+            }
+        }
+
+        // An empty favorite slot (0.1.15): a faint small hollow square — visibly "nothing pinned here".
+        private static void DrawEmptySlot(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+            ctx.LineWidth = Math.Max(1.2, c.L(1.6));
+            SetColor(ctx, rgba, 0.28);
+            ctx.Rectangle(c.X(20), c.Y(20), c.L(20), c.L(20));
+            ctx.Stroke();
+        }
+
+        // The ★ badge on pinned catalog tiles (0.1.15; repositioned in 0.1.16 — human-requested): a small
+        // filled five-point star tucked into the UPPER-RIGHT corner, close to the tile edge so it clears
+        // every shape glyph (zoom 1.0 so it can hug the corner without clipping).
+        private static void DrawStarBadge(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 76, zoom: 1.0);
+            double cx = 69.5, cy = 7, rOut = 6.5, rIn = 2.7;
+            SetColor(ctx, rgba, 1.0);
+            for (int i = 0; i < 10; i++)
+            {
+                double r = i % 2 == 0 ? rOut : rIn;
+                double ang = -Math.PI / 2 + Math.PI * i / 5.0;
+                double px = cx + r * Math.Cos(ang), py = cy + r * Math.Sin(ang);
+                if (i == 0) ctx.MoveTo(c.X(px), c.Y(py)); else ctx.LineTo(c.X(px), c.Y(py));
+            }
+            ctx.ClosePath();
+            ctx.Fill();
         }
 
         // ============================ toggle glyphs (box = 60) ============================

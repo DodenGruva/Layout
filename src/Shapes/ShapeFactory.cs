@@ -12,9 +12,18 @@ namespace Layout.Shapes
     /// </summary>
     public static class ShapeFactory
     {
-        /// <summary>Builds a brand-new shape from the two draft clicks.</summary>
+        /// <summary>
+        /// Builds a brand-new shape from the two draft clicks. <paramref name="inverted"/> (Session 11:
+        /// SHIFT at placement) mirrors the born apex/arc below the base for the shapes that have an "up"
+        /// (the arch family and triangles); symmetric shapes ignore it. <paramref name="sides"/> is the
+        /// polygon's side count; every other shape ignores it. The Free-Shape is the one multi-click
+        /// primitive: pass its full corner chain via <paramref name="chain"/> (+ <paramref name="closed"/>);
+        /// with no chain it degrades to a two-corner open polyline from start/end.
+        /// </summary>
         public static IGuideShape Create(
-            GuideShapeType type, ShapeConstraint constraint, PlaneAxis shapePlaneAxis, Vec3d start, Vec3d end)
+            GuideShapeType type, ShapeConstraint constraint, PlaneAxis shapePlaneAxis, Vec3d start, Vec3d end,
+            bool inverted = false, int sides = 0,
+            IReadOnlyList<Vec3d> chain = null, bool closed = false)
         {
             switch (type)
             {
@@ -23,11 +32,16 @@ namespace Layout.Shapes
                 case GuideShapeType.Line:
                     return new LineShape(start, end);
                 case GuideShapeType.Triangle:
-                    return new TriangleShape(start, end, shapePlaneAxis, constraint);
+                    return new TriangleShape(start, end, shapePlaneAxis, constraint, inverted);
                 case GuideShapeType.Rectangle:
                     return new RectangleShape(start, end, shapePlaneAxis, constraint);
+                case GuideShapeType.Polygon:
+                    return new PolygonShape(start, end, shapePlaneAxis, sides);
+                case GuideShapeType.FreeShape:
+                    return new FreeShape(chain != null && chain.Count >= 2 ? chain : new[] { start, end },
+                        closed && chain != null && chain.Count >= 3);
                 default:
-                    return new ArchShape(start, end, constraint: constraint);
+                    return new ArchShape(start, end, constraint: constraint, inverted: inverted);
             }
         }
 
@@ -47,6 +61,10 @@ namespace Layout.Shapes
                     return new TriangleShape(g.ControlPoints, g.ShapePlaneAxis, g.Constraint);
                 case GuideShapeType.Rectangle:
                     return new RectangleShape(g.ControlPoints, g.ShapePlaneAxis, g.Constraint);
+                case GuideShapeType.Polygon:
+                    return new PolygonShape(g.ControlPoints, g.ShapePlaneAxis, g.Sides);
+                case GuideShapeType.FreeShape:
+                    return new FreeShape(g.ControlPoints, g.IsClosed);
                 default:
                     return new ArchShape(g.ControlPoints, constraint: g.Constraint);
             }
@@ -54,7 +72,8 @@ namespace Layout.Shapes
 
         /// <summary>Adopt for transient lists that have no GuideData (the renderer's draft ghost).</summary>
         public static IGuideShape Adopt(
-            GuideShapeType type, ShapeConstraint constraint, PlaneAxis shapePlaneAxis, List<ControlPoint> points)
+            GuideShapeType type, ShapeConstraint constraint, PlaneAxis shapePlaneAxis, List<ControlPoint> points,
+            int sides = 0, bool closed = false)
         {
             switch (type)
             {
@@ -66,6 +85,10 @@ namespace Layout.Shapes
                     return new TriangleShape(points, shapePlaneAxis, constraint);
                 case GuideShapeType.Rectangle:
                     return new RectangleShape(points, shapePlaneAxis, constraint);
+                case GuideShapeType.Polygon:
+                    return new PolygonShape(points, shapePlaneAxis, sides);
+                case GuideShapeType.FreeShape:
+                    return new FreeShape(points, closed);
                 default:
                     return new ArchShape(points, constraint: constraint);
             }

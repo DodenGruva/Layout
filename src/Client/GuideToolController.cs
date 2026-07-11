@@ -214,18 +214,48 @@ namespace Layout.Client
             TargetHit hit = FindTarget(includeLockedPoints: true);
             _hud.SetExaminedGuide(hit.Found ? hit.GuideId : (Guid?)null);
 
-            // 2) Live second-foot aim while drafting (Create mode): HUD readout + the world-space ghost
-            //    of the arch that would be built (Module-7 in-game finding: the drafter previously saw
-            //    nothing at all between the two clicks).
+            // 2) Live aim while drafting (Create mode): HUD readout + the world-space ghost of the guide
+            //    that would be built. Two-click shapes aim their second foot; a three-click triangle whose
+            //    base is already down aims its APEX instead (Session 11). The cardinal snap rides CTRL now;
+            //    SHIFT while drafting live-inverts the ghost (upside-down arch / triangle).
             if (_draft.Mode == ToolMode.Create && _draft.HasActiveDraft)
             {
                 if (blockSel != null)
                 {
                     Vec3d aim = ResolveAnchorPoint(blockSel);
-                    if (ShiftHeld()) aim = ConstrainToStart(aim);
-                    _hud.SetDraftAim(aim);
-                    _renderer.SetDraftPreview(_draft.DraftStart, aim, BuildSettings(blockSel, aim),
-                        _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis);
+                    if (DraftManager.IsChainShape(_draft.Shape))
+                    {
+                        // Free-Shape (0.1.15): the ghost is the placed chain + a live segment to the
+                        // crosshair. CTRL snaps the segment level-and-cardinal off the LAST placed corner;
+                        // SHIFT (0.1.16) snaps it VERTICAL (straight up/down from that corner). Aiming
+                        // near the first corner (with ≥3 placed) snaps onto it and previews the CLOSED loop.
+                        aim = ConstrainChainAim(aim);
+                        bool closing = _draft.ChainCount >= 3
+                            && Dist(aim, _draft.ChainFirst) <= ChainSnapRadius();
+                        if (closing) aim = _draft.ChainFirst;
+                        _hud.SetDraftAim(aim);
+                        _renderer.SetDraftChainPreview(_draft.DraftChain, closing ? null : aim, closing,
+                            BuildSettings(blockSel, aim));
+                    }
+                    else if (_draft.AwaitingApex)
+                    {
+                        // SHIFT while aiming the apex (0.1.15): centre it on the base — the apex rides
+                        // the base's perpendicular bisector, live on the ghost.
+                        if (ShiftHeld()) aim = CenterApexOnBase(aim);
+                        _hud.SetDraftAim(aim);
+                        _renderer.SetDraftPreview(_draft.DraftStart, _draft.DraftSecond,
+                            BuildSettings(blockSel, aim),
+                            _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
+                            sides: _draft.Sides, apex: aim);
+                    }
+                    else
+                    {
+                        if (CtrlHeld()) aim = ConstrainToStart(aim);
+                        _hud.SetDraftAim(aim);
+                        _renderer.SetDraftPreview(_draft.DraftStart, aim, BuildSettings(blockSel, aim),
+                            _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
+                            sides: _draft.Sides, inverted: ShiftHeld());
+                    }
                 }
                 else
                 {
@@ -256,10 +286,11 @@ namespace Layout.Client
             {
                 target = ResolveAnchorPoint(blockSel);
 
-                // SHIFT re-grab constraint (Session-8 playtest fix): dragging an ANCHOR with shift held
-                // constrains it to the cardinal line through the guide's other anchor — the exact
-                // constraint drafting offers, reintroduced after placement.
-                if (cp.IsAnchor && ShiftHeld())
+                // CTRL re-grab constraint (Session-8 playtest fix; moved from SHIFT to CTRL in Session 11,
+                // freeing SHIFT for invert/spring-back): dragging an ANCHOR with ctrl held constrains it
+                // to the cardinal line through the guide's other anchor — the exact constraint drafting
+                // offers, reintroduced after placement.
+                if (cp.IsAnchor && CtrlHeld())
                 {
                     Vec3d other = OtherAnchorOf(g, _grab.PointIndex);
                     if (other != null) target = ConstrainTo(other, target);
@@ -386,18 +417,28 @@ namespace Layout.Client
                     return;
                 }
 
+                // SHIFT+click on a placed guide (Session 11): SPRING BACK to its as-placed form instead
+                // of grabbing — one undo step, server-restored. SHIFT is free for this now that the
+                // cardinal constraint rides CTRL.
+                if (ShiftHeld())
+                {
+                    _net.SendSpringBack(hit.GuideId);
+                    return;
+                }
+
                 if (hit.PointIndex >= 0)
                 {
                     StartGrab(hit.GuideId, hit.PointIndex);
                 }
                 else if (_net.Guides.TryGetValue(hit.GuideId, out GuideData bodyG)
-                         && bodyG.ShapeType != GuideShapeType.Arch)
+                         && !TakesBodyInserts(bodyG.ShapeType))
                 {
-                    // DECISION (Session 8, generalised in Session 9): a body grab on ANY parametric shape
-                    // (ellipse family, line, triangle, rectangle) grabs the NEAREST HANDLE — pulling the
-                    // outline stretches it, which is the natural feel; arbitrary interpolation points have
-                    // no meaning on these shapes, so there is nothing to insert. Only the arch family
-                    // (free splines) takes body inserts.
+                    // DECISION (Session 8, generalised in Session 9): a body grab on a PARAMETRIC shape
+                    // (ellipse family, line, triangle, rectangle, polygon) grabs the NEAREST HANDLE —
+                    // pulling the outline stretches it, which is the natural feel; arbitrary interpolation
+                    // points have no meaning on these shapes, so there is nothing to insert. The arch
+                    // family (free splines) and the Free-Shape (hand-placed polyline; 0.1.15) DO take
+                    // body inserts — see TakesBodyInserts.
                     int handle = NearestHandleIndex(bodyG, hit.BodyPos);
                     if (handle >= 0 && !bodyG.ControlPoints[handle].IsLocked) StartGrab(hit.GuideId, handle);
                 }
@@ -426,13 +467,18 @@ namespace Layout.Client
                 return;
             }
 
-            // 2. Drafting → discard the whole draft (nothing was committed yet).
+            // 2. Drafting → step BACK one click (Session 11: a three-click draft first retracts its base
+            //    end, back to "one anchor placed"; the next right-click — or any two-click draft — then
+            //    discards the whole draft, exactly as before).
             if (_draft.HasActiveDraft)
             {
-                _net.SendDraftCancel();
-                _draft.ClearDraft();
-                _hud.ClearDraftAim();
-                _renderer.ClearDraftPreview();
+                bool draftSurvives = _draft.StepBackDraft();
+                if (!draftSurvives)
+                {
+                    _net.SendDraftCancel();
+                    _hud.ClearDraftAim();
+                    _renderer.ClearDraftPreview();
+                }
                 return;
             }
 
@@ -450,12 +496,13 @@ namespace Layout.Client
                 bool locked = g.ControlPoints[hit.PointIndex].IsLocked;
                 _net.SendLockPoint(hit.GuideId, hit.PointIndex, !locked);
             }
-            else if (g.ShapeType != GuideShapeType.Arch)
+            else if (!TakesBodyInserts(g.ShapeType))
             {
-                // DECISION (Session 8, generalised in Session 9): lock-in-place has no meaning on any
-                // parametric shape (ellipse ring, line, triangle, rectangle — no arbitrary points can be
-                // born there), so a body right-click toggles the NEAREST HANDLE's lock instead — the same
-                // "lock what I'm pointing at" intent, mapped to the points these shapes actually have.
+                // DECISION (Session 8, generalised in Session 9): lock-in-place has no meaning on a
+                // parametric shape (ellipse ring, line, triangle, rectangle, polygon — no arbitrary points
+                // can be born there), so a body right-click toggles the NEAREST HANDLE's lock instead —
+                // the same "lock what I'm pointing at" intent, mapped to the points these shapes have.
+                // The arch family and the Free-Shape fall through to genuine lock-in-place below.
                 int handle = NearestHandleIndex(g, hit.BodyPos);
                 if (handle >= 0)
                     _net.SendLockPoint(hit.GuideId, handle, !g.ControlPoints[handle].IsLocked);
@@ -484,6 +531,13 @@ namespace Layout.Client
                 }
             }
         }
+
+        // Which shape families take BODY INSERTS (clicking between points creates a new point there):
+        // the arch (free spline) and, since 0.1.15, the Free-Shape (hand-placed polyline — inserting a
+        // corner mid-segment is exactly how you refine one). Every other shape is parametric: body
+        // clicks map to the nearest handle instead.
+        private static bool TakesBodyInserts(GuideShapeType t) =>
+            t == GuideShapeType.Arch || t == GuideShapeType.FreeShape;
 
         // Nearest real (non-phantom) control point to a world position — the ellipse family's body-hit →
         // handle mapping.
@@ -520,7 +574,8 @@ namespace Layout.Client
             if (blockSel == null) return;                           // anchors REQUIRE a block target (§5)
 
             Vec3d anchor = ResolveAnchorPoint(blockSel);
-            if (_draft.HasActiveDraft && ShiftHeld()) anchor = ConstrainToStart(anchor);
+            // The cardinal snap rides CTRL now (Session 11); it applies to the BASE clicks, not the apex.
+            if (_draft.HasActiveDraft && !_draft.AwaitingApex && CtrlHeld()) anchor = ConstrainToStart(anchor);
 
             if (!_draft.HasActiveDraft)
             {
@@ -532,11 +587,67 @@ namespace Layout.Client
                 return;
             }
 
-            DraftCompletion completion = _draft.TryCompleteDraft(anchor);
+            // FREE-SHAPE (0.1.15): every click chains another corner. Clicking the FIRST corner (≥3
+            // placed) closes the loop; clicking the LAST placed corner again — the practical double-click —
+            // finishes it open. CTRL snaps each new segment relative to the PREVIOUS corner.
+            if (DraftManager.IsChainShape(_draft.Shape))
+            {
+                Vec3d corner = ConstrainChainAim(ResolveAnchorPoint(blockSel));
+
+                double snap = ChainSnapRadius();
+                bool onFirst = _draft.ChainFirst != null && Dist(corner, _draft.ChainFirst) <= snap;
+                bool onLast = _draft.ChainLast != null && Dist(corner, _draft.ChainLast) <= snap;
+
+                if (onFirst && _draft.ChainCount >= 3)
+                {
+                    CompleteChain(closed: true, blockSel, corner);
+                }
+                else if (onLast && _draft.ChainCount >= 2)
+                {
+                    CompleteChain(closed: false, blockSel, corner);
+                }
+                else if (onFirst || onLast)
+                {
+                    // Too few corners to finish either way — swallow the click rather than stacking a
+                    // duplicate corner on top of an existing one.
+                }
+                else if (!_draft.AppendChainPoint(corner))
+                {
+                    Error("layout-freeshapecap",
+                        $"Free-Shape corner limit reached ({Shapes.FreeShape.MaxCorners}). Finish or step back.");
+                }
+                return;
+            }
+
+            // THREE-CLICK TRIANGLE (Session 11): anchor · anchor · height. The second click stores the
+            // base's far end (client-side only — nothing is committed yet); the ghost then shows the
+            // triangle with its apex tracking the crosshair until the third click places it.
+            if (!_draft.AwaitingApex && DraftManager.NeedsApexClick(_draft.Shape, _draft.Constraint))
+            {
+                _draft.PlaceSecondPoint(anchor);
+                return;
+            }
+
+            Vec3d apex = null;
+            Vec3d end = anchor;
+            if (_draft.AwaitingApex)
+            {
+                apex = anchor;                       // the third click IS the apex
+                if (ShiftHeld()) apex = CenterApexOnBase(apex);   // 0.1.15: SHIFT centres it on the base
+                end = _draft.DraftSecond;            // the base was fixed by the second click
+            }
+
+            // SHIFT at the completing click bakes the inverted (upside-down) form — only meaningful for
+            // the shapes that derive an "up" (arch family, equilateral triangle); apex-clicked triangles
+            // take their height from the click itself.
+            bool inverted = apex == null && ShiftHeld();
+
+            DraftCompletion completion = _draft.TryCompleteDraft(end, apex, inverted);
             if (completion.IsReady)
             {
                 _net.SendCreateRequest(completion.Start, completion.End, BuildSettings(blockSel, anchor),
-                    _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis);
+                    _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
+                    inverted, _draft.Sides, completion.Apex);
                 _draft.ClearDraft();
                 _hud.ClearDraftAim();
                 _renderer.ClearDraftPreview();       // now: the real guide arrives via broadcast
@@ -547,6 +658,58 @@ namespace Layout.Client
                 Error("layout-overcap",
                     $"Too large: {completion.VoxelCount:n0} voxels (cap {completion.CapLimit:n0}). Aim closer or coarsen the scale.");
             }
+        }
+
+        // Finish a Free-Shape chain (0.1.15): cap pre-check, then the create request carrying the full
+        // corner list + closed flag; the draft clears on a successful send like every other completion.
+        private void CompleteChain(bool closed, BlockSelection blockSel, Vec3d lastAim)
+        {
+            DraftCompletion completion = _draft.TryCompleteChain(closed);
+            if (completion.IsReady)
+            {
+                _net.SendCreateRequest(completion.Start, completion.End, BuildSettings(blockSel, lastAim),
+                    _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
+                    inverted: false, sides: 0, apex: null,
+                    chain: _draft.DraftChain, closed: closed);
+                _draft.ClearDraft();
+                _hud.ClearDraftAim();
+                _renderer.ClearDraftPreview();
+            }
+            else if (completion.Status == DraftCompletionStatus.RejectedOverCap)
+            {
+                Error("layout-overcap",
+                    $"Too large: {completion.VoxelCount:n0} voxels (cap {completion.CapLimit:n0}). Step back or coarsen the scale.");
+            }
+        }
+
+        // The click-forgiveness radius for finishing a Free-Shape on an existing corner: the lock-snap
+        // formula, floored a touch higher (clicked cells resolve to identical snapped coords, so this only
+        // has to absorb an adjacent-cell miss).
+        private double ChainSnapRadius() => Math.Max(0.25, _draft.Scale / 16.0 * 1.5);
+
+        // The Free-Shape's segment constraints, keyed off the LAST placed corner: SHIFT (0.1.16,
+        // human-requested) pins the next segment VERTICAL — same X/Z as that corner, height from the aim;
+        // CTRL keeps the 0.1.15 horizontal level-and-cardinal snap. SHIFT wins when both are held.
+        private Vec3d ConstrainChainAim(Vec3d aim)
+        {
+            Vec3d reference = _draft.ChainLast ?? _draft.DraftStart;
+            if (reference == null) return aim;
+            if (ShiftHeld()) return new Vec3d(reference.X, aim.Y, reference.Z);
+            if (CtrlHeld()) return ConstrainTo(reference, aim);
+            return aim;
+        }
+
+        // SHIFT on the apex stage (0.1.15): project the aimed apex onto the base's perpendicular bisector
+        // (the isosceles line) — "centred on the current base", height still from the aim.
+        private Vec3d CenterApexOnBase(Vec3d aim)
+        {
+            Vec3d a = _draft.DraftStart, b = _draft.DraftSecond;
+            if (a == null || b == null) return aim;
+            if (!ShapeGeometry.TryGetFrame(a, b, _draft.DraftPlaneAxis, out _, out Vec3d m, out _))
+                return aim;
+            var mid = new Vec3d((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, (a.Z + b.Z) * 0.5);
+            double h = (aim.X - mid.X) * m.X + (aim.Y - mid.Y) * m.Y + (aim.Z - mid.Z) * m.Z;
+            return new Vec3d(mid.X + m.X * h, mid.Y + m.Y * h, mid.Z + m.Z * h);
         }
 
         // (HandleEditClick and HandleLockClick are gone — Session 8 folded Edit and Lock into Create's
@@ -850,6 +1013,7 @@ namespace Layout.Client
                 fp += p.X + p.Y * 3.0 + p.Z * 7.0;      // asymmetric weights: axis swaps don't cancel out
             }
             fp += (int)g.Constraint * 13.0;             // a break re-shapes the curve without moving points
+            fp += g.Sides * 29.0;                       // a side-count change re-shapes a polygon the same way
 
             if (_curveCache.TryGetValue(g.Id, out var entry) && entry.fingerprint == fp)
                 return entry.curve;
@@ -1042,6 +1206,12 @@ namespace Layout.Client
         private bool ShiftHeld() =>
             _capi.Input.KeyboardKeyStateRaw[(int)GlKeys.ShiftLeft] ||
             _capi.Input.KeyboardKeyStateRaw[(int)GlKeys.ShiftRight];
+
+        // Session 11: the cardinal/level snap moved from SHIFT to CTRL (freeing SHIFT for invert +
+        // spring-back). Same raw-key read as ShiftHeld.
+        private bool CtrlHeld() =>
+            _capi.Input.KeyboardKeyStateRaw[(int)GlKeys.ControlLeft] ||
+            _capi.Input.KeyboardKeyStateRaw[(int)GlKeys.ControlRight];
 
         private void Error(string code, string message) => _capi.TriggerIngameError(this, code, message);
 

@@ -87,6 +87,10 @@ namespace Layout.UI
         private long _tickId;
         private bool _subscribed;
 
+        // The HUD's copy of the Current Shape chip (0.1.16): which "-current" glyph is composed right
+        // now, or null when hidden (non-Create modes). A change recomposes the HUD (rare — shape picks).
+        private string _chipIcon;
+
         public GuideHud(ICoreClientAPI capi, DraftManager tool, ClientNetworkHandler net) : base(capi)
         {
             _tool = tool;
@@ -183,15 +187,40 @@ namespace Layout.UI
                 .AddShadedDialogBG(bgBounds, false)
                 .BeginChildElements(bgBounds);
 
+            // The HUD's Current Shape chip (0.1.16, human-requested): the same always-lit, guide-body-
+            // yellow glyph as the F-menu's chip, top-right of the panel, shown while creating. The first
+            // two text lines narrow so they never run under it.
+            const double chip = 42;
+            bool showChip = _tool.Mode == ToolMode.Create;
+            _chipIcon = showChip
+                ? GuideToolGui.CurrentShapeIconName(_tool.Shape, _tool.Constraint)
+                : null;
+            if (showChip)
+            {
+                ElementBounds chipBounds = ElementBounds.Fixed(panelW - chip, 0, chip, chip);
+                var chipBtn = new GuiElementToggleButton(
+                    capi, _chipIcon, "", font, OnChipToggled, chipBounds, toggleable: true);
+                c.AddInteractiveElement(chipBtn, "hudcurshape");
+            }
+
             string[] keys = { "mode", "scale", "proj", "fill", "dims", "guide", "cap" };
             foreach (string key in keys)
             {
-                ElementBounds lineBounds = ElementBounds.Fixed(0, y, panelW, lineH);
+                double lineW = showChip && (key == "mode" || key == "scale") ? panelW - chip - 6 : panelW;
+                ElementBounds lineBounds = ElementBounds.Fixed(0, y, lineW, lineH);
                 c.AddDynamicText("", font, lineBounds, key);
                 y += lineH + gap;
             }
 
             SingleComposer = c.EndChildElements().Compose();
+            SingleComposer.GetToggleButton("hudcurshape")?.SetValue(true);   // a status light, always lit
+        }
+
+        // The HUD chip is display-only: if anything ever manages to click it, snap it back to lit.
+        private void OnChipToggled(bool on)
+        {
+            if (on) return;
+            SingleComposer?.GetToggleButton("hudcurshape")?.SetValue(true);
         }
 
         // ---------------------------------------------------------------------------------
@@ -200,6 +229,13 @@ namespace Layout.UI
         private void RefreshText()
         {
             if (SingleComposer == null) return;
+
+            // Current Shape chip upkeep (0.1.16): a shape pick or mode flip swaps/hides the glyph, which
+            // needs a recompose — rare (only on those changes), so it's done here on the cheap tick.
+            string wantIcon = _tool.Mode == ToolMode.Create
+                ? GuideToolGui.CurrentShapeIconName(_tool.Shape, _tool.Constraint)
+                : null;
+            if (wantIcon != _chipIcon && IsOpened()) SetupHud();
 
             // --- always-present tool state ---
             // Session 8: the mode line also carries the next guide's shape in Create mode, so the
@@ -261,16 +297,34 @@ namespace Layout.UI
             long qy = (long)Math.Floor(aim.Y * 16.0);
             long qz = (long)Math.Floor(aim.Z * 16.0);
 
-            // Shape changes fold into the scale key slot cheaply: shifting the key by shape/constraint/fill
-            // forces a re-measure whenever any of them changes mid-draft.
-            int shapeKey = scale + 1000 * ((int)_tool.Shape + 4 * (int)_tool.Constraint + 16 * (_tool.Filled ? 1 : 0));
+            // Shape changes fold into the scale key slot cheaply: shifting the key by shape/constraint/
+            // fill/sides/draft-stage/chain-length forces a re-measure whenever any changes mid-draft.
+            int shapeKey = scale + 1000 * ((int)_tool.Shape + 4 * (int)_tool.Constraint + 16 * (_tool.Filled ? 1 : 0)
+                + 32 * _tool.Sides + 1024 * (_tool.AwaitingApex ? 1 : 0) + 2048 * _tool.ChainCount);
             if (qx == _draftKeyX && qy == _draftKeyY && qz == _draftKeyZ && shapeKey == _draftKeyScale) return;
             _draftKeyX = qx; _draftKeyY = qy; _draftKeyZ = qz; _draftKeyScale = shapeKey;
 
             try
             {
-                IGuideShape shape = ShapeFactory.Create(
-                    _tool.Shape, _tool.Constraint, _tool.DraftPlaneAxis, start, aim);
+                IGuideShape shape;
+                if (DraftManager.IsChainShape(_tool.Shape))
+                {
+                    // The Free-Shape measures its whole placed chain + the live aim corner (0.1.15).
+                    var corners = _tool.DraftChain;
+                    corners.Add(new Vintagestory.API.MathTools.Vec3d(aim.X, aim.Y, aim.Z));
+                    shape = new FreeShape(corners, false);
+                }
+                else
+                {
+                    // A three-click triangle whose base is down measures with the aim as its APEX (the
+                    // base is fixed); every other draft measures start → aim, as ever (Session 11).
+                    Vec3d end = _tool.AwaitingApex ? _tool.DraftSecond : aim;
+                    shape = ShapeFactory.Create(
+                        _tool.Shape, _tool.Constraint, _tool.DraftPlaneAxis, start, end,
+                        sides: _tool.Sides);
+                    if (_tool.AwaitingApex && shape.ControlPoints.Count > 2)
+                        shape.MoveControlPoint(2, aim);
+                }
                 var voxels = shape.GetVoxelPositions(scale, _tool.Filled);
                 _draftVoxelCount = voxels.Count;
                 _draftExtent = GuideMeshBuilder.MeasureExtent(voxels, scale);

@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using Cairo;
 using Vintagestory.API.Client;
+using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
+using Layout.Config;
 using Layout.Guide;
 using Layout.Network;
 using Layout.Systems;
@@ -72,6 +75,7 @@ namespace Layout.UI
     {
         private readonly DraftManager _tool;
         private readonly ClientNetworkHandler _net;
+        private readonly LayoutClientConfig _config;
 
         // ---- Tile row tables (code kept stable; display names are short tile labels) ----
         // Order matches the ToolMode enum (Create · Edit · Delete) so (int)Mode indexes the row.
@@ -79,16 +83,18 @@ namespace Layout.UI
         private static readonly string[] ModeNames  = { "Create", "Edit (selected guide)", "Delete" };
 
         // The shape catalog — the primitives+modifiers model, in the order players think of them
-        // (Session 9: eleven entries, rendered as a tile GRID of four per row). Codes map to
-        // (GuideShapeType, ShapeConstraint) in ShapeFromCode below.
+        // (0.1.15: thirteen entries with Polygon + Free-Shape, shown in the EXPANDED picker as a grid of
+        // four per row). Codes map to (GuideShapeType, ShapeConstraint) in ShapeFromCode below.
         private static readonly string[] ShapeCodes = {
             "arch", "halfcircle", "circle", "ellipse",
             "line", "triangle", "righttri", "equilateral",
-            "isosceles", "rectangle", "square" };
+            "isosceles", "rectangle", "square", "polygon",
+            "freeshape" };
         private static readonly string[] ShapeNames = {
             "Arch", "Half-circle", "Circle", "Ellipse",
             "Line", "Triangle", "Right triangle", "Equilateral",
-            "Isosceles", "Rectangle", "Square" };
+            "Isosceles", "Rectangle", "Square", "Polygon",
+            "Free-Shape" };
 
         // Voxel-edge scale, ascending: the NxN icon IS the voxel count (1x1 smallest ... 16x16 = full block),
         // exactly like the game's native scale icons. Names are voxel counts, not fractions (human-requested).
@@ -115,7 +121,8 @@ namespace Layout.UI
         private static readonly string[] ShapeIcons = {
             LayoutToolIcons.Arch, LayoutToolIcons.HalfCircle, LayoutToolIcons.Circle, LayoutToolIcons.Ellipse,
             LayoutToolIcons.Line, LayoutToolIcons.Triangle, LayoutToolIcons.RightTri, LayoutToolIcons.Equilateral,
-            LayoutToolIcons.Isosceles, LayoutToolIcons.Rectangle, LayoutToolIcons.Square };
+            LayoutToolIcons.Isosceles, LayoutToolIcons.Rectangle, LayoutToolIcons.Square, LayoutToolIcons.Polygon,
+            LayoutToolIcons.FreeShapeIcon };
         private static readonly string[] ModeIcons = { LayoutToolIcons.ModeCreate, LayoutToolIcons.ModeEdit, LayoutToolIcons.ModeDelete };
         private static readonly string[] ProjIcons = { LayoutToolIcons.ProjVolumetric, LayoutToolIcons.ProjSurface };
         private static readonly string[] FillIcons = { LayoutToolIcons.FillHollow, LayoutToolIcons.FillFilled };
@@ -127,10 +134,20 @@ namespace Layout.UI
         private static readonly string[] ScaleIcons =
             { LayoutToolIcons.Scale1, LayoutToolIcons.Scale2, LayoutToolIcons.Scale4, LayoutToolIcons.Scale8, LayoutToolIcons.Scale16 };
 
-        // Active divisions number-fields registered for scroll-wheel adjustment (repopulated each compose):
-        // the field key + the change handler. See OnMouseWheel.
-        private readonly List<(string fieldKey, Action<int> onChanged)> _divWheelFields =
-            new List<(string, Action<int>)>();
+        // Active number-fields registered for scroll-wheel adjustment (repopulated each compose): the
+        // field key, the change handler, and the field's own clamp range (Divisions 0..256, Sides 3..24).
+        // See OnMouseWheel.
+        private readonly List<(string fieldKey, Action<int> onChanged, int min, int max)> _divWheelFields =
+            new List<(string, Action<int>, int, int)>();
+
+        // Last APPLIED value per number field (0.1.16): lets the typed handler tell a native
+        // spinner/wheel DECREMENT below the floor (value == last − 1 → hard-stop at min) apart from
+        // transient typing ("1" on the way to "12"), since both arrive as the same text event.
+        private readonly Dictionary<string, int> _numberFieldValues = new Dictionary<string, int>();
+
+        // Whether the shape picker's full-catalog grid is unfolded (the ▾ tile; Session 11). Session-local
+        // GUI state, deliberately not persisted — the panel always opens compact.
+        private bool _shapeGridExpanded;
 
         // When true, our own SetValue refreshes must NOT be treated as user input.
         private bool _suppress;
@@ -147,11 +164,17 @@ namespace Layout.UI
 
         private readonly List<(string key, int sel)> _initialLight = new List<(string, int)>();
 
-        public GuideToolGui(ICoreClientAPI capi, DraftManager tool, ClientNetworkHandler net) : base(capi)
+        public GuideToolGui(ICoreClientAPI capi, DraftManager tool, ClientNetworkHandler net,
+            LayoutClientConfig config) : base(capi)
         {
             _tool = tool;
             _net = net;
+            _config = config;
         }
+
+        /// <summary>True if <paramref name="code"/> is one of the shape picker's catalog codes — the
+        /// validity check the client config uses when normalising the pinned favorites.</summary>
+        public static bool IsKnownShapeCode(string code) => Array.IndexOf(ShapeCodes, code) >= 0;
 
         // Opened programmatically by the tool item, so no auto key combination.
         public override string ToggleKeyCombinationCode => null;
@@ -162,6 +185,7 @@ namespace Layout.UI
         public override void OnGuiOpened()
         {
             base.OnGuiOpened();
+            _shapeGridExpanded = false;      // the panel always opens compact (Session-11 flag 11e)
             Subscribe();
             SetupDialog();
         }
@@ -187,7 +211,7 @@ namespace Layout.UI
             if (args.IsHandled || !IsOpened() || SingleComposer == null) return;
 
             int mx = capi.Input.MouseX, my = capi.Input.MouseY;
-            foreach ((string fieldKey, Action<int> onChanged) in _divWheelFields)
+            foreach ((string fieldKey, Action<int> onChanged, int min, int max) in _divWheelFields)
             {
                 GuiElementTextInput field = SingleComposer.GetTextInput(fieldKey);
                 if (field == null || !field.IsPositionInside(mx, my)) continue;
@@ -195,14 +219,15 @@ namespace Layout.UI
                 int.TryParse(field.GetText()?.Trim(), out int cur);
                 int step = args.value != 0 ? Math.Sign(args.value) : Math.Sign(args.delta);
                 int val = cur + step;
-                if (val < 0) val = 0;
-                if (val > Shapes.DivisionMarks.MaxDivisions) val = Shapes.DivisionMarks.MaxDivisions;
+                if (val < min) val = min;
+                if (val > max) val = max;
 
                 if (val != cur)
                 {
                     onChanged(val);
+                    _numberFieldValues[fieldKey] = val;
                     _suppress = true;
-                    try { field.SetValue(val > 0 ? val.ToString() : ""); }
+                    try { field.SetValue(val.ToString()); }
                     finally { _suppress = false; }
                 }
                 args.SetHandled(true);
@@ -234,7 +259,6 @@ namespace Layout.UI
             GuideData selected = ResolveSelectedGuide();
 
             CairoFont font = CairoFont.WhiteSmallText();
-            CairoFont dimFont = CairoFont.WhiteDetailText();
             // Greyed rows in Delete mode (playtest revision: the detail-font dim was far too subtle):
             // GHOST fonts — same size as the live text but at a fraction of its alpha, so the rows fade
             // hard toward the dialog background while keeping their layout. Combined with leaving these
@@ -250,11 +274,13 @@ namespace Layout.UI
             const double tileGap    = 4;
             const double rowGap     = 5;
             const double headerH    = 20;
-            const double favH       = 24;
             const double controlW   = 5 * tile + 4 * tileGap; // widest tile row = 5 tiles (Scale)
 
             double contentW = labelW + pad + controlW;
-            double y = GuiStyle.TitleBarHeight + 6;
+            // 0.1.17 (human-requested): the child area is ALREADY inset from the dialog edge by
+            // ElementToDialogPadding, so starting a full TitleBarHeight down left ~a text line of dead
+            // space under the title bar. Start just below where the bar actually ends instead.
+            double y = Math.Max(0, GuiStyle.TitleBarHeight - GuiStyle.ElementToDialogPadding) + 4;
 
             _inertRows.Clear();
             _initialLight.Clear();
@@ -274,9 +300,22 @@ namespace Layout.UI
                 .AddDialogTitleBar("Layout Tool", OnTitleBarClose)
                 .BeginChildElements(bgBounds);
 
-            // Context header — a dynamic-text line so mode flips can refresh it cheaply.
+            // Context header — a dynamic-text line so mode flips can refresh it cheaply. In CREATE the
+            // shape name is split out and RIGHT-ALIGNED (0.1.16, human-requested) so it sits naturally
+            // above the Current Shape chip at the row's right edge.
             ElementBounds headerBounds = ElementBounds.Fixed(0, y, contentW, headerH);
-            c.AddDynamicText(BuildHeaderText(), font, headerBounds, "header");
+            if (_tool.Mode == ToolMode.Create)
+            {
+                c.AddDynamicText("Create Mode - Next guide:", font, headerBounds, "header");
+                CairoFont rightFont = CairoFont.WhiteSmallText();
+                rightFont.Orientation = EnumTextOrientation.Right;
+                c.AddDynamicText(ShapeDisplayName(_tool.Shape, _tool.Constraint), rightFont,
+                    ElementBounds.Fixed(0, y, contentW, headerH), "headershape");
+            }
+            else
+            {
+                c.AddDynamicText(BuildHeaderText(), font, headerBounds, "header");
+            }
             y += headerH + rowGap;
 
             // Mode context. In EDIT the setting rows act on the SELECTED guide (via the network senders) and
@@ -288,13 +327,37 @@ namespace Layout.UI
             CairoFont settingLabelFont = settingsInert ? ghostFont : font;
 
             // ---- Mode row (always live — the way between modes) ----
+            double modeRowY = y;
             AddIconRow(c, font, ref y, labelW, pad, tile, tileGap, rowGap,
                 "Mode", ModeCodes, ModeNames, ModeIcons, (int)_tool.Mode, OnModeTile, "mode", inert: false);
 
+            // ---- Current-shape chip (0.1.15, human-requested) ----
+            // A permanently-lit tile at the far right of the Mode row showing the picked shape IN YELLOW
+            // (the guide-body colour), so a selection that isn't on the favorite slots is still visible at
+            // a glance. Status only — clicks are swallowed. Hidden in Edit (the tool's next-guide shape
+            // isn't what that mode is about); dimmed in Delete like the other shape controls.
+            if (!editMode)
+            {
+                int curIdx = ClampIndex(CurrentShapeIndex(), ShapeCodes.Length);
+                string chipIcon = ShapeIcons[curIdx] + LayoutToolIcons.CurrentSuffix
+                    + (deleteMode ? LayoutToolIcons.GhostSuffix : "");
+                ElementBounds chipB = ElementBounds.Fixed(
+                    labelW + pad + 4 * (tile + tileGap), modeRowY, tile, tile);
+                var chip = new GuiElementToggleButton(
+                    capi, chipIcon, "",
+                    CairoFont.WhiteSmallText(), OnCurrentShapeChip, chipB, toggleable: true)
+                { Enabled = !deleteMode };
+                c.AddInteractiveElement(chip, "curshape");
+                c.AddAutoSizeHoverText("Current shape: " + ShapeNames[curIdx],
+                    CairoFont.WhiteDetailText(), 260, chipB.FlatCopy(), "curshape:ht");
+            }
+
             if (editMode)
             {
-                // A compact guide-info line + Deselect stands in for the shape picker / favorites.
-                string gh = selected != null ? BuildSelectedHeaderText(selected) : "Click a guide to edit it";
+                // A compact guide-info line + Deselect stands in for the shape picker / favorites. With
+                // nothing selected it carries the mode's second instruction line (0.1.18 wording).
+                string gh = selected != null ? BuildSelectedHeaderText(selected)
+                    : "Edit the selected guide using the settings below.";
                 c.AddDynamicText(gh, font, ElementBounds.Fixed(0, y + 2, contentW - 80, headerH), "gheader");
                 if (selected != null)
                     c.AddSmallButton("Deselect", OnDeselectClicked, ElementBounds.Fixed(contentW - 76, y, 76, 22));
@@ -302,18 +365,10 @@ namespace Layout.UI
             }
             else
             {
-                // ---- Shape picker grid + Favorites placeholder (Create / Delete — the "next guide" tools) ----
-                AddIconGrid(c, mainLabelFont, ref y, labelW, pad, tile, tileGap, rowGap,
-                    "Shape", ShapeCodes, ShapeNames, ShapeIcons, CurrentShapeIndex(), OnShapeTile, "shape", deleteMode, perRow: 4);
-
-                ElementBounds lb = ElementBounds.Fixed(0, y + 4, labelW, favH);
-                ElementBounds well = ElementBounds.Fixed(labelW + pad, y, controlW, favH);
-                ElementBounds hint = ElementBounds.Fixed(labelW + pad + 8, y + 4, controlW - 16, favH - 6);
-                CairoFont favFont = deleteMode ? ghostFont : dimFont;
-                c.AddStaticText("Favorites", favFont, lb)
-                 .AddInset(well, 3)
-                 .AddStaticText("☆  star to pin — soon", favFont, hint);
-                y += favH + rowGap;
+                // ---- Shape picker (Session 11 rework): 3 pinned favorite slots + a ▾ expand tile that
+                // unfolds the full catalog. Starring (right-click) a catalog tile pins it into slot 1.
+                // The old separate Favorites strip is gone — the slots ARE the favorites.
+                AddShapePicker(c, mainLabelFont, ref y, labelW, pad, tile, tileGap, rowGap, deleteMode);
             }
 
             // ---- Scale / Projection / (Plane) / Fill / Divisions [/ Visibility] ----
@@ -325,11 +380,27 @@ namespace Layout.UI
                 IndexOfScale(editMode ? (selected?.VoxelScale ?? _tool.Scale) : _tool.Scale),
                 editMode ? OnGuideScaleTile : OnScaleTile, "scale", editMode ? settingsInert : deleteMode);
 
+            // Projection + Fill share ONE row (0.1.17, human-requested — the two-tile Projection row left
+            // three empty slots; Fill's two tiles slot into them with a compact second label). Fill greys
+            // out for the Free-Shape (0.1.19, human-directed): fill is deferred on it, so the toggle
+            // being live was misleading.
             bool surface = editMode ? (selected != null && selected.Projection == ProjectionMode.Surface)
                                     : _tool.Projection == ProjectionMode.Surface;
-            AddIconRow(c, rowFont, ref y, labelW, pad, tile, tileGap, rowGap,
+            bool projFillInert = editMode ? settingsInert : deleteMode;
+            bool freeShapePicked = editMode
+                ? selected != null && selected.ShapeType == GuideShapeType.FreeShape
+                : _tool.Shape == GuideShapeType.FreeShape;
+            bool fillInert = projFillInert || freeShapePicked;
+            string[] fillNames = !projFillInert && freeShapePicked
+                ? new[] { FillNames[0] + "\nFill is not available on a Free-Shape.",
+                          FillNames[1] + "\nFill is not available on a Free-Shape." }
+                : FillNames;
+            AddIconRowPair(c, rowFont, ref y, labelW, pad, tile, tileGap, rowGap,
                 "Projection", ProjCodes, ProjNames, ProjIcons, surface ? 1 : 0,
-                editMode ? OnGuideProjectionTile : OnProjectionTile, "proj", editMode ? settingsInert : deleteMode);
+                editMode ? OnGuideProjectionTile : OnProjectionTile, "proj", projFillInert,
+                "Fill", fillInert ? ghostFont : rowFont, FillCodes, fillNames, FillIcons,
+                (editMode ? (selected?.IsFilled ?? false) : _tool.Filled) ? 1 : 0,
+                editMode ? OnGuideFillTile : OnFillTile, "fill", fillInert);
 
             if (surface)
             {
@@ -344,15 +415,24 @@ namespace Layout.UI
                         OverrideToToolIndex(_tool.PlaneOverride), OnPlaneTile, "plane", deleteMode);
             }
 
-            AddIconRow(c, rowFont, ref y, labelW, pad, tile, tileGap, rowGap,
-                "Fill", FillCodes, FillNames, FillIcons,
-                (editMode ? (selected?.IsFilled ?? false) : _tool.Filled) ? 1 : 0,
-                editMode ? OnGuideFillTile : OnFillTile, "fill", editMode ? settingsInert : deleteMode);
-
-            AddDivisionsControl(c, rowFont, font, ref y, labelW, pad, tile, rowGap,
-                editMode ? (selected?.Divisions ?? 0) : _tool.Divisions,
-                editMode ? settingsInert : deleteMode, "div",
-                editMode ? OnGuideDivisionsChanged : OnToolDivisionsChanged);
+            // Divisions — and, for a polygon, the Sides field beside it on the SAME row (0.1.17,
+            // human-requested). Both are the native number input + wheel + spinners.
+            bool sidesRow = editMode ? (selected != null && selected.ShapeType == GuideShapeType.Polygon)
+                                     : _tool.Shape == GuideShapeType.Polygon;
+            int divCurrent = editMode ? (selected?.Divisions ?? 0) : _tool.Divisions;
+            Action<int> divChanged = editMode ? OnGuideDivisionsChanged : OnToolDivisionsChanged;
+            bool numberInert = editMode ? settingsInert : deleteMode;
+            if (sidesRow)
+                AddNumberPairControl(c, rowFont, font, ref y, labelW, pad, tile, rowGap,
+                    "Divisions", divCurrent, 0, Shapes.DivisionMarks.MaxDivisions, "div", divChanged,
+                    "Sides",
+                    editMode ? (selected?.Sides ?? Shapes.PolygonShape.DefaultSides) : _tool.Sides,
+                    Shapes.PolygonShape.MinSides, Shapes.PolygonShape.MaxSides, "sides",
+                    editMode ? OnGuideSidesChanged : OnToolSidesChanged,
+                    numberInert);
+            else
+                AddNumberControl(c, rowFont, font, ref y, labelW, pad, tile, rowGap, "Divisions",
+                    divCurrent, 0, Shapes.DivisionMarks.MaxDivisions, numberInert, "div", divChanged);
 
             // Visibility is Edit-only — a placed guide can be shown/hidden; the tool has no such state.
             if (editMode)
@@ -368,51 +448,109 @@ namespace Layout.UI
             LightInitialTiles();
         }
 
-        // The Divisions control (Session 10, second attempt): the game's own NUMBER input
-        // (GuiElementNumberInput) — it ships native scroll-wheel handling (its own OnMouseWheel override;
-        // the plain text input has none, which is why the first attempt's wheel did nothing) plus small
-        // up/down spinner buttons. IntMode/Interval(=1) are set post-compose in LightInitialTiles. Typing
-        // still applies per keystroke through the same clamp handler (0..DivisionMarks.MaxDivisions), and
-        // the dialog-level OnMouseWheel fallback keeps hover-scroll working even if the element's native
-        // path needs focus first. Programmatic SetValue runs under the _suppress guard. In inert (Delete)
-        // mode the row is ghost static text.
-        private void AddDivisionsControl(
+        // A labelled number-input row (Session 10's Divisions control, generalised in Session 11 for the
+        // polygon's Sides): the game's own NUMBER input (GuiElementNumberInput) — native scroll-wheel
+        // handling plus small up/down spinner buttons. IntMode/Interval(=1) are set post-compose in
+        // LightInitialTiles. Typing applies per keystroke through the clamp handler; the dialog-level
+        // OnMouseWheel fallback keeps hover-scroll working even without focus. Programmatic SetValue runs
+        // under the _suppress guard. In inert (Delete / no-selection) mode the row is ghost static text.
+        private void AddNumberControl(
             GuiComposer c, CairoFont labelFont, CairoFont font, ref double y,
-            double labelW, double pad, double tile, double rowGap,
-            int current, bool inert, string key, Action<int> onChanged)
+            double labelW, double pad, double tile, double rowGap, string label,
+            int current, int min, int max, bool inert, string key, Action<int> onChanged)
         {
             ElementBounds labelBounds = ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20);
-            c.AddStaticText("Divisions", labelFont, labelBounds);
+            c.AddStaticText(label, labelFont, labelBounds);
 
             if (inert)
             {
                 ElementBounds vb = ElementBounds.Fixed(labelW + pad, y + (tile - 16) / 2, 80, 20);
-                c.AddStaticText(current > 1 ? current.ToString() : "Off", labelFont, vb);
+                c.AddStaticText(current > 1 ? current.ToString() : (min > 0 ? current.ToString() : "Off"),
+                    labelFont, vb);
                 y += tile + rowGap;
                 return;
             }
 
             const double fieldH = 30, fieldW = 90;   // wide enough for the spinner buttons
             ElementBounds fieldBounds = ElementBounds.Fixed(labelW + pad, y + (tile - fieldH) / 2, fieldW, fieldH);
-            c.AddNumberInput(fieldBounds, text => OnDivisionsTyped(text, key + ":text", onChanged), font, key + ":text");
+            c.AddNumberInput(fieldBounds, text => OnNumberTyped(text, key + ":text", onChanged, min, max), font, key + ":text");
 
-            _pendingFieldText.Add((key + ":text", current > 0 ? current.ToString() : "0"));
-            _divWheelFields.Add((key + ":text", onChanged));
+            _pendingFieldText.Add((key + ":text", current > 0 ? current.ToString() : min.ToString()));
+            _divWheelFields.Add((key + ":text", onChanged, min, max));
+            _numberFieldValues[key + ":text"] = current;
+            y += tile + rowGap;
+        }
+
+        // TWO number fields sharing one row (0.1.17): Divisions + the polygon's Sides. Same native
+        // inputs, wheel plumbing, and clamp handling as the single-field row; the second label is compact.
+        private void AddNumberPairControl(
+            GuiComposer c, CairoFont labelFont, CairoFont font, ref double y,
+            double labelW, double pad, double tile, double rowGap,
+            string label1, int current1, int min1, int max1, string key1, Action<int> onChanged1,
+            string label2, int current2, int min2, int max2, string key2, Action<int> onChanged2,
+            bool inert)
+        {
+            // 0.1.18: fields narrowed (90 → 76) so the second label has room and never wraps.
+            const double fieldH = 30, field1W = 76, field2W = 76, label2W = 52;
+
+            c.AddStaticText(label1, labelFont, ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20));
+
+            if (inert)
+            {
+                c.AddStaticText(current1 > 1 ? current1.ToString() : "Off", labelFont,
+                    ElementBounds.Fixed(labelW + pad, y + (tile - 16) / 2, 60, 20));
+                c.AddStaticText(label2, labelFont,
+                    ElementBounds.Fixed(labelW + pad + 96, y + (tile - 16) / 2, label2W, 20));
+                c.AddStaticText(current2.ToString(), labelFont,
+                    ElementBounds.Fixed(labelW + pad + 96 + label2W + pad, y + (tile - 16) / 2, 60, 20));
+                y += tile + rowGap;
+                return;
+            }
+
+            double x = labelW + pad;
+            c.AddNumberInput(ElementBounds.Fixed(x, y + (tile - fieldH) / 2, field1W, fieldH),
+                text => OnNumberTyped(text, key1 + ":text", onChanged1, min1, max1), font, key1 + ":text");
+            _pendingFieldText.Add((key1 + ":text", current1 > 0 ? current1.ToString() : min1.ToString()));
+            _divWheelFields.Add((key1 + ":text", onChanged1, min1, max1));
+            _numberFieldValues[key1 + ":text"] = current1;
+            x += field1W + 8;
+
+            c.AddStaticText(label2, labelFont, ElementBounds.Fixed(x, y + (tile - 16) / 2, label2W, 20));
+            x += label2W + pad;
+            c.AddNumberInput(ElementBounds.Fixed(x, y + (tile - fieldH) / 2, field2W, fieldH),
+                text => OnNumberTyped(text, key2 + ":text", onChanged2, min2, max2), font, key2 + ":text");
+            _pendingFieldText.Add((key2 + ":text", current2 > 0 ? current2.ToString() : min2.ToString()));
+            _divWheelFields.Add((key2 + ":text", onChanged2, min2, max2));
+            _numberFieldValues[key2 + ":text"] = current2;
+
             y += tile + rowGap;
         }
 
         private readonly List<(string key, string text)> _pendingFieldText = new List<(string, string)>();
 
-        private void OnDivisionsTyped(string text, string fieldKey, Action<int> onChanged)
+        private void OnNumberTyped(string text, string fieldKey, Action<int> onChanged, int min, int max)
         {
             if (_suppress) return;
-            if (string.IsNullOrWhiteSpace(text)) { onChanged(0); return; }   // empty (mid-edit) = 0
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                if (min <= 0) { onChanged(0); _numberFieldValues[fieldKey] = 0; }   // Divisions: empty = 0
+                return;
+            }
             if (!int.TryParse(text.Trim(), out int value)) return;           // ignore partial/garbled input
-            int clamped = value < 0 ? 0 : value > Shapes.DivisionMarks.MaxDivisions ? Shapes.DivisionMarks.MaxDivisions : value;
+            int clamped = value < min ? min : value > max ? max : value;
+
+            // UNDER-min handling in a floored field (0.1.16 fix — the Sides field could display 2, 1, 0…):
+            // the native spinner/wheel has no minimum, so a downward step below the floor arrives here as
+            // last−1 — HARD-STOP it: re-apply min and snap the display back. Anything else under min is
+            // transient TYPING ("1" on the way to "12"): apply nothing, leave the display for more digits.
+            if (value < min && min > 0)
+            {
+                bool decremented = _numberFieldValues.TryGetValue(fieldKey, out int last) && value == last - 1;
+                if (!decremented) return;
+                value = int.MinValue;                // force the display snap below
+            }
             onChanged(clamped);
-            // The native number input has no min/max, so its wheel/spinner can step to -1 / past the cap.
-            // When we clamp, snap the DISPLAY back (synchronously, before the frame renders) so it can never
-            // show a negative or an over-cap value.
+            _numberFieldValues[fieldKey] = clamped;
             if (clamped != value)
             {
                 _suppress = true;
@@ -429,23 +567,93 @@ namespace Layout.UI
             if (g != null && g.Divisions != value) _net.SendSetDivisions(g.Id, value);
         }
 
+        private void OnToolSidesChanged(int value) => _tool.SetSides(value);
+
+        private void OnGuideSidesChanged(int value)
+        {
+            GuideData g = ResolveSelectedGuide();
+            if (g != null && g.Sides != value) _net.SendSetSides(g.Id, value);
+        }
+
         // ---- Icon tiles (UI pass) ----------------------------------------------------------------------
         // Square icon tiles wired into the SAME exclusive-toggle plumbing as the old text tiles (same
         // "{key}:{i}" keys, relight, inert handling, recompose) — only the tile FACE is a registered glyph.
         // Tile size + gaps come from the compact layout metrics; a per-tile hover text names the option.
 
-        // One icon toggle tile: a stock GuiElementToggleButton whose face is a CustomIcons glyph. Inert
-        // (Delete-mode greyed) tiles use the button's native Enabled=false dim rather than the text ghost.
-        private void AddIconTile(GuiComposer c, string icon, string hover, ElementBounds bounds,
-            string rowKey, string code, string tileKey, Action<string, string> onTile, bool enabled)
+        // A toggle tile that also reports right-clicks (Session 11: starring a catalog shape pins it as a
+        // favorite). The stock button only knows left-clicks; right press/release are swallowed here so
+        // they can't fall through to the world or fire the toggle.
+        private sealed class StarrableToggleButton : GuiElementToggleButton
         {
-            var btn = new GuiElementToggleButton(
-                capi, icon, "", CairoFont.WhiteSmallText(),
-                on => OnTileToggled(rowKey, code, tileKey, on, onTile), bounds, toggleable: true)
-            { Enabled = enabled };
+            public Action OnRightClick;
+
+            public StarrableToggleButton(ICoreClientAPI capi, string icon, CairoFont font,
+                Action<bool> onToggled, ElementBounds bounds)
+                : base(capi, icon, "", font, onToggled, bounds, toggleable: true) { }
+
+            public override void OnMouseDownOnElement(ICoreClientAPI api, MouseEvent args)
+            {
+                if (args.Button == EnumMouseButton.Right)
+                {
+                    OnRightClick?.Invoke();
+                    args.Handled = true;
+                    return;
+                }
+                base.OnMouseDownOnElement(api, args);
+            }
+
+            public override void OnMouseUpOnElement(ICoreClientAPI api, MouseEvent args)
+            {
+                if (args.Button == EnumMouseButton.Right)
+                {
+                    args.Handled = true;
+                    return;
+                }
+                base.OnMouseUpOnElement(api, args);
+            }
+        }
+
+        // One icon toggle tile: a stock GuiElementToggleButton whose face is a CustomIcons glyph.
+        // Disabled (Delete-mode greyed) tiles swap to the glyph's "-ghost" variant (0.1.16 — the button's
+        // native Enabled=false dims its chrome but NOT a custom icon face, so the tiles didn't read as
+        // greyed) on top of the native disabled state. Hover text is AUTO-SIZED to its content;
+        // onRightClick, when given, makes the tile starrable.
+        private void AddIconTile(GuiComposer c, string icon, string hover, ElementBounds bounds,
+            string rowKey, string code, string tileKey, Action<string, string> onTile, bool enabled,
+            Action onRightClick = null)
+        {
+            string face = enabled ? icon : icon + LayoutToolIcons.GhostSuffix;
+            GuiElementToggleButton btn;
+            if (onRightClick != null)
+            {
+                btn = new StarrableToggleButton(capi, face, CairoFont.WhiteSmallText(),
+                    on => OnTileToggled(rowKey, code, tileKey, on, onTile), bounds)
+                { Enabled = enabled, OnRightClick = onRightClick };
+            }
+            else
+            {
+                btn = new GuiElementToggleButton(
+                    capi, face, "", CairoFont.WhiteSmallText(),
+                    on => OnTileToggled(rowKey, code, tileKey, on, onTile), bounds, toggleable: true)
+                { Enabled = enabled };
+            }
             c.AddInteractiveElement(btn, tileKey);
             if (!string.IsNullOrEmpty(hover))
-                c.AddHoverText(hover, CairoFont.WhiteDetailText(), 200, bounds.FlatCopy(), tileKey + ":ht");
+                c.AddAutoSizeHoverText(hover, CairoFont.WhiteDetailText(), 260, bounds.FlatCopy(), tileKey + ":ht");
+        }
+
+        // A plain white rule (0.1.16): separates the pinned favorite slots from the unfolded catalog.
+        private sealed class HRuleElement : GuiElement
+        {
+            public HRuleElement(ICoreClientAPI capi, ElementBounds bounds) : base(capi, bounds) { }
+
+            public override void ComposeElements(Context ctx, ImageSurface surface)
+            {
+                Bounds.CalcWorldBounds();
+                ctx.SetSourceRGBA(1, 1, 1, 0.55);
+                ctx.Rectangle(Bounds.drawX, Bounds.drawY, Bounds.InnerWidth, Bounds.InnerHeight);
+                ctx.Fill();
+            }
         }
 
         // Label + one row of exclusive SQUARE icon tiles, left-aligned.
@@ -470,29 +678,194 @@ namespace Layout.UI
             if (!inert) _initialLight.Add((key, sel));
         }
 
-        // Label + a GRID of exclusive SQUARE icon tiles (the shape catalog).
-        private void AddIconGrid(
+        // TWO short exclusive tile groups sharing one row (0.1.17): the left group exactly like
+        // AddIconRow, then a compact second label + its tiles in the leftover slots (Projection + Fill).
+        // Each group carries its OWN inert state + label font (0.1.19: Fill greys alone on a Free-Shape)
+        // and its own key, so the relight plumbing is untouched.
+        private void AddIconRowPair(
             GuiComposer c, CairoFont labelFont, ref double y,
             double labelW, double pad, double tile, double tileGap, double rowGap,
-            string label, string[] codes, string[] names, string[] icons, int selectedIndex,
-            Action<string, string> onTile, string key, bool inert, int perRow)
+            string label1, string[] codes1, string[] names1, string[] icons1, int sel1,
+            Action<string, string> onTile1, string key1, bool inert1,
+            string label2, CairoFont labelFont2, string[] codes2, string[] names2, string[] icons2, int sel2,
+            Action<string, string> onTile2, string key2, bool inert2)
+        {
+            c.AddStaticText(label1, labelFont, ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20));
+
+            double x = labelW + pad;
+            int s1 = ClampIndex(sel1, codes1.Length);
+            for (int i = 0; i < codes1.Length; i++)
+            {
+                AddIconTile(c, icons1[i], names1[i], ElementBounds.Fixed(x, y, tile, tile),
+                    key1, codes1[i], key1 + ":" + i, onTile1, !inert1);
+                x += tile + tileGap;
+            }
+
+            // The second group's tiles snap to the SAME column grid as every other row (0.1.18 fix —
+            // they sat a few pixels left of the tiles above): its label takes exactly the one tile slot
+            // between the groups, and the tiles start on the next slot boundary.
+            double x2 = labelW + pad + (codes1.Length + 1) * (tile + tileGap);
+            c.AddStaticText(label2, labelFont2,
+                ElementBounds.Fixed(x + 2, y + (tile - 16) / 2, x2 - x - 6, 20));
+
+            int s2 = ClampIndex(sel2, codes2.Length);
+            for (int i = 0; i < codes2.Length; i++)
+            {
+                AddIconTile(c, icons2[i], names2[i], ElementBounds.Fixed(x2 + i * (tile + tileGap), y, tile, tile),
+                    key2, codes2[i], key2 + ":" + i, onTile2, !inert2);
+            }
+
+            if (inert1) _inertRows.Add(key1);
+            if (inert2) _inertRows.Add(key2);
+            y += tile + rowGap;
+            if (!inert1) _initialLight.Add((key1, s1));
+            if (!inert2) _initialLight.Add((key2, s2));
+        }
+
+        // ---- Shape picker (Session 11; 0.1.15 hard-kept rework) --------------------------------------
+        //
+        // The main row holds the player's FOUR pinned shapes (persisted in layout-client.json; empty
+        // slots show a faint placeholder) plus a chevron tile that unfolds the full catalog beneath.
+        // Left-click anywhere selects. RIGHT-click stars/unstars: starring NEVER evicts — a full list
+        // shows a message telling you to unstar first (right-click a starred catalog tile, which wears a
+        // small ★ badge, or the slot tile itself). Selecting from the catalog folds it away again.
+        private const int FavoriteSlots = 4;
+
+        private void AddShapePicker(
+            GuiComposer c, CairoFont labelFont, ref double y,
+            double labelW, double pad, double tile, double tileGap, double rowGap, bool inert)
         {
             ElementBounds labelBounds = ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20);
-            c.AddStaticText(label, labelFont, labelBounds);
+            c.AddStaticText("Shape", labelFont, labelBounds);
 
-            int sel = ClampIndex(selectedIndex, codes.Length);
-            for (int i = 0; i < codes.Length; i++)
+            List<string> favs = _config.FavoriteShapes;
+            string currentCode = ShapeCodes[ClampIndex(CurrentShapeIndex(), ShapeCodes.Length)];
+
+            int litSlot = -1;
+            for (int i = 0; i < FavoriteSlots; i++)
             {
-                int row = i / perRow, col = i % perRow;
-                string tileKey = key + ":" + i;
-                ElementBounds tb = ElementBounds.Fixed(
-                    labelW + pad + col * (tile + tileGap), y + row * (tile + tileGap), tile, tile);
-                AddIconTile(c, icons[i], names[i], tb, key, codes[i], tileKey, onTile, !inert);
+                ElementBounds tb = ElementBounds.Fixed(labelW + pad + i * (tile + tileGap), y, tile, tile);
+                int catalog = i < favs.Count ? Array.IndexOf(ShapeCodes, favs[i]) : -1;
+                if (catalog >= 0)
+                {
+                    string code = favs[i];
+                    AddIconTile(c, ShapeIcons[catalog],
+                        ShapeNames[catalog] + "\nRight-Click to unpin and free this slot.", tb,
+                        "shape", code, "shape:" + i, OnShapeTile, !inert,
+                        onRightClick: inert ? null : (Action)(() => OnUnstarFavorite(code)));
+                    if (code == currentCode) litSlot = i;
+                }
+                else
+                {
+                    // An empty, hard-kept slot: a faint placeholder that only right-click-starring fills.
+                    var empty = new GuiElementToggleButton(
+                        capi, LayoutToolIcons.EmptySlot, "", CairoFont.WhiteSmallText(),
+                        _ => { }, tb, toggleable: false)
+                    { Enabled = false };
+                    c.AddInteractiveElement(empty, "shapeempty:" + i);
+                    c.AddAutoSizeHoverText("Empty Slot - Right-Click a shape below to pin it.",
+                        CairoFont.WhiteDetailText(), 260, tb.FlatCopy(), "shapeempty:" + i + ":ht");
+                }
             }
-            int rows = (codes.Length + perRow - 1) / perRow;
-            if (inert) _inertRows.Add(key);
-            y += rows * tile + (rows - 1) * tileGap + rowGap;
-            if (!inert) _initialLight.Add((key, sel));
+
+            // The expand tile: not part of the exclusive row — its lit state means "catalog open".
+            ElementBounds eb = ElementBounds.Fixed(labelW + pad + FavoriteSlots * (tile + tileGap), y, tile, tile);
+            string chevron = _shapeGridExpanded ? LayoutToolIcons.ExpandUp : LayoutToolIcons.ExpandDown;
+            var expandBtn = new GuiElementToggleButton(
+                capi, inert ? chevron + LayoutToolIcons.GhostSuffix : chevron,
+                "", CairoFont.WhiteSmallText(), OnExpandToggled, eb, toggleable: true)
+            { Enabled = !inert };
+            c.AddInteractiveElement(expandBtn, "shapemore");
+            c.AddAutoSizeHoverText(
+                litSlot < 0 && !_shapeGridExpanded
+                    ? "All shapes (current: " + ShapeDisplayName(_tool.Shape, _tool.Constraint) + ")"
+                    : "All shapes",
+                CairoFont.WhiteDetailText(), 260, eb.FlatCopy(), "shapemore:ht");
+
+            y += tile + rowGap;
+            if (!inert && litSlot >= 0) _initialLight.Add(("shape", litSlot));
+
+            // The unfolded catalog (0.1.16: FIVE per row, divided from the slots by a white rule): the
+            // current pick is lit; starred tiles wear the ★ badge; right-click stars (or unstars).
+            if (_shapeGridExpanded)
+            {
+                // The separator between "your slots" and "everything" (human-requested).
+                c.AddStaticElement(new HRuleElement(capi,
+                    ElementBounds.Fixed(labelW + pad, y, 5 * tile + 4 * tileGap, 2)), "shapesep");
+                y += 2 + rowGap;
+
+                const int perRow = 5;
+                int sel = ClampIndex(CurrentShapeIndex(), ShapeCodes.Length);
+                for (int i = 0; i < ShapeCodes.Length; i++)
+                {
+                    int row = i / perRow, col = i % perRow;
+                    string code = ShapeCodes[i];
+                    bool starred = favs.Contains(code);
+                    ElementBounds tb = ElementBounds.Fixed(
+                        labelW + pad + col * (tile + tileGap), y + row * (tile + tileGap), tile, tile);
+                    // Favorited = the glyph drawn in the Current-Shape YELLOW (0.1.17, human-requested —
+                    // the corner ★ was too small to read; the yellow highlight is unmissable).
+                    AddIconTile(c,
+                        starred ? ShapeIcons[i] + LayoutToolIcons.CurrentSuffix : ShapeIcons[i],
+                        ShapeNames[i] + (starred ? "\nPinned - Right-Click to unpin."
+                                                 : "\nRight-Click to pin into a free slot."),
+                        tb, "shapecat", code, "shapecat:" + i, OnCatalogShapeTile, !inert,
+                        onRightClick: inert ? null
+                            : (Action)(starred ? () => OnUnstarFavorite(code) : () => OnStarFavorite(code)));
+                }
+                int rows = (ShapeCodes.Length + perRow - 1) / perRow;
+                if (inert) _inertRows.Add("shapecat");
+                y += rows * tile + (rows - 1) * tileGap + rowGap;
+                if (!inert) _initialLight.Add(("shapecat", sel));
+            }
+            if (inert) _inertRows.Add("shape");
+        }
+
+        // The current-shape chip swallows clicks: snap it straight back to lit (a status light).
+        private void OnCurrentShapeChip(bool on)
+        {
+            if (_suppress || on) return;
+            _suppress = true;
+            try { SingleComposer?.GetToggleButton("curshape")?.SetValue(true); }
+            finally { _suppress = false; }
+        }
+
+        // The ▾/▴ tile: folds the catalog open or shut. Not exclusive-row plumbing — clicking the lit
+        // (open) tile genuinely closes it.
+        private void OnExpandToggled(bool on)
+        {
+            if (_suppress) return;
+            _shapeGridExpanded = on;
+            DeferRecompose();
+        }
+
+        // A pick from the unfolded catalog: select it AND fold the catalog away (submenu semantics).
+        private void OnCatalogShapeTile(string rowKey, string code)
+        {
+            _shapeGridExpanded = false;
+            OnShapeTile(rowKey, code);
+        }
+
+        // Right-click star (0.1.15, hard-kept): fill the FIRST FREE slot; a full list refuses with a
+        // message — starring never evicts. Persisted with the client config on shutdown.
+        private void OnStarFavorite(string code)
+        {
+            List<string> favs = _config.FavoriteShapes;
+            if (favs.Contains(code)) return;
+            if (favs.Count >= FavoriteSlots)
+            {
+                capi.TriggerIngameError(this, "layout-favoritesfull",
+                    "All four shape slots are taken - Right-Click a pinned shape to unpin it first.");
+                return;
+            }
+            favs.Add(code);
+            DeferRecompose();                                   // the slot re-draws with the new pin
+        }
+
+        // Right-click a starred shape (slot or catalog): unstar it, freeing its slot.
+        private void OnUnstarFavorite(string code)
+        {
+            if (_config.FavoriteShapes.Remove(code)) DeferRecompose();
         }
 
         // Toggle-tile plumbing: exclusive rows on top of independent toggle buttons.
@@ -539,8 +912,14 @@ namespace Layout.UI
                 foreach ((string key, int sel) in _initialLight)
                     SingleComposer.GetToggleButton(key + ":" + sel)?.SetValue(true);
 
-                // Configure the divisions number inputs: whole numbers, ±1 per wheel notch / spinner click.
-                foreach ((string fieldKey, _) in _divWheelFields)
+                // The shape picker's expand tile lights while the catalog is unfolded (not an exclusive row).
+                SingleComposer.GetToggleButton("shapemore")?.SetValue(_shapeGridExpanded);
+
+                // The current-shape chip is ALWAYS lit — it's a status light, not a control.
+                SingleComposer.GetToggleButton("curshape")?.SetValue(true);
+
+                // Configure the number inputs: whole numbers, ±1 per wheel notch / spinner click.
+                foreach ((string fieldKey, _, _, _) in _divWheelFields)
                 {
                     GuiElementNumberInput num = SingleComposer.GetNumberInput(fieldKey);
                     if (num != null) { num.IntMode = true; num.Interval = 1f; }
@@ -723,6 +1102,9 @@ namespace Layout.UI
                 if (surfaceNow) RelightRow("plane", PlaneEditCodes, AxisToEditIndex(g.Plane.FlattenedAxis));
                 RelightRow("fill", FillCodes, g.IsFilled ? 1 : 0);
                 SingleComposer?.GetTextInput("div:text")?.SetValue(g.Divisions > 0 ? g.Divisions.ToString() : "0");
+                if (g.ShapeType == GuideShapeType.Polygon)
+                    SingleComposer?.GetTextInput("sides:text")?.SetValue(
+                        Shapes.PolygonShape.ClampSides(g.Sides).ToString());
                 RelightRow("vis", VisCodes, g.IsHidden ? 1 : 0);
             }
             finally
@@ -747,10 +1129,11 @@ namespace Layout.UI
         {
             return _tool.Mode switch
             {
-                ToolMode.Create => "Create mode — next guide: "
-                    + ShapeDisplayName(_tool.Shape, _tool.Constraint),
-                ToolMode.Edit => "Edit mode — the settings below change the selected guide",
-                ToolMode.Delete => "Delete mode — click a guide to remove it",
+                // Create composes as TWO texts (left label + right-aligned shape name) in SetupDialog;
+                // this left half only backstops any other caller.
+                ToolMode.Create => "Create Mode - Next guide:",
+                ToolMode.Edit => "Edit Mode - Select a guide to edit it.",
+                ToolMode.Delete => "Delete Mode - Click a guide to remove it.",
                 _ => "Layout tool"
             };
         }
@@ -766,7 +1149,7 @@ namespace Layout.UI
                 ? "in use by " + holder
                 : "editable";
             return "Selected: " + ShapeDisplayName(g.ShapeType, g.Constraint)
-                + " " + ShortId(g.Id) + " — " + lockNote;
+                + " " + ShortId(g.Id) + " - " + lockNote + ".";
         }
 
         // ---------------------------------------------------------------------------------
@@ -861,6 +1244,8 @@ namespace Layout.UI
             "isosceles"   => (GuideShapeType.Triangle,  ShapeConstraint.Isosceles),
             "rectangle"   => (GuideShapeType.Rectangle, ShapeConstraint.None),
             "square"      => (GuideShapeType.Rectangle, ShapeConstraint.Square),
+            "polygon"     => (GuideShapeType.Polygon,   ShapeConstraint.None),
+            "freeshape"   => (GuideShapeType.FreeShape, ShapeConstraint.None),
             _             => (GuideShapeType.Arch,      ShapeConstraint.None)
         };
 
@@ -878,11 +1263,18 @@ namespace Layout.UI
                 _                           => 5
             },
             GuideShapeType.Rectangle => constraint == ShapeConstraint.Square ? 10 : 9,
+            GuideShapeType.Polygon   => 11,
+            GuideShapeType.FreeShape => 12,
             _ => constraint == ShapeConstraint.SemiCircle ? 1 : 0
         };
 
         internal static string ShapeDisplayName(GuideShapeType shape, ShapeConstraint constraint) =>
             ShapeNames[ShapeIndexOf(shape, constraint)];
+
+        /// <summary>The always-yellow "-current" glyph name for a shape pick — the Current Shape chip's
+        /// face, shared with the HUD's copy of the chip (0.1.16).</summary>
+        internal static string CurrentShapeIconName(GuideShapeType shape, ShapeConstraint constraint) =>
+            ShapeIcons[ShapeIndexOf(shape, constraint)] + LayoutToolIcons.CurrentSuffix;
 
         private static PlaneAxis AxisFromCode(string code) => code switch
         {

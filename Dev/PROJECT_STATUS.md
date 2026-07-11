@@ -1,15 +1,25 @@
 # Layout — Project Status & Handoff
 
-**Checkpoint:** **SESSION 10 — Layout v0.1.13, in real-world play, first full Claude Code session.**
-Session 10 verified the reconstructed Session-9 docs against source (all accurate), replaced the text-button
-GUI with a compact **icon-tile UI** (custom Cairo glyphs; native-style N×N scale icons), **fixed B-S10-1**
-(surface guides shifting behind block faces on reload — playtest-confirmed), rebuilt the **divisions
-scroll-wheel** on the game's native number input (**confirmed working**; floored at 0), added a **third tool
-mode — Edit** (the setting rows edit the selected guide, so per-guide editing no longer expands the panel),
-and **paired division markers** on off-cell boundaries. Releases: 0.1.10 → 0.1.11 → 0.1.12 → 0.1.13, one zip
-per revision (never overwritten). **B-S9-1** (lock-in-place) remains **unresolved** by the human's choice
-("not gamebreaking") and is still the top open bug. The plan is **`ARCHITECTURE.md`**. **This is the
-status/handoff doc.** Session-10 detail: `SESSION_10.md`.
+**Checkpoint:** **SESSION 11 — Layout v0.1.14 → v0.1.19; everything through 0.1.18 playtest-CONFIRMED
+(iteratively, in-session), 0.1.19 pending a quick look.** The session delivered the whole Session-10
+backlog (0.1.14), the Free-Shape + hard-kept favorites + Current Shape chip (0.1.15), then four rapid
+GUI-polish rounds (0.1.16–0.1.19 — see `SESSION_11.md` §13/§15). Release zips live in the human's
+**`..\Layout Zips\`** folder (the full 0.1.10+ history). **Next session's headline (human-set): B-S9-1,
+the lock-in-place bug — attempt ray-vs-voxel-box first-hit picking.** New standing workflow rule: ship a
+zip per iteration, update docs ONLY when the human says so.
+**0.1.14** shipped the entire Session-10 backlog: the **B-S10-2 fix** (air-side-probed Surface→Volumetric
+bake — human: "This was fixed"), the **three-click triangle**, the **key remap** (CTRL = cardinal; SHIFT =
+draft-invert + spring-back, all shapes defaulting "up"), the **Polygon** (N-gon, 3–24 sides), auto-sized
+tooltips, 75%-thinner slabs — all **confirmed in play the same session**. The favorites flow was then
+redesigned on feedback → **0.1.15**: **hard-kept 4-slot favorites** (starring never evicts; right-click
+unstars; ★ badges in the catalog; empty-slot placeholders), the **yellow Current Shape chip** on the Mode
+row, **SHIFT-centred triangle apex**, and the **Free-Shape** — an irregular polyline placed corner by
+corner (click-last = finish open, click-first = close; right-click steps back; body inserts like the arch;
+fill deferred). DataVersion **7** (`IsClosed`; v6 added Sides + the spring-back snapshot); wire additions
+all additive; **54 source files**; releases: `Layout0.1.14.zip`, `Layout0.1.15.zip`. **B-S9-1**
+(lock-in-place) remains **unresolved** by the human's choice ("not gamebreaking") and is still the top open
+bug. The plan is **`ARCHITECTURE.md`**. **This is the status/handoff doc.** Session-11 detail (incl. the
+0.1.15 playtest checklist + flagged decisions 11a–11r): `SESSION_11.md`.
 
 > **Fidelity note.** Session-9 sections were reconstructed from the working conversation, not regenerated from
 > code on disk. **Verified against source 2026-07-05:** all specifics formerly tagged **⚠ verify** (file
@@ -23,13 +33,13 @@ status/handoff doc.** Session-10 detail: `SESSION_10.md`.
 
 The doc set (now a Claude Code repo):
 
-1. **`ARCHITECTURE.md`** — the authoritative plan; Settled Decisions Register + Session-9 changelog.
-2. **The code** — `src/` (**49 files**, verified: 43 at Session-8 end + 6 new Session-9 files — LineShape,
-   TriangleShape, RectangleShape, ShapeGeometry, DivisionMarks, SetDivisionsCommand),
+1. **`ARCHITECTURE.md`** — the authoritative plan; Settled Decisions Register (updated through Session 11).
+2. **The code** — `src/` (**54 files**: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
+   RectangleShape, ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 Session-10 — LayoutToolIcons;
+   + 4 Session-11 — PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape),
    `assets/layout/`, `modinfo.json`, `modicon.png`, `Layout.csproj`, `BUILD_INSTRUCTIONS.txt`.
 3. **`TODO.md`** — the live punch-list (renamed from `OUTSTANDING_ITEMS.md`).
-4. **`SESSION_9.md`** / **`SESSION_10.md`** — standalone per-session records (kept separate from the merged
-   docs; SESSION_10 also records the Session-10 file additions: `UI/LayoutToolIcons.cs`, → **50 files**).
+4. **`SESSION_9.md`** / **`SESSION_10.md`** / **`SESSION_11.md`** — standalone per-session records.
 5. **This status doc.**
 
 > Precedence: **`ARCHITECTURE.md` is the plan.** This doc tracks *status and intent*. Source code lives only
@@ -72,9 +82,33 @@ The doc set (now a Claude Code repo):
     in Create. `ToolMode` = Create · Edit · Delete.
   - **Division markers pair (0.1.13):** off-cell boundaries claim both near-tied voxels (arch-apex treatment,
     generalised via `ShapeGeometry.ClaimMarkerPaired`).
-- **IN REAL PLAY:** save-compatibility matters — DataVersion 5 saves; pinned-enum / additive-protobuf /
-  default-migration rules remain in force (now with the Session-9 shape/constraint/divisions additions).
-  Session 10 touched no wire/persistence surface (renderer/GUI/icons only).
+- **Session 11, batch 1 (v0.1.14): the whole human backlog — playtest-CONFIRMED same session.**
+  - **B-S10-2 fixed & confirmed:** air-side-probed Surface→Volumetric bake (volume grows into the air).
+  - **Triangle → three-click** (free/right/isosceles; equilateral stays 2-click); draft right-click steps
+    back per-click. Confirmed.
+  - **CTRL = cardinal constraint; SHIFT = draft invert + placed-guide spring-back** (as-placed snapshot,
+    one undo step); all shapes default "up" regardless of click order. Confirmed.
+  - **Polygon (N-gon):** 3–24 sides, per-guide `Sides` + number row, cap-checked SetSides, undoable.
+    Confirmed.
+  - **Tweaks:** auto-sized tile tooltips; Surface slabs 0.01 → 0.0025.
+  - Picker worked but its favorites flow was redesigned on feedback (→ batch 2).
+- **Session 11, batches 3–5 (v0.1.16–v0.1.19): rapid GUI polish — 0.1.16–0.1.18 playtest-CONFIRMED,
+  0.1.19 pending** (`SESSION_11.md` §13/§15): Sides hard floor · 5-wide catalog + white separator ·
+  favorites as YELLOW glyphs · combined Projection+Fill and Divisions+Sides rows · title-bar dead space
+  removed · right-aligned header shape name · HUD chip · Delete-mode "-ghost" tile greying · Free-Shape
+  SHIFT-vertical · pin/unpin vocabulary · Fill greyed on Free-Shapes · zips → `..\Layout Zips\`.
+- **Session 11, batch 2 (v0.1.15): playtest feedback + three new features — playtest-CONFIRMED
+  ("This was tested. Good work.").** Detail in `SESSION_11.md` §10.
+  - **Favorites HARD-KEPT:** four slots; starring never evicts (message when full); right-click unstars
+    (slot or catalog); ★ badges; empty-slot placeholders; no auto-padding of existing configs.
+  - **Current Shape chip:** permanently-lit yellow glyph of the picked shape on the Mode row.
+  - **SHIFT-centred apex** on the triangle's third click (perpendicular bisector, live ghost).
+  - **Free-Shape:** irregular polyline, chained clicks; click-last = open, click-first = close (≥3);
+    right-click steps back a corner; CTRL snaps to the previous corner; body inserts like the arch; fill
+    deferred; 64-corner cap. `IsClosed` → **DataVersion 7**; additive Chain/Closed on the create request.
+- **IN REAL PLAY:** save-compatibility matters — DataVersion **7** saves (v7: IsClosed; v6: Sides + the
+  never-wired spring-back snapshot); pinned-enum / additive-protobuf / default-migration rules remain in
+  force. Session 11's wire additions are all additive and registered append-only.
 - **UNRESOLVED:** **B-S9-1 lock-in-place** — targeted voxel often not the one locked; guide still
   shifts/deforms on lock. Multiple fixes tried; see `TODO.md`. **Parked by the human ("not gamebreaking");
   still the top open bug.**
@@ -85,13 +119,13 @@ The doc set (now a Claude Code repo):
 
 | # | Module | Effort | Status |
 |---|--------|--------|--------|
-| 1 | Pure math layer | **Max** | COMPLETE (+ S8 catalog; + S9 line/triangle/rectangle, divisions, slave-flow) |
-| 2 | Data model | Low | COMPLETE (DataVersion **5**, verified) |
-| 3 | Systems + undo | High | COMPLETE (+ break/bake ops; + S9 `SetDivisionsCommand` ✓) |
-| 4 | Networking | **Max** | COMPLETE (+ additive fields; + S9 `GuideSetDivisionsPacket`, registered ✓) |
-| 5 | Rendering | High | COMPLETE (+ S9 `DivisionMarks.Apply` recolor pass ✓) |
-| 6 | UI | Medium | COMPLETE (+ S9 11-tile shape grid, divisions dropdown+field ✓) |
-| 7 | Integration | High | COMPLETE (+ S9 generalized body-click policy for non-arch shapes) |
+| 1 | Pure math layer | **Max** | COMPLETE (+ S8 catalog; + S9 line/triangle/rectangle, divisions, slave-flow; + S11 PolygonShape, FreeShape, default-up frames, invertible arches) |
+| 2 | Data model | Low | COMPLETE (DataVersion **7**: + S11 `Sides`, spring-back snapshot, `IsClosed`) |
+| 3 | Systems + undo | High | COMPLETE (+ break/bake ops; + S9 `SetDivisionsCommand`; + S11 air-side bake, `SetSides`, `SpringBackCommand`, 3-click draft state) |
+| 4 | Networking | **Max** | COMPLETE (+ additive fields; + S11 `GuideSetSidesPacket`, `GuideSpringBackPacket`, create-request inverted/sides/apex) |
+| 5 | Rendering | High | COMPLETE (+ S9 `DivisionMarks.Apply`; + S11 apex-aware ghost, thinner Surface slabs) |
+| 6 | UI | Medium | COMPLETE (+ S11 favorites picker + catalog fold-out, Sides row, auto-size tooltips) |
+| 7 | Integration | High | COMPLETE (+ S11 CTRL/SHIFT remap, spring-back gesture, 3-click routing) |
 
 Namespaces match folders: `Layout`, `Layout.Guide`, `Layout.Shapes`, `Layout.Systems`, `Layout.Network`,
 `Layout.Undo`, `Layout.Undo.Commands`, `Layout.UI`, `Layout.Config`, `Layout.Items`, `Layout.Client`.
@@ -179,22 +213,19 @@ below and `TODO.md`.
 
 ## 7. Next session — start here
 
-The **human queued a 7-item backlog at Session-10 end** — full text + ordered plan in `TODO.md`
-("Requested next — human backlog" / "Next session — start here"). Headline order:
+**Everything through 0.1.14 is confirmed in play. 0.1.15 (favorites redesign, Current Shape chip,
+SHIFT-centred apex, Free-Shape) is built but UNPLAYED.**
 
-1. **B-S10-2** — Surface→Volumetric bake grows into the block; make it grow into the open air (self-contained
-   bug; server-side air-probe in `GuideManager.SetProjection`).
-2. **Shape picker → 3 buttons + expand arrow**, and **Favorites = those 3 slots** (one GUI design, do together;
-   supersedes F2 + the Favorites placeholder).
-3. **Triangle → 3-click** (anchor · anchor · height) — needs a two-point draft in `DraftManager`; supersedes
-   the 2-click+born-apex flag.
-4. **SHIFT → CTRL** for the cardinal constraint, then **SHIFT = spring back to the original shape**.
-5. **Polygon (N-gon).**
-6. **B-S9-1** (lock-in-place) — still the top *bug*, parked by the human; slot it in when they want it.
-7. **Walk the remaining flagged list** with the human when convenient.
-
-Everything through 0.1.13 is confirmed in play except the three 0.1.13 items (Edit mode "looks fantastic";
-marker pairing + the 0-floor await a look) — see `SESSION_10.md`.
+1. **Playtest 0.1.15** against the checklist in `SESSION_11.md` §12 — the hard-kept favorites (star/unstar,
+   full-list message, ★ badges), the yellow chip, the centred apex, and the whole Free-Shape flow
+   (chain, step-back, finish-open, close-the-loop, corner inserts). Fix-and-reship anything that feels
+   wrong (each revision = version bump + new zip, per the standing rule).
+2. **Review flagged decisions 11a–11r** (`SESSION_11.md` §8 + §11) — especially 11a (spring-back restores
+   the as-placed POSITION) and 11n (the Fill toggle is inert on a Free-Shape).
+3. **Free-Shape follow-ups if asked:** concave-safe fill for closed outlines; broadcasting the whole draft
+   chain to other players (11q).
+4. **B-S9-1** (lock-in-place; ray-vs-voxel-box first-hit picking is the untried fix) — parked by the human;
+   slot it in when they want it.
 
 ---
 
