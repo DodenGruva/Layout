@@ -49,9 +49,57 @@ namespace Layout.Guide
         /// straight segment; clicking the LAST placed corner finishes it open, clicking the FIRST closes
         /// it into a loop (<see cref="GuideData.IsClosed"/>). All clicked corners are anchors.
         /// </summary>
-        FreeShape = 6
+        FreeShape = 6,
 
-        // Reserved for future shapes — append only, never renumber:
-        // Dome, Cylinder, Roof, Tunnel ...
+        /// <summary>
+        /// Sphere (Session 11, 0.1.20 — the FIRST 3D volume): the two clicks are opposite ends of the
+        /// ball (a diameter, the circle gesture in 3D). Hollow = the one-voxel shell; Filled = the solid
+        /// ball. Always Volumetric; Surface and Divisions don't apply (true of every volume below too).
+        /// </summary>
+        Sphere = 7,
+
+        /// <summary>
+        /// Dome (0.1.21): a half-sphere over the two-click base diameter, rising out of the clicked
+        /// plane (SHIFT at placement inverts it into a bowl). Stores the two base anchors plus the apex
+        /// (derived, side-remembering). Hollow = the curved shell, open across the base.
+        /// </summary>
+        Dome = 8,
+
+        /// <summary>
+        /// Cylinder (0.1.21): three clicks — base diameter, then the height click (projected onto the
+        /// base's axis). Stores the two base anchors plus the height point. Hollow = the open tube.
+        /// </summary>
+        Cylinder = 9,
+
+        /// <summary>
+        /// Cone (0.1.21): three clicks — base diameter, then the tip click (projected onto the axis).
+        /// Stores the two base anchors plus the tip. Hollow = the sloped shell, open across the base.
+        /// </summary>
+        Cone = 10,
+
+        /// <summary>
+        /// Box (0.1.21): three clicks — two DIAGONAL corners of the base rectangle (the rectangle
+        /// gesture) then the height click; every side may differ. Stores the two base corners plus the
+        /// lid point over the base centre. Hollow = all six faces as a one-voxel shell.
+        /// </summary>
+        Box = 11
+
+        // Reserved for future shapes — append only, never renumber: Roof, Tunnel ...
+    }
+
+    /// <summary>Shared classifications over the shape catalog (0.1.21).</summary>
+    public static class GuideShapeTypes
+    {
+        /// <summary>
+        /// True for the 3D volumes (Sphere/Dome/Cylinder/Cone/Box): always Volumetric (Surface projection
+        /// is meaningless and gated out everywhere), and Divisions don't apply. Explicit switch — never
+        /// infer from enum ordering, since future 2D shapes may be appended after the volumes.
+        /// </summary>
+        public static bool IsVolume(GuideShapeType t) => t switch
+        {
+            GuideShapeType.Sphere or GuideShapeType.Dome or GuideShapeType.Cylinder
+                or GuideShapeType.Cone or GuideShapeType.Box => true,
+            _ => false
+        };
     }
 }

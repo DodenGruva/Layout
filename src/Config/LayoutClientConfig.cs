@@ -93,7 +93,7 @@ namespace Layout.Config
                 DefaultProjection != (int)ProjectionMode.Surface)
                 DefaultProjection = (int)ProjectionMode.Volumetric;
 
-            if (DefaultShape < (int)GuideShapeType.Arch || DefaultShape > (int)GuideShapeType.FreeShape)
+            if (DefaultShape < (int)GuideShapeType.Arch || DefaultShape > (int)GuideShapeType.Sphere)
                 DefaultShape = (int)GuideShapeType.Arch;
             if (!Systems.DraftManager.IsValidPair((GuideShapeType)DefaultShape, (ShapeConstraint)DefaultConstraint))
                 DefaultConstraint = (int)ShapeConstraint.None;

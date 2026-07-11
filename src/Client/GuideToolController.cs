@@ -239,9 +239,10 @@ namespace Layout.Client
                     }
                     else if (_draft.AwaitingApex)
                     {
-                        // SHIFT while aiming the apex (0.1.15): centre it on the base — the apex rides
-                        // the base's perpendicular bisector, live on the ghost.
-                        if (ShiftHeld()) aim = CenterApexOnBase(aim);
+                        // SHIFT while aiming a TRIANGLE apex (0.1.15): centre it on the base. The 3-click
+                        // volumes (cylinder/cone/box) project the height onto their axis themselves, so
+                        // SHIFT-centering doesn't apply to them.
+                        if (ShiftHeld() && _draft.Shape == GuideShapeType.Triangle) aim = CenterApexOnBase(aim);
                         _hud.SetDraftAim(aim);
                         _renderer.SetDraftPreview(_draft.DraftStart, _draft.DraftSecond,
                             BuildSettings(blockSel, aim),
@@ -632,8 +633,9 @@ namespace Layout.Client
             Vec3d end = anchor;
             if (_draft.AwaitingApex)
             {
-                apex = anchor;                       // the third click IS the apex
-                if (ShiftHeld()) apex = CenterApexOnBase(apex);   // 0.1.15: SHIFT centres it on the base
+                apex = anchor;                       // the third click IS the apex / height
+                if (ShiftHeld() && _draft.Shape == GuideShapeType.Triangle)
+                    apex = CenterApexOnBase(apex);   // 0.1.15: SHIFT centres a triangle apex on the base
                 end = _draft.DraftSecond;            // the base was fixed by the second click
             }
 
@@ -1166,7 +1168,18 @@ namespace Layout.Client
             double coord = axis == PlaneAxis.X ? anchor.X : (axis == PlaneAxis.Y ? anchor.Y : anchor.Z);
             var plane = new ProjectionPlane(axis, (int)Math.Round(coord * 16.0));
 
-            return _draft.BuildRenderSettings(plane);
+            GuideRenderSettings settings = _draft.BuildRenderSettings(plane);
+
+            // 3D volumes are ALWAYS Volumetric and carry no division marks (0.1.20 sphere, 0.1.21 family):
+            // flattening a volume onto a plane is meaningless, so a lingering Surface/Divisions tool
+            // default is overridden for the ghost and the create request both. (The GUI greys those rows
+            // for these shapes; this covers the remembered defaults.)
+            if (GuideShapeTypes.IsVolume(_draft.Shape)
+                && (settings.Mode == ProjectionMode.Surface || settings.Divisions != 0))
+                settings = new GuideRenderSettings(settings.Scale, ProjectionMode.Volumetric,
+                    settings.Plane, settings.Filled, 0);
+
+            return settings;
         }
 
         // ==========================================================================================

@@ -282,6 +282,13 @@ namespace Layout.Systems
             if (start == null || end == null) return GuideOperationResult.Invalid();
             if (!GuideData.IsValidVoxelScale(settings.Scale)) return GuideOperationResult.Invalid();
 
+            // 3D volumes are always Volumetric and carry no division marks (0.1.20 sphere, 0.1.21 family)
+            // — normalise defensively whatever a client sends (a lingering Surface/Divisions default).
+            if (GuideShapeTypes.IsVolume(shapeType)
+                && (settings.Mode == ProjectionMode.Surface || settings.Divisions != 0))
+                settings = new GuideRenderSettings(settings.Scale, ProjectionMode.Volumetric,
+                    settings.Plane, settings.Filled, 0);
+
             // Guide-COUNT caps first — cheap, and nothing has been built yet (Guide is null in the result).
             if (_maxGuidesWorldWide > 0 && _guides.Count >= _maxGuidesWorldWide)
                 return GuideOperationResult.OverGuideCount(null, _guides.Count, _maxGuidesWorldWide);
@@ -291,11 +298,11 @@ namespace Layout.Systems
             IGuideShape shape = ShapeFactory.Create(shapeType, constraint, shapePlaneAxis, start, end,
                 inverted, sides, chain, closed);
 
-            // Three-click triangle (Session 11): the third click IS the apex. Applied before the record is
-            // built so the as-placed snapshot captures the true placed form. Equilateral never sends one
-            // (its apex is fully derived); ignore a third point there defensively.
-            if (thirdPoint != null && shapeType == GuideShapeType.Triangle
-                && shape.Constraint != ShapeConstraint.Equilateral && shape.ControlPoints.Count > 2)
+            // Three-click shapes (Session 11 triangle; 0.1.21 cylinder/cone/box): the third click sets the
+            // apex/height, stored at control point index 2. Applied before the record is built so the
+            // as-placed snapshot captures the true placed form. Two-click shapes send no third point.
+            if (thirdPoint != null && DraftManager.NeedsApexClick(shapeType, shape.Constraint)
+                && shape.ControlPoints.Count > 2)
             {
                 shape.MoveControlPoint(2, thirdPoint);
             }
@@ -516,6 +523,9 @@ namespace Layout.Systems
         public GuideOperationResult SetProjection(Guid id, ProjectionMode mode, ProjectionPlane plane)
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
+            // A 3D volume cannot go Surface (0.1.20/0.1.21) — the GUI greys the row; server-side gate.
+            if (GuideShapeTypes.IsVolume(g.ShapeType) && mode == ProjectionMode.Surface)
+                return GuideOperationResult.Invalid(g);
             var shape = _shapes[id];
 
             ProjectionMode oldMode = g.Projection;
@@ -725,6 +735,9 @@ namespace Layout.Systems
         public GuideOperationResult SetDivisions(Guid id, int divisions)
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
+            // Divisions don't apply to 3D volumes (0.1.20/0.1.21 — no single curve); the GUI greys the
+            // field, this is the server-side gate against a stale packet painting the wireframe.
+            if (GuideShapeTypes.IsVolume(g.ShapeType)) return GuideOperationResult.Invalid(g);
             int clamped = divisions < 0 ? 0 : divisions > Shapes.DivisionMarks.MaxDivisions
                 ? Shapes.DivisionMarks.MaxDivisions : divisions;
             g.Divisions = clamped;

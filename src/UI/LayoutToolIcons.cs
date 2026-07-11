@@ -39,6 +39,11 @@ namespace Layout.UI
         public const string Square = "layout-square";
         public const string Polygon = "layout-polygon";
         public const string FreeShapeIcon = "layout-freeshape";
+        public const string Sphere = "layout-sphere";
+        public const string Dome = "layout-dome";
+        public const string Cylinder = "layout-cylinder";
+        public const string Cone = "layout-cone";
+        public const string Box = "layout-box";
 
         /// <summary>The shape picker's expand/collapse tile (Session 11): ▾ closed, ▴ open.</summary>
         public const string ExpandDown = "layout-expand-down";
@@ -103,6 +108,11 @@ namespace Layout.UI
             reg[Square] = DrawSquare;
             reg[Polygon] = DrawPolygon;
             reg[FreeShapeIcon] = DrawFreeShape;
+            reg[Sphere] = DrawSphere;
+            reg[Dome] = DrawDome;
+            reg[Cylinder] = DrawCylinder;
+            reg[Cone] = DrawCone;
+            reg[Box] = DrawBox;
             reg[ExpandDown] = (ctx, x, y, w, h, rgba) => DrawExpandChevron(ctx, x, y, w, h, rgba, down: true);
             reg[ExpandUp] = (ctx, x, y, w, h, rgba) => DrawExpandChevron(ctx, x, y, w, h, rgba, down: false);
             reg[EmptySlot] = DrawEmptySlot;
@@ -111,7 +121,7 @@ namespace Layout.UI
             foreach (string shapeName in new[]
             {
                 Arch, HalfCircle, Circle, Ellipse, Line, Triangle, RightTri, Equilateral,
-                Isosceles, Rectangle, Square, Polygon, FreeShapeIcon
+                Isosceles, Rectangle, Square, Polygon, FreeShapeIcon, Sphere, Dome, Cylinder, Cone, Box
             })
             {
                 var baseDrawer = reg[shapeName];
@@ -378,6 +388,87 @@ namespace Layout.UI
                 ctx.Arc(c.X(uv[i]), c.Y(uv[i + 1]), c.L(3.0), 0, 2 * Math.PI);
                 ctx.Fill();
             }
+        }
+
+        // The sphere (0.1.20, the first 3D volume): a circle with an equatorial ellipse — the classic
+        // "this is a ball, not a disc" cue.
+        private static void DrawSphere(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 76);
+            Pen(ctx, rgba, c.L(2.6));
+            ctx.Arc(c.X(38), c.Y(37), c.L(22), 0, 2 * Math.PI);
+            ctx.Stroke();
+            // The equator: a squashed ellipse across the middle, slightly thinner pen.
+            Pen(ctx, rgba, c.L(1.8));
+            ctx.Save();
+            ctx.Translate(c.X(38), c.Y(37));
+            ctx.Scale(c.L(22), c.L(7.5));
+            ctx.Arc(0, 0, 1, 0, 2 * Math.PI);
+            ctx.Restore();
+            ctx.Stroke();
+        }
+
+        // The dome (0.1.21): a half-circle with an elliptical base — a bump on a plane.
+        private static void DrawDome(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 76);
+            Pen(ctx, rgba, c.L(2.6));
+            double cx = c.X(38), cy = c.Y(50), rx = c.L(24), ry = c.L(24);
+            ctx.Save();
+            ctx.Translate(cx, cy);
+            ctx.Scale(rx, ry);
+            ctx.Arc(0, 0, 1, Math.PI, 2 * Math.PI);     // upper dome
+            ctx.Restore();
+            ctx.Stroke();
+            // Elliptical base across the bottom (the open ring).
+            Pen(ctx, rgba, c.L(1.8));
+            ctx.Save();
+            ctx.Translate(cx, cy);
+            ctx.Scale(rx, c.L(7));
+            ctx.Arc(0, 0, 1, 0, 2 * Math.PI);
+            ctx.Restore();
+            ctx.Stroke();
+        }
+
+        // The cylinder (0.1.21): two ellipses (top + bottom) joined by vertical sides.
+        private static void DrawCylinder(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 76);
+            Pen(ctx, rgba, c.L(2.4));
+            double cx = c.X(38), rx = c.L(20), ry = c.L(7);
+            double topY = c.Y(20), botY = c.Y(56);
+            // sides
+            ctx.MoveTo(cx - rx, topY); ctx.LineTo(cx - rx, botY); ctx.Stroke();
+            ctx.MoveTo(cx + rx, topY); ctx.LineTo(cx + rx, botY); ctx.Stroke();
+            // bottom ellipse (full) then top ellipse (full)
+            void Ell(double yc) { ctx.Save(); ctx.Translate(cx, yc); ctx.Scale(rx, ry); ctx.Arc(0, 0, 1, 0, 2 * Math.PI); ctx.Restore(); ctx.Stroke(); }
+            Ell(botY);
+            Ell(topY);
+        }
+
+        // The cone (0.1.21): an elliptical base rising to a tip.
+        private static void DrawCone(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 76);
+            Pen(ctx, rgba, c.L(2.4));
+            double cx = c.X(38), rx = c.L(20), ry = c.L(7);
+            double botY = c.Y(56), tipY = c.Y(16);
+            ctx.MoveTo(cx - rx, botY); ctx.LineTo(cx, tipY); ctx.LineTo(cx + rx, botY); ctx.Stroke();
+            ctx.Save(); ctx.Translate(cx, botY); ctx.Scale(rx, ry); ctx.Arc(0, 0, 1, 0, 2 * Math.PI); ctx.Restore();
+            ctx.Stroke();
+        }
+
+        // The box (0.1.21): an isometric cuboid (front face + top + right edges) — a solid, not a flat square.
+        private static void DrawBox(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 76);
+            Pen(ctx, rgba, c.L(2.4));
+            // front face
+            Poly(ctx, c, rgba, true, 16, 30, 46, 30, 46, 60, 16, 60);
+            // top
+            Poly(ctx, c, rgba, false, 16, 30, 30, 18, 60, 18, 46, 30);
+            // right side
+            Poly(ctx, c, rgba, false, 46, 30, 60, 18, 60, 48, 46, 60);
         }
 
         // An empty favorite slot (0.1.15): a faint small hollow square — visibly "nothing pinned here".

@@ -89,12 +89,14 @@ namespace Layout.UI
             "arch", "halfcircle", "circle", "ellipse",
             "line", "triangle", "righttri", "equilateral",
             "isosceles", "rectangle", "square", "polygon",
-            "freeshape" };
+            "freeshape",
+            "sphere", "dome", "cylinder", "cone", "box" };
         private static readonly string[] ShapeNames = {
             "Arch", "Half-circle", "Circle", "Ellipse",
             "Line", "Triangle", "Right triangle", "Equilateral",
             "Isosceles", "Rectangle", "Square", "Polygon",
-            "Free-Shape" };
+            "Free-Shape",
+            "Sphere", "Dome", "Cylinder", "Cone", "Box" };
 
         // Voxel-edge scale, ascending: the NxN icon IS the voxel count (1x1 smallest ... 16x16 = full block),
         // exactly like the game's native scale icons. Names are voxel counts, not fractions (human-requested).
@@ -122,7 +124,9 @@ namespace Layout.UI
             LayoutToolIcons.Arch, LayoutToolIcons.HalfCircle, LayoutToolIcons.Circle, LayoutToolIcons.Ellipse,
             LayoutToolIcons.Line, LayoutToolIcons.Triangle, LayoutToolIcons.RightTri, LayoutToolIcons.Equilateral,
             LayoutToolIcons.Isosceles, LayoutToolIcons.Rectangle, LayoutToolIcons.Square, LayoutToolIcons.Polygon,
-            LayoutToolIcons.FreeShapeIcon };
+            LayoutToolIcons.FreeShapeIcon,
+            LayoutToolIcons.Sphere, LayoutToolIcons.Dome, LayoutToolIcons.Cylinder,
+            LayoutToolIcons.Cone, LayoutToolIcons.Box };
         private static readonly string[] ModeIcons = { LayoutToolIcons.ModeCreate, LayoutToolIcons.ModeEdit, LayoutToolIcons.ModeDelete };
         private static readonly string[] ProjIcons = { LayoutToolIcons.ProjVolumetric, LayoutToolIcons.ProjSurface };
         private static readonly string[] FillIcons = { LayoutToolIcons.FillHollow, LayoutToolIcons.FillFilled };
@@ -383,10 +387,20 @@ namespace Layout.UI
             // Projection + Fill share ONE row (0.1.17, human-requested — the two-tile Projection row left
             // three empty slots; Fill's two tiles slot into them with a compact second label). Fill greys
             // out for the Free-Shape (0.1.19, human-directed): fill is deferred on it, so the toggle
-            // being live was misleading.
-            bool surface = editMode ? (selected != null && selected.Projection == ProjectionMode.Surface)
-                                    : _tool.Projection == ProjectionMode.Surface;
+            // being live was misleading. Projection greys out for every 3D VOLUME (0.1.20 sphere, 0.1.21
+            // family): a volume is always Volumetric — flattening it onto a plane is meaningless.
+            bool volumePicked = editMode
+                ? selected != null && GuideShapeTypes.IsVolume(selected.ShapeType)
+                : GuideShapeTypes.IsVolume(_tool.Shape);
+            bool surface = !volumePicked
+                && (editMode ? (selected != null && selected.Projection == ProjectionMode.Surface)
+                             : _tool.Projection == ProjectionMode.Surface);
             bool projFillInert = editMode ? settingsInert : deleteMode;
+            bool projInert = projFillInert || volumePicked;
+            string[] projNames = !projFillInert && volumePicked
+                ? new[] { ProjNames[0] + "\nA 3D shape is always volumetric.",
+                          ProjNames[1] + "\nNot available on a 3D shape." }
+                : ProjNames;
             bool freeShapePicked = editMode
                 ? selected != null && selected.ShapeType == GuideShapeType.FreeShape
                 : _tool.Shape == GuideShapeType.FreeShape;
@@ -395,9 +409,9 @@ namespace Layout.UI
                 ? new[] { FillNames[0] + "\nFill is not available on a Free-Shape.",
                           FillNames[1] + "\nFill is not available on a Free-Shape." }
                 : FillNames;
-            AddIconRowPair(c, rowFont, ref y, labelW, pad, tile, tileGap, rowGap,
-                "Projection", ProjCodes, ProjNames, ProjIcons, surface ? 1 : 0,
-                editMode ? OnGuideProjectionTile : OnProjectionTile, "proj", projFillInert,
+            AddIconRowPair(c, projInert ? ghostFont : rowFont, ref y, labelW, pad, tile, tileGap, rowGap,
+                "Projection", ProjCodes, projNames, ProjIcons, volumePicked ? 0 : (surface ? 1 : 0),
+                editMode ? OnGuideProjectionTile : OnProjectionTile, "proj", projInert,
                 "Fill", fillInert ? ghostFont : rowFont, FillCodes, fillNames, FillIcons,
                 (editMode ? (selected?.IsFilled ?? false) : _tool.Filled) ? 1 : 0,
                 editMode ? OnGuideFillTile : OnFillTile, "fill", fillInert);
@@ -416,12 +430,13 @@ namespace Layout.UI
             }
 
             // Divisions — and, for a polygon, the Sides field beside it on the SAME row (0.1.17,
-            // human-requested). Both are the native number input + wheel + spinners.
+            // human-requested). Both are the native number input + wheel + spinners. Divisions grey out
+            // for the Sphere (0.1.20): the equal-parts marks run along a curve, and a ball has none.
             bool sidesRow = editMode ? (selected != null && selected.ShapeType == GuideShapeType.Polygon)
                                      : _tool.Shape == GuideShapeType.Polygon;
             int divCurrent = editMode ? (selected?.Divisions ?? 0) : _tool.Divisions;
             Action<int> divChanged = editMode ? OnGuideDivisionsChanged : OnToolDivisionsChanged;
-            bool numberInert = editMode ? settingsInert : deleteMode;
+            bool numberInert = (editMode ? settingsInert : deleteMode) || volumePicked;
             if (sidesRow)
                 AddNumberPairControl(c, rowFont, font, ref y, labelW, pad, tile, rowGap,
                     "Divisions", divCurrent, 0, Shapes.DivisionMarks.MaxDivisions, "div", divChanged,
@@ -785,40 +800,77 @@ namespace Layout.UI
             y += tile + rowGap;
             if (!inert && litSlot >= 0) _initialLight.Add(("shape", litSlot));
 
-            // The unfolded catalog (0.1.16: FIVE per row, divided from the slots by a white rule): the
-            // current pick is lit; starred tiles wear the ★ badge; right-click stars (or unstars).
+            // The unfolded catalog (0.1.16: FIVE per row, divided from the slots by a white rule; 0.1.21:
+            // the 3D VOLUMES are split into their own group under a SECOND separator). The current pick is
+            // lit; pinned tiles show YELLOW; right-click pins (or unpins).
             if (_shapeGridExpanded)
             {
-                // The separator between "your slots" and "everything" (human-requested).
+                // Separator between "your slots" and the catalog (human-requested).
                 c.AddStaticElement(new HRuleElement(capi,
                     ElementBounds.Fixed(labelW + pad, y, 5 * tile + 4 * tileGap, 2)), "shapesep");
                 y += 2 + rowGap;
 
-                const int perRow = 5;
-                int sel = ClampIndex(CurrentShapeIndex(), ShapeCodes.Length);
+                // Partition the catalog into 2D shapes and 3D volumes, preserving order + global index.
+                var twoD = new List<int>();
+                var threeD = new List<int>();
                 for (int i = 0; i < ShapeCodes.Length; i++)
+                    (GuideShapeTypes.IsVolume(ShapeFromCode(ShapeCodes[i]).Item1) ? threeD : twoD).Add(i);
+
+                DrawCatalogGroup(c, twoD, "2D", ref y, labelW, pad, tile, tileGap, rowGap, favs, inert);
+                if (threeD.Count > 0)
                 {
-                    int row = i / perRow, col = i % perRow;
-                    string code = ShapeCodes[i];
-                    bool starred = favs.Contains(code);
-                    ElementBounds tb = ElementBounds.Fixed(
-                        labelW + pad + col * (tile + tileGap), y + row * (tile + tileGap), tile, tile);
-                    // Favorited = the glyph drawn in the Current-Shape YELLOW (0.1.17, human-requested —
-                    // the corner ★ was too small to read; the yellow highlight is unmissable).
-                    AddIconTile(c,
-                        starred ? ShapeIcons[i] + LayoutToolIcons.CurrentSuffix : ShapeIcons[i],
-                        ShapeNames[i] + (starred ? "\nPinned - Right-Click to unpin."
-                                                 : "\nRight-Click to pin into a free slot."),
-                        tb, "shapecat", code, "shapecat:" + i, OnCatalogShapeTile, !inert,
-                        onRightClick: inert ? null
-                            : (Action)(starred ? () => OnUnstarFavorite(code) : () => OnStarFavorite(code)));
+                    c.AddStaticElement(new HRuleElement(capi,
+                        ElementBounds.Fixed(labelW + pad, y, 5 * tile + 4 * tileGap, 2)), "shapesep3d");
+                    y += 2 + rowGap;
+                    DrawCatalogGroup(c, threeD, "3D", ref y, labelW, pad, tile, tileGap, rowGap, favs, inert);
                 }
-                int rows = (ShapeCodes.Length + perRow - 1) / perRow;
+
                 if (inert) _inertRows.Add("shapecat");
-                y += rows * tile + (rows - 1) * tileGap + rowGap;
-                if (!inert) _initialLight.Add(("shapecat", sel));
+                if (!inert) _initialLight.Add(("shapecat", ClampIndex(CurrentShapeIndex(), ShapeCodes.Length)));
             }
             if (inert) _inertRows.Add("shape");
+        }
+
+        // Draws one catalog group (2D or 3D) as a 5-wide grid, with its section label centred vertically
+        // in the label column to the left (0.1.21). Tile keys stay the GLOBAL catalog index so the
+        // exclusive-row relight/lighting plumbing is untouched.
+        private void DrawCatalogGroup(GuiComposer c, List<int> indices, string sectionLabel, ref double y,
+            double labelW, double pad, double tile, double tileGap, double rowGap,
+            List<string> favs, bool inert)
+        {
+            const int perRow = 5;
+            int rows = (indices.Count + perRow - 1) / perRow;
+            double groupH = rows * tile + (rows - 1) * tileGap;
+
+            CairoFont labelFont = inert ? Ghost() : CairoFont.WhiteSmallText();
+            c.AddStaticText(sectionLabel, labelFont,
+                ElementBounds.Fixed(0, y + (groupH - 16) / 2, labelW, 20));
+
+            for (int k = 0; k < indices.Count; k++)
+            {
+                int i = indices[k];
+                int row = k / perRow, col = k % perRow;
+                string code = ShapeCodes[i];
+                bool pinned = favs.Contains(code);
+                ElementBounds tb = ElementBounds.Fixed(
+                    labelW + pad + col * (tile + tileGap), y + row * (tile + tileGap), tile, tile);
+                AddIconTile(c,
+                    pinned ? ShapeIcons[i] + LayoutToolIcons.CurrentSuffix : ShapeIcons[i],
+                    ShapeNames[i] + (pinned ? "\nPinned - Right-Click to unpin."
+                                            : "\nRight-Click to pin into a free slot."),
+                    tb, "shapecat", code, "shapecat:" + i, OnCatalogShapeTile, !inert,
+                    onRightClick: inert ? null
+                        : (Action)(pinned ? () => OnUnstarFavorite(code) : () => OnStarFavorite(code)));
+            }
+            y += groupH + rowGap;
+        }
+
+        // A ghost-alpha copy of the small white font (Delete-mode dimming for static text).
+        private static CairoFont Ghost()
+        {
+            CairoFont f = CairoFont.WhiteSmallText();
+            f.Color = new double[] { 1, 1, 1, 0.22 };
+            return f;
         }
 
         // The current-shape chip swallows clicks: snap it straight back to lit (a status light).
@@ -1246,6 +1298,11 @@ namespace Layout.UI
             "square"      => (GuideShapeType.Rectangle, ShapeConstraint.Square),
             "polygon"     => (GuideShapeType.Polygon,   ShapeConstraint.None),
             "freeshape"   => (GuideShapeType.FreeShape, ShapeConstraint.None),
+            "sphere"      => (GuideShapeType.Sphere,    ShapeConstraint.None),
+            "dome"        => (GuideShapeType.Dome,      ShapeConstraint.None),
+            "cylinder"    => (GuideShapeType.Cylinder,  ShapeConstraint.None),
+            "cone"        => (GuideShapeType.Cone,      ShapeConstraint.None),
+            "box"         => (GuideShapeType.Box,       ShapeConstraint.None),
             _             => (GuideShapeType.Arch,      ShapeConstraint.None)
         };
 
@@ -1265,6 +1322,11 @@ namespace Layout.UI
             GuideShapeType.Rectangle => constraint == ShapeConstraint.Square ? 10 : 9,
             GuideShapeType.Polygon   => 11,
             GuideShapeType.FreeShape => 12,
+            GuideShapeType.Sphere    => 13,
+            GuideShapeType.Dome      => 14,
+            GuideShapeType.Cylinder  => 15,
+            GuideShapeType.Cone      => 16,
+            GuideShapeType.Box       => 17,
             _ => constraint == ShapeConstraint.SemiCircle ? 1 : 0
         };
 

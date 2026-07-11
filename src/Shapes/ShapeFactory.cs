@@ -40,6 +40,16 @@ namespace Layout.Shapes
                 case GuideShapeType.FreeShape:
                     return new FreeShape(chain != null && chain.Count >= 2 ? chain : new[] { start, end },
                         closed && chain != null && chain.Count >= 3);
+                case GuideShapeType.Sphere:
+                    return new SphereShape(start, end);
+                case GuideShapeType.Dome:
+                    return new DomeShape(start, end, shapePlaneAxis, inverted);
+                case GuideShapeType.Cylinder:
+                    return new CylinderShape(start, end, shapePlaneAxis, inverted);
+                case GuideShapeType.Cone:
+                    return new ConeShape(start, end, shapePlaneAxis, inverted);
+                case GuideShapeType.Box:
+                    return new BoxShape(start, end, shapePlaneAxis, inverted);
                 default:
                     return new ArchShape(start, end, constraint: constraint, inverted: inverted);
             }
@@ -65,6 +75,16 @@ namespace Layout.Shapes
                     return new PolygonShape(g.ControlPoints, g.ShapePlaneAxis, g.Sides);
                 case GuideShapeType.FreeShape:
                     return new FreeShape(g.ControlPoints, g.IsClosed);
+                case GuideShapeType.Sphere:
+                    return new SphereShape(g.ControlPoints);
+                case GuideShapeType.Dome:
+                    return new DomeShape(g.ControlPoints, g.ShapePlaneAxis);
+                case GuideShapeType.Cylinder:
+                    return new CylinderShape(g.ControlPoints, g.ShapePlaneAxis);
+                case GuideShapeType.Cone:
+                    return new ConeShape(g.ControlPoints, g.ShapePlaneAxis);
+                case GuideShapeType.Box:
+                    return new BoxShape(g.ControlPoints, g.ShapePlaneAxis);
                 default:
                     return new ArchShape(g.ControlPoints, constraint: g.Constraint);
             }
@@ -89,6 +109,16 @@ namespace Layout.Shapes
                     return new PolygonShape(points, shapePlaneAxis, sides);
                 case GuideShapeType.FreeShape:
                     return new FreeShape(points, closed);
+                case GuideShapeType.Sphere:
+                    return new SphereShape(points);
+                case GuideShapeType.Dome:
+                    return new DomeShape(points, shapePlaneAxis);
+                case GuideShapeType.Cylinder:
+                    return new CylinderShape(points, shapePlaneAxis);
+                case GuideShapeType.Cone:
+                    return new ConeShape(points, shapePlaneAxis);
+                case GuideShapeType.Box:
+                    return new BoxShape(points, shapePlaneAxis);
                 default:
                     return new ArchShape(points, constraint: constraint);
             }

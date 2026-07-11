@@ -201,7 +201,9 @@ namespace Layout.Systems
             {
                 GuideShapeType.Ellipse or GuideShapeType.Line or GuideShapeType.Triangle
                     or GuideShapeType.Rectangle or GuideShapeType.Polygon
-                    or GuideShapeType.FreeShape => shape,
+                    or GuideShapeType.FreeShape
+                    or GuideShapeType.Sphere or GuideShapeType.Dome or GuideShapeType.Cylinder
+                    or GuideShapeType.Cone or GuideShapeType.Box => shape,
                 _ => GuideShapeType.Arch
             };
             _constraint = IsValidPair(_shape, constraint) ? constraint : ShapeConstraint.None;
@@ -222,12 +224,16 @@ namespace Layout.Systems
             || (shape == GuideShapeType.Rectangle && constraint == ShapeConstraint.Square);
 
         /// <summary>
-        /// True when this shape+constraint places with THREE clicks (anchor · anchor · height): the free,
-        /// Right, and Isosceles triangles, whose apex the third click sets. Equilateral stays two-click —
-        /// its apex is fully derived from the base, so a third click would have nothing to decide.
+        /// True when this shape+constraint places with THREE clicks (base · base · height/apex): the free,
+        /// Right, and Isosceles triangles (apex click), and the Cylinder / Cone / Box volumes (0.1.21 —
+        /// two base clicks then a height click). Equilateral stays two-click (its apex is fully derived);
+        /// the Sphere and Dome are two-click volumes.
         /// </summary>
         public static bool NeedsApexClick(GuideShapeType shape, ShapeConstraint constraint) =>
-            shape == GuideShapeType.Triangle && constraint != ShapeConstraint.Equilateral;
+            (shape == GuideShapeType.Triangle && constraint != ShapeConstraint.Equilateral)
+            || shape == GuideShapeType.Cylinder
+            || shape == GuideShapeType.Cone
+            || shape == GuideShapeType.Box;
 
         /// <summary>True for the chained-click Free-Shape (Session 11, 0.1.15).</summary>
         public static bool IsChainShape(GuideShapeType shape) => shape == GuideShapeType.FreeShape;

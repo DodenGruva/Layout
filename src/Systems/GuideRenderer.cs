@@ -322,9 +322,10 @@ namespace Layout.Systems
             _previewSides = sides; _previewInverted = inverted;
             IGuideShape shape = ShapeFactory.Create(shapeType, constraint, shapePlaneAxis, start, end,
                 inverted, sides);
-            // A three-click triangle mid-draft: the ghost's apex tracks the crosshair (Session 11).
-            if (apex != null && shapeType == GuideShapeType.Triangle
-                && constraint != ShapeConstraint.Equilateral && shape.ControlPoints.Count > 2)
+            // A three-click shape mid-draft (triangle apex, or cylinder/cone/box height — 0.1.21): the
+            // ghost's index-2 handle tracks the crosshair.
+            if (apex != null && DraftManager.NeedsApexClick(shapeType, constraint)
+                && shape.ControlPoints.Count > 2)
             {
                 shape.MoveControlPoint(2, apex);
             }
