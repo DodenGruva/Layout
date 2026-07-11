@@ -220,9 +220,11 @@ namespace Layout.Client
             //    SHIFT while drafting live-inverts the ghost (upside-down arch / triangle).
             if (_draft.Mode == ToolMode.Create && _draft.HasActiveDraft)
             {
-                if (blockSel != null)
+                // The volume HEIGHT stage works in free air too (0.1.23): a targeted block wins, but with
+                // none the height handle follows the view ray. Every other stage still needs a block.
+                if (blockSel != null || AwaitingVolumeHeight)
                 {
-                    Vec3d aim = ResolveAnchorPoint(blockSel);
+                    Vec3d aim = blockSel != null ? ResolveAnchorPoint(blockSel) : FreeAirHeightAim();
                     if (DraftManager.IsChainShape(_draft.Shape))
                     {
                         // Free-Shape (0.1.15): the ghost is the placed chain + a live segment to the
@@ -572,9 +574,11 @@ namespace Layout.Client
 
         private void HandleCreateClick(BlockSelection blockSel)
         {
-            if (blockSel == null) return;                           // anchors REQUIRE a block target (§5)
+            // Base/anchor clicks REQUIRE a block target (§5); the volume HEIGHT stage is the exception —
+            // it may complete in free air (0.1.23), the view ray standing in for the click point.
+            if (blockSel == null && !AwaitingVolumeHeight) return;
 
-            Vec3d anchor = ResolveAnchorPoint(blockSel);
+            Vec3d anchor = blockSel != null ? ResolveAnchorPoint(blockSel) : FreeAirHeightAim();
             // The cardinal snap rides CTRL now (Session 11); it applies to the BASE clicks, not the apex.
             if (_draft.HasActiveDraft && !_draft.AwaitingApex && CtrlHeld()) anchor = ConstrainToStart(anchor);
 
@@ -1108,6 +1112,23 @@ namespace Layout.Client
             return new Vec3d(x, y, z);
         }
 
+        // True when the active draft is on the HEIGHT stage of a 3D volume (cylinder/cone/box, base placed).
+        private bool AwaitingVolumeHeight =>
+            _draft.AwaitingApex && GuideShapeTypes.IsVolume(_draft.Shape);
+
+        // The free-air height aim (0.1.23): with no block under the crosshair, the volume's height handle
+        // follows the view ray at the base's distance — looking up/down grows/shrinks the height (the
+        // shape projects this onto its axis). A targeted block still takes priority (handled by callers).
+        private Vec3d FreeAirHeightAim()
+        {
+            Vec3d start = _draft.DraftStart, second = _draft.DraftSecond;
+            Vec3d baseCentre = second == null ? start
+                : new Vec3d((start.X + second.X) * 0.5, (start.Y + second.Y) * 0.5, (start.Z + second.Z) * 0.5);
+            Vec3d eye = EyePos(), dir = ViewDir();
+            double depth = Math.Max(1.0, Dist(eye, baseCentre));
+            return new Vec3d(eye.X + dir.X * depth, eye.Y + dir.Y * depth, eye.Z + dir.Z * depth);
+        }
+
         // Shift-to-constrain: the second foot snaps to the FIRST foot's elevation and to the nearest
         // cardinal line from it — a level, square-on arch (and the all-Blue anchor shade) in one gesture.
         private Vec3d ConstrainToStart(Vec3d aim)
@@ -1159,10 +1180,16 @@ namespace Layout.Client
             {
                 axis = _draft.PlaneOverride.Value;
             }
-            else
+            else if (blockSel != null)
             {
                 Vec3i n = blockSel.Face.Normali;
                 axis = n.Y != 0 ? PlaneAxis.Y : (n.Z != 0 ? PlaneAxis.Z : PlaneAxis.X);
+            }
+            else
+            {
+                // Free-air height stage (0.1.23): no clicked face — the draft's captured plane stands in.
+                // Volumes force Volumetric below, so the exact plane is immaterial here anyway.
+                axis = _draft.DraftPlaneAxis;
             }
 
             double coord = axis == PlaneAxis.X ? anchor.X : (axis == PlaneAxis.Y ? anchor.Y : anchor.Z);

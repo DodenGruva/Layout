@@ -430,14 +430,19 @@ namespace Layout.UI
             }
 
             // Divisions — and, for a polygon, the Sides field beside it on the SAME row (0.1.17,
-            // human-requested). Both are the native number input + wheel + spinners. Divisions grey out
-            // for the Sphere (0.1.20): the equal-parts marks run along a curve, and a ball has none.
+            // human-requested). Both are the native number input + wheel + spinners. On a 3D VOLUME the
+            // whole row is HIDDEN (0.1.23, human-requested — same as the Sides field being polygon-only;
+            // the equal-parts marks run along a curve and a volume has none).
             bool sidesRow = editMode ? (selected != null && selected.ShapeType == GuideShapeType.Polygon)
                                      : _tool.Shape == GuideShapeType.Polygon;
             int divCurrent = editMode ? (selected?.Divisions ?? 0) : _tool.Divisions;
             Action<int> divChanged = editMode ? OnGuideDivisionsChanged : OnToolDivisionsChanged;
-            bool numberInert = (editMode ? settingsInert : deleteMode) || volumePicked;
-            if (sidesRow)
+            bool numberInert = editMode ? settingsInert : deleteMode;
+            if (volumePicked)
+            {
+                // no Divisions / Sides row for volumes
+            }
+            else if (sidesRow)
                 AddNumberPairControl(c, rowFont, font, ref y, labelW, pad, tile, rowGap,
                     "Divisions", divCurrent, 0, Shapes.DivisionMarks.MaxDivisions, "div", divChanged,
                     "Sides",
@@ -475,7 +480,7 @@ namespace Layout.UI
             int current, int min, int max, bool inert, string key, Action<int> onChanged)
         {
             ElementBounds labelBounds = ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20);
-            c.AddStaticText(label, labelFont, labelBounds);
+            c.AddStaticText(label, Centered(labelFont), labelBounds);
 
             if (inert)
             {
@@ -508,7 +513,7 @@ namespace Layout.UI
             // 0.1.18: fields narrowed (90 → 76) so the second label has room and never wraps.
             const double fieldH = 30, field1W = 76, field2W = 76, label2W = 52;
 
-            c.AddStaticText(label1, labelFont, ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20));
+            c.AddStaticText(label1, Centered(labelFont), ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20));
 
             if (inert)
             {
@@ -679,7 +684,7 @@ namespace Layout.UI
             Action<string, string> onTile, string key, bool inert)
         {
             ElementBounds labelBounds = ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20);
-            c.AddStaticText(label, labelFont, labelBounds);
+            c.AddStaticText(label, Centered(labelFont), labelBounds);
 
             int sel = ClampIndex(selectedIndex, codes.Length);
             for (int i = 0; i < codes.Length; i++)
@@ -705,7 +710,7 @@ namespace Layout.UI
             string label2, CairoFont labelFont2, string[] codes2, string[] names2, string[] icons2, int sel2,
             Action<string, string> onTile2, string key2, bool inert2)
         {
-            c.AddStaticText(label1, labelFont, ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20));
+            c.AddStaticText(label1, Centered(labelFont), ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20));
 
             double x = labelW + pad;
             int s1 = ClampIndex(sel1, codes1.Length);
@@ -751,7 +756,7 @@ namespace Layout.UI
             double labelW, double pad, double tile, double tileGap, double rowGap, bool inert)
         {
             ElementBounds labelBounds = ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20);
-            c.AddStaticText("Shape", labelFont, labelBounds);
+            c.AddStaticText("Shape", Centered(labelFont), labelBounds);
 
             List<string> favs = _config.FavoriteShapes;
             string currentCode = ShapeCodes[ClampIndex(CurrentShapeIndex(), ShapeCodes.Length)];
@@ -842,7 +847,7 @@ namespace Layout.UI
             int rows = (indices.Count + perRow - 1) / perRow;
             double groupH = rows * tile + (rows - 1) * tileGap;
 
-            CairoFont labelFont = inert ? Ghost() : CairoFont.WhiteSmallText();
+            CairoFont labelFont = Centered(inert ? Ghost() : CairoFont.WhiteSmallText());
             c.AddStaticText(sectionLabel, labelFont,
                 ElementBounds.Fixed(0, y + (groupH - 16) / 2, labelW, 20));
 
@@ -873,6 +878,15 @@ namespace Layout.UI
             return f;
         }
 
+        // A centred copy of a label font (0.1.23) — the section labels (Mode, Shape, Scale…) are centred
+        // in their left column. Cloned so the caller's font (reused for other text) is untouched.
+        private static CairoFont Centered(CairoFont f)
+        {
+            CairoFont g = f.Clone();
+            g.Orientation = EnumTextOrientation.Center;
+            return g;
+        }
+
         // The current-shape chip swallows clicks: snap it straight back to lit (a status light).
         private void OnCurrentShapeChip(bool on)
         {
@@ -891,10 +905,10 @@ namespace Layout.UI
             DeferRecompose();
         }
 
-        // A pick from the unfolded catalog: select it AND fold the catalog away (submenu semantics).
+        // A pick from the unfolded catalog: select it and leave the catalog OPEN (0.1.23, human-requested
+        // — it only closes when the player clicks the ▾/▴ tile).
         private void OnCatalogShapeTile(string rowKey, string code)
         {
-            _shapeGridExpanded = false;
             OnShapeTile(rowKey, code);
         }
 

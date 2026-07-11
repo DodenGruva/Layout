@@ -66,7 +66,10 @@ namespace Layout.Shapes
             r = baseLen * 0.5;
             if (r < MinRadius) return false;
 
-            n = ShapeGeometry.Cross(u, m);                       // the base normal (unit: u ⟂ m, both unit)
+            // Deterministic base normal (0.1.23) — points +up regardless of anchor order, so dragging the
+            // second base point to the other side no longer inverts the dome into the floor.
+            n = ShapeGeometry.BaseNormal(u, _preferredAxis);
+            if (n == null) return false;
             Vec3d v = _controlPoints[2].WorldPosition;
             double side = ShapeGeometry.Dot(new Vec3d(v.X - c.X, v.Y - c.Y, v.Z - c.Z), n) < 0 ? -1.0 : 1.0;
             n = new Vec3d(n.X * side, n.Y * side, n.Z * side);   // n̂ points at the apex's side
@@ -83,7 +86,8 @@ namespace Layout.Shapes
                 Vec3d a = _controlPoints[0].WorldPosition, b = _controlPoints[1].WorldPosition;
                 if (!ShapeGeometry.TryGetFrame(a, b, _preferredAxis, out Vec3d u0, out Vec3d m0, out double len))
                     return;
-                Vec3d n0 = ShapeGeometry.Cross(u0, m0);
+                Vec3d n0 = ShapeGeometry.BaseNormal(u0, _preferredAxis);
+                if (n0 == null) return;
                 double r0 = len * 0.5, s = initialSide.Value;
                 var c0 = new Vec3d((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, (a.Z + b.Z) * 0.5);
                 _controlPoints[2].SetPosition(c0.X + n0.X * r0 * s, c0.Y + n0.Y * r0 * s, c0.Z + n0.Z * r0 * s);

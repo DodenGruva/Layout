@@ -51,6 +51,28 @@ namespace Layout.Shapes
             return true;
         }
 
+        /// <summary>
+        /// The DETERMINISTIC base-plane normal for a 3D volume whose base direction is <paramref name="uHat"/>
+        /// under a preferred plane normal (0.1.23): the preferred axis with û projected out, sign fixed to
+        /// the preferred axis's positive direction. Unlike <c>Cross(û, m̂)</c> — whose sign flips when the
+        /// base anchors are dragged to the other side, inverting the volume — this points the SAME way
+        /// regardless of anchor order (a ground volume always rises +Y; SHIFT is the only way to invert).
+        /// Falls back through Y then X when û is parallel to the preferred axis.
+        /// </summary>
+        public static Vec3d BaseNormal(Vec3d uHat, PlaneAxis preferredAxis)
+        {
+            Vec3d Signed(PlaneAxis axis)
+            {
+                Vec3d ax = AxisVec(axis);
+                Vec3d n = ProjectOutAndNormalise(ax, uHat);
+                if (n == null) return null;
+                // Keep the sign aligned with the positive axis direction (so ground → +Y, not −Y).
+                if (Dot(n, ax) < 0) { n = new Vec3d(-n.X, -n.Y, -n.Z); }
+                return n;
+            }
+            return Signed(preferredAxis) ?? Signed(PlaneAxis.Y) ?? Signed(PlaneAxis.X);
+        }
+
         /// <summary>The two in-plane world axes of an axis-aligned plane (normal = <paramref name="axis"/>).</summary>
         public static void InPlaneAxes(PlaneAxis axis, out Vec3d u1, out Vec3d u2)
         {

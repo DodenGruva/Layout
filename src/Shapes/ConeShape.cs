@@ -65,8 +65,9 @@ namespace Layout.Shapes
                 return false;
             c = new Vec3d((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, (a.Z + b.Z) * 0.5);
             r = baseLen * 0.5;
-            n = ShapeGeometry.Cross(u, m);
-            return r >= MinRadius;
+            // Deterministic axis (0.1.23): +up regardless of base-anchor order (see CylinderShape).
+            n = ShapeGeometry.BaseNormal(u, _preferredAxis);
+            return n != null && r >= MinRadius;
         }
 
         private bool TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n, out double h)
