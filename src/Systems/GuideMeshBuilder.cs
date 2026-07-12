@@ -133,9 +133,8 @@ namespace Layout.Systems
     /// the transient grabbed-point highlight — plus the bounding-extent helper behind the HUD readout.
     /// </summary>
     /// <remarks>
-    /// COLOUR TABLE (authoritative: ARCHITECTURE.md v2.2 — the post-"swap" scheme, apex Green / anchors Blue).
-    /// NOTE: the "// Blue"/"// Green" inline comments on <see cref="VoxelRenderType"/> and <c>ControlPoint</c>
-    /// predate the swap and are stale — this table, not those comments, is correct:
+    /// COLOUR TABLE (authoritative — this file is the single source of truth for guide colours; the role
+    /// comments on <see cref="VoxelRenderType"/> and <c>ControlPoint</c> agree with it):
     ///   Normal → Yellow, Locked → Red, Primary/apex → Green, Anchor → Blue,
     ///   far Anchor when not level+cardinal → Indigo off-shade, Grabbed → White,
     ///   hidden-guide anchors → the anchor colour at reduced alpha.

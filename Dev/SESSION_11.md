@@ -11,7 +11,8 @@
 > **Current Shape** indicator → **0.1.15** (§10). They **playtested THAT too** ("This was tested. Good
 > work.") and queued ten polish items → **0.1.16** (§13). Everything compiled clean (`0 Warning(s)
 > 0 Error(s)`, Debug + Release). Release zips live in **`..\Layout Zips\`** (human-directed, holds the full
-> 0.1.10+ history). 0.1.16 is NOT yet playtest-confirmed; checklist in §14.
+> 0.1.10+ history). 0.1.16's checklist is §14 — subsequently CONFIRMED in §15, and the session continued through v0.1.27
+(the 3D family in §16, hardening in §17).
 
 ---
 

@@ -27,20 +27,22 @@ server-authoritative, world-shared, and persist across logout/chunk-unload. Stat
   **github.com/DodenGruva/Layout** through v0.1.27. Commit/push ONLY when the human instructs.
 
 ## The documents (read these before large work)
-- **`ARCHITECTURE.md`** — the authoritative plan. Its **Settled Decisions Register** lists locked-in design
-  choices; **do not reopen those without the human explicitly asking.**
+- **`HANDOFF.md`** (repo root) — the consolidated current-state brief (scope · status · direction ·
+  performance characteristics), written for external analysis; the fastest way to get oriented.
+- **`ARCHITECTURE.md`** (in `dev/`, v2.8) — the authoritative plan. Its **Settled Decisions Register** lists
+  locked-in design choices; **do not reopen those without the human explicitly asking.**
 - **`TODO.md`** — the live punch-list: open bug, deferred requests, flagged decisions, future features.
 - **`PROJECT_STATUS.md`** — where things stand and what each module does.
-- **`SESSION_9.md` / `SESSION_10.md` / `SESSION_11.md`** — standalone per-session records (SESSION_11 is
-  the most recent; it ends with the 0.1.14 playtest checklist and flagged decisions 11a–11j).
+- **`PLAN_CLIENT_ONLY.md`** — the phased implementation plan for the client-only fallback mode (F4 → 0.2.0).
+- **`SESSION_9.md` / `SESSION_10.md` / `SESSION_11.md`** — standalone per-session records (SESSION_11 is the
+  most recent and runs through **v0.1.27**: the Session-11 backlog, the 3D volume family §16, and the
+  0.1.24–0.1.27 hardening §17; flagged decisions 11a–11r and 16a–16d).
 
-## ✅ Doc-verification pass — DONE (2026-07-05)
-The Session-9 doc sections were reconstructed from a chat transcript, not from source. That first-session
-verification pass is **complete**: every **`⚠ verify`** identifier (class/packet/command names, `DataVersion`,
-file counts) was checked against the code and confirmed accurate — no reconstruction errors. The only stale
-items were ARCHITECTURE.md's own file count (43 → **49**) and its shape-catalog snippets (§1/§2), now
-corrected. The ⚠ tags in ARCHITECTURE/TODO/PROJECT_STATUS/SESSION_9 are resolved in place. Docs are
-trustworthy; no need to repeat this pass.
+## ✅ Docs verified & consolidated to v0.1.27 (2026-07-12)
+All prose docs were audited against the source and brought consistent to the current state — **v0.1.27,
+DataVersion 7, 59 files, 12 shape types / 18 tiles**. `ARCHITECTURE.md` is **v2.8**; `HANDOFF.md` (repo root)
+is the consolidated brief for external analysis. Docs are trustworthy — but still prefer reading the `.cs`
+files over any identifier quoted in prose. No need to re-run a from-scratch verification pass.
 
 ## How to work on this project (the human's established workflow)
 - **The human is not a programmer** and does not read code. They validate by *playing the mod* and describing
@@ -85,4 +87,4 @@ awaits a quick look.
 `Network/` (packets + handlers), `UI/` (GUI + HUD + `LayoutToolIcons.cs`, the Cairo icon glyphs), `Config/`,
 `Items/`, `Client/` (the tool controller), `Undo/Commands/`. Adding a new shape starts in
 `Shapes/ShapeFactory.cs`. Soft-point flow behavior lives in `Shapes/SoftPointFlow.cs`. (Filenames verified
-against the tree on 2026-07-05.)
+against the tree on 2026-07-12 — 59 source files.)

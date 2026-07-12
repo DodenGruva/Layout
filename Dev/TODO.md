@@ -1,12 +1,7 @@
-# Layout — TODO / Outstanding Items (post-Session-9)
+# Layout — TODO / Outstanding Items (current: v0.1.27)
 
-> **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan) and `PROJECT_STATUS.md`
-> (the status). Renamed from `OUTSTANDING_ITEMS.md` at the Session-8→9 migration into Claude Code.
->
-> **Fidelity note (Session-9 additions).** The Session-9 content below was reconstructed from the working
-> conversation, not regenerated from the code on disk. **Verified against source 2026-07-05:** the specifics
-> formerly tagged **⚠ verify** (file/class/packet/command names, DataVersion, counts) were all confirmed
-> accurate; the tags are resolved in place. Full Session-9 detail lives in `SESSION_9.md`.
+> **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
+> status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
@@ -265,8 +260,7 @@ deliberate (11r).
 - **Ghost-greying** — if the API's toggle buttons expose an `Enabled` flag, native disabled state beats the
   alpha-ghost approach (`GuideToolGui` tile-row seam).
 - Carried from Session 7: item transforms; recipe balance; scroll-wheel bindings (the divisions field is the
-  first concrete use — see Deferred); stale color comments (cosmetic); Surface flatten's eventual move into
-  the shape layer (`TODO(Surface)`).
+  first concrete use — see Deferred); Surface flatten's eventual move into the shape layer (`TODO(Surface)`).
 
 ---
 
@@ -287,6 +281,9 @@ catalog tile to pin (newest pin = slot 1). Persisted per-player in `layout-clien
 (each code = a {type + constraint} pair). The old placeholder row is deleted.
 
 ### ★ MAJOR — F4. Client-only / server-less fallback mode (human-requested, deferred; discussed v0.1.23)
+> **Full implementation plan: `PLAN_CLIENT_ONLY.md`** (phased, target **0.2.0**). The sketch below is the
+> feasibility discussion that plan expands into phases; read the plan before starting.
+
 **Goal:** let a player use the mod on a server that does NOT have it installed — guides visible to that one
 player only, no server needed. **Discussed and judged feasible — moderate effort, NOT a foundation rewrite**
 (the shape math, data model, renderer, HUD, GUI, and interaction controller are all authority-agnostic and
@@ -323,19 +320,24 @@ Park until asked.
 
 ## Next session — start here
 
-**Everything through 0.1.22 is playtest-confirmed; 0.1.23 (the 3D GUI/placement fixes) awaits a final
-look. The full 3D volume family (Sphere/Dome/Cylinder/Cone/Box) is in and confirmed.** The agenda:
+**Everything through v0.1.26 is playtest-confirmed; v0.1.27 (running total → `long`, `/dispel` →
+`/layout dispel`) awaits a quick look. The full 2D catalog and the 3D volume family are in and confirmed.**
+The agenda:
 
-1. **Confirm 0.1.23** in passing, and do the queued **Divisions-field width tweak** (see "Quick GUI tweaks"
-   near the top — narrow the standalone field to the 76 px polygon width).
+1. **Confirm v0.1.27** in passing — both changes are low-risk (the widened running total and the namespaced
+   admin command). (The queued Divisions-field width tweak already shipped in 0.1.24.)
 2. **B-S9-1 — the lock-in-place bug is the top remaining *bug*.** Attempt the untried fix: ray-vs-voxel-box
    first-hit picking so the aimed cell is authoritative (see OPEN BUGS for the full history of attempts).
-3. Then, if asked: **Roof / Tunnel** volumes; a concave-safe **Free-Shape fill**; broadcasting the whole
+3. **F4 — client-only / server-less mode (MAJOR, deferred).** Full phased plan in `PLAN_CLIENT_ONLY.md`
+   (→ 0.2.0); start with Phase 0 de-risking.
+4. **Enormous fine-detail guides (human wants this):** raise the scan guard / hard ceiling + a rendering
+   perf pass (chunked meshes / LOD).
+5. Then, if asked: **Roof / Tunnel** volumes; a concave-safe **Free-Shape fill**; broadcasting the whole
    Free-Shape draft chain to other players (11q); **F3 re-constrain op**.
 
 **Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;
 docs are updated ONLY when the human says so; commits/pushes only when the human instructs (main is now the
-mainline — pushed to github.com/DodenGruva/Layout through v0.1.23).
+mainline — pushed to github.com/DodenGruva/Layout through v0.1.27).
 
 ---
 

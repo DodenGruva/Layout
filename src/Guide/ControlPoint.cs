@@ -39,10 +39,10 @@ namespace Layout.Guide
         /// <summary>A tangent-only phantom point (P0 / P4). Exists for the math; never rendered.</summary>
         public bool IsPhantom { get; set; }
 
-        /// <summary>A start/end anchor (P1 / P3). Rendered green.</summary>
+        /// <summary>A start/end anchor (P1 / P3). Rendered blue.</summary>
         public bool IsAnchor { get; set; }
 
-        /// <summary>The apex / primary point (P2). Rendered blue.</summary>
+        /// <summary>The apex / primary point (P2). Rendered green.</summary>
         public bool IsPrimary { get; set; }
 
         /// <summary>

@@ -1,3 +1,16 @@
+======================================================================
+NOTE (updated 2026-07-12): This is the ORIGINAL first-build doc
+(Module 7 / v0.1.0 / 35 source files). The BUILD, RUN, and first-run
+steps below are still accurate, but the project has moved on:
+  - CURRENT is v0.1.27, 59 source files, DataVersion 7.
+  - One dependency was ADDED since: cairo-sharp.dll (in Lib\, for the
+    GUI icon glyphs, Session 10) — it also ships with the game, and
+    like the others it does NOT go in the mod zip.
+For current build/packaging/versioning rules see CLAUDE.md and
+dev/PROJECT_STATUS.md; for project scope/status/direction see the
+consolidated brief HANDOFF.md at the repo root.
+======================================================================
+
 Layout mod - FIRST RUNNABLE BUILD (through Module 7b)
 =====================================================
 

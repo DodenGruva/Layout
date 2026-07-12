@@ -16,8 +16,8 @@ namespace Layout.Guide
     {
         Normal,   // Yellow — ordinary curve body
         Locked,   // Red    — a locked (constraint) control point
-        Primary,  // Blue   — the apex / primary control point
-        Anchor,   // Green  — start / end anchor points
+        Primary,  // Green  — the apex / primary control point
+        Anchor,   // Blue   — start / end anchor points
         Grabbed,  // White  — the point currently held during an active drag
         Division  // Magenta — Session 9: an equal-part boundary mark (purely visual; renderer-applied)
     }

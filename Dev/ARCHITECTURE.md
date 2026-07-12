@@ -1,26 +1,76 @@
-# Layout — Architecture Document (v2.7)
+# Layout — Architecture Document (v2.8)
 
-**Supersedes v2.6 — Session-10 delta.** v2.5 consolidated five revisions into the **Settled Decisions
-Register** below; v2.6 folded in **Session 9** (extended shape catalog, Divisions overlay, slave-regime
-flow). v2.7 folds in **Session 10**: the **icon-tile GUI** (custom Cairo glyphs, native-style scale icons,
-compact square tiles), the **B-S10-1 fix** (surface-guide reload shift — unloaded-chunk-aware air-side
-probe), the **divisions scroll-wheel** on the game's native number input, a **third tool mode — Edit**
-(the setting rows act on the selected guide, replacing the appended per-guide section), and **paired
-division markers** on off-cell boundaries. The register and flows below are updated in place; the changelogs
-under this header are the quick deltas.
+**Supersedes v2.7 — Session-11 + 3D-family delta (covers v0.1.14 → v0.1.27).** v2.5 consolidated five
+revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
+catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
+surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
+**v2.8 folds in Session 11 and the post-finalize 3D work:** the **three-click triangle**, the
+**CTRL/SHIFT remap** (CTRL = cardinal, SHIFT = draft-invert + placed-guide spring-back) with
+**every-shape-defaults-up**, the **Polygon** and **Free-Shape**, the **hard-kept favorites picker + catalog
+fold-out**, a long GUI-polish loop, the **3D VOLUME family** (Sphere/Dome/Cylinder/Cone/Box — cell-lattice
+scan, always Volumetric), the **`/layout dispel` admin commands**, the **hard voxel ceiling**, and the
+**running-total→`long`** widening. The register, Overview, file tree, and Data Model below are updated in
+place to the v0.1.27 / DataVersion 7 / 59-file state; the changelogs under this header are the quick deltas.
 
-> **Fidelity note (v2.6).** The Session-9 additions were reconstructed from the working conversation during
-> the Claude Code migration, not regenerated from source. **Verification pass completed 2026-07-05:** every
-> Session-9 identifier (new class / packet / enum-member names, DataVersion, file count) was checked against
-> the code on disk and confirmed accurate — the reconstruction held up. The former **⚠ verify** tags have
-> been resolved in place here and in `PROJECT_STATUS.md` / `TODO.md` / `SESSION_9.md`. The one stale item was
-> this document's own file count and shape-catalog snippets (§1/§2), corrected below.
+**Where the project stands:** Layout **v0.1.27** is a built, playtested mod **deployed to real-played game
+worlds** — everything through **v0.1.26 is playtest-confirmed**; v0.1.27 awaits a quick look. All seven
+modules, the Session-8/9/10 capability waves, the full Session-11 backlog, and the post-finalize **3D volume
+family** run against VS 1.22.3 / .NET 10. The catalog is **12 shape types / 18 picker tiles** (2D + 3D),
+**DataVersion 7**, **59 source files**, committed to `main` and pushed to github.com/DodenGruva/Layout.
+**One open bug:** lock-in-place (B-S9-1) is unresolved — the targeted voxel is often not the one locked and
+the guide still shifts; it is the top priority and does **not** have a settled design here yet (leading
+approach: ray-vs-voxel-box cell picking). Parked by the human ("not gamebreaking"). See `TODO.md`.
 
-**Where the project stands:** Layout v0.1.x is a built, playtested mod **deployed to real-played game worlds**
-(through Session 9). All seven modules, the Session-8 capability wave, and the Session-9 catalog/divisions/
-slave-flow work are against VS 1.22.3 / .NET 10. **One open bug:** lock-in-place (B-S9-1) is unresolved —
-the targeted voxel is often not the one locked and the guide still shifts; it is the top priority and does
-**not** have a settled design here yet (leading approach: ray-vs-voxel-box cell picking). See `TODO.md`.
+> **▶ DIRECTION — the next major arc: client-only / server-less fallback mode (F4, target 0.2.0).** This is a
+> deliberately-planned, high-priority direction — not a vague someday. **Goal:** let a player use Layout on a
+> server that does NOT have the mod installed, with guides **visible only to that player** and held **in
+> memory for the session**. Architecturally the pure layers (shape math, data model, renderer, HUD, GUI, most
+> of the controller) are already authority-agnostic and carry over untouched; the work is confined to a
+> **local-authority seam** — a `LocalGuideAuthority` running a client-side `GuideManager` (its few server
+> couplings — persistence, save/load events, block-solidity probe — narrowed behind interfaces), **join-time
+> mode detection** (did the `"layout"` network channel actually handshake?), and **item-less activation**
+> (a hotkey toggle, since a vanilla server can't register the `layout:guidetool` item). It is an explicit
+> DIVERGENCE from the settled server-authoritative / world-shared pillar (Multiplayer register below): in
+> this mode locks, caps, and undo-gating become local no-ops — a solo sketch layer that runs anywhere, not
+> the collaborative tool. **The full phased implementation plan is `PLAN_CLIENT_ONLY.md` — read it before
+> starting F4.**
+
+---
+
+## Changelog — v2.7 → v2.8 (Session 11 + the 3D family, v0.1.14 → v0.1.27; full record in `SESSION_11.md`)
+
+- **Three-click triangle (0.1.14):** free/right/isosceles triangles place anchor · anchor · height (the
+  equilateral stays two-click, fully derived). `DraftManager` gained a second stored point + `NeedsApexClick`;
+  draft right-click now **steps back one click** instead of discarding. This reopened the settled
+  "every shape is two clicks" rule at the human's request.
+- **CTRL/SHIFT remap + default-up (0.1.14):** **CTRL** is the cardinal/level snap (was SHIFT). **SHIFT**
+  now (a) inverts the ghost while drafting and (b) **springs a placed guide back to its as-placed form**
+  (`SpringBackCommand`; restores points + constraint from a creation snapshot — `OriginalControlPoints` /
+  `OriginalConstraint`, persisted, never wired). Prerequisite shipped with it: **every shape defaults "up"**
+  regardless of click order (`ShapeGeometry` frame perpendicular sign-normalised world-up).
+- **Polygon (0.1.14) + Free-Shape (0.1.15):** `PolygonShape` (regular N-gon, 3–24 sides, per-guide `Sides`);
+  `FreeShape` (irregular polyline, unbounded chained clicks ≤64 — click the last corner to finish open, the
+  first to close the loop; `IsClosed`). Fill deferred on the Free-Shape.
+- **Favorites redesign (0.1.15) + GUI polish (0.1.16–0.1.19):** the shape row is **four hard-kept pinned
+  slots + a ▾ catalog fold-out** (right-click pins/unpins, never evicts); the **Current Shape chip** (F-menu
+  and HUD); combined Projection+Fill and Divisions+Sides rows; Delete-mode "-ghost" tile greying; Free-Shape
+  SHIFT-vertical; Fill greyed on Free-Shapes.
+- **The 3D VOLUME family (0.1.20–0.1.23):** Sphere/Dome/Cylinder/Cone/Box, gated by
+  `GuideShapeTypes.IsVolume`. Hollow = one-cell shell, Filled = solid, voxelised by a **cell-lattice scan**
+  (not curve-marching) with a `MaxScanCells` (4M) **scan guard**. Sphere/Dome = two clicks; Cylinder/Cone/Box
+  = three (reusing the triangle's apex machinery). Always Volumetric (Surface + Divisions gated off);
+  deterministic up-axis `ShapeGeometry.BaseNormal`; wireframe targeting; free-air height. The
+  "planar-only, 3D LATER" decision was reopened and delivered. **No new persisted/wire fields**; enum values
+  appended; **DataVersion stays 7**.
+- **Client-lifecycle + admin + safety (0.1.24–0.1.27):** GUI icons re-register per client start; pinned
+  favorites persist (`ObjectCreationHandling.Replace`); **`/layout dispel all`** and **`/layout dispel
+  <chunk radius>`** (controlserver); a **hard voxel ceiling** (`GuideManager.HardVoxelCeiling` = 10M) that
+  rejects un-renderable giants regardless of caps; clear in-game create-rejection errors; the running voxel
+  total widened **`int → long`**.
+- **Process:** every revision bumps `modinfo.json` and ships a new `Layout<version>.zip` in the sibling
+  **`..\Layout Zips\`** folder (0.1.14 → 0.1.27 this arc); older zips are never overwritten. Committed to
+  `main` and pushed to GitHub through v0.1.27. Client-only mode (F4) now has a full implementation plan in
+  `PLAN_CLIENT_ONLY.md` (target 0.2.0).
 
 ---
 
@@ -92,16 +142,26 @@ blocks underneath.
 The tool is a held item with an F-key **tile menu** (Create/Edit/Delete mode, the shape picker, voxel scale
 1×1×1–16×16×16 defaulting to the finest to match chisel resolution, projection, plane, fill); all interaction
 uses first-person clicks and crosshair targeting rather than transform gizmos. The **shape catalog** is
-arch · half-circle · circle · ellipse, built on the primitives+constraints model (a half-circle is an arch
-under a SemiCircle constraint; a circle is an ellipse under a Circle constraint); every shape is placed with
-the same two-click gesture. Players reshape guides by grabbing points (clicking the body inserts-and-grabs in
-one motion on the arch family, or grabs the nearest handle on the ellipse family), locking points as
-constraints, and relying on two standing contracts: **absorb-or-break** (a grab a constraint can absorb, it
-absorbs; one it cannot absorb demotes the shape to its free parent, seamlessly and undoably) and **soft-point
-flow** (unlocked interior points flow proportionally with the structural anchors+locks — locking is the only
-thing that pins geometry). Each guide can additionally be rescaled, toggled between volumetric (3D) and
-surface (flat decal) projection, set hollow or **filled** (arch family: the region closed by the foot-to-foot
-chord; ellipse family: the disc), and hidden or shown.
+**12 shape types shown as 18 picker tiles**, split into a **2D section** — arch · half-circle · circle ·
+ellipse · line · triangle (+ right/equilateral/isosceles) · rectangle (+ square) · polygon (regular N-gon) ·
+Free-Shape (irregular polyline) — and a **3D VOLUME section** — sphere · dome · cylinder · cone · box. It is
+built on the **primitives+constraints** model (a half-circle is an arch under a SemiCircle constraint, a
+circle is an ellipse under a Circle constraint, a square is a rectangle under a Square constraint, and the
+triangle constraints derive the apex); constrained variants are **not** separate types. **Most shapes place
+with a two-click gesture**, with the deliberately reopened exceptions: the free/right/isosceles triangles and
+the 3D cylinder/cone/box take **three clicks** (base, then a height click), and the Free-Shape takes
+**unbounded chained clicks** (≤64). Players reshape 2D guides by grabbing points (clicking the body
+inserts-and-grabs in one motion on the arch and Free-Shape families, or grabs the nearest handle on every
+other parametric shape), locking points as constraints, and relying on two standing contracts:
+**absorb-or-break** (a grab a constraint can absorb, it absorbs; one it cannot absorb demotes the shape to
+its free parent, seamlessly and undoably) and **soft-point flow** (slave-regime: an interior grab slaves
+unlocked points onto the curve with zero offset, a structural grab keeps shape-preserving proportional flow —
+locking is the only thing that pins geometry). Each guide can additionally be rescaled, toggled between
+volumetric (3D) and surface (flat decal) projection, set hollow or **filled** (arch family: the region closed
+by the foot-to-foot chord; ellipse/polygon: the disc/interior; triangle/rectangle: the interior/box;
+3D volumes: the solid), given a purely-visual **equal-parts division** overlay, and hidden or shown. **The 3D
+volumes are always Volumetric** (Surface and Divisions do not apply to them) and are voxelised by a cell-
+lattice shell/solid scan rather than curve-marching.
 
 Colors: yellow body, red locked points, green apex/primary, blue anchors (indigo off-shade for a non-coplanar
 far foot), white grabbed; hidden guides show only anchors at reduced opacity. In-progress drafts are
@@ -277,6 +337,11 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   points it had.
 - **Systems communicate by return value (`GuideOperationResult`), not events**; undo is validate-then-apply
   with stale-command skip and the `Blocked` outcome for cap-rejected-but-valid commands.
+- **Planned divergence — client-only mode (F4, → 0.2.0).** Everything in this section describes NETWORKED
+  mode, which stays the collaborative product and is unchanged by F4. The planned local fallback (guides
+  visible to one player, in-memory, no server) makes locks / caps / undo-gating **local no-ops** and adds a
+  `LocalGuideAuthority` at the `ClientNetworkHandler.Send*` seam — it does **not** reopen any settled
+  decision for networked play. Full design: `PLAN_CLIENT_ONLY.md`; see the ▶ DIRECTION callout at the top.
 
 ### Configuration, assets, GUI
 - **Server `layout.json`:** perGuideVoxelCap 25,000 · totalVoxelCap 250,000 · maxGuidesPerPlayer 0 ·
@@ -339,10 +404,10 @@ Layout/
     ├── Items/
     │   └── ItemGuideTool.cs
     ├── Guide/                            [pure data]
-    │   ├── GuideData.cs                  [DataVersion 5]
+    │   ├── GuideData.cs                  [DataVersion 7; + Sides, IsClosed, Original{ControlPoints,Constraint}]
     │   ├── ControlPoint.cs
     │   ├── VoxelPosition.cs              [VoxelRenderType: … Grabbed, Division (magenta, S9)]
-    │   ├── GuideShapeType.cs             [Arch, Ellipse, Line, Triangle, Rectangle]
+    │   ├── GuideShapeType.cs             [Arch, Ellipse, Line, Triangle, Rectangle, Polygon, FreeShape, Sphere, Dome, Cylinder, Cone, Box; + GuideShapeTypes.IsVolume]
     │   ├── ShapeConstraint.cs            [None, SemiCircle, Circle, Right, Equilateral, Isosceles, Square]
     │   ├── ProjectionMode.cs
     │   ├── ProjectionPlane.cs
@@ -353,9 +418,16 @@ Layout/
     │   ├── ArchShape.cs                  [free spline + SemiCircle arc mode + ruled fill]
     │   ├── EllipseShape.cs               [closed planar primitive; Circle = constraint]
     │   ├── LineShape.cs                  [S9: two anchors, no fill, insert no-op]
-    │   ├── TriangleShape.cs              [S9: base anchors + born apex; Right/Equilateral/Isosceles]
+    │   ├── TriangleShape.cs              [S9/S11: base anchors + apex, THREE-click (free/right/isosceles); Right/Equilateral/Isosceles]
     │   ├── RectangleShape.cs             [S9: diagonal corners stored, other two derived; Square]
-    │   ├── ShapeGeometry.cs              [S9: shared planar frame + nearest-claim marker helper]
+    │   ├── PolygonShape.cs               [S11: regular N-gon, MinSides 3 / MaxSides 24 (GuideData.Sides)]
+    │   ├── FreeShape.cs                  [S11 (0.1.15): irregular polyline; IsClosed; MaxCorners 64; takes body inserts]
+    │   ├── SphereShape.cs                [3D (0.1.20): cell-lattice shell/solid scan; MaxScanCells 4M guard]
+    │   ├── DomeShape.cs                  [3D (0.1.21): half-sphere clipped to the apex half-space]
+    │   ├── CylinderShape.cs              [3D (0.1.21): centre-banded lateral shell; 3-click]
+    │   ├── ConeShape.cs                  [3D (0.1.21): centre-banded sloped shell; 3-click]
+    │   ├── BoxShape.cs                   [3D (0.1.21): independent side lengths; exact shell; 3-click]
+    │   ├── ShapeGeometry.cs              [S9: shared planar frame + nearest-claim marker; S11 BaseNormal deterministic up-axis]
     │   ├── ShapeFactory.cs               [the single shape construction point]
     │   ├── SoftPointFlow.cs              [S9: slave-regime (interior grabs) + proportional (structural); both sides]
     │   ├── DivisionMarks.cs              [S9: renderer-side equal-part recolor; MaxDivisions = 256]
@@ -394,6 +466,8 @@ Layout/
             ├── SetProjectionCommand.cs   [optional pre-bake point snapshot]
             ├── SetFilledCommand.cs
             ├── SetDivisionsCommand.cs    [S9: old/new count; undo/redo re-applies]
+            ├── SetSidesCommand.cs        [S11: old/new polygon side count]
+            ├── SpringBackCommand.cs      [S11: pre/post point+constraint snapshots around a SHIFT spring-back]
             └── BreakConstraintCommand.cs
 ```
 
@@ -419,7 +493,7 @@ GuideData {
     Guid              Id
     GuideShapeType    ShapeType
     ShapeConstraint   Constraint        // None | SemiCircle | Circle (absorb-or-break)
-    PlaneAxis         ShapePlaneAxis    // the ellipse family's INTRINSIC plane normal (first-click face)
+    PlaneAxis         ShapePlaneAxis    // INTRINSIC plane normal / base axis (first-click face) — ellipse family + 3D volumes
     List<ControlPoint> ControlPoints
     int               VoxelScale        // 1, 2, 4, 8, or 16
     bool              IsHidden
@@ -427,7 +501,7 @@ GuideData {
     ProjectionPlane   Plane             // the Surface PROJECTION plane (≠ ShapePlaneAxis)
     bool              IsFilled          // hollow vs filled (Tier 2, built)
     string            CreatorUid        // nullable; bookkeeping only, never ownership, never wired
-    int               DataVersion       // 6 (const CurrentDataVersion); older saves migrate by defaults
+    int               DataVersion       // 7 (const CurrentDataVersion); older saves migrate by defaults
     int               Divisions          // Session 9: visual equal-parts count (0/1 = none)
     int               Sides              // Session 11: polygon side count (3–24; 0 on other shapes)
     bool              IsClosed           // Session 11 (0.1.15): Free-Shape loop flag (false elsewhere)
@@ -466,13 +540,18 @@ In Surface mode the same struct renders as a paper-thin slab on the plane.
 Pinned, append-only. Constrained variants are **not** types; fill is **not** a type.
 
 ```
-enum GuideShapeType  { Arch = 0, Ellipse = 1, Line = 2, Triangle = 3, Rectangle = 4 }
+enum GuideShapeType  { Arch = 0, Ellipse = 1, Line = 2, Triangle = 3, Rectangle = 4, Polygon = 5,
+                       FreeShape = 6, Sphere = 7, Dome = 8, Cylinder = 9, Cone = 10, Box = 11 }
 enum ShapeConstraint { None = 0, SemiCircle = 1, Circle = 2, Right = 3, Equilateral = 4, Isosceles = 5, Square = 6 }
 ```
-The eleven-tile catalog (type, constraint): Arch = (Arch, None) · Half-circle = (Arch, SemiCircle) ·
-Circle = (Ellipse, Circle) · Ellipse = (Ellipse, None) · Line = (Line, None) · Triangle = (Triangle, None) ·
-Right = (Triangle, Right) · Equilateral = (Triangle, Equilateral) · Isosceles = (Triangle, Isosceles) ·
-Rectangle = (Rectangle, None) · Square = (Rectangle, Square).
+`GuideShapeTypes.IsVolume(type)` classifies Sphere/Dome/Cylinder/Cone/Box (never inferred from enum ordering,
+so future 2D shapes can be appended after the volumes). The 18-tile catalog (type, constraint) — **2D
+section:** Arch = (Arch, None) · Half-circle = (Arch, SemiCircle) · Circle = (Ellipse, Circle) ·
+Ellipse = (Ellipse, None) · Line = (Line, None) · Triangle = (Triangle, None) · Right = (Triangle, Right) ·
+Equilateral = (Triangle, Equilateral) · Isosceles = (Triangle, Isosceles) · Rectangle = (Rectangle, None) ·
+Square = (Rectangle, Square) · Polygon = (Polygon, None) · Free-Shape = (FreeShape, None); **3D section:**
+Sphere = (Sphere, None) · Dome = (Dome, None) · Cylinder = (Cylinder, None) · Cone = (Cone, None) ·
+Box = (Box, None). (Polygon side count lives in `GuideData.Sides`, not a constraint.)
 
 ### ProjectionMode / ProjectionPlane / GuideRenderSettings
 Unchanged since v2: `ProjectionMode { Volumetric, Surface }`; `ProjectionPlane` = a `PlaneAxis`
@@ -798,8 +877,10 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
 
 ---
 
-This v2.6 document is the authoritative plan, consolidated to current state: **Layout v0.1.x, in real play**
-on live game worlds. Arches, half-circles, circles, ellipses, lines, triangles (+ right/equilateral/isosceles),
-and rectangles (+ square) place, preview, reshape, fill, lock/unlock, divide, and project onto surfaces in
-live multiplayer against VS 1.22.3 / .NET 10. History lives in the v2.4 copy; status, flagged decisions, and
-the punch-list live in `PROJECT_STATUS.md` and `TODO.md` (renamed from `OUTSTANDING_ITEMS.md`).
+This v2.8 document is the authoritative plan, consolidated to current state: **Layout v0.1.27, in real play**
+on live game worlds. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
+(+ right/equilateral/isosceles), rectangles (+ square), polygons, and Free-Shapes — plus the **3D volume
+family** (spheres, domes, cylinders, cones, boxes) place, preview, reshape, fill, lock/unlock, divide, and
+project onto surfaces in live multiplayer against VS 1.22.3 / .NET 10. Status, flagged decisions, and the
+punch-list live in `PROJECT_STATUS.md` and `TODO.md`; the current-state brief for external analysis lives in
+`HANDOFF.md` at the repo root; the client-only-mode plan lives in `PLAN_CLIENT_ONLY.md`.
