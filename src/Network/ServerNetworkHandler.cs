@@ -151,18 +151,23 @@ namespace Layout.Network
         }
 
         // ==========================================================================================
-        //  Admin commands (v0.1.26): /dispel all  ·  /dispel <chunk radius>
+        //  Admin commands (v0.1.26; namespaced under /layout in v0.1.27 so they can't clash with other
+        //  mods):  /layout dispel all  ·  /layout dispel <chunk radius>
         // ==========================================================================================
 
         private void RegisterCommands()
         {
             var parsers = _sapi.ChatCommands.Parsers;
             _sapi.ChatCommands
-                .Create("dispel")
-                .WithDescription("Dispel Layout guides. 'all' clears the whole world; a number clears within that chunk radius of you.")
+                .Create("layout")
+                .WithDescription("Layout mod admin commands.")
                 .RequiresPrivilege(Privilege.controlserver)
-                .WithArgs(parsers.Word("all-or-radius"))
-                .HandleWith(OnDispelCommand);
+                .BeginSubCommand("dispel")
+                    .WithDescription("Dispel guides. 'all' clears the whole world; a number clears within that chunk radius of you.")
+                    .RequiresPrivilege(Privilege.controlserver)
+                    .WithArgs(parsers.Word("all-or-radius"))
+                    .HandleWith(OnDispelCommand)
+                .EndSubCommand();
         }
 
         private TextCommandResult OnDispelCommand(TextCommandCallingArgs args)
@@ -323,7 +328,7 @@ namespace Layout.Network
                             result.VoxelCount);
                     else
                         fromPlayer.SendIngameError("layout-overcap",
-                            "World voxel budget reached: {0:n0} more would pass the {1:n0} limit. Dispel some guides ('/dispel'), coarsen the scale, or raise totalVoxelCap.",
+                            "World voxel budget reached: {0:n0} more would pass the {1:n0} limit. Dispel some guides ('/layout dispel'), coarsen the scale, or raise totalVoxelCap.",
                             result.VoxelCount, result.CapLimit);
                     _channel.SendPacket(
                         new VoxelCapWarningPacket(result.Guide.Id, result.VoxelCount, result.CapLimit),

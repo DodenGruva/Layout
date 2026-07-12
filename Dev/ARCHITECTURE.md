@@ -188,9 +188,10 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 - **Primitives + constraint modifiers, not a flat enum of near-duplicates** (square = rectangle+constraint,
   circle = ellipse+constraint, half-circle = arch+constraint, and the triangle constraints below). Keeps
   `GuideShapeType` short and lets future favorites store {type + constraint} pairs.
-- **The catalog (Session-11 state, 0.1.15):** arch, half-circle, circle, ellipse, **line, triangle
+- **The catalog (v0.1.23 state):** arch, half-circle, circle, ellipse, **line, triangle
   (+ right / equilateral / isosceles), rectangle (+ square), polygon (regular N-gon, side count = per-guide
-  data, 3–24), Free-Shape (irregular polyline)**. **Placement is two clicks for every shape EXCEPT the
+  data, 3–24), Free-Shape (irregular polyline)**, and the **3D VOLUME family (v0.1.20–0.1.21): sphere, dome,
+  cylinder, cone, box** (see the dedicated bullet below). **Placement is two clicks for every shape EXCEPT the
   free/right/isosceles triangles (THREE: anchor · anchor · height — SHIFT on the third click centres the
   apex on the base) and the Free-Shape (UNBOUNDED chained clicks, ≤64: click the LAST placed corner to
   finish open, the FIRST corner (≥3) to close the loop; the aim snaps onto those targets)** — the human
@@ -218,8 +219,20 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   (generated, not estimated) — correctness over performance, per standing rule.
 - **Circle → ellipse is the break floor** (v1): an ellipse does not break further into a free closed spline.
   Likewise a free triangle / free rectangle is the floor for its family (no further break in v1).
-- **3D volumes (spheres, cones…) are in scope LATER; current shapes stay planar** — the per-shape intrinsic
-  plane (`ShapePlaneAxis`, captured from the first click's face) is already in the contracts for that future.
+- **3D VOLUMES — DELIVERED (v0.1.20–0.1.23; the "planar-only, 3D LATER" decision was reopened by the human
+  and shipped).** `GuideShapeTypes.IsVolume` gates the family. **Sphere / Dome** = two clicks (a diameter /
+  a base diameter); **Cylinder / Cone / Box** = three clicks (base, then a height click — reusing the
+  triangle's apex machinery, `NeedsApexClick`). Box is a true box (independent side lengths). **Hollow = a
+  one-cell shell, Filled = the solid**, voxelised by a **cell-lattice scan** (not curve-marching): exact
+  surface-crossing (sphere/box/dome) or centre-banded (cylinder/cone), with a `MaxScanCells` **scan guard**
+  that short-circuits absurd fine-scale sizes so the cap rejects them without a freeze. Volumes are **always
+  Volumetric** (Surface + Divisions gated off server-side and greyed/hidden in the GUI). The base plane / axis
+  comes from the clicked face; the axis is the **deterministic `ShapeGeometry.BaseNormal`** (+up regardless of
+  anchor order — SHIFT is the only invert, e.g. dome → bowl). **Targeting is a wireframe** (equator/meridians,
+  rings + verticals, box edges), not every shell cell — the anchors and the height handle are the reliable
+  grab points. Height may be set in **free air** (no block → the handle follows the view ray; a targeted
+  block wins). No new persisted/wire fields — volumes reuse `ControlPoints` + `ShapePlaneAxis`; enum values
+  appended, **DataVersion stays 7**. Natural next volumes: **Roof, Tunnel**.
 - **Fill is a guide property (`IsFilled`), constraints are modifiers — neither is a shape type.**
 
 ### Rendering
@@ -269,7 +282,16 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 - **Server `layout.json`:** perGuideVoxelCap 25,000 · totalVoxelCap 250,000 · maxGuidesPerPlayer 0 ·
   maxGuidesWorldWide 0 · undoHistoryDepth 50 · requiredPrivilege "" · adminCanOverrideLocks true
   (0/negative = unlimited; **construction-time injection — edits need a server restart**). Caps sync to
-  clients on join so the pre-check matches enforcement.
+  clients on join so the pre-check matches enforcement. **The running total is a `long`** (v0.1.27) so a
+  caps-off server can't overflow it negative. A **hard voxel ceiling** (`GuideManager.HardVoxelCeiling`,
+  10M) rejects un-renderable giant guides ALWAYS, even with caps disabled — the 3D scan guard returns a
+  huge sentinel count for over-size volumes, and without this ceiling a caps-off server could create
+  invisible giants that silently max the world total. Server-side create rejections send a **clear in-game
+  error** (the HUD cap-flash is keyed to a guide id that doesn't exist yet on a create, so it was silent).
+- **Admin commands (v0.1.26–0.1.27):** **`/layout dispel all`** (whole world) and **`/layout dispel <chunk
+  radius>`** (Chebyshev radius around the caller), both `controlserver`. Namespaced under `/layout` so they
+  can't clash with other mods. Registered in `ServerNetworkHandler`; they delete + force-free locks +
+  broadcast, and reset the running total.
 - **Client `layout-client.json`:** remembers scale / projection / fill / **shape + constraint** (validated
   pairs) / divisions / **sides** plus the six opacities and (Session 11) the **pinned favorite shape codes
   (up to FOUR since 0.1.15; hard-kept — never auto-padded)**; client-retained, never synced. **Default
@@ -375,9 +397,10 @@ Layout/
             └── BreakConstraintCommand.cs
 ```
 
-**54 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
+**59 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
 ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 in Session 10: LayoutToolIcons; + 4 in Session 11:
-PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape). Namespaces match
+PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 for the 3D family (v0.1.20–0.1.21):
+SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape). Namespaces match
 folders: `Layout`, `Layout.Guide`, `Layout.Shapes`, `Layout.Systems`,
 `Layout.Network`, `Layout.UI`, `Layout.Config`, `Layout.Items`, `Layout.Client`, `Layout.Undo`,
 `Layout.Undo.Commands`. (`UndoManager` is the one file whose folder differs from its namespace: it lives in
@@ -615,13 +638,15 @@ a row of exclusive SQUARE ICON tiles (42 px; hover names the option, auto-sized 
 mode. **Create:** tool defaults for the next guide — the Mode row's far-right **Current Shape chip
 (0.1.15: always lit, guide-body yellow, hover names the pick — visible even when the selection isn't on a
 slot)** · Shape (**0.1.15: FOUR hard-kept pinned slots + a ▾
-expand tile that unfolds the full 13-shape catalog; right-click stars a shape into a FREE slot — never
-evicts, message when full — or unstars a starred tile (★ badge in the catalog; empty slots show faint
-placeholders); selecting from the catalog folds it away; the pins persist in `layout-client.json` — the old
-Favorites strip is gone, the slots ARE the favorites**) · Scale (native N×N voxel-count icons; 16× = one
-solid block) ·
-Projection · Plane · Fill · Divisions · **Sides (polygon only)**. **Edit:** the SAME
-Scale/Projection/Plane/Fill/Divisions (+ Sides on a polygon) rows plus **Visibility** (no shape picker) act
+expand tile that unfolds the full 18-shape catalog — split into a **2D section and a 3D section** under
+their own separators with centred "2D"/"3D" labels (0.1.22–0.1.23); pins shown as YELLOW glyphs (0.1.17);
+right-click pins/unpins (never evicts; message when full); the catalog STAYS OPEN after a pick (0.1.23) —
+only the ▾/▴ collapses it; selecting a shape never collapses; empty slots show faint placeholders; pins
+persist in `layout-client.json`; the old Favorites strip is gone**) · Scale (native N×N voxel-count icons;
+16× = one solid block) · **Projection + Fill on ONE row** (0.1.17; Projection greys on volumes, Fill greys
+on the Free-Shape) · Plane · **Divisions (+ Sides for polygons on the same row; the whole row HIDDEN on 3D
+volumes, 0.1.23)**. All the primary row labels (Mode/Shape/Scale/…) are **centre-aligned** in their column
+(0.1.23). **Edit:** the SAME rows plus **Visibility** (no shape picker) act
 on the SELECTED guide via the send API, with a compact guide-info line + **Deselect**; greyed with a "click
 a guide" prompt when none is selected — so the panel never grows a second section. **Delete:** every row but
 Mode disabled (native `Enabled=false` + ghost labels). Divisions and Sides are native

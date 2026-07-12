@@ -189,7 +189,11 @@ namespace Layout.Systems
         private readonly Dictionary<Guid, GuideData> _guides = new Dictionary<Guid, GuideData>();
         private readonly Dictionary<Guid, IGuideShape> _shapes = new Dictionary<Guid, IGuideShape>();
         private readonly Dictionary<Guid, int> _voxelCounts = new Dictionary<Guid, int>();
-        private int _totalVoxels;
+        // LONG, not int (v0.1.27): each guide's own count fits an int (the hard ceiling caps a single guide
+        // at ~10M), but the SUM across many guides can pass int's ~2.1B limit on a caps-disabled server —
+        // and a wrapped-negative total would read as "under budget" and disable the cap checks. A long
+        // holds ~9 quintillion, so the running total can never overflow in practice.
+        private long _totalVoxels;
 
         private readonly JsonSerializerSettings _jsonSettings = new JsonSerializerSettings
         {
@@ -206,7 +210,7 @@ namespace Layout.Systems
         public IReadOnlyDictionary<Guid, GuideData> AllGuides => _guides;
 
         /// <summary>Total voxels across all loaded guides (kept in step with the per-guide cache).</summary>
-        public int TotalVoxelCount => _totalVoxels;
+        public long TotalVoxelCount => _totalVoxels;
 
         /// <summary>
         /// The active per-guide voxel cap this server enforces. Exposed read-only so the network layer can
@@ -814,7 +818,7 @@ namespace Layout.Systems
             if (newCount > HardVoxelCeiling) { cap = HardVoxelCeiling; return true; }
             if (_perGuideVoxelCap > 0 && newCount > _perGuideVoxelCap) { cap = _perGuideVoxelCap; return true; }
             int currentForId = _voxelCounts.TryGetValue(id, out var c) ? c : 0;
-            int projectedTotal = _totalVoxels - currentForId + newCount;
+            long projectedTotal = _totalVoxels - currentForId + newCount;
             if (_totalVoxelCap > 0 && projectedTotal > _totalVoxelCap) { cap = _totalVoxelCap; return true; }
             cap = 0;
             return false;

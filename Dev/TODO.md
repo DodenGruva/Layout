@@ -10,109 +10,85 @@
 
 ---
 
-## ⭐ Top of the list (Session-11 end, v0.1.19)
+## ⭐ Top of the list (v0.1.27)
 
-1. **B-S9-1 — Lock-in-place (UNRESOLVED; the headline for next session, human-confirmed).** Right-clicking
-   to lock often locks an adjacent voxel and the guide visibly shifts. Untried fix: **ray-vs-voxel-box
-   first-hit picking** so the aimed cell is authoritative. See OPEN BUGS.
-2. **Playtest-confirm 0.1.19** (tiny: pin/unpin wording; Fill greys out on the Free-Shape). Everything
-   through **0.1.18 is playtest-CONFIRMED** (human-verified in-session, iteratively).
-3. Remaining flagged decisions (11a–11r, 16a–16d in `SESSION_11.md`): 11a (spring-back restores POSITION)
-   was reviewed and **confirmed good**; 11n (Fill on Free-Shape) resolved by greying the button in 0.1.19.
-   The rest are cosmetic — walk them opportunistically.
+1. **B-S9-1 — Lock-in-place (UNRESOLVED; the top open *bug*, human-confirmed).** Right-clicking to lock
+   often locks an adjacent voxel and the guide visibly shifts. Untried fix: **ray-vs-voxel-box first-hit
+   picking** so the aimed cell is authoritative. See OPEN BUGS.
+2. **★ MAJOR (deferred, human-requested): client-only / server-less fallback mode** — run on servers that
+   don't have the mod (single-player-visible guides). Feasible, moderate effort; full design in **F4**.
+3. **★ Enormous fine-detail guides (human wants this).** The human wants players to build grand structures
+   at fine detail (huge domes etc.). Blocked today by the 3D **scan guard** (`MaxScanCells ≈ 4M`, per
+   shape) and the **hard voxel ceiling** (`GuideManager.HardVoxelCeiling = 10M`) that reject un-renderable
+   giants. Raising them needs care: per-guide voxel COUNTS would then exceed `int` (the running total is
+   already `long` as of v0.1.27), and rendering millions of cubes needs a perf pass (chunked meshes / LOD).
+4. **Playtest-confirm 0.1.27** (running total → `long`; `/dispel` → `/layout dispel`). Everything through
+   **0.1.26 is playtest-CONFIRMED**.
+5. Remaining flagged decisions (11a–11r, 16a–16d in `SESSION_11.md`) are cosmetic — walk them
+   opportunistically.
 
-**Standing workflow rule (session end, human-set — also in CLAUDE.md):** ship a NEW zip per code
-iteration, but do NOT update docs (TODO/ARCHITECTURE/PROJECT_STATUS/SESSION/memory) until the human says
-so. Warn the human before any context trim if the docs are stale.
-
----
-
-## Resolved in Session 11, batches 3–5 (0.1.16 → 0.1.19) — `SESSION_11.md` §13/§15
-## (0.1.16–0.1.18 playtest-CONFIRMED; 0.1.19 pending)
-
-- **0.1.16:** Sides hard floor at 3 · catalog 5-wide + white separator · corner ★ badges · Create header
-  shape name right-aligned · the HUD's Current Shape chip · Delete mode greys every TILE ("-ghost" glyph
-  variants) · Free-Shape SHIFT = vertical segment · zips relocated to `..\Layout Zips\` (0.1.10+ history).
-- **0.1.17:** Fill onto the Projection row · Sides onto the Divisions row · title-bar dead space removed ·
-  favorites shown as YELLOW glyphs (the ★ was too small).
-- **0.1.18:** Fill tiles snapped to the column grid · number fields narrowed (no "Sides" wrap) · Edit-mode
-  text rewrite + periods/capitalisation pass.
-- **0.1.19:** pin/unpin vocabulary everywhere · Fill greyed out on the Free-Shape (closes flag 11n).
+**Standing workflow rule (human-set — also in CLAUDE.md):** ship a NEW zip per code iteration into
+`..\Layout Zips\`, but update docs / commit ONLY when the human says so. Warn before any context trim if
+the docs are stale.
 
 ---
 
-## Resolved in Session 11, second batch (0.1.15) — record in `SESSION_11.md` §10; **playtest-CONFIRMED**
-## ("This was tested. Good work." — refinements it spawned are the 0.1.16 batch above)
+## Resolved after Session 11's finalize (v0.1.20 → v0.1.27) — condensed; full detail in `SESSION_11.md`
 
-- **Favorites hard-kept (human redesign after playing 0.1.14):** FOUR slots; starring fills a free slot and
-  never evicts (message when full); right-click unstars (slot or catalog); ★ badges on starred catalog
-  tiles; empty slots show placeholders; no auto-padding of existing configs.
-- **Current Shape chip:** permanently-lit, guide-body-yellow glyph of the picked shape at the far right of
-  the Mode row — you can see an off-slot selection without reading anything.
-- **SHIFT on the triangle's apex click = centred apex** (perpendicular bisector, live on the ghost).
-- **Free-Shape (13th catalog entry):** chained straight segments; click-last finishes open / click-first
-  (≥3) closes; right-click steps back a corner; CTRL snaps to the previous corner; body inserts like the
-  arch; fill deferred; corner cap 64. `IsClosed` → **DataVersion 7**; additive Chain/Closed on the create
-  request; **54 source files** (+ FreeShape.cs).
+The human pivoted to **3D volumes** (long parked as "LATER"), then iterated fixes. Committed to `main` and
+pushed to GitHub through v0.1.27.
+
+- **v0.1.20 Sphere · v0.1.21 Dome/Cylinder/Cone/Box** (the **3D volume family**, playtest-CONFIRMED):
+  `GuideShapeTypes.IsVolume`; hollow = one-cell shell, filled = solid, via a **cell-lattice scan** (exact
+  for sphere/box/dome, centre-banded for cylinder/cone) with a `MaxScanCells` **scan guard**. Sphere/Dome
+  = 2-click; Cylinder/Cone/Box = 3-click (base + height, reusing `NeedsApexClick`). Always Volumetric;
+  Surface + Divisions gated off. Wireframe targeting; deterministic up-axis. Own **3D catalog section**.
+- **v0.1.22–0.1.23 (3D fixes, CONFIRMED):** `SetShape` whitelist fix (3D shapes no longer fall back to
+  Arch); centred **2D/3D section labels**; catalog stays expanded after a pick; centred row labels;
+  Divisions row hidden on volumes; **height-inversion fix** (`ShapeGeometry.BaseNormal` — axis stops
+  flipping when the 2nd base point crosses sides); **free-air height** for Cylinder/Cone/Box.
+- **v0.1.24–0.1.25 (client-lifecycle fixes, CONFIRMED):** GUI icons re-register per client start (fix
+  blank tiles after exit-to-title → re-enter — was a process-static guard vs. a fresh `CustomIcons` dict);
+  pinned favorites now persist (save-on-change + the real bug: `ObjectCreationHandling.Replace` so
+  Newtonsoft stops appending saved pins to the default list, which `Normalize` then trimmed off); standalone
+  Divisions field narrowed to the 76 px polygon width.
+- **v0.1.26–0.1.27 (admin + safety, CONFIRMED through 0.1.26):** **`/layout dispel all`** and
+  **`/layout dispel <chunk radius>`** (controlserver; namespaced under `/layout` in 0.1.27 so it can't
+  clash); a **hard voxel ceiling** (`HardVoxelCeiling = 10M`) that rejects un-renderable giant guides
+  regardless of caps — no more invisible guides silently maxing the world total; **clear in-game errors**
+  on server-side placement rejection (were silent — the flash was tied to a not-yet-existent guide id); the
+  running voxel total widened `int → long` (can't overflow-wrap negative on a caps-off server).
+
+**No new persisted/wire fields** for the volumes — they reuse `ControlPoints` + `ShapePlaneAxis`; the
+enum values are appended. DataVersion stays **7**. New files: `SphereShape`, `DomeShape`, `CylinderShape`,
+`ConeShape`, `BoxShape` → **59 source files**.
 
 ---
 
-## Resolved in Session 11, first batch (0.1.14) — full record in `SESSION_11.md`; **playtest-CONFIRMED**
-## (bake, keys, triangle, polygon; picker superseded by the 0.1.15 redesign above)
+## Resolved in Session 11 (v0.1.14 → v0.1.19) — condensed; full per-version detail in `SESSION_11.md`
 
-**The whole Session-10 human backlog, plus both small tweaks:**
+The queued backlog, the Free-Shape, and a long GUI-polish loop — all playtest-CONFIRMED.
 
-- **B-S10-2 FIXED (code-complete):** the Surface→Volumetric bake probes world solidity on both sides of the
-  plane (server-side mirror of the renderer's decal probe) and bakes points half a voxel into the AIR side —
-  the volume grows out of the wall now, not into it. (`GuideManager.ProbeAirSide`; flagged item #15 closed.)
-- **Shape picker = 3 pinned favorite slots + ▾ catalog fold-out; starring = right-click a catalog tile.**
-  Pins persist in `layout-client.json`. Favorites strip deleted; **F2 delivered in this form.**
-- **Triangle = three clicks** (anchor · anchor · height; ghost apex tracks the crosshair; right-click steps
-  the draft back one click). Equilateral stays two-click. Supersedes flagged decision #2.
-- **CTRL = the cardinal constraint** (was SHIFT), drafting + anchor re-grabs.
-- **SHIFT = invert while drafting** (upside-down arch / equilateral; live on the ghost) **and spring-back on
-  a placed guide** (SHIFT+left-click restores the as-placed points + constraint from a creation snapshot;
-  one undo step; old-save guides politely refuse). Prerequisite shipped: **all shapes default "up"**
-  regardless of click order (sign-normalised frames; side-preserving constraint re-derivation).
-- **Polygon (N-gon):** vertex → opposite-perimeter-point gesture, 3–24 sides as per-guide data with a Sides
-  number row (Create + Edit), cap-checked `SetSides`, undoable, own glyph. F1's "next catalog addition" done.
-- **Tooltips auto-size** (`AddAutoSizeHoverText`); **Surface slabs 0.01 → 0.0025** (75% thinner).
-- **DataVersion 5 → 6** (`Sides` + the never-wired spring-back snapshot). Wire: additive create-request
-  fields + `GuideSetSidesPacket` + `GuideSpringBackPacket`, appended in order. **53 source files** (+3).
+- **The Session-10 backlog (0.1.14):** B-S10-2 air-side bake fix; three-click triangle; **CTRL = cardinal
+  constraint**, **SHIFT = draft-invert + placed-guide spring-back** (all shapes default "up"); **Polygon**
+  (N-gon, 3–24 sides); auto-size tooltips; thinner Surface slabs. DataVersion 5 → **6**.
+- **Favorites + Free-Shape (0.1.15):** hard-kept 4-slot favorites (star/unstar, never evict); the yellow
+  **Current Shape chip**; SHIFT-centred triangle apex; the **Free-Shape** irregular polyline (chained
+  clicks; click-last = open, click-first = close; body inserts like the arch; fill deferred). `IsClosed`
+  → DataVersion **7**.
+- **GUI polish (0.1.16–0.1.19):** Sides floor at 3; 5-wide catalog + separator; favorites as YELLOW glyphs;
+  Projection+Fill and Divisions+Sides on shared rows; HUD Current Shape chip; Delete-mode "-ghost" tile
+  greying; Free-Shape SHIFT = vertical segment; pin/unpin wording; Fill greyed on Free-Shapes; zips moved
+  to `..\Layout Zips\`.
 
 ---
 
 ## Resolved in Session 10 (0.1.10 → 0.1.13) — full record in `SESSION_10.md`
 
-**Edit mode — per-guide editing without the GUI expanding (0.1.13).** New third `ToolMode.Edit` (enum now
-`Create · Edit · Delete`, client-only). In Edit mode the main setting rows (Scale/Projection/Plane/Fill/
-Divisions/**Visibility**) act on the SELECTED guide via the network senders instead of the tool defaults —
-so the panel no longer grows a separate section. Edit left-click **selects only** (no grab/insert/lock);
-geometry editing stays in Create; Delete dispels. (`BuildSelectedGuideSection` removed; `ResolveSelectedGuide`
-is Edit-only; pencil glyph `LayoutToolIcons.ModeEdit`.)
-
-**Division markers pair on off-cell boundaries (0.1.13).** When a boundary lands between two voxels a lone
-mark read half a cell off; `ShapeGeometry.ClaimMarkerPaired` (new) claims BOTH near-tied cells — the arch
-apex's even-span midpoint treatment, generalised. `DivisionMarks.Apply` uses it. Pure render-side recolor.
-
-**Divisions floored at 0 (0.1.13).** The native number input has no min; `OnDivisionsTyped` now snaps the
-display back when it clamps, so the field can never go negative (or over `MaxDivisions`).
-
-**B-S10-1 — Surface guides shift behind the block face after reload. FIXED (playtest-confirmed).** On
-world-load, a Surface guide could render before its surrounding blocks loaded; the air-side probe
-(`GuideRenderer.CountSolidProbes`) then saw all-air and picked the wrong layer, sinking the decal behind the
-face it was placed on. Fix: the probe now detects unloaded chunks (`GetChunkAtBlockPos == null`) and marks
-the guide's side *provisional*; a low-frequency re-probe tick (`OnReprobeTick`, 500 ms) rebuilds each
-deferred guide once its neighbourhood loads — no wire/persistence change, self-corrects on reload and when
-walking into range. (Volumetric guides were never affected: their anchor is stored half a voxel into the air
-cell, reload-stable.)
-
-**Icon UI pass (0.1.10–0.1.12).** All option rows are now compact square icon tiles drawn by the new
-`src/UI/LayoutToolIcons.cs` (Cairo glyphs in `capi.Gui.Icons.CustomIcons`; project now references
-`cairo-sharp.dll`): the 11-shape picker, Mode, Projection, Plane, Fill, Visibility, and Scale. Scale copies
-the game's native icons — an N×N grid where **N is the voxel count** (1×1 smallest … 16×16 = full block,
-drawn as one solid square); 4×4+ run edge-to-edge. Arch glyph = open elliptical dome (matches the real
-Catmull-Rom curve). Tiles show their name on hover; Delete-mode greying uses native `Enabled=false`.
+Icon-tile UI pass (`LayoutToolIcons`, Cairo glyphs; native N×N scale icons); third **Edit** tool mode
+(per-guide settings without the panel expanding); **B-S10-1 fixed** (Surface guides no longer sink behind
+the block face on reload — unloaded-chunk-aware air probe + re-probe tick); divisions scroll-wheel on the
+native number input, floored at 0; division markers pair on off-cell boundaries.
 
 ---
 
@@ -300,14 +276,43 @@ deliberate (11r).
 **Built this session:** Line, Triangle (+ Right / Equilateral / Isosceles), Rectangle (+ Square). *(Verified
 against `GuideShapeType` = {Arch,Ellipse,Line,Triangle,Rectangle}, `ShapeConstraint` =
 {None,SemiCircle,Circle,Right,Equilateral,Isosceles,Square}, and the shape files — all present.)*
-**SECOND WAVE (Session 11): Polygon (regular N-gon, 3–24 sides) — DONE (0.1.14, awaiting playtest).** The
-**planar-vs-3D decision remains SETTLED: 3D volumes (spheres, cones…) are in scope LATER**; current shapes
-stay planar (per-shape plane is in the contracts via `ShapePlaneAxis`).
+**SECOND WAVE (Session 11): Polygon (regular N-gon, 3–24 sides) — DONE (0.1.14) + Free-Shape (0.1.15).**
+**THIRD WAVE (post-Session-11): the 3D VOLUME family — DONE (0.1.20–0.1.23): Sphere, Dome, Cylinder,
+Cone, Box.** The "planar-only, 3D LATER" decision has been **reopened and delivered** — see the resolved
+section near the top. Natural next volumes if wanted: **Roof, Tunnel** (a walk-through extruded arch).
 
 ### F2. Favorites — ✅ DELIVERED (Session 11, 0.1.14; awaiting playtest)
 Built exactly as the human redesigned it: the picker is 3 pinned slots + a ▾ catalog fold-out; right-click a
 catalog tile to pin (newest pin = slot 1). Persisted per-player in `layout-client.json` as shape codes
 (each code = a {type + constraint} pair). The old placeholder row is deleted.
+
+### ★ MAJOR — F4. Client-only / server-less fallback mode (human-requested, deferred; discussed v0.1.23)
+**Goal:** let a player use the mod on a server that does NOT have it installed — guides visible to that one
+player only, no server needed. **Discussed and judged feasible — moderate effort, NOT a foundation rewrite**
+(the shape math, data model, renderer, HUD, GUI, and interaction controller are all authority-agnostic and
+carry over untouched). The work is confined to the authority + sync + activation + persistence seam:
+
+- **Mode detection.** On join, decide networked vs. local by whether the `"layout"` network channel actually
+  handshook (a vanilla server never registers it → channel stays unconnected → run local).
+- **Local authority.** In local mode the client becomes its own authority instead of the server. Cleanest:
+  abstract `GuideManager`'s few server couplings (persistence, save/load events, logger, `World.BlockAccessor`)
+  behind an interface and run the SAME manager client-side; its return-value API and the existing
+  mirror-update events mean the renderer/HUD/GUI light up unchanged. (Alternative: a slimmer local
+  create/move/delete store.) An **authority interface** both `ServerNetworkHandler` and a new `LocalAuthority`
+  implement — routed at the `ClientNetworkHandler.Send*` seam — lets ONE codebase serve both modes.
+- **Activation without the custom item.** A vanilla server can't have `layout:guidetool` (the server owns the
+  item registry, and registration happens at mod LOAD before any server is known). Drive the tool from a
+  **hotkey toggle** in this mode (drop the held-item gate); a vanilla-item trigger is a fallback. Going
+  fully item-less is the robust route — it sidesteps a client-only item/recipe the server never heard of.
+- **Persistence.** In-memory for the session is the natural default (guides gone on logout — exactly the
+  "temporary persist until logout" the human asked about). Chunk-unload eviction is an optional extra;
+  a client-side file keyed by server+world (survive reconnect) is optional polish.
+
+**The semantic caveat to weigh:** local guides are single-player-visible; the settled "world-shared,
+server-authoritative, concurrent-edit-with-locks" pillar simply doesn't apply (locks/caps/undo-gating become
+local no-ops). It's a solo sketch layer that runs anywhere, not the collaborative tool. **Biggest unknown to
+verify first:** exactly how a VS client behaves when a client-only mod has registered an item/recipe the
+joined server doesn't know — the strongest argument for the hotkey-only, item-less approach.
 
 ### F3. Re-constrain op (idea, unrequested)
 The inverse of a break: a menu action to snap a free shape back under a constraint (arch → half-circle,
@@ -318,18 +323,19 @@ Park until asked.
 
 ## Next session — start here
 
-**Everything through 0.1.18 is playtest-confirmed; 0.1.19 (pin/unpin wording + Fill greyed on Free-Shape)
-awaits a quick look.** The agenda, human-set:
+**Everything through 0.1.22 is playtest-confirmed; 0.1.23 (the 3D GUI/placement fixes) awaits a final
+look. The full 3D volume family (Sphere/Dome/Cylinder/Cone/Box) is in and confirmed.** The agenda:
 
-1. **B-S9-1 — the lock-in-place bug is the HEADLINE.** Attempt the untried fix: ray-vs-voxel-box first-hit
-   picking so the aimed cell is authoritative (see OPEN BUGS for the full history of attempts).
-2. Confirm 0.1.19's two tiny changes in passing.
-3. Then, if asked: Free-Shape fill (needs a concave-safe method — deliberately deferred, rare-use);
-   broadcasting the whole Free-Shape draft chain to other players (11q); **F3 re-constrain op**; 3D volumes
-   (settled-in-scope-LATER).
+1. **Confirm 0.1.23** in passing, and do the queued **Divisions-field width tweak** (see "Quick GUI tweaks"
+   near the top — narrow the standalone field to the 76 px polygon width).
+2. **B-S9-1 — the lock-in-place bug is the top remaining *bug*.** Attempt the untried fix: ray-vs-voxel-box
+   first-hit picking so the aimed cell is authoritative (see OPEN BUGS for the full history of attempts).
+3. Then, if asked: **Roof / Tunnel** volumes; a concave-safe **Free-Shape fill**; broadcasting the whole
+   Free-Shape draft chain to other players (11q); **F3 re-constrain op**.
 
 **Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;
-docs are updated ONLY when the human says so; warn before a context trim if docs are stale.
+docs are updated ONLY when the human says so; commits/pushes only when the human instructs (main is now the
+mainline — pushed to github.com/DodenGruva/Layout through v0.1.23).
 
 ---
 

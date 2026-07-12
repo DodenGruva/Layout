@@ -1,4 +1,9 @@
-# SESSION 11 — v0.1.14 → v0.1.16: the queued backlog, played, refined, extended, and polished
+# SESSION 11 — v0.1.14 → v0.1.27: the backlog, the Free-Shape, the GUI polish, the 3D family, and hardening
+
+> §1–§15 = v0.1.14–0.1.19 (backlog + polish). **§16 = the 3D volume family, v0.1.20–0.1.23** (Sphere, Dome,
+> Cylinder, Cone, Box). **§17 = v0.1.24–0.1.27** (client-lifecycle bug fixes, `/layout dispel` admin
+> commands, the oversize-guide hard ceiling, and the running-total `long` widening). All on `main`, pushed
+> to GitHub through v0.1.27.
 
 > **Scope.** The human confirmed 0.1.13 fully working and asked for all five queued backlog items plus the
 > two small tweaks → **0.1.14**. They **playtested it the same session**: everything confirmed except the
@@ -303,3 +308,113 @@ placed Free-Shape is selected in Edit, and comes back for other shapes.
    still pins it level; SHIFT wins if both held.
 7. **Regression:** favorites star/unstar, the Free-Shape finish gestures, and spring-back all behave as in
    0.1.15.
+
+---
+
+## 16. Post-finalize — the 3D shape family (v0.1.20 → v0.1.23)
+
+After the Session-11 finalize the human pivoted to **3D volumes** (long parked as "in scope LATER"). Shipped
+code+zip only per the standing rule; documented here in the first doc pass after, then **committed to `main`
+and pushed to GitHub** (github.com/DodenGruva/Layout) through v0.1.23.
+
+### 16a. v0.1.20 — Sphere (playtest-CONFIRMED)
+`SphereShape`: two clicks = a diameter, centre/radius derived. The first volumetric sampler — instead of
+marching a curve it **scans the cell lattice** in the bounding box and keeps cells by predicate: *shell* =
+the surface crosses the cell (nearest-corner distance ≤ R ≤ farthest-corner), *solid* = the cell touches
+the ball. Exact, hole-free, one cell thick. A **scan guard** (`MaxScanCells ≈ 4M`) short-circuits absurd
+fine-scale sizes: `GetVoxelCount` returns a huge number so the cap rejects instantly and the ghost coarsens,
+`GetVoxelPositions` returns empty — the two disagree only in a regime the cap makes unreachable. Targeting
+is a **wireframe** (equator + two meridians). Volumes are forced **Volumetric**; Surface + Divisions gated
+server-side and greyed in the GUI.
+
+### 16b. v0.1.21 — Dome, Cylinder, Cone, Box (playtest-CONFIRMED after 0.1.22/0.1.23)
+`GuideShapeTypes.IsVolume` classifies the family. **Dome** = 2-click half-sphere over the base diameter,
+rising out of the clicked plane (SHIFT → bowl); stores the two base anchors + a side-remembering apex; shell
+= the sphere scan clipped to the apex's half-space. **Cylinder / Cone** = 3-click (base diameter, then a
+height click projected onto the axis; centre-banded lateral shell). **Box** = 3-click (two diagonal base
+corners = the rectangle gesture, then height); a true box with independent side lengths; shell = the sphere's
+solid-minus-eroded recipe in box-local coordinates. New **3D catalog section** under a second white
+separator. The 3-click volumes reuse the triangle's `NeedsApexClick` height machinery; SHIFT-centring stays
+triangle-only.
+
+### 16c. v0.1.22 — first fixes
+3D shapes were falling back to a plain Arch — the `SetShape` whitelist still omitted Dome/Cylinder/Cone/Box;
+added. **"2D" / "3D" section labels** placed left of each catalog group.
+
+### 16d. v0.1.23 — 3D GUI + placement fixes (pending final playtest)
+- **Catalog stays expanded** after picking a shape (only the ▾/▴ tile collapses it).
+- **Section labels centred** in their column (Mode, Shape, Scale, 2D/3D, …).
+- **Divisions row hidden entirely** on 3D volumes (like Sides being polygon-only), not just greyed.
+- **Height-inversion fix** (Dome/Cylinder/Cone): the axis was `Cross(u, m)`, whose sign flipped when the
+  second base anchor crossed to the other side of the first — inverting the volume into the floor. Replaced
+  with a deterministic **`ShapeGeometry.BaseNormal`** (+up regardless of anchor order; SHIFT stays the only
+  invert). Same class of bug as the 2D default-up fix. Box/Sphere were never affected.
+- **Free-air height** for Cylinder/Cone/Box: with no block under the crosshair the height handle follows
+  the view ray at the base's distance (looking up/down grows/shrinks it, the shape projecting it onto its
+  axis); a targeted block still takes priority. `BuildSettings` made null-`blockSel` safe (falls back to the
+  draft's captured plane axis).
+
+**Data/wire:** none new — volumes reuse `ControlPoints` + `ShapePlaneAxis`; enum values appended;
+**DataVersion stays 7**. **59 source files** (+ SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape).
+
+### 16e. Flagged / worth watching (3D)
+- **Wireframe targeting** (all volumes): clicking the shell between wireframe lines misses the body — the
+  anchors and the height handle are the reliable grab points. Fine for v1.
+- **Cap vs. resolution is real in 3D**: a shell grows with R², a solid with R³. Fine-scale volumes cap out
+  small (~2.8-block sphere radius at scale 1); the "coarsen your scale" cap warning is the intended guide.
+- **Free-air height depth = base-centre distance** — the aim traces a sphere around the eye and projects to
+  height. Intuitive enough; revisit if it feels floaty in play.
+- **Cylinder/cone diagonal shells may run 2 cells thick** (centre-banded, not exact) at odd orientations —
+  the accepted v1 trade; sphere/dome/box are exact.
+
+### 16f. Queued small tweak
+- **Narrow the standalone Divisions field to the polygon width** (76 px, matching `AddNumberPairControl`);
+  it is 90 px in `AddNumberControl` today. See `TODO.md` "Quick GUI tweaks".
+
+---
+
+## 17. v0.1.24 → v0.1.27 — client-lifecycle bugs, admin commands, oversize safety
+
+Post-3D-family bug hunt (from playtesting) plus two requested features. Committed to `main` and pushed to
+GitHub through v0.1.27.
+
+### 17a. v0.1.24 — exit-to-title fixes + Divisions width
+- **Blank GUI tiles after exit-to-title → re-enter (B-24-1).** `LayoutToolIcons` gated registration on a
+  process-**static** `_registered` flag that outlived the client; on re-entry `capi.Gui.Icons.CustomIcons`
+  is a fresh empty dictionary, so registration was skipped and tiles rendered blank. Fixed: gate on the
+  LIVE dictionary (`reg.ContainsKey(Arch)`) and re-register each client start.
+- **Pins save-on-change (partial B-24-2).** Star/unstar now persists the client config immediately instead
+  of relying on `Dispose` firing on exit-to-title (wired a save `Action` into `GuideToolGui`). Narrowed the
+  standalone Divisions field to the 76 px polygon width.
+
+### 17b. v0.1.25 — the real favorites-persistence bug
+Pins STILL reverted after 0.1.24 — the bug was on LOAD, not save. `FavoriteShapes` is pre-initialised to the
+four defaults, and Newtonsoft (default `ObjectCreationHandling.Auto`) **appends** the saved pins to that
+existing list rather than replacing it → `[defaults…, saved…]`; `Normalize` then caps at 4 keeping the first
+four (the defaults). The saved pins were on disk the whole time; the load discarded them. Fixed with
+`[JsonProperty(ObjectCreationHandling = ObjectCreationHandling.Replace)]`.
+
+### 17c. v0.1.26 — admin commands + the invisible-giant root cause
+A heavily version-swapped test world silently refused all placements. Diagnosed as the **total voxel cap
+(250k) maxed**, which was silent because the cap-warning flash is tied to the would-be guide's id (never
+displayed). Root cause of the max-out: with per-guide cap set to 0, **enormous 3D guides could be created
+even though the scan guard makes them un-renderable** — `GetVoxelCount` returns a ~536M sentinel and
+`GetVoxelPositions` returns empty, so invisible giants got stored, each dumping ~536M onto the world total.
+Fixes:
+- **`/dispel all`** and **`/dispel <chunk radius>`** admin commands (controlserver) — cleanup.
+- **`GuideManager.HardVoxelCeiling = 10M`**: any guide over it is rejected REGARDLESS of caps (create +
+  rescale/fill/drag), so invisible giants can't be made and can't pollute the total.
+- **Clear in-game errors** on server-side create rejection (too-large vs. world-budget), replacing the
+  invisible flash.
+
+### 17d. v0.1.27 — namespacing + overflow safety
+- **`/dispel` → `/layout dispel`** (a `/layout` command group with a `dispel` subcommand) so it can't clash
+  with other mods.
+- **Running voxel total `int → long`** (`GuideManager._totalVoxels`). Each guide's own count fits an int
+  (hard ceiling), but the SUM on a caps-off server could pass int's ~2.1B and wrap negative (which reads as
+  "under budget" and disables the cap checks). A `long` can't overflow in practice. Groundwork for the
+  human's wish to allow **enormous fine-detail guides** later (which will also need the scan guard / hard
+  ceiling raised and a rendering perf pass).
+
+**Data/wire:** no changes — DataVersion stays **7**; no new packets (commands are server-local). **59 source
+files.**

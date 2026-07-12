@@ -22,7 +22,9 @@ server-authoritative, world-shared, and persist across logout/chunk-unload. Stat
 - **Versioning rule (standing, human-set):** EVERY revision bumps `modinfo.json` and ships as a NEW
   `Layout<version>.zip` in **`..\Layout Zips\`** (the sibling folder of this repo — human-directed
   location, holds the full 0.1.10+ history) — never overwrite an older release zip. Versions increment
-  monotonically per revision (Session 10 shipped 0.1.10 → 0.1.13; Session 11 shipped 0.1.14 → 0.1.19).
+  monotonically per revision. **Current: v0.1.27.**
+- **Git:** `main` is the mainline (the human authorised committing to it); pushed to
+  **github.com/DodenGruva/Layout** through v0.1.27. Commit/push ONLY when the human instructs.
 
 ## The documents (read these before large work)
 - **`ARCHITECTURE.md`** — the authoritative plan. Its **Settled Decisions Register** lists locked-in design
@@ -55,7 +57,8 @@ trustworthy; no need to repeat this pass.
   "finalize the session"). The playtest loop iterates fast; per-iteration doc churn wastes tokens.
   **Exception:** if the conversation is close to a context trim while docs are stale, WARN the human first
   so nothing is lost to the trim un-recorded.
-- **Commit only when the human instructs**, and commit on a fork (a branch off main), not main directly.
+- **Commit only when the human instructs.** `main` is the mainline now (the human directs commits/pushes
+  to it); the Session-11 fork era is over.
 
 ## Tool modes (Session 10): Create · Edit · Delete
 **Create** owns all geometry (place, grab/reshape, insert, lock; right-click = cancel/lock). **Edit** is
@@ -63,17 +66,19 @@ settings-only: left-click **selects** a guide and the GUI's setting rows then ac
 reshaping — geometry stays in Create); this replaced the old panel-expanding "selected-guide section".
 **Delete** dispels. `ToolMode` is client-only (never wired), so it's safe to reorder.
 
-## Current priorities (see TODO.md for detail; Session-11 record in SESSION_11.md)
-1. **B-S9-1 — lock-in-place bug: THE HEADLINE for next session (human-confirmed).** Right-clicking to lock
-   a point often locks the wrong (adjacent) voxel, and the guide visibly shifts/deforms when the lock
-   lands. Intended: only the aimed voxel locks and turns red, and the guide never moves except when the
-   user is actively moving it. Attempt the untried fix: **ray-vs-voxel-box first-hit picking** so the
-   aimed cell is authoritative.
-2. **Confirm 0.1.19 in passing** (tiny: pin/unpin wording; Fill greyed on the Free-Shape). Everything
-   through **0.1.18 is playtest-confirmed** — Session 11 shipped 0.1.14 → 0.1.19 in one long iterate-and-
-   confirm loop; per-version detail in `SESSION_11.md`.
-3. Remaining flagged decisions are cosmetic (`SESSION_11.md` §8/§11/§13); 11a (spring-back restores
-   position) was reviewed and confirmed good, 11n closed by the 0.1.19 greyed Fill.
+## Current priorities (detail in TODO.md; full 0.1.14–0.1.27 record in SESSION_11.md)
+The **3D shape family is in and confirmed** (v0.1.20–0.1.21: Sphere, Dome, Cylinder, Cone, Box — cell-lattice
+shell/solid scan, always Volumetric, deterministic up-axis `ShapeGeometry.BaseNormal`). Everything through
+v0.1.26 is playtest-confirmed; v0.1.27 (running-total → `long`, `/dispel` renamed to **`/layout dispel`**)
+awaits a quick look.
+1. **B-S9-1 — lock-in-place bug: the top open *bug* (human-confirmed).** Right-clicking to lock often locks
+   the wrong (adjacent) voxel and the guide shifts. Untried fix: **ray-vs-voxel-box first-hit picking**.
+2. **F4 (MAJOR, deferred): client-only / server-less mode** — run on servers without the mod
+   (single-player-visible guides). Design in `TODO.md` F4.
+3. **The human wants ENORMOUS fine-detail guides later** (grand domes, etc.) — needs the 3D scan
+   guard / hard ceiling raised (and per-guide counts may then exceed int). Parked until asked.
+4. If asked: **Roof / Tunnel** volumes; concave-safe Free-Shape fill; F3 re-constrain op. Remaining
+   flagged decisions are cosmetic.
 
 ## Project layout (namespaces match folders)
 `src/` contains: `Guide/` (data types), `Shapes/` (pure geometry math), `Systems/` (managers + undo),

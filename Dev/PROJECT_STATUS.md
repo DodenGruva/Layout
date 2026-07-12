@@ -1,31 +1,17 @@
 # Layout — Project Status & Handoff
 
-**Checkpoint:** **SESSION 11 — Layout v0.1.14 → v0.1.19; everything through 0.1.18 playtest-CONFIRMED
-(iteratively, in-session), 0.1.19 pending a quick look.** The session delivered the whole Session-10
-backlog (0.1.14), the Free-Shape + hard-kept favorites + Current Shape chip (0.1.15), then four rapid
-GUI-polish rounds (0.1.16–0.1.19 — see `SESSION_11.md` §13/§15). Release zips live in the human's
-**`..\Layout Zips\`** folder (the full 0.1.10+ history). **Next session's headline (human-set): B-S9-1,
-the lock-in-place bug — attempt ray-vs-voxel-box first-hit picking.** New standing workflow rule: ship a
-zip per iteration, update docs ONLY when the human says so.
-**0.1.14** shipped the entire Session-10 backlog: the **B-S10-2 fix** (air-side-probed Surface→Volumetric
-bake — human: "This was fixed"), the **three-click triangle**, the **key remap** (CTRL = cardinal; SHIFT =
-draft-invert + spring-back, all shapes defaulting "up"), the **Polygon** (N-gon, 3–24 sides), auto-sized
-tooltips, 75%-thinner slabs — all **confirmed in play the same session**. The favorites flow was then
-redesigned on feedback → **0.1.15**: **hard-kept 4-slot favorites** (starring never evicts; right-click
-unstars; ★ badges in the catalog; empty-slot placeholders), the **yellow Current Shape chip** on the Mode
-row, **SHIFT-centred triangle apex**, and the **Free-Shape** — an irregular polyline placed corner by
-corner (click-last = finish open, click-first = close; right-click steps back; body inserts like the arch;
-fill deferred). DataVersion **7** (`IsClosed`; v6 added Sides + the spring-back snapshot); wire additions
-all additive; **54 source files**; releases: `Layout0.1.14.zip`, `Layout0.1.15.zip`. **B-S9-1**
-(lock-in-place) remains **unresolved** by the human's choice ("not gamebreaking") and is still the top open
-bug. The plan is **`ARCHITECTURE.md`**. **This is the status/handoff doc.** Session-11 detail (incl. the
-0.1.15 playtest checklist + flagged decisions 11a–11r): `SESSION_11.md`.
-
-> **Fidelity note.** Session-9 sections were reconstructed from the working conversation, not regenerated from
-> code on disk. **Verified against source 2026-07-05:** all specifics formerly tagged **⚠ verify** (file
-> count, DataVersion, class/packet/command names) checked out — no reconstruction errors; the ⚠ tags are
-> resolved in place. Full Session-9 detail: `SESSION_9.md`. Punch-list: `TODO.md` (renamed from
-> `OUTSTANDING_ITEMS.md`).
+**Checkpoint: Layout v0.1.27.** Everything through **v0.1.26 is playtest-CONFIRMED**; v0.1.27 awaits a
+quick look. Since Session 11's finalize the arc was: the queued backlog + Free-Shape + favorites + GUI
+polish (v0.1.14–0.1.19), the **3D volume family** (v0.1.20–0.1.21: Sphere/Dome/Cylinder/Cone/Box; cell-
+lattice shell/solid scan, always Volumetric, deterministic up-axis), then bug/UX rounds (v0.1.22–0.1.27):
+placement + 2D/3D catalog labels, height-inversion + free-air-height fixes, the icon/favorites persistence
+fixes, admin **`/layout dispel`** commands, a hard voxel ceiling against un-renderable giant guides, clear
+placement-rejection errors, and the running-voxel-total widened to `long`. **DataVersion 7**; **59 source
+files.** Committed to `main` and pushed to **github.com/DodenGruva/Layout** through v0.1.27. Release zips
+live in **`..\Layout Zips\`** (full 0.1.10+ history). **Top open bug: B-S9-1 (lock-in-place)** — attempt
+ray-vs-voxel-box first-hit picking. **The human wants ENORMOUS fine-detail guides later** (raise the scan
+guard / hard ceiling). Standing rule: ship a zip per iteration; update docs / commit ONLY on the human's
+say-so. Per-version detail lives in **`SESSION_11.md`** and **`TODO.md`**; the plan is **`ARCHITECTURE.md`**.
 
 ---
 
