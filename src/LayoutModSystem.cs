@@ -180,7 +180,9 @@ namespace Layout
             // The two dialogs share the same DraftManager + ClientNetworkHandler (the Module-6 contract).
             // They are constructed ready but stay closed: the controller shows the HUD on equip and opens
             // the GUI on F.
-            ToolGui = new GuideToolGui(capi, Draft, ClientNet, ClientConfig);   // config carries the pinned favorites
+            // config carries the pinned favorites; the save action lets the GUI persist a pin change
+            // immediately (B-24-2 fix — not relying on Dispose firing on exit-to-title).
+            ToolGui = new GuideToolGui(capi, Draft, ClientNet, ClientConfig, SaveClientConfig);
             Hud = new GuideHud(capi, Draft, ClientNet);
 
             // The aim-controller: per-tick raycast + click routing while the tool is held. It (not the

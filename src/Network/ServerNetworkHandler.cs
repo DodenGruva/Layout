@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
 using Layout.Guide;
@@ -145,6 +146,86 @@ namespace Layout.Network
 
             _sapi.Event.PlayerNowPlaying += OnPlayerNowPlaying;
             _sapi.Event.PlayerDisconnect += OnPlayerDisconnect;
+
+            RegisterCommands();
+        }
+
+        // ==========================================================================================
+        //  Admin commands (v0.1.26): /dispel all  ·  /dispel <chunk radius>
+        // ==========================================================================================
+
+        private void RegisterCommands()
+        {
+            var parsers = _sapi.ChatCommands.Parsers;
+            _sapi.ChatCommands
+                .Create("dispel")
+                .WithDescription("Dispel Layout guides. 'all' clears the whole world; a number clears within that chunk radius of you.")
+                .RequiresPrivilege(Privilege.controlserver)
+                .WithArgs(parsers.Word("all-or-radius"))
+                .HandleWith(OnDispelCommand);
+        }
+
+        private TextCommandResult OnDispelCommand(TextCommandCallingArgs args)
+        {
+            string arg = (args[0] as string)?.Trim().ToLowerInvariant();
+
+            if (arg == "all")
+            {
+                int n = DispelGuides(null, 0);
+                return TextCommandResult.Success($"Dispelled all {n} Layout guide(s) in the world.");
+            }
+
+            if (int.TryParse(arg, out int radius) && radius >= 0)
+            {
+                if (args.Caller.Player is not IServerPlayer p)
+                    return TextCommandResult.Error("A radius dispel must be run by a player (use '/dispel all' from the console).");
+                int n = DispelGuides(p, radius);
+                return TextCommandResult.Success($"Dispelled {n} Layout guide(s) within {radius} chunk(s).");
+            }
+
+            return TextCommandResult.Error("Usage: /dispel all   OR   /dispel <chunk radius>");
+        }
+
+        // Dispels guides, force-freeing their locks and broadcasting the removals. A null player dispels
+        // EVERY guide; otherwise only guides whose anchor lies within <radius> chunks (Chebyshev) of the
+        // player. Returns the count removed.
+        private int DispelGuides(IServerPlayer player, int radius)
+        {
+            const int chunk = 32;                                 // VS chunks are 32 blocks on a side
+            int pcx = 0, pcz = 0;
+            if (player != null)
+            {
+                pcx = (int)Math.Floor(player.Entity.Pos.X / chunk);
+                pcz = (int)Math.Floor(player.Entity.Pos.Z / chunk);
+            }
+
+            var targets = new List<Guid>();
+            foreach (var kv in _guides.AllGuides)
+            {
+                if (player == null) { targets.Add(kv.Key); continue; }
+                Vec3d a = FirstAnchorPos(kv.Value);
+                if (a == null) continue;
+                int gcx = (int)Math.Floor(a.X / chunk), gcz = (int)Math.Floor(a.Z / chunk);
+                if (Math.Abs(gcx - pcx) <= radius && Math.Abs(gcz - pcz) <= radius) targets.Add(kv.Key);
+            }
+
+            int removed = 0;
+            foreach (Guid id in targets)
+            {
+                if (_guides.DeleteGuide(id).Status != GuideOpStatus.Success) continue;
+                _locks.ClearLock(id);                             // force-free any editor's lock; it's gone
+                _channel.BroadcastPacket(new GuideDeletePacket(id));
+                removed++;
+            }
+            return removed;
+        }
+
+        private static Vec3d FirstAnchorPos(GuideData g)
+        {
+            if (g?.ControlPoints == null) return null;
+            foreach (ControlPoint cp in g.ControlPoints)
+                if (cp != null && !cp.IsPhantom && cp.WorldPosition != null) return cp.WorldPosition;
+            return null;
         }
 
         // ==========================================================================================
@@ -231,8 +312,19 @@ namespace Layout.Network
                     break;
 
                 case GuideOpStatus.RejectedOverCap:
-                    // Client pre-checks the per-guide cap, so this is the total cap. Leave the draft so the
-                    // player can adjust or cancel; just warn them.
+                    // The client pre-checks the PER-GUIDE cap, so a server-side over-cap on CREATE is the
+                    // total-voxel budget or the hard scan ceiling. The HUD cap-flash is tied to a guide id
+                    // that doesn't exist yet, so it never showed — send a CLEAR ingame error instead
+                    // (v0.1.26 fix: previously this rejection was effectively silent). Leave the draft so
+                    // the player can shrink it or dispel some guides and retry.
+                    if (result.CapLimit >= GuideManager.HardVoxelCeiling)
+                        fromPlayer.SendIngameError("layout-toolarge",
+                            "That guide is too large to render ({0:n0} voxels). Make it smaller or use a coarser scale.",
+                            result.VoxelCount);
+                    else
+                        fromPlayer.SendIngameError("layout-overcap",
+                            "World voxel budget reached: {0:n0} more would pass the {1:n0} limit. Dispel some guides ('/dispel'), coarsen the scale, or raise totalVoxelCap.",
+                            result.VoxelCount, result.CapLimit);
                     _channel.SendPacket(
                         new VoxelCapWarningPacket(result.Guide.Id, result.VoxelCount, result.CapLimit),
                         fromPlayer);

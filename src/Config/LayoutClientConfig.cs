@@ -50,7 +50,15 @@ namespace Layout.Config
         /// tile to unstar it and free the slot; fewer than four is fine (empty slots show as faint
         /// placeholders). Unknown codes are dropped at load; the list is never re-padded.
         /// </summary>
-        [JsonProperty("favoriteShapes")]
+        /// <remarks>
+        /// B-24-2 fix (v0.1.25): <see cref="ObjectCreationHandling.Replace"/> is REQUIRED. Without it,
+        /// Newtonsoft REUSES this pre-initialised default list on deserialization and APPENDS the saved
+        /// pins after the four defaults; <see cref="Normalize"/> then caps at 4 keeping the first four —
+        /// the defaults — so saved pins were silently dropped every load (they persisted to disk fine; the
+        /// LOAD threw them away). Replace makes the deserialized list overwrite the default; when the JSON
+        /// key is absent (first run) the default initializer still stands.
+        /// </remarks>
+        [JsonProperty("favoriteShapes", ObjectCreationHandling = ObjectCreationHandling.Replace)]
         public List<string> FavoriteShapes { get; set; } =
             new List<string> { "arch", "halfcircle", "circle", "line" };
 

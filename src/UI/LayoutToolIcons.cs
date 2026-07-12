@@ -87,13 +87,22 @@ namespace Layout.UI
         public const string Scale8 = "layout-scale-8";
         public const string Scale16 = "layout-scale-16";
 
-        private static bool _registered;
-
-        /// <summary>Registers every Layout glyph exactly once. Safe to call repeatedly.</summary>
+        /// <summary>
+        /// Registers every Layout glyph into the client's live icon dictionary. Idempotent (overwrites the
+        /// same keys), and called on EVERY client start.
+        /// </summary>
+        /// <remarks>
+        /// B-24-1 fix (v0.1.24): this used to short-circuit on a process-STATIC <c>_registered</c> flag.
+        /// That flag outlived the client — so after exit-to-title → re-enter (a fresh client API with a
+        /// brand-new, EMPTY <c>capi.Gui.Icons.CustomIcons</c> dictionary), the guard was still true and the
+        /// glyphs were never registered into the new dictionary, leaving the GUI tiles blank. Gating on the
+        /// LIVE dictionary instead (skip only if our sentinel is already present) makes it correct across
+        /// re-inits; registration is just cheap dictionary writes.
+        /// </remarks>
         public static void EnsureRegistered(ICoreClientAPI capi)
         {
-            if (_registered || capi?.Gui?.Icons?.CustomIcons == null) return;
-            var reg = capi.Gui.Icons.CustomIcons;
+            var reg = capi?.Gui?.Icons?.CustomIcons;
+            if (reg == null || reg.ContainsKey(Arch)) return;   // already registered in THIS dictionary
 
             reg[Arch] = DrawArch;
             reg[HalfCircle] = DrawHalfCircle;
@@ -179,8 +188,6 @@ namespace Layout.UI
                     baseDrawer(ctx, x, y, w, h, dim);
                 };
             }
-
-            _registered = true;
         }
 
         // ============================ drawing helpers ============================

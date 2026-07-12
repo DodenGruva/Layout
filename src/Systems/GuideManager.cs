@@ -169,6 +169,17 @@ namespace Layout.Systems
         /// <summary>Save-blob key under which all guides are stored.</summary>
         public const string StorageKey = "layout:guidedata";
 
+        /// <summary>
+        /// Hard voxel ceiling enforced INDEPENDENT of the configurable caps (v0.1.26). A shape whose voxel
+        /// scan exceeds its guard returns a huge sentinel count (~536M) from <c>GetVoxelCount</c> and an
+        /// EMPTY voxel set — i.e. it can't be rendered. Real guides never exceed a few million (the scan
+        /// guard caps the lattice scan itself), so anything above this ceiling is that "too big to
+        /// voxelise" sentinel and is ALWAYS rejected — otherwise a server with caps disabled (0 =
+        /// unlimited) could create INVISIBLE giant guides that also dump the sentinel onto the running
+        /// total and silently max the world budget.
+        /// </summary>
+        public const int HardVoxelCeiling = 10_000_000;
+
         private readonly ICoreServerAPI _sapi;
         private readonly int _perGuideVoxelCap;
         private readonly int _totalVoxelCap;
@@ -322,6 +333,8 @@ namespace Layout.Systems
             data.CreatorUid = creatorUid;
 
             int count = shape.GetVoxelCount(data.VoxelScale, data.IsFilled);
+            if (count > HardVoxelCeiling)                        // scan-guard sentinel — too big to render
+                return GuideOperationResult.OverCap(data, count, HardVoxelCeiling);
             if (_perGuideVoxelCap > 0 && count > _perGuideVoxelCap)
                 return GuideOperationResult.OverCap(data, count, _perGuideVoxelCap);
             if (_totalVoxelCap > 0 && _totalVoxels + count > _totalVoxelCap)
@@ -796,6 +809,9 @@ namespace Layout.Systems
         // A cap of 0 means unlimited — that check is skipped (normalised in the ctor).
         private bool WouldExceedCaps(Guid id, int newCount, out int cap)
         {
+            // Hard ceiling first, ALWAYS (even with caps disabled): a scan-guard sentinel count means the
+            // guide is too big to voxelise/render — never let an edit (rescale, fill, drag) grow into one.
+            if (newCount > HardVoxelCeiling) { cap = HardVoxelCeiling; return true; }
             if (_perGuideVoxelCap > 0 && newCount > _perGuideVoxelCap) { cap = _perGuideVoxelCap; return true; }
             int currentForId = _voxelCounts.TryGetValue(id, out var c) ? c : 0;
             int projectedTotal = _totalVoxels - currentForId + newCount;

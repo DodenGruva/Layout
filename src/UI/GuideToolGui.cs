@@ -168,12 +168,18 @@ namespace Layout.UI
 
         private readonly List<(string key, int sel)> _initialLight = new List<(string, int)>();
 
+        // Persists the client config right now (B-24-2 fix, v0.1.24) — wired to LayoutModSystem's full
+        // Draft→config sync + StoreModConfig, so a pin change is written immediately instead of relying on
+        // Dispose firing on exit-to-title (which it may not).
+        private readonly Action _saveConfig;
+
         public GuideToolGui(ICoreClientAPI capi, DraftManager tool, ClientNetworkHandler net,
-            LayoutClientConfig config) : base(capi)
+            LayoutClientConfig config, Action saveConfig) : base(capi)
         {
             _tool = tool;
             _net = net;
             _config = config;
+            _saveConfig = saveConfig;
         }
 
         /// <summary>True if <paramref name="code"/> is one of the shape picker's catalog codes — the
@@ -491,7 +497,9 @@ namespace Layout.UI
                 return;
             }
 
-            const double fieldH = 30, fieldW = 90;   // wide enough for the spinner buttons
+            // 76 px matches the paired-with-Sides layout (AddNumberPairControl.field1W) so the standalone
+            // Divisions field is the same size in both layouts (v0.1.24, human-requested).
+            const double fieldH = 30, fieldW = 76;
             ElementBounds fieldBounds = ElementBounds.Fixed(labelW + pad, y + (tile - fieldH) / 2, fieldW, fieldH);
             c.AddNumberInput(fieldBounds, text => OnNumberTyped(text, key + ":text", onChanged, min, max), font, key + ":text");
 
@@ -913,7 +921,7 @@ namespace Layout.UI
         }
 
         // Right-click star (0.1.15, hard-kept): fill the FIRST FREE slot; a full list refuses with a
-        // message — starring never evicts. Persisted with the client config on shutdown.
+        // message — starring never evicts. Persisted IMMEDIATELY (B-24-2 fix, v0.1.24).
         private void OnStarFavorite(string code)
         {
             List<string> favs = _config.FavoriteShapes;
@@ -925,13 +933,14 @@ namespace Layout.UI
                 return;
             }
             favs.Add(code);
+            _saveConfig?.Invoke();                              // don't wait for Dispose (may not fire)
             DeferRecompose();                                   // the slot re-draws with the new pin
         }
 
         // Right-click a starred shape (slot or catalog): unstar it, freeing its slot.
         private void OnUnstarFavorite(string code)
         {
-            if (_config.FavoriteShapes.Remove(code)) DeferRecompose();
+            if (_config.FavoriteShapes.Remove(code)) { _saveConfig?.Invoke(); DeferRecompose(); }
         }
 
         // Toggle-tile plumbing: exclusive rows on top of independent toggle buttons.
