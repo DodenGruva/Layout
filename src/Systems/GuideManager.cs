@@ -4,8 +4,8 @@ using System.Linq;
 using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
-using Vintagestory.API.Server;
 using Layout.Guide;
 using Layout.Shapes;
 
@@ -180,7 +180,9 @@ namespace Layout.Systems
         /// </summary>
         public const int HardVoxelCeiling = 10_000_000;
 
-        private readonly ICoreServerAPI _sapi;
+        private readonly IGuidePersistence _persistence;
+        private readonly IGuideBlockProbe _blockProbe;
+        private readonly ILogger _logger;
         private readonly int _perGuideVoxelCap;
         private readonly int _totalVoxelCap;
         private readonly int _maxGuidesPerPlayer;
@@ -243,23 +245,21 @@ namespace Layout.Systems
         /// eject persisted state a server admin lowered a cap underneath).
         /// </summary>
         public GuideManager(
-            ICoreServerAPI sapi,
+            IGuidePersistence persistence,
+            IGuideBlockProbe blockProbe,
+            ILogger logger,
             int perGuideVoxelCap = 25000,
             int totalVoxelCap = 250000,
             int maxGuidesPerPlayer = 0,
             int maxGuidesWorldWide = 0)
         {
-            _sapi = sapi ?? throw new ArgumentNullException(nameof(sapi));
+            _persistence = persistence ?? throw new ArgumentNullException(nameof(persistence));
+            _blockProbe = blockProbe ?? throw new ArgumentNullException(nameof(blockProbe));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _perGuideVoxelCap = perGuideVoxelCap > 0 ? perGuideVoxelCap : 0;
             _totalVoxelCap = totalVoxelCap > 0 ? totalVoxelCap : 0;
             _maxGuidesPerPlayer = maxGuidesPerPlayer > 0 ? maxGuidesPerPlayer : 0;
             _maxGuidesWorldWide = maxGuidesWorldWide > 0 ? maxGuidesWorldWide : 0;
-
-            // VS-API touch points (verify signatures at compile-check):
-            //   sapi.Event.SaveGameLoaded  — fired once when the save loads; we read guides here.
-            //   sapi.Event.GameWorldSave   — fired before each world save; we flush the latest blob here.
-            _sapi.Event.SaveGameLoaded += Load;
-            _sapi.Event.GameWorldSave += Persist;
         }
 
         // --- Lookups ------------------------------------------------------------------------------
@@ -607,9 +607,6 @@ namespace Layout.Systems
         // This is the server-side mirror of the renderer's CountSolidProbes decal-side vote (B-S10-2).
         private int ProbeAirSide(GuideData g, ProjectionPlane plane)
         {
-            var accessor = _sapi.World?.BlockAccessor;
-            if (accessor == null) return 1;
-
             double planeCoord = plane.PlaneOffset / 16.0;
             int solidsPos = 0, solidsNeg = 0;
             foreach (ControlPoint cp in g.ControlPoints)
@@ -623,9 +620,8 @@ namespace Layout.Systems
                     double wy = plane.FlattenedAxis == PlaneAxis.Y ? c : w.Y;
                     double wz = plane.FlattenedAxis == PlaneAxis.Z ? c : w.Z;
                     var pos = new BlockPos((int)Math.Floor(wx), (int)Math.Floor(wy), (int)Math.Floor(wz));
-                    if (accessor.GetChunkAtBlockPos(pos) == null) continue;   // unloaded: no vote
-                    var block = accessor.GetBlock(pos);
-                    if (block != null && block.Id != 0)
+                    if (!_blockProbe.TryIsSolid(pos, out bool solid)) continue;   // unloaded: no vote
+                    if (solid)
                     {
                         if (side == 0) solidsPos++; else solidsNeg++;
                     }
@@ -886,7 +882,7 @@ namespace Layout.Systems
 
         // Serializes all guides into the save blob. Cheap (in-memory); the actual disk write happens on world
         // save. Never throws out of here — a serialization fault must not crash the server.
-        private void Persist()
+        public void Persist()
         {
             try
             {
@@ -897,25 +893,25 @@ namespace Layout.Systems
                 };
                 string json = JsonConvert.SerializeObject(root, _jsonSettings);
                 byte[] bytes = Encoding.UTF8.GetBytes(json);
-                _sapi.WorldManager.SaveGame.StoreData(StorageKey, bytes);
+                _persistence.Store(StorageKey, bytes);
             }
             catch (Exception e)
             {
-                _sapi.Logger.Error("[Layout] Failed to persist guides: {0}", e);
+                _logger.Error("[Layout] Failed to persist guides: {0}", e);
             }
         }
 
         // Reads guides back from the save blob, rebuilds each guide's shape over its (shared) control-point
         // list, re-derives phantoms, and rebuilds the count caches. Older records migrate by deserialization
         // defaults (missing Projection/Plane/IsFilled fall to Volumetric / default plane / hollow).
-        private void Load()
+        public void Load()
         {
             try
             {
-                byte[] bytes = _sapi.WorldManager.SaveGame.GetData(StorageKey);
+                byte[] bytes = _persistence.Load(StorageKey);
                 if (bytes == null || bytes.Length == 0)
                 {
-                    _sapi.Logger.Notification("[Layout] No saved guides found.");
+                    _logger.Notification("[Layout] No saved guides found.");
                     return;
                 }
 
@@ -929,7 +925,7 @@ namespace Layout.Systems
 
                 if (root?.Guides == null)
                 {
-                    _sapi.Logger.Warning("[Layout] Guide save blob was empty or unreadable; starting with no guides.");
+                    _logger.Warning("[Layout] Guide save blob was empty or unreadable; starting with no guides.");
                     return;
                 }
 
@@ -947,11 +943,11 @@ namespace Layout.Systems
                     StoreCount(g.Id, shape.GetVoxelCount(g.VoxelScale, g.IsFilled));
                 }
 
-                _sapi.Logger.Notification("[Layout] Loaded {0} guide(s).", _guides.Count);
+                _logger.Notification("[Layout] Loaded {0} guide(s).", _guides.Count);
             }
             catch (Exception e)
             {
-                _sapi.Logger.Error("[Layout] Failed to load guides; starting with none: {0}", e);
+                _logger.Error("[Layout] Failed to load guides; starting with none: {0}", e);
                 _guides.Clear();
                 _shapes.Clear();
                 _voxelCounts.Clear();

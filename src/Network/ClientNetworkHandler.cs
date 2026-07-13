@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using Vintagestory.API.Client;
 using Vintagestory.API.MathTools;
+using Layout.Client;
 using Layout.Guide;
+using Layout.Systems;
 
 namespace Layout.Network
 {
@@ -33,13 +35,25 @@ namespace Layout.Network
     {
         private readonly ICoreClientAPI _capi;
         private readonly IClientNetworkChannel _channel;
+        private LocalGuideAuthority _local;
+        private bool _receivedServerBulkSync;
+        private bool _preferClientOnly;
+        private bool _serverLayoutAvailable;
+        private bool _serverAllowsClientOnlyMode;
 
         private readonly Dictionary<Guid, GuideData> _guides = new Dictionary<Guid, GuideData>();
+        private readonly HashSet<Guid> _serverGuideIds = new HashSet<Guid>();
+        private readonly HashSet<Guid> _localGuideIds = new HashSet<Guid>();
         private readonly Dictionary<Guid, string> _lockHolders = new Dictionary<Guid, string>();
         private readonly Dictionary<string, Vec3d> _remoteDraftAnchors = new Dictionary<string, Vec3d>();
 
         private int _perGuideVoxelCap = 25000;
         private int _totalVoxelCap = 250000;
+
+        /// <summary>The authority selected for the current world.</summary>
+        public ClientAuthorityMode AuthorityMode { get; private set; } = ClientAuthorityMode.Detecting;
+        public bool ServerLayoutAvailable => _serverLayoutAvailable;
+        public bool ServerAllowsClientOnlyMode => _serverAllowsClientOnlyMode;
 
         // -- Read-only views for the renderer / HUD / tool ----------------------------------------
 
@@ -53,10 +67,14 @@ namespace Layout.Network
         public IReadOnlyDictionary<string, Vec3d> RemoteDraftAnchors => _remoteDraftAnchors;
 
         /// <summary>The server's active per-guide voxel cap (synced on join). Use for the placement pre-check.</summary>
-        public int PerGuideVoxelCap => _perGuideVoxelCap;
+        public int PerGuideVoxelCap => AuthorityMode == ClientAuthorityMode.Local
+            ? GuideManager.HardVoxelCeiling
+            : _perGuideVoxelCap;
 
         /// <summary>The server's active total voxel cap (synced on join).</summary>
-        public int TotalVoxelCap => _totalVoxelCap;
+        public int TotalVoxelCap => AuthorityMode == ClientAuthorityMode.Local ? 0 : _totalVoxelCap;
+
+        public bool IsLocalGuide(Guid id) => _localGuideIds.Contains(id);
 
         // -- Events --------------------------------------------------------------------------------
 
@@ -81,6 +99,12 @@ namespace Layout.Network
         /// <summary>A mutation was refused for exceeding a cap: (guide id, attempted count, cap).</summary>
         public event Action<Guid, int, int> VoxelCapWarningReceived;
 
+        /// <summary>Raised after the current world's authority becomes known or is reset.</summary>
+        public event Action<ClientAuthorityMode> AuthorityModeChanged;
+
+        /// <summary>Raised when an explicit server command changes the persisted client preference.</summary>
+        public event Action<bool> ForceClientOnlyPreferenceChanged;
+
         public ClientNetworkHandler(ICoreClientAPI capi)
         {
             _capi = capi ?? throw new ArgumentNullException(nameof(capi));
@@ -89,31 +113,169 @@ namespace Layout.Network
             LayoutPackets.RegisterMessageTypes(_channel);
 
             _channel
-                .SetMessageHandler<GuideBulkSyncPacket>(OnBulkSync)
-                .SetMessageHandler<GuideCreatePacket>(OnCreate)
-                .SetMessageHandler<GuideUpdatePacket>(OnUpdate)
-                .SetMessageHandler<GuideInsertPointPacket>(OnInsert)
-                .SetMessageHandler<GuideDeletePacket>(OnDelete)
-                .SetMessageHandler<GuideHidePacket>(OnHide)
-                .SetMessageHandler<GuideLockPointPacket>(OnLockPoint)
-                .SetMessageHandler<GuideRescalePacket>(OnRescale)
-                .SetMessageHandler<GuideSetProjectionPacket>(OnSetProjection)
-                .SetMessageHandler<GuideSetFilledPacket>(OnSetFilled)
-                .SetMessageHandler<GuideSetDivisionsPacket>(OnSetDivisions)
-                .SetMessageHandler<GuideSetSidesPacket>(OnSetSides)
+                .SetMessageHandler<GuideBulkSyncPacket>(OnNetworkBulkSync)
+                .SetMessageHandler<GuideCreatePacket>(OnServerCreate)
+                .SetMessageHandler<GuideUpdatePacket>(p => ApplyServerGuidePacket(p.GuideId(), p, OnUpdate))
+                .SetMessageHandler<GuideInsertPointPacket>(p => ApplyServerGuidePacket(p.GuideId(), p, OnInsert))
+                .SetMessageHandler<GuideDeletePacket>(OnServerDelete)
+                .SetMessageHandler<GuideHidePacket>(p => ApplyServerGuidePacket(p.GuideId(), p, OnHide))
+                .SetMessageHandler<GuideLockPointPacket>(p => ApplyServerGuidePacket(p.GuideId(), p, OnLockPoint))
+                .SetMessageHandler<GuideRescalePacket>(p => ApplyServerGuidePacket(p.GuideId(), p, OnRescale))
+                .SetMessageHandler<GuideSetProjectionPacket>(p => ApplyServerGuidePacket(p.GuideId(), p, OnSetProjection))
+                .SetMessageHandler<GuideSetFilledPacket>(p => ApplyServerGuidePacket(p.GuideId(), p, OnSetFilled))
+                .SetMessageHandler<GuideSetDivisionsPacket>(p => ApplyServerGuidePacket(p.GuideId(), p, OnSetDivisions))
+                .SetMessageHandler<GuideSetSidesPacket>(p => ApplyServerGuidePacket(p.GuideId(), p, OnSetSides))
                 .SetMessageHandler<GuideLockStatePacket>(OnLockState)
                 .SetMessageHandler<DraftAnchorBroadcastPacket>(OnDraftAnchorBroadcast)
                 .SetMessageHandler<DraftAnchorRemovePacket>(OnDraftAnchorRemove)
-                .SetMessageHandler<VoxelCapWarningPacket>(OnCapWarning);
+                .SetMessageHandler<VoxelCapWarningPacket>(OnCapWarning)
+                .SetMessageHandler<ClientPlacementModePacket>(OnPlacementMode)
+                .SetMessageHandler<ClientGuidePushRequestPacket>(OnGuidePushRequest)
+                .SetMessageHandler<ClientGuidePushResultPacket>(OnGuidePushResult);
+        }
+
+        /// <summary>
+        /// Resolves the current world's authority. A real bulk sync is the positive proof that the server
+        /// runs Layout; channel state alone is not reliable on every game/server combination.
+        /// </summary>
+        public bool TryResolveAuthorityMode(bool allowLocalFallback = false)
+        {
+            EnumChannelState state = _capi.Network.GetChannelState(LayoutChannel.Name);
+
+            if (_receivedServerBulkSync)
+            {
+                _capi.Logger.Notification(
+                    "[Layout] Authority probe: channel state {0}, connected {1}, server sync received.",
+                    state, _channel.Connected);
+                SetAuthorityMode(ClientAuthorityMode.Networked);
+                return true;
+            }
+
+            if (state == EnumChannelState.Registered && !allowLocalFallback)
+            {
+                SetAuthorityMode(ClientAuthorityMode.Detecting);
+                return false;
+            }
+
+            if (state == EnumChannelState.NotFound
+                || state == EnumChannelState.NotConnected
+                || !_channel.Connected)
+            {
+                _capi.Logger.Notification(
+                    "[Layout] Authority probe: channel state {0}, connected {1}, no server sync; using client-only mode.",
+                    state, _channel.Connected);
+                _serverLayoutAvailable = false;
+                _serverAllowsClientOnlyMode = true;
+                EnsureLocalAuthority();
+                SetAuthorityMode(ClientAuthorityMode.Local);
+                return true;
+            }
+
+            if (!allowLocalFallback)
+            {
+                SetAuthorityMode(ClientAuthorityMode.Detecting);
+                return false;
+            }
+
+            _capi.Logger.Warning(
+                "[Layout] Channel claimed to be connected but no Layout server sync arrived; using client-only mode.");
+            _serverLayoutAvailable = false;
+            _serverAllowsClientOnlyMode = true;
+            EnsureLocalAuthority();
+            SetAuthorityMode(ClientAuthorityMode.Local);
+            return true;
+        }
+
+        /// <summary>Returns authority selection to neutral without touching a network bulk sync already received.</summary>
+        public void ResetAuthorityMode(bool forceClientOnly = false)
+        {
+            _preferClientOnly = forceClientOnly;
+            SetAuthorityMode(ClientAuthorityMode.Detecting);
+        }
+
+        /// <summary>Ends the current world session and drops every local mirror entry.</summary>
+        public void EndWorldSession()
+        {
+            ResetAuthorityMode(_preferClientOnly);
+            _receivedServerBulkSync = false;
+            _serverLayoutAvailable = false;
+            _serverAllowsClientOnlyMode = false;
+            _local = null;
+            _guides.Clear();
+            _serverGuideIds.Clear();
+            _localGuideIds.Clear();
+            _lockHolders.Clear();
+            _remoteDraftAnchors.Clear();
+            GuidesBulkSynced?.Invoke();
+        }
+
+        /// <summary>Runs the admin-style dispel operation against client-only guides.</summary>
+        public int DispelLocalGuides(Vec3d playerPosition, int radius)
+        {
+            return _local?.DispelGuides(playerPosition, radius) ?? 0;
+        }
+
+        private void SetAuthorityMode(ClientAuthorityMode mode)
+        {
+            if (AuthorityMode == mode) return;
+            AuthorityMode = mode;
+            AuthorityModeChanged?.Invoke(mode);
+        }
+
+        private void EnsureLocalAuthority()
+        {
+            if (_local != null) return;
+            _local = new LocalGuideAuthority(
+                _capi,
+                OnLocalCreate, OnLocalDelete, OnHide, OnLockPoint, OnRescale,
+                OnSetProjection, OnSetFilled, OnSetDivisions, OnSetSides, OnCapWarning);
+            OnLocalBulkSync(_local.CreateBulkSyncPacket());
+        }
+
+        private void RemoveLocalOverlay()
+        {
+            foreach (Guid id in _localGuideIds) _guides.Remove(id);
+            _localGuideIds.Clear();
+            _local = null;
+            GuidesBulkSynced?.Invoke();
         }
 
         // ==========================================================================================
         //  Receive: full-state
         // ==========================================================================================
 
-        private void OnBulkSync(GuideBulkSyncPacket p)
+        private void OnNetworkBulkSync(GuideBulkSyncPacket p)
         {
-            _guides.Clear();
+            _receivedServerBulkSync = true;
+            _serverLayoutAvailable = true;
+            bool supportsClientOnlyPolicy = p?.ProtocolVersion >= 2;
+            _serverAllowsClientOnlyMode = supportsClientOnlyPolicy && p.AllowClientOnlyMode;
+            OnServerBulkSync(p);
+
+            if (_serverAllowsClientOnlyMode) EnsureLocalAuthority();
+            else RemoveLocalOverlay();
+
+            SetAuthorityMode(ClientAuthorityMode.Networked);
+            if (supportsClientOnlyPolicy)
+            {
+                _channel.SendPacket(new ClientPlacementModeRequestPacket(_preferClientOnly));
+            }
+            else if (_preferClientOnly)
+            {
+                _capi.ShowChatMessage(
+                    "[Layout] This server uses an older Layout protocol and cannot permit client-only mode.");
+            }
+        }
+
+        private void ApplyServerGuidePacket<T>(Guid id, T packet, Action<T> apply)
+        {
+            if (_serverGuideIds.Contains(id)) apply(packet);
+        }
+
+        private void OnServerBulkSync(GuideBulkSyncPacket p)
+        {
+            foreach (Guid id in _serverGuideIds) _guides.Remove(id);
+            _serverGuideIds.Clear();
             _lockHolders.Clear();
             _remoteDraftAnchors.Clear();
 
@@ -122,6 +284,7 @@ namespace Layout.Network
                 {
                     if (dto == null) continue;
                     GuideData g = dto.ToGuideData();
+                    _serverGuideIds.Add(g.Id);
                     _guides[g.Id] = g;
                 }
 
@@ -129,6 +292,101 @@ namespace Layout.Network
             _totalVoxelCap = p.TotalVoxelCap;
 
             GuidesBulkSynced?.Invoke();
+        }
+
+        private void OnLocalBulkSync(GuideBulkSyncPacket p)
+        {
+            foreach (Guid id in _localGuideIds) _guides.Remove(id);
+            _localGuideIds.Clear();
+            if (p?.Guides != null)
+                foreach (GuideDataDto dto in p.Guides)
+                {
+                    if (dto == null) continue;
+                    GuideData guide = dto.ToGuideData();
+                    _localGuideIds.Add(guide.Id);
+                    _guides[guide.Id] = guide;
+                }
+            GuidesBulkSynced?.Invoke();
+        }
+
+        private void OnServerCreate(GuideCreatePacket p)
+        {
+            if (p?.Guide == null) return;
+            Guid id = NetIds.ToGuid(p.Guide.IdBytes);
+            _serverGuideIds.Add(id);
+            OnCreate(p);
+        }
+
+        private void OnLocalCreate(GuideCreatePacket p)
+        {
+            if (p?.Guide == null) return;
+            Guid id = NetIds.ToGuid(p.Guide.IdBytes);
+            _localGuideIds.Add(id);
+            OnCreate(p);
+        }
+
+        private void OnServerDelete(GuideDeletePacket p)
+        {
+            Guid id = p.GuideId();
+            if (!_serverGuideIds.Remove(id)) return;
+            OnDelete(p);
+        }
+
+        private void OnLocalDelete(GuideDeletePacket p)
+        {
+            _localGuideIds.Remove(p.GuideId());
+            OnDelete(p);
+        }
+
+        private void OnPlacementMode(ClientPlacementModePacket packet)
+        {
+            if (packet == null) return;
+            if (packet.ClientOnly && packet.Allowed)
+            {
+                EnsureLocalAuthority();
+                SetAuthorityMode(ClientAuthorityMode.Local);
+            }
+            else
+            {
+                SetAuthorityMode(ClientAuthorityMode.Networked);
+            }
+
+            if (packet.UpdatePreference && packet.Allowed)
+            {
+                _preferClientOnly = packet.ClientOnly;
+                ForceClientOnlyPreferenceChanged?.Invoke(packet.ClientOnly);
+            }
+
+            if (!string.IsNullOrWhiteSpace(packet.Message))
+                _capi.ShowChatMessage("[Layout] " + packet.Message);
+        }
+
+        private void OnGuidePushRequest(ClientGuidePushRequestPacket packet)
+        {
+            if (AuthorityMode != ClientAuthorityMode.Networked)
+            {
+                _capi.ShowChatMessage("[Layout] Switch to server mode before pushing private guides.");
+                return;
+            }
+
+            ClientGuidePushDto[] guides = _local?.CreatePushDtos() ?? Array.Empty<ClientGuidePushDto>();
+            _channel.SendPacket(new ClientGuidePushPacket(guides));
+        }
+
+        private void OnGuidePushResult(ClientGuidePushResultPacket packet)
+        {
+            if (packet == null) return;
+            var accepted = new List<Guid>();
+            if (packet.AcceptedLocalIdBytes != null)
+                foreach (byte[] bytes in packet.AcceptedLocalIdBytes)
+                {
+                    Guid id = NetIds.ToGuid(bytes);
+                    if (id != Guid.Empty) accepted.Add(id);
+                }
+
+            _local?.RemovePublishedGuides(accepted);
+            if (!string.IsNullOrWhiteSpace(packet.Message))
+                _capi.ShowChatMessage("[Layout] " + packet.Message);
         }
 
         private void OnCreate(GuideCreatePacket p)
@@ -276,6 +534,13 @@ namespace Layout.Network
             bool inverted = false, int sides = 0, Vec3d apex = null,
             IReadOnlyList<Vec3d> chain = null, bool closed = false)
         {
+            if (AuthorityMode == ClientAuthorityMode.Local && _local != null)
+            {
+                _local.Create(start, end, settings, shapeType, constraint, shapePlaneAxis,
+                    inverted, sides, apex, chain, closed);
+                return;
+            }
+
             Vec3Dto[] chainDto = null;
             if (chain != null && chain.Count > 0)
             {
@@ -290,29 +555,52 @@ namespace Layout.Network
         }
 
         /// <summary>Broadcast the local draft start anchor to other players.</summary>
-        public void SendDraftStart(Vec3d start, GuideRenderSettings settings) =>
+        public void SendDraftStart(Vec3d start, GuideRenderSettings settings)
+        {
+            if (AuthorityMode == ClientAuthorityMode.Local) return;
             _channel.SendPacket(new DraftStartPacket(Vec3Dto.From(start), RenderSettingsDto.From(settings)));
+        }
 
         /// <summary>Cancel the local draft.</summary>
-        public void SendDraftCancel() => _channel.SendPacket(new DraftCancelPacket());
+        public void SendDraftCancel()
+        {
+            if (AuthorityMode == ClientAuthorityMode.Local) return;
+            _channel.SendPacket(new DraftCancelPacket());
+        }
 
         /// <summary>Request the edit lock on a guide.</summary>
-        public void SendGrab(Guid guideId) => _channel.SendPacket(new GuideGrabPacket(guideId));
+        public void SendGrab(Guid guideId)
+        {
+            if (IsLocalGuide(guideId)) return;
+            _channel.SendPacket(new GuideGrabPacket(guideId));
+        }
 
         /// <summary>Release the edit lock on a guide (the server commits the drag's undo entry on receipt).</summary>
-        public void SendRelease(Guid guideId) => _channel.SendPacket(new GuideReleasePacket(guideId));
+        public void SendRelease(Guid guideId)
+        {
+            if (IsLocalGuide(guideId)) return;
+            _channel.SendPacket(new GuideReleasePacket(guideId));
+        }
 
         /// <summary>Cancel (not commit) our in-progress grab — see <see cref="GuideCancelGrabPacket"/>.</summary>
-        public void SendCancelGrab(Guid guideId) => _channel.SendPacket(new GuideCancelGrabPacket(guideId));
+        public void SendCancelGrab(Guid guideId)
+        {
+            if (IsLocalGuide(guideId)) return;
+            _channel.SendPacket(new GuideCancelGrabPacket(guideId));
+        }
 
         /// <summary>Move a single control point (the common grab-and-drag case).</summary>
-        public void SendMovePoint(Guid guideId, int index, Vec3d position) =>
+        public void SendMovePoint(Guid guideId, int index, Vec3d position)
+        {
+            if (IsLocalGuide(guideId)) return;
             _channel.SendPacket(new GuideUpdatePacket(
                 guideId, new[] { new ControlPointEditDto(index, Vec3Dto.From(position)) }));
+        }
 
         /// <summary>Move several control points at once.</summary>
         public void SendMovePoints(Guid guideId, IReadOnlyList<(int index, Vec3d position)> edits)
         {
+            if (IsLocalGuide(guideId)) return;
             if (edits == null || edits.Count == 0) return;
             var dto = new ControlPointEditDto[edits.Count];
             for (int i = 0; i < edits.Count; i++)
@@ -326,43 +614,88 @@ namespace Layout.Network
         /// With <paramref name="locked"/>: a lock-in-place insert — the point is created on-curve, born
         /// locked, and no grab follows (the server never leaves us holding the edit lock).
         /// </summary>
-        public void SendInsertPoint(Guid guideId, Vec3d position, bool locked = false) =>
+        public void SendInsertPoint(Guid guideId, Vec3d position, bool locked = false)
+        {
+            if (IsLocalGuide(guideId)) return;
             _channel.SendPacket(new GuideInsertPointPacket(guideId, -1, Vec3Dto.From(position), locked));
+        }
 
         /// <summary>Dispel a guide.</summary>
-        public void SendDelete(Guid guideId) => _channel.SendPacket(new GuideDeletePacket(guideId));
+        public void SendDelete(Guid guideId)
+        {
+            if (IsLocalGuide(guideId) && _local != null) { _local.Delete(guideId); return; }
+            _channel.SendPacket(new GuideDeletePacket(guideId));
+        }
 
         /// <summary>Toggle a guide's hidden flag.</summary>
-        public void SendHide(Guid guideId, bool hidden) => _channel.SendPacket(new GuideHidePacket(guideId, hidden));
+        public void SendHide(Guid guideId, bool hidden)
+        {
+            if (IsLocalGuide(guideId) && _local != null) { _local.SetHidden(guideId, hidden); return; }
+            _channel.SendPacket(new GuideHidePacket(guideId, hidden));
+        }
 
         /// <summary>Set a control point's locked-constraint flag.</summary>
-        public void SendLockPoint(Guid guideId, int index, bool locked) =>
+        public void SendLockPoint(Guid guideId, int index, bool locked)
+        {
+            if (IsLocalGuide(guideId) && _local != null) { _local.SetPointLocked(guideId, index, locked); return; }
             _channel.SendPacket(new GuideLockPointPacket(guideId, index, locked));
+        }
 
         /// <summary>Change a guide's voxel scale.</summary>
-        public void SendRescale(Guid guideId, int scale) => _channel.SendPacket(new GuideRescalePacket(guideId, scale));
+        public void SendRescale(Guid guideId, int scale)
+        {
+            if (IsLocalGuide(guideId) && _local != null) { _local.Rescale(guideId, scale); return; }
+            _channel.SendPacket(new GuideRescalePacket(guideId, scale));
+        }
 
         /// <summary>Set a guide's projection mode and plane.</summary>
-        public void SendSetProjection(Guid guideId, ProjectionMode mode, ProjectionPlane plane) =>
+        public void SendSetProjection(Guid guideId, ProjectionMode mode, ProjectionPlane plane)
+        {
+            if (IsLocalGuide(guideId) && _local != null) { _local.SetProjection(guideId, mode, plane); return; }
             _channel.SendPacket(new GuideSetProjectionPacket(
                 guideId, (int)mode, (int)plane.FlattenedAxis, plane.PlaneOffset));
+        }
 
         /// <summary>Toggle a guide's filled flag.</summary>
-        public void SendSetFilled(Guid guideId, bool filled) => _channel.SendPacket(new GuideSetFilledPacket(guideId, filled));
+        public void SendSetFilled(Guid guideId, bool filled)
+        {
+            if (IsLocalGuide(guideId) && _local != null) { _local.SetFilled(guideId, filled); return; }
+            _channel.SendPacket(new GuideSetFilledPacket(guideId, filled));
+        }
 
         /// <summary>Session 9: set a guide's equal-part division marks (purely visual).</summary>
-        public void SendSetDivisions(Guid guideId, int divisions) => _channel.SendPacket(new GuideSetDivisionsPacket(guideId, divisions));
+        public void SendSetDivisions(Guid guideId, int divisions)
+        {
+            if (IsLocalGuide(guideId) && _local != null) { _local.SetDivisions(guideId, divisions); return; }
+            _channel.SendPacket(new GuideSetDivisionsPacket(guideId, divisions));
+        }
 
         /// <summary>Session 11: set a polygon guide's side count.</summary>
-        public void SendSetSides(Guid guideId, int sides) => _channel.SendPacket(new GuideSetSidesPacket(guideId, sides));
+        public void SendSetSides(Guid guideId, int sides)
+        {
+            if (IsLocalGuide(guideId) && _local != null) { _local.SetSides(guideId, sides); return; }
+            _channel.SendPacket(new GuideSetSidesPacket(guideId, sides));
+        }
 
         /// <summary>Session 11: spring a guide back to its as-placed form (SHIFT+click).</summary>
-        public void SendSpringBack(Guid guideId) => _channel.SendPacket(new GuideSpringBackPacket(guideId));
+        public void SendSpringBack(Guid guideId)
+        {
+            if (IsLocalGuide(guideId) && _local != null) { _local.SpringBack(guideId); return; }
+            _channel.SendPacket(new GuideSpringBackPacket(guideId));
+        }
 
         /// <summary>Undo the local player's most recent action.</summary>
-        public void SendUndo() => _channel.SendPacket(new UndoRequestPacket());
+        public void SendUndo()
+        {
+            if (AuthorityMode == ClientAuthorityMode.Local && _local != null) { _local.Undo(); return; }
+            _channel.SendPacket(new UndoRequestPacket());
+        }
 
         /// <summary>Redo the local player's most recently undone action.</summary>
-        public void SendRedo() => _channel.SendPacket(new RedoRequestPacket());
+        public void SendRedo()
+        {
+            if (AuthorityMode == ClientAuthorityMode.Local && _local != null) { _local.Redo(); return; }
+            _channel.SendPacket(new RedoRequestPacket());
+        }
     }
 }

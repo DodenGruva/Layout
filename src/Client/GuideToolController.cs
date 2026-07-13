@@ -123,6 +123,8 @@ namespace Layout.Client
             _net.LockStateChanged += OnLockStateChanged;
             _net.GuideRemoved += OnGuideRemoved;
             _net.GuideAddedOrUpdated += OnGuideAddedOrUpdated;
+            _net.AuthorityModeChanged += OnAuthorityModeChanged;
+            _capi.Input.InWorldAction += OnInWorldAction;
 
             _tickId = _capi.Event.RegisterGameTickListener(OnTick, TickIntervalMs);
         }
@@ -138,11 +140,22 @@ namespace Layout.Client
             return stack?.Collectible is Items.ItemGuideTool;
         }
 
+        /// <summary>
+        /// Networked worlds use the custom Layout item. Client-only worlds are active while Flax Twine is in
+        /// the main hand and a vanilla Hammer is in the off-hand, matching normal held-tool behavior.
+        /// </summary>
+        public bool IsToolActive()
+        {
+            if (_net.ServerLayoutAvailable) return IsToolHeld();
+            if (_net.AuthorityMode != ClientAuthorityMode.Local) return false;
+            return ClientToolGate.HasRequiredItems(_capi.World?.Player);
+        }
+
         private void OnTick(float dt)
         {
             if (_disposed) return;
 
-            bool held = IsToolHeld();
+            bool held = IsToolActive();
             if (held != _toolHeld)
             {
                 _toolHeld = held;
@@ -163,6 +176,24 @@ namespace Layout.Client
                 _hasPendingInsert = false;
 
             UpdateAim();
+        }
+
+        // The custom Layout item normally owns click interception. Client-only mode deliberately uses
+        // vanilla items, so consume the in-world actions here while (and only while) the local tool is active.
+        private void OnInWorldAction(EnumEntityAction action, bool on, ref EnumHandling handled)
+        {
+            if (!on || !IsToolActive()) return;
+
+            if (action == EnumEntityAction.InWorldLeftMouseDown)
+            {
+                OnPrimaryClick(_capi.World.Player.CurrentBlockSelection);
+                handled = EnumHandling.PreventDefault;
+            }
+            else if (action == EnumEntityAction.InWorldRightMouseDown)
+            {
+                OnSecondaryClick(_capi.World.Player.CurrentBlockSelection);
+                handled = EnumHandling.PreventDefault;
+            }
         }
 
         private void OnHeldChanged(bool held)
@@ -530,7 +561,10 @@ namespace Layout.Client
                 }
                 else
                 {
-                    _net.SendInsertPoint(hit.GuideId, hit.BodyPos, locked: true);
+                    if (_net.IsLocalGuide(hit.GuideId))
+                        Error("layout-localreshape", "Point insertion and reshaping are not enabled in this test build yet.");
+                    else
+                        _net.SendInsertPoint(hit.GuideId, hit.BodyPos, locked: true);
                 }
             }
         }
@@ -564,6 +598,12 @@ namespace Layout.Client
         // play if adoption ever fails silently again.)
         private void BeginBodyInsert(TargetHit hit)
         {
+            if (_net.IsLocalGuide(hit.GuideId))
+            {
+                Error("layout-localreshape", "Point insertion and reshaping are not enabled in this test build yet.");
+                return;
+            }
+
             _net.SendInsertPoint(hit.GuideId, hit.BodyPos);
             _hasPendingInsert = true;
             _pendingInsertGuide = hit.GuideId;
@@ -737,6 +777,12 @@ namespace Layout.Client
 
         private void StartGrab(Guid guideId, int pointIndex)
         {
+            if (_net.IsLocalGuide(guideId))
+            {
+                Error("layout-localreshape", "Point insertion and reshaping are not enabled in this test build yet.");
+                return;
+            }
+
             if (!_net.Guides.TryGetValue(guideId, out GuideData g)) return;
 
             // ABSORB-OR-BREAK, local half (Session 8): if this grab is one the constraint cannot absorb
@@ -838,6 +884,17 @@ namespace Layout.Client
                 DropGrabLocally();
         }
 
+        private void OnAuthorityModeChanged(ClientAuthorityMode mode)
+        {
+            if (mode == ClientAuthorityMode.Detecting) return;
+            if (_grab != null) DropGrabLocally();
+            if (_draft.HasActiveDraft) _draft.ClearDraft();
+            _hasPendingInsert = false;
+            _hud.ClearDraftAim();
+            _hud.SetExaminedGuide(null);
+            _renderer.ClearDraftPreview();
+        }
+
         private void OnGuideRemoved(Guid guideId)
         {
             if (_grab != null && _grab.GuideId == guideId) DropGrabLocally();
@@ -896,13 +953,13 @@ namespace Layout.Client
         }
 
         // ==========================================================================================
-        //  Hotkeys (delegated from the ModSystem; all gated to the held tool)
+        //  Hotkeys (delegated from the ModSystem; all gated to the active tool)
         // ==========================================================================================
 
         /// <summary>F: toggle the mode/settings GUI. Unhandled (falls through) when the tool isn't held.</summary>
         public bool OnToolGuiHotkey()
         {
-            if (!IsToolHeld()) return false;
+            if (!IsToolActive()) return false;
             if (_gui.IsOpened()) _gui.TryClose(); else _gui.TryOpen();
             return true;
         }
@@ -910,7 +967,7 @@ namespace Layout.Client
         /// <summary>Ctrl+Z: undo. Only consumed while the tool is held, so it never hijacks other UIs.</summary>
         public bool OnUndoHotkey()
         {
-            if (!IsToolHeld()) return false;
+            if (!IsToolActive()) return false;
             _net.SendUndo();
             return true;
         }
@@ -918,7 +975,7 @@ namespace Layout.Client
         /// <summary>Ctrl+Y: redo. Same held-tool gate as undo.</summary>
         public bool OnRedoHotkey()
         {
-            if (!IsToolHeld()) return false;
+            if (!IsToolActive()) return false;
             _net.SendRedo();
             return true;
         }
@@ -1269,6 +1326,8 @@ namespace Layout.Client
             _net.LockStateChanged -= OnLockStateChanged;
             _net.GuideRemoved -= OnGuideRemoved;
             _net.GuideAddedOrUpdated -= OnGuideAddedOrUpdated;
+            _net.AuthorityModeChanged -= OnAuthorityModeChanged;
+            _capi.Input.InWorldAction -= OnInWorldAction;
 
             if (_tickId != 0)
             {

@@ -74,6 +74,9 @@ namespace Layout.Network
         // Server-config policy (Module 7). Empty/null privilege = everyone may use the tool.
         private readonly string _requiredPrivilege;
         private readonly bool _adminCanOverrideLocks;
+        private readonly bool _allowClientOnlyMode;
+        private readonly HashSet<string> _clientOnlyPlayers = new HashSet<string>();
+        private const int MaxGuidesPerPush = 100;
 
         // Per-player in-progress drag: the guide being edited and each moved point's pre-drag origin.
         // Used to coalesce a drag into a single undo entry on release — and, since Session 8, to service
@@ -111,7 +114,8 @@ namespace Layout.Network
             GuideLockManager lockManager,
             UndoManager undoManager,
             string requiredPrivilege = null,
-            bool adminCanOverrideLocks = true)
+            bool adminCanOverrideLocks = true,
+            bool allowClientOnlyMode = false)
         {
             _sapi = sapi ?? throw new ArgumentNullException(nameof(sapi));
             _guides = guideManager ?? throw new ArgumentNullException(nameof(guideManager));
@@ -119,6 +123,7 @@ namespace Layout.Network
             _undo = undoManager ?? throw new ArgumentNullException(nameof(undoManager));
             _requiredPrivilege = string.IsNullOrWhiteSpace(requiredPrivilege) ? null : requiredPrivilege.Trim();
             _adminCanOverrideLocks = adminCanOverrideLocks;
+            _allowClientOnlyMode = allowClientOnlyMode;
 
             _channel = _sapi.Network.RegisterChannel(LayoutChannel.Name);
             LayoutPackets.RegisterMessageTypes(_channel);
@@ -142,7 +147,9 @@ namespace Layout.Network
                 .SetMessageHandler<DraftStartPacket>(OnDraftStart)
                 .SetMessageHandler<DraftCancelPacket>(OnDraftCancel)
                 .SetMessageHandler<UndoRequestPacket>(OnUndo)
-                .SetMessageHandler<RedoRequestPacket>(OnRedo);
+                .SetMessageHandler<RedoRequestPacket>(OnRedo)
+                .SetMessageHandler<ClientPlacementModeRequestPacket>(OnClientPlacementModeRequest)
+                .SetMessageHandler<ClientGuidePushPacket>(OnClientGuidePush);
 
             _sapi.Event.PlayerNowPlaying += OnPlayerNowPlaying;
             _sapi.Event.PlayerDisconnect += OnPlayerDisconnect;
@@ -160,14 +167,76 @@ namespace Layout.Network
             var parsers = _sapi.ChatCommands.Parsers;
             _sapi.ChatCommands
                 .Create("layout")
-                .WithDescription("Layout mod admin commands.")
-                .RequiresPrivilege(Privilege.controlserver)
+                .WithDescription("Layout guide and placement-mode commands.")
+                .RequiresPrivilege(Privilege.chat)
                 .BeginSubCommand("dispel")
                     .WithDescription("Dispel guides. 'all' clears the whole world; a number clears within that chunk radius of you.")
                     .RequiresPrivilege(Privilege.controlserver)
                     .WithArgs(parsers.Word("all-or-radius"))
                     .HandleWith(OnDispelCommand)
+                .EndSubCommand()
+                .BeginSubCommand("client")
+                    .WithDescription("Client-only Layout mode commands.")
+                    .RequiresPrivilege(Privilege.chat)
+                    .BeginSubCommand("set")
+                        .WithDescription("Place new guides client-only when the server permits it.")
+                        .RequiresPrivilege(Privilege.chat)
+                        .HandleWith(OnClientModeSetCommand)
+                    .EndSubCommand()
+                    .BeginSubCommand("push")
+                        .WithDescription("Publish private guides to the server.")
+                        .RequiresPrivilege(Privilege.chat)
+                        .WithArgs(parsers.Word("all"))
+                        .HandleWith(OnClientPushCommand)
+                    .EndSubCommand()
+                .EndSubCommand()
+                .BeginSubCommand("server")
+                    .WithDescription("Server-authoritative Layout mode commands.")
+                    .RequiresPrivilege(Privilege.chat)
+                    .BeginSubCommand("set")
+                        .WithDescription("Place new guides on the server.")
+                        .RequiresPrivilege(Privilege.chat)
+                        .HandleWith(OnServerModeSetCommand)
+                    .EndSubCommand()
                 .EndSubCommand();
+        }
+
+        private TextCommandResult OnClientModeSetCommand(TextCommandCallingArgs args)
+        {
+            if (args.Caller.Player is not IServerPlayer player)
+                return TextCommandResult.Error("This command must be run by a player.");
+
+            if (!_allowClientOnlyMode)
+            {
+                SendPlacementMode(player, false, false, false,
+                    null);
+                return TextCommandResult.Error("This server does not allow client-only Layout mode.");
+            }
+
+            SetClientOnlyMode(player, true, updatePreference: true);
+            return TextCommandResult.Success("New Layout guides will be client-only.");
+        }
+
+        private TextCommandResult OnServerModeSetCommand(TextCommandCallingArgs args)
+        {
+            if (args.Caller.Player is not IServerPlayer player)
+                return TextCommandResult.Error("This command must be run by a player.");
+
+            SetClientOnlyMode(player, false, updatePreference: true);
+            return TextCommandResult.Success("New Layout guides will be stored on the server.");
+        }
+
+        private TextCommandResult OnClientPushCommand(TextCommandCallingArgs args)
+        {
+            if (args.Caller.Player is not IServerPlayer player)
+                return TextCommandResult.Error("This command must be run by a player.");
+            string argument = (args[0] as string)?.Trim().ToLowerInvariant();
+            if (argument != "all") return TextCommandResult.Error("Usage: /layout client push all");
+            if (_clientOnlyPlayers.Contains(player.PlayerUID))
+                return TextCommandResult.Error("Switch to server mode first with /layout server set.");
+
+            _channel.SendPacket(new ClientGuidePushRequestPacket(), player);
+            return TextCommandResult.Success("Requested all private guides for server publication.");
         }
 
         private TextCommandResult OnDispelCommand(TextCommandCallingArgs args)
@@ -183,12 +252,12 @@ namespace Layout.Network
             if (int.TryParse(arg, out int radius) && radius >= 0)
             {
                 if (args.Caller.Player is not IServerPlayer p)
-                    return TextCommandResult.Error("A radius dispel must be run by a player (use '/dispel all' from the console).");
+                    return TextCommandResult.Error("A radius dispel must be run by a player (use '/layout dispel all' from the console).");
                 int n = DispelGuides(p, radius);
                 return TextCommandResult.Success($"Dispelled {n} Layout guide(s) within {radius} chunk(s).");
             }
 
-            return TextCommandResult.Error("Usage: /dispel all   OR   /dispel <chunk radius>");
+            return TextCommandResult.Error("Usage: /layout dispel all   OR   /layout dispel <chunk radius>");
         }
 
         // Dispels guides, force-freeing their locks and broadcasting the removals. A null player dispels
@@ -243,7 +312,8 @@ namespace Layout.Network
             var all = new List<GuideDataDto>(_guides.AllGuides.Count);
             foreach (var g in _guides.AllGuides.Values) all.Add(GuideDataDto.From(g));
             _channel.SendPacket(
-                new GuideBulkSyncPacket(all.ToArray(), _guides.PerGuideVoxelCap, _guides.TotalVoxelCap),
+                new GuideBulkSyncPacket(all.ToArray(), _guides.PerGuideVoxelCap, _guides.TotalVoxelCap,
+                    _allowClientOnlyMode),
                 player);
 
             // 2) Current lock state of any locked guide, so the joiner sees what is being edited.
@@ -269,9 +339,110 @@ namespace Layout.Network
 
             _undo.ClearPlayer(uid);
             _drags.Remove(uid);
+            _clientOnlyPlayers.Remove(uid);
 
             if (_draftAnchors.Remove(uid))
                 _channel.BroadcastPacket(new DraftAnchorRemovePacket(uid));
+        }
+
+        private void OnClientPlacementModeRequest(IServerPlayer player, ClientPlacementModeRequestPacket packet)
+        {
+            bool wantsClientOnly = packet?.ClientOnly == true;
+            if (wantsClientOnly && !_allowClientOnlyMode)
+            {
+                SendPlacementMode(player, false, false, false,
+                    "This server does not allow client-only Layout mode.");
+                return;
+            }
+
+            SetClientOnlyMode(player, wantsClientOnly, updatePreference: false);
+        }
+
+        private void SetClientOnlyMode(IServerPlayer player, bool clientOnly, bool updatePreference)
+        {
+            bool wasClientOnly = _clientOnlyPlayers.Contains(player.PlayerUID);
+            if (clientOnly) _clientOnlyPlayers.Add(player.PlayerUID);
+            else _clientOnlyPlayers.Remove(player.PlayerUID);
+
+            if (wasClientOnly != clientOnly)
+            {
+                IReadOnlyList<Guid> freed = _locks.ReleaseAllLocksForPlayer(player.PlayerUID);
+                foreach (Guid id in freed)
+                    _channel.BroadcastPacket(new GuideLockStatePacket(id, null));
+                _drags.Remove(player.PlayerUID);
+                if (_draftAnchors.Remove(player.PlayerUID))
+                    _channel.BroadcastPacket(new DraftAnchorRemovePacket(player.PlayerUID));
+            }
+
+            SendPlacementMode(player, clientOnly, true, updatePreference, null);
+        }
+
+        private void SendPlacementMode(IServerPlayer player, bool clientOnly, bool allowed,
+            bool updatePreference, string message)
+        {
+            _channel.SendPacket(
+                new ClientPlacementModePacket(clientOnly, allowed, updatePreference, message), player);
+        }
+
+        private void OnClientGuidePush(IServerPlayer player, ClientGuidePushPacket packet)
+        {
+            if (_clientOnlyPlayers.Contains(player.PlayerUID))
+            {
+                _channel.SendPacket(new ClientGuidePushResultPacket(
+                    Array.Empty<byte[]>(), packet?.Guides?.Length ?? 0,
+                    "Switch to server mode before pushing private guides."), player);
+                return;
+            }
+
+            if (DeniedByPrivilege(player))
+            {
+                _channel.SendPacket(new ClientGuidePushResultPacket(
+                    Array.Empty<byte[]>(), packet?.Guides?.Length ?? 0,
+                    "You lack the privilege required to publish Layout guides."), player);
+                return;
+            }
+
+            ClientGuidePushDto[] incoming = packet?.Guides ?? Array.Empty<ClientGuidePushDto>();
+            var accepted = new List<byte[]>();
+            int rejected = Math.Max(0, incoming.Length - MaxGuidesPerPush);
+            int count = Math.Min(incoming.Length, MaxGuidesPerPush);
+
+            for (int i = 0; i < count; i++)
+            {
+                try
+                {
+                    GuideData candidate = incoming[i]?.ToGuideData();
+                    Guid localId = candidate?.Id ?? Guid.Empty;
+                    if (candidate == null || localId == Guid.Empty)
+                    {
+                        rejected++;
+                        continue;
+                    }
+
+                    candidate.Id = Guid.NewGuid();
+                    candidate.CreatorUid = player.PlayerUID;
+                    candidate.DataVersion = GuideData.CurrentDataVersion;
+                    GuideOperationResult result = _guides.RestoreGuide(candidate);
+                    if (!result.IsSuccess)
+                    {
+                        rejected++;
+                        continue;
+                    }
+
+                    _undo.Record(player.PlayerUID, new CreateGuideCommand(result.Guide));
+                    _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
+                    accepted.Add(NetIds.ToBytes(localId));
+                }
+                catch (Exception e)
+                {
+                    rejected++;
+                    _sapi.Logger.Warning("[Layout] Rejected a pushed guide from {0}: {1}",
+                        player.PlayerUID, e.Message);
+                }
+            }
+
+            string summary = $"Published {accepted.Count} private guide(s); {rejected} rejected.";
+            _channel.SendPacket(new ClientGuidePushResultPacket(accepted.ToArray(), rejected, summary), player);
         }
 
         // ==========================================================================================

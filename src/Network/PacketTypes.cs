@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 1;
+        public const int ProtocolVersion = 2;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -263,15 +263,63 @@ namespace Layout.Network
         [ProtoMember(2)] public int PerGuideVoxelCap;
         [ProtoMember(3)] public int TotalVoxelCap;
         [ProtoMember(4)] public int ProtocolVersion;
+        [ProtoMember(5)] public bool AllowClientOnlyMode;
 
         public GuideBulkSyncPacket() { }
 
-        public GuideBulkSyncPacket(GuideDataDto[] guides, int perGuideVoxelCap, int totalVoxelCap)
+        public GuideBulkSyncPacket(GuideDataDto[] guides, int perGuideVoxelCap, int totalVoxelCap,
+            bool allowClientOnlyMode = false)
         {
             Guides = guides;
             PerGuideVoxelCap = perGuideVoxelCap;
             TotalVoxelCap = totalVoxelCap;
             ProtocolVersion = LayoutChannel.ProtocolVersion;
+            AllowClientOnlyMode = allowClientOnlyMode;
+        }
+    }
+
+    /// <summary>S→C. The player's effective placement mode after a server policy decision.</summary>
+    [ProtoContract]
+    public class ClientPlacementModePacket
+    {
+        [ProtoMember(1)] public bool ClientOnly;
+        [ProtoMember(2)] public bool Allowed;
+        [ProtoMember(3)] public bool UpdatePreference;
+        [ProtoMember(4)] public string Message;
+
+        public ClientPlacementModePacket() { }
+
+        public ClientPlacementModePacket(bool clientOnly, bool allowed, bool updatePreference, string message = null)
+        {
+            ClientOnly = clientOnly;
+            Allowed = allowed;
+            UpdatePreference = updatePreference;
+            Message = message;
+        }
+    }
+
+    /// <summary>S→C. Requests that the client upload all currently loaded private guides.</summary>
+    [ProtoContract]
+    public class ClientGuidePushRequestPacket
+    {
+        public ClientGuidePushRequestPacket() { }
+    }
+
+    /// <summary>S→C. Confirms which private guide ids were accepted by a push operation.</summary>
+    [ProtoContract]
+    public class ClientGuidePushResultPacket
+    {
+        [ProtoMember(1)] public byte[][] AcceptedLocalIdBytes;
+        [ProtoMember(2)] public int RejectedCount;
+        [ProtoMember(3)] public string Message;
+
+        public ClientGuidePushResultPacket() { }
+
+        public ClientGuidePushResultPacket(byte[][] acceptedLocalIdBytes, int rejectedCount, string message)
+        {
+            AcceptedLocalIdBytes = acceptedLocalIdBytes;
+            RejectedCount = rejectedCount;
+            Message = message;
         }
     }
 
@@ -536,6 +584,69 @@ namespace Layout.Network
         public RedoRequestPacket() { }
     }
 
+    /// <summary>C→S. Reports the client's preferred placement mode after the join policy is known.</summary>
+    [ProtoContract]
+    public class ClientPlacementModeRequestPacket
+    {
+        [ProtoMember(1)] public bool ClientOnly;
+
+        public ClientPlacementModeRequestPacket() { }
+        public ClientPlacementModeRequestPacket(bool clientOnly) { ClientOnly = clientOnly; }
+    }
+
+    /// <summary>A complete private-guide snapshot used only by the explicit push-to-server operation.</summary>
+    [ProtoContract]
+    public class ClientGuidePushDto
+    {
+        [ProtoMember(1)] public GuideDataDto Guide;
+        [ProtoMember(2)] public ControlPointDto[] OriginalControlPoints;
+        [ProtoMember(3)] public int OriginalConstraint;
+
+        public ClientGuidePushDto() { }
+
+        public static ClientGuidePushDto From(GuideData guide)
+        {
+            ControlPointDto[] original = null;
+            if (guide.OriginalControlPoints != null)
+            {
+                original = new ControlPointDto[guide.OriginalControlPoints.Count];
+                for (int i = 0; i < original.Length; i++)
+                    original[i] = ControlPointDto.From(guide.OriginalControlPoints[i]);
+            }
+
+            return new ClientGuidePushDto
+            {
+                Guide = GuideDataDto.From(guide),
+                OriginalControlPoints = original,
+                OriginalConstraint = (int)guide.OriginalConstraint
+            };
+        }
+
+        public GuideData ToGuideData()
+        {
+            GuideData guide = Guide?.ToGuideData();
+            if (guide == null) return null;
+            if (OriginalControlPoints != null)
+            {
+                guide.OriginalControlPoints = new List<ControlPoint>(OriginalControlPoints.Length);
+                foreach (ControlPointDto point in OriginalControlPoints)
+                    guide.OriginalControlPoints.Add(point?.ToControlPoint() ?? new ControlPoint());
+            }
+            guide.OriginalConstraint = (ShapeConstraint)OriginalConstraint;
+            return guide;
+        }
+    }
+
+    /// <summary>C→S. Uploads private guide snapshots after an explicit push-all request.</summary>
+    [ProtoContract]
+    public class ClientGuidePushPacket
+    {
+        [ProtoMember(1)] public ClientGuidePushDto[] Guides;
+
+        public ClientGuidePushPacket() { }
+        public ClientGuidePushPacket(ClientGuidePushDto[] guides) { Guides = guides; }
+    }
+
     // ----------------------------------------------------------------------------------------------
     //  Packets — bidirectional (C→S as a request, S→C as the authoritative broadcast)
     // ----------------------------------------------------------------------------------------------
@@ -772,7 +883,13 @@ namespace Layout.Network
             typeof(GuideSetDivisionsPacket),
             // Session-11 additions
             typeof(GuideSetSidesPacket),
-            typeof(GuideSpringBackPacket)
+            typeof(GuideSpringBackPacket),
+            // Client-only policy, mode, and explicit publication (append-only)
+            typeof(ClientPlacementModePacket),
+            typeof(ClientGuidePushRequestPacket),
+            typeof(ClientGuidePushResultPacket),
+            typeof(ClientPlacementModeRequestPacket),
+            typeof(ClientGuidePushPacket)
         };
     }
 }
