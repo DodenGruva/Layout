@@ -1,10 +1,10 @@
 # Client-only fallback mode (F4) — implementation record
 
-> Originally written after v0.1.27 as the phased plan for F4. **Status at v0.1.52: implemented and
+> Originally written after v0.1.27 as the phased plan for F4. **Status at v0.1.53: implemented and
 > playtested on the `ClientOnlyFallback` branch; candidate headline feature for v0.2.0.** This document now
 > records the final design, the behavior matrix, and the deliberate departures from the original proposal.
 > Detailed F4 version history is in `SESSION_12.md`; the subsequent optimization/interaction pass is in
-> `SESSION_13.md`.
+> `SESSION_13.md`; the v0.1.53 shell-scaling/mesh handoff is in `SESSION_14.md`.
 
 ## Goal delivered
 
@@ -152,13 +152,13 @@ that unsafe behavior. The new public ID naturally renders with the public Blue/I
 - **DataVersion is 8.** F4 itself added no private/public ownership field to `GuideData`; ownership remains a
   client mirror classification. Version 8 is the later additive `ControlPoint.IsLockMarker` field, which
   defaults false for older saves. Public world saves remain compatible with v0.1.27.
-- Current implementation size: **65 C# source files**.
+- Current implementation size: **66 C# source files**.
 
 ## Validation status and remaining caveats
 
 The fallback tool, GUI, placement, persistence across reconnect, public/private overlay, commands, push,
 reshape, HUD labeling, palettes, and mixed-authority undo routing were playtested successfully through
-v0.1.52. The backup recovery code builds cleanly and normal persistence is confirmed; deliberate corruption
+v0.1.53. The backup recovery code builds cleanly and normal persistence is confirmed; deliberate corruption
 fault injection has not been separately reported.
 
 The pre-existing B-S9-1 lock/constraint and pre-drag restoration behaviors were **not** F4 regressions. The

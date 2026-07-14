@@ -1,16 +1,16 @@
 # Layout — Project Status & Handoff
 
-**Checkpoint: Layout v0.1.52 on `ClientOnlyFallback`.** F4 is implemented and playtested: automatic
+**Checkpoint: Layout v0.1.53 on `ClientOnlyFallback`.** F4 is implemented and playtested: automatic
 client-only authority on servers without Layout; opt-in private overlays on Layout servers; per-world/per-UID
 client persistence; normal placement, reshape, settings, and undo parity; public/private commands and
 publication; HUD and anchor ownership cues; mixed-authority undo routing; and backup-recovery hardening.
-The current pass adds cap-aware 3D counting, natural at-cap drag clamping, exact first-hit lock targeting,
-complete drag-cancel restoration, and non-deforming passive lock markers. **DataVersion 8; protocol 3; 65
-source files.** `main` remains at v0.1.27. Release zips live in **`..\LayoutZips\`** through v0.1.52.
-**B-S9-1 is substantially improved but remains under focused playtest**, not closed. After that interaction
-regression, the next milestone is a final F4/public multiplayer regression and promotion to a **v0.2.0
-candidate**. Standing rule: ship a zip per code iteration; update docs / commit ONLY on the human's say-so.
-Detail lives in **`SESSION_12.md`**, **`SESSION_13.md`**,
+The latest pass replaces hollow Sphere/Dome cubic scanning with exact shell-focused generation. The human
+placed a roughly 100-block Sphere and confirmed the next bottleneck: one full cube per voxel in one monolithic
+GPU mesh. **DataVersion 8; protocol 3; 66 source files.** `main` remains at v0.1.27. Release zips live in
+**`..\LayoutZips\`** through v0.1.53. The v0.1.53 source/docs are uncommitted; last pushed commit is
+`1461c19`. **Top task: chunked exposed-face/greedy mesh implementation.** B-S9-1 remains improved but under
+focused playtest. Standing rule: ship a zip per code iteration; update docs / commit ONLY on the human's
+say-so. Detail lives in **`SESSION_12.md`**, **`SESSION_13.md`**, **`SESSION_14.md`**,
 `PLAN_CLIENT_ONLY.md`, and `TODO.md`; the authoritative plan is **`ARCHITECTURE.md`**.
 
 ---
@@ -19,18 +19,19 @@ Detail lives in **`SESSION_12.md`**, **`SESSION_13.md`**,
 
 The doc set (now a Claude Code repo):
 
-1. **`ARCHITECTURE.md`** — the authoritative plan (v3.0); Settled Decisions Register updated through v0.1.52.
-2. **The code** — `src/` (**65 files**: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
+1. **`ARCHITECTURE.md`** — the authoritative plan (v3.1); Settled Decisions Register updated through v0.1.53.
+2. **The code** — `src/` (**66 files**: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
    RectangleShape, ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 Session-10 — LayoutToolIcons;
    + 4 Session-11 — PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 the 3D family
    (v0.1.20–0.1.21) — SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape; + 5 F4 —
    ClientAuthorityMode, ClientToolGate, ClientWorldGuidePersistence, LocalGuideAuthority,
-   GuideManagerDependencies; + 1 Session-13 — RemoveLockMarkerCommand),
+   GuideManagerDependencies; + 1 Session-13 — RemoveLockMarkerCommand; + 1 Session-14 —
+   SphericalShellScan),
    `assets/layout/`, `modinfo.json`, `modicon.png`, `Layout.csproj`, `BUILD_INSTRUCTIONS.txt`.
 3. **`TODO.md`** — the live punch-list (renamed from `OUTSTANDING_ITEMS.md`).
 4. **`SESSION_9.md`** / **`SESSION_10.md`** / **`SESSION_11.md`** / **`SESSION_12.md`** /
-   **`SESSION_13.md`** — standalone per-session records (SESSION_12 runs through v0.1.45; SESSION_13 covers
-   v0.1.46–v0.1.52).
+   **`SESSION_13.md`** / **`SESSION_14.md`** — standalone records (SESSION_12 runs through v0.1.45;
+   SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 shell/mesh handoff).
 5. **`HANDOFF.md`** (repo root) — the consolidated current-state brief for external AI analysis
    (scope / status / direction / performance characteristics).
 6. **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix.
@@ -140,6 +141,16 @@ The doc set (now a Claude Code repo):
   - **Non-deforming locks:** passive Arch lock markers do not become curve knots until actively dragged.
     v0.1.52 removes stale unlocked markers and preserves curve-relative insertion order. This advances the
     additive schema to DataVersion 8 and protocol 3.
+- **Session 14 — hollow-shell scaling (v0.1.53): playtest-CONFIRMED; mesh work next.** Detail and resume plan
+  in `SESSION_14.md`.
+  - **Generator:** `SphericalShellScan` analytically narrows each X/Y column to its Z shell bands and then
+    applies the old exact predicate. Hollow Sphere/Dome no longer hit the 4M cubic candidate-cell guard.
+  - **Validation:** exact voxel-set parity across all scales/orientations/inversion; 20-block hollow Dome =
+    242,500 voxels in ~5 ms in isolation; Release build clean.
+  - **Human playtest:** a roughly 100-block hollow Sphere placed successfully and caused visible lag.
+  - **Confirmed frontier:** `GuideMeshBuilder` still emits 8 vertices + 36 indices for every voxel, shared
+    faces included, as one uploaded mesh per guide. Next pass is exposed faces → chunks/culling → greedy
+    same-colour merging. Filled Sphere/Dome retain their old guarded cubic path.
 - **IN REAL PLAY:** save-compatibility matters — DataVersion **8** saves (v8: passive `IsLockMarker`; v7:
   IsClosed; v6: Sides + the
   never-wired spring-back snapshot); pinned-enum / additive-protobuf / default-migration rules remain in
@@ -154,11 +165,11 @@ The doc set (now a Claude Code repo):
 
 | # | Module | Effort | Status |
 |---|--------|--------|--------|
-| 1 | Pure math layer | **Max** | COMPLETE (+ S8 catalog; + S9 line/triangle/rectangle, divisions, slave-flow; + S11 PolygonShape, FreeShape, default-up frames, invertible arches; + 3D volumes Sphere/Dome/Cylinder/Cone/Box — cell-lattice scan, `MaxScanCells` guard, `BaseNormal` up-axis) |
+| 1 | Pure math layer | **Max** | COMPLETE (+ S8 catalog; + S9 line/triangle/rectangle, divisions, slave-flow; + S11 PolygonShape, FreeShape, default-up frames, invertible arches; + 3D volumes; + S14 exact surface-area-oriented hollow Sphere/Dome scanner) |
 | 2 | Data model | Low | COMPLETE (DataVersion **8**: + S11 `Sides`, spring-back snapshot, `IsClosed`; + S13 passive `ControlPoint.IsLockMarker`) |
 | 3 | Systems + undo | High | COMPLETE (+ break/bake ops; + S9 `SetDivisionsCommand`; + S11 air-side bake, `SetSides`, `SpringBackCommand`, 3-click draft state; + F4 side-neutral persistence/probe dependencies and local authority; + S13 threshold counting, full drag snapshots, `RemoveLockMarkerCommand`) |
 | 4 | Networking | **Max** | COMPLETE (+ additive fields; + S11 guide settings/create fields; + F4 protocol 2 policy/mode/push packets; + S13 protocol 3 lock-marker field; combined public/private mirror with ownership routing) |
-| 5 | Rendering | High | COMPLETE (+ S9 `DivisionMarks.Apply`; + S11 apex-aware ghost, thinner Surface slabs; + F4 ownership-sensitive anchor palettes and private target label) |
+| 5 | Rendering | High | FUNCTIONAL; **large-guide optimization active** (+ S9 `DivisionMarks.Apply`; + S11 apex-aware ghost, thinner Surface slabs; + F4 ownership palettes; current bottleneck is monolithic full-cube mesh; staged replacement in `SESSION_14.md`) |
 | 6 | UI | Medium | COMPLETE (+ S11 favorites picker + catalog fold-out, Sides row, auto-size tooltips) |
 | 7 | Integration | High | COMPLETE (+ S11 CTRL/SHIFT remap, spring-back gesture, 3-click routing; + F4 authority detection, vanilla-item gate, private persistence, commands, and mixed-mode HUD state) |
 
@@ -244,25 +255,26 @@ the scale-icon/tile-proportion calls; Session-9 adds the regime split, triangle'
 no-break-gesture for Right/Isosceles/Square, rectangle corners as markers, magenta division color, the
 per-keystroke divisions field; Session-8's list still stands. Full list + rationale in `TODO.md`.
 
-**Open — real-play agenda:** finish the focused v0.1.52 lock/drag/unlock regression, then run one final
-F4/public multiplayer regression before promoting the feature branch to a v0.2.0 candidate.
+**Open — real-play agenda:** implement the v0.1.53-confirmed large-guide mesh pass, finish the focused
+v0.1.52 lock/drag/unlock regression, then run one final F4/public multiplayer regression before promoting the
+feature branch to a v0.2.0 candidate.
 
 ---
 
 ## 7. Next session — start here
 
-**F4 is feature-complete and playtested through v0.1.52 on `ClientOnlyFallback`.** Normal public multiplayer
-behavior is intentionally preserved. The current interaction pass is documented in `SESSION_13.md`.
+**F4 is feature-complete and playtested through v0.1.53 on `ClientOnlyFallback`.** Normal public multiplayer
+behavior is intentionally preserved. Read `SESSION_14.md` first: it is the current mesh-optimization handoff.
 
-1. **Finish B-S9-1 interaction testing.** Exercise adjacent locks and repeated lock → drag → cancel/revert →
+1. **Implement large-guide meshes.** Add an exposed-face Volumetric path, then per-guide spatial chunk mesh
+   ownership/disposal and culling, then same-colour/orientation greedy merging. Preserve the verified shader,
+   true settled-guide scale, marker palettes, and legacy Surface/slab path. See `SESSION_14.md`.
+2. **Finish B-S9-1 interaction testing.** Exercise adjacent locks and repeated lock → drag → cancel/revert →
    unlock → relock cycles, especially on both sides of an Arch and around existing markers. Fix only any
    reproducible residual behavior; do not reopen the confirmed non-deforming design.
-2. **Final F4/public multiplayer regression → v0.2.0 candidate.** Cover vanilla-server fallback, Layout
+3. **Final F4/public multiplayer regression → v0.2.0 candidate.** Cover vanilla-server fallback, Layout
    policy denial, mixed public/private placement and editing, reconnect persistence, publication, commands,
    and undo/redo around ownership boundaries.
-3. **Enormous fine-detail guides (human wants this).** Needs the 3D scan guard (`MaxScanCells` 4M) / hard
-   voxel ceiling (10M) raised plus a rendering perf pass (chunked meshes / LOD); the running total is already
-   `long` as groundwork.
 4. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill; broadcasting the whole Free-Shape draft
    chain (11q); the F3 re-constrain op. Remaining flagged decisions (11a–11r, 16a–16d) are cosmetic.
 

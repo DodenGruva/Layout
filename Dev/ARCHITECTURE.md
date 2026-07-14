@@ -1,6 +1,6 @@
-# Layout — Architecture Document (v3.0)
+# Layout — Architecture Document (v3.1)
 
-**Supersedes v2.9 — performance and interaction delta (covers v0.1.46 → v0.1.52).** v2.5 consolidated five
+**Supersedes v3.0 — hollow-shell scaling and mesh-frontier delta (v0.1.53).** v2.5 consolidated five
 revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
 catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
 surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
@@ -14,17 +14,19 @@ policy-controlled private overlays on Layout servers, the side-neutral `GuideMan
 client persistence, mixed ownership/undo routing, private publication, and ownership presentation. **v3.0
 folds in the cap-performance and interaction pass:** threshold-aware 3D counting, natural at-cap drag
 clamping, rendered-voxel first-hit picking, complete drag snapshots, robust curve-cache invalidation, and
-passive non-deforming Arch lock markers. The register, file tree, module map, persistence, and edge cases
-below are updated in place to the v0.1.52 / DataVersion 8 / protocol-3 / 65-file state; the changelogs under
-this header are the quick deltas.
+passive non-deforming Arch lock markers. **v3.1 adds the exact surface-area-oriented hollow Sphere/Dome
+scanner and records the now-playtest-confirmed mesh frontier.** The register, file tree, module map,
+persistence, and edge cases below are updated in place to the v0.1.53 / DataVersion 8 / protocol-3 / 66-file
+state; the changelogs under this header are the quick deltas.
 
-**Where the project stands:** Layout **v0.1.52** is built and playtested on the
-`ClientOnlyFallback` branch; `main` remains at v0.1.27. All seven modules, the complete
+**Where the project stands:** Layout **v0.1.53** is built, packaged, and playtested on the
+`ClientOnlyFallback` branch; its source/docs are uncommitted and the last pushed commit is `1461c19`.
+`main` remains at v0.1.27. All seven modules, the complete
 2D/3D catalog, normal public multiplayer, vanilla-server local fallback, and mixed public/private operation
 run against VS 1.22.3 / .NET 10. The catalog is **12 shape types / 18 picker tiles**, **DataVersion 8**,
-**protocol 3**, and **65 source files**. F4 is feature-complete. B-S9-1 is substantially improved and lock
-placement no longer deforms an Arch, but repeated marker/drag/unlock cycles remain under playtest. Finish that
-focused regression, then run the broad F4/public regression before naming a v0.2.0 candidate. See `TODO.md`.
+**protocol 3**, and **66 source files**. F4 is feature-complete. A roughly 100-block hollow Sphere now places
+successfully and exposes visible lag in the monolithic full-cube mesh path. The immediate task is the staged
+mesh pass in `SESSION_14.md`; B-S9-1 and the broad F4/public regression follow. See `TODO.md`.
 
 > **▶ IMPLEMENTED — client-only / server-less fallback mode (F4, v0.1.28–v0.1.45).** On a server without
 > Layout, a three-second positive-proof detection window falls back to a client-side
@@ -34,6 +36,24 @@ focused regression, then run the broad F4/public regression before naming a v0.2
 > `GuideManager` supplies local parity, while guide ownership routes edits and last-operation authority
 > routes undo/redo. Private guides persist per server/world + player UID. `PLAN_CLIENT_ONLY.md` is the final
 > behavior and implementation record; `SESSION_12.md` is the version history.
+
+---
+
+## Changelog — v3.0 → v3.1 (hollow shell scaling, v0.1.53; full handoff in `SESSION_14.md`)
+
+- **Exact shell-focused scan:** `SphericalShellScan` walks X/Y columns, analytically narrows each to the two Z
+  surface bands, and applies the prior nearest/farthest predicate. Hollow Sphere/Dome preserve exact voxel
+  output while work scales approximately with shell area rather than bounding-cube volume.
+- **Filled paths unchanged:** filled Sphere/Dome retain the 4M candidate-cell guard and cubic scan. No save or
+  wire change; DataVersion 8 / protocol 3 remain current.
+- **Validation:** cell-for-cell parity across every scale, off-grid placement, inversion, wall orientations,
+  and threshold counts. A 20-block hollow Dome generated 242,500 voxels in ~5 ms in isolation.
+- **Human playtest:** a roughly 100-block hollow Sphere placed successfully and caused visible lag. This
+  confirms the next bottleneck is `GuideMeshBuilder`'s 8-vertex/36-index full cube per voxel, one monolithic
+  uploaded mesh per guide, full rebuild on every change, and no spatial culling.
+- **Next architecture:** exposed-face Volumetric meshing → per-guide spatial chunk meshes with reliable
+  ownership/disposal and culling → same-colour/orientation greedy merging. Keep Surface/slabs on the legacy
+  path initially and never permanently coarsen settled guides without explicit human approval.
 
 ---
 
@@ -334,9 +354,9 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   and shipped).** `GuideShapeTypes.IsVolume` gates the family. **Sphere / Dome** = two clicks (a diameter /
   a base diameter); **Cylinder / Cone / Box** = three clicks (base, then a height click — reusing the
   triangle's apex machinery, `NeedsApexClick`). Box is a true box (independent side lengths). **Hollow = a
-  one-cell shell, Filled = the solid**, voxelised by a **cell-lattice scan** (not curve-marching): exact
-  surface-crossing (sphere/box/dome) or centre-banded (cylinder/cone), with a `MaxScanCells` **scan guard**
-  that short-circuits absurd fine-scale sizes so the cap rejects them without a freeze. Volumes are **always
+  one-cell shell, Filled = the solid**. v0.1.53 routes hollow Sphere/Dome through the exact
+  surface-area-oriented `SphericalShellScan`; Box and filled volumes retain lattice scans, while
+  Cylinder/Cone remain centre-banded. The remaining cubic paths keep `MaxScanCells` guards. Volumes are **always
   Volumetric** (Surface + Divisions gated off server-side and greyed/hidden in the GUI). The base plane / axis
   comes from the clicked face; the axis is the **deterministic `ShapeGeometry.BaseNormal`** (+up regardless of
   anchor order — SHIFT is the only invert, e.g. dome → bowl). **Targeting is a wireframe** (equator/meridians,
@@ -363,6 +383,12 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   blocks arrived sank behind the face on reload (B-S10-1).
 - **Settled guides always render at their true scale**; `ChooseRenderScale` coarsening (8,000-voxel cap) is
   a **draft-ghost-only** courtesy — it once leaked into placed guides and permanently degraded them.
+- **Current large-guide bottleneck (v0.1.53, human-confirmed):** `GuideMeshBuilder` emits an independent full
+  cube for every voxel (8 vertices / 36 indices, shared faces included), stores one uploaded mesh per guide,
+  and `GuideRenderer` rebuilds/reuploads the whole guide on any change while drawing all loaded guide meshes.
+  A roughly 100-block hollow Sphere caused visible lag. The approved next seam is exposed-face Volumetric
+  meshing → spatial chunk meshes/culling → same-colour greedy merging. Preserve the verified draw recipe and
+  keep Surface/slabs on the legacy builder initially; full invariants in `SESSION_14.md`.
 - **Leaving Surface bakes the flattened positions into the control points** (undoable, full-state
   broadcast): Surface-mode edits are made against the view, so the view is what leaving it keeps. Returning
   to Surface restores the stored plane; only never-Surface guides get the floor-at-anchor seed.
@@ -402,9 +428,10 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   (0/negative = unlimited; **construction-time injection — edits need a server restart**). Caps sync to
   clients on join so the pre-check matches enforcement. **The running total is a `long`** (v0.1.27) so a
   caps-off server can't overflow it negative. A **hard voxel ceiling** (`GuideManager.HardVoxelCeiling`,
-  10M) rejects un-renderable giant guides ALWAYS, even with caps disabled — the 3D scan guard returns a
-  huge sentinel count for over-size volumes, and without this ceiling a caps-off server could create
-  invisible giants that silently max the world total. Server-side create rejections send a **clear in-game
+  10M) rejects giant guides ALWAYS, even with caps disabled. Remaining guarded 3D scans return a huge sentinel
+  for over-size filled/volume paths; hollow Sphere/Dome now count exactly beyond the old guard. Do not raise
+  the hard ceiling before the mesh pass: a near-ceiling monolithic mesh already lags. Server-side create
+  rejections send a **clear in-game
   error** (the HUD cap-flash is keyed to a guide id that doesn't exist yet on a create, so it was silent).
 - **Admin commands (v0.1.26–0.1.27):** **`/layout dispel all`** (whole world) and **`/layout dispel <chunk
   radius>`** (Chebyshev radius around the caller), both `controlserver`. Namespaced under `/layout` so they
@@ -484,8 +511,9 @@ Layout/
     │   ├── RectangleShape.cs             [S9: diagonal corners stored, other two derived; Square]
     │   ├── PolygonShape.cs               [S11: regular N-gon, MinSides 3 / MaxSides 24 (GuideData.Sides)]
     │   ├── FreeShape.cs                  [S11 (0.1.15): irregular polyline; IsClosed; MaxCorners 64; takes body inserts]
-    │   ├── SphereShape.cs                [3D (0.1.20): cell-lattice shell/solid scan; MaxScanCells 4M guard]
-    │   ├── DomeShape.cs                  [3D (0.1.21): half-sphere clipped to the apex half-space]
+    │   ├── SphereShape.cs                [3D (0.1.20; S14 hollow shell scan / guarded filled scan)]
+    │   ├── DomeShape.cs                  [3D (0.1.21; S14 exact shell + half-space clip)]
+    │   ├── SphericalShellScan.cs         [S14: shared surface-area-oriented hollow Sphere/Dome scan]
     │   ├── CylinderShape.cs              [3D (0.1.21): centre-banded lateral shell; 3-click]
     │   ├── ConeShape.cs                  [3D (0.1.21): centre-banded sloped shell; 3-click]
     │   ├── BoxShape.cs                   [3D (0.1.21): independent side lengths; exact shell; 3-click]
@@ -539,12 +567,12 @@ Layout/
             └── BreakConstraintCommand.cs
 ```
 
-**65 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
+**66 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
 ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 in Session 10: LayoutToolIcons; + 4 in Session 11:
 PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 for the 3D family (v0.1.20–0.1.21):
 SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape; + 5 for F4: ClientAuthorityMode,
 ClientToolGate, ClientWorldGuidePersistence, LocalGuideAuthority, GuideManagerDependencies; + 1 in Session 13:
-RemoveLockMarkerCommand). Namespaces match
+RemoveLockMarkerCommand; + 1 in Session 14: SphericalShellScan). Namespaces match
 folders: `Layout`, `Layout.Guide`, `Layout.Shapes`, `Layout.Systems`,
 `Layout.Network`, `Layout.UI`, `Layout.Config`, `Layout.Items`, `Layout.Client`, `Layout.Undo`,
 `Layout.Undo.Commands`. (`UndoManager` is the one file whose folder differs from its namespace: it lives in
@@ -970,11 +998,12 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
 
 ---
 
-This v3.0 document is the authoritative architecture, consolidated to current state: **Layout v0.1.52 on
+This v3.1 document is the authoritative architecture, consolidated to current state: **Layout v0.1.53 on
 `ClientOnlyFallback`, built and playtested**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
 (+ right/equilateral/isosceles), rectangles (+ square), polygons, and Free-Shapes — plus the **3D volume
 family** (spheres, domes, cylinders, cones, boxes) place, preview, reshape, fill, lock/unlock, divide, and
 project onto surfaces under server or local authority against VS 1.22.3 / .NET 10. Status, flagged decisions, and the
 punch-list live in `PROJECT_STATUS.md` and `TODO.md`; the current-state brief for external analysis lives in
 `HANDOFF.md` at the repo root; F4's final behavior record lives in `PLAN_CLIENT_ONLY.md`, its implementation
-history in `SESSION_12.md`, and the current optimization/interaction checkpoint in `SESSION_13.md`.
+history in `SESSION_12.md`, the interaction checkpoint in `SESSION_13.md`, and the active mesh resume plan in
+`SESSION_14.md`.

@@ -2,12 +2,12 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-14 against **v0.1.52** on
+> and the performance-relevant mechanics. Updated 2026-07-14 against **v0.1.53** on
 > `ClientOnlyFallback`. Where this file and the
 > code disagree, **the code wins** — treat this as a map, then read the `.cs` files it points at.
 >
 > **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/10/11/12/13.md` (per-session
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/10/11/12/13/14.md` (per-session
 > history), `dev/PLAN_CLIENT_ONLY.md` (F4 implementation record), `CLAUDE.md` (working conventions).
 
 ---
@@ -20,15 +20,18 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.1.52, **playtested in multiplayer and vanilla-server fallback**. F4 is feature-complete on
-  `ClientOnlyFallback`; the cap-performance and lock/drag correctness pass is under final playtest. `main`
-  remains at v0.1.27.
-- **Size:** **65 source files** (`src/`), ~one asset tree, one `.csproj`.
+- **Status:** v0.1.53, **playtested in multiplayer and vanilla-server fallback**. F4 is feature-complete on
+  `ClientOnlyFallback`; hollow Sphere/Dome shell generation now scales beyond the old 10-block boundary.
+  The v0.1.53 source/docs are uncommitted; last pushed commit is `1461c19`. `main` remains at v0.1.27.
+- **Size:** **66 source files** (`src/`), ~one asset tree, one `.csproj`.
 - **Data schema:** **DataVersion 8** (additive passive-lock-marker flag; pinned enums/default migration).
 - **Wire protocol:** **3** (append-only lock-marker field after the protocol-2 F4 additions).
 - **Catalog:** **12 shape types**, shown as **18 picker tiles** — a full 2D family plus a **3D volume family**.
 - **Active follow-up:** B-S9-1 is substantially improved; lock placement no longer deforms the guide, but
   repeated lock/drag/revert/unlock behavior still needs broader playtesting before closure.
+- **Top performance task:** a roughly 100-block hollow Sphere was successfully placed and caused visible lag.
+  The confirmed bottleneck is now the one-full-cube-per-voxel, one-buffer-per-guide mesh path. See §9 and
+  `dev/SESSION_14.md`.
 - **Design philosophy (standing rule): correctness over performance** unless told otherwise. Several
   deliberate un-optimized paths exist by choice; see §9.
 
@@ -59,10 +62,10 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── HANDOFF.md                  ← THIS FILE
 ├── Layout.csproj  modinfo.json  modicon.png
 ├── assets/layout/              ← itemtypes, textures, lang
-├── src/                        ← all 65 .cs files (see §6)
+├── src/                        ← all 66 .cs files (see §6)
 └── dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
-    ├── SESSION_9.md  SESSION_10.md  SESSION_11.md  SESSION_12.md  SESSION_13.md
+    ├── SESSION_9.md  SESSION_10.md  SESSION_11.md  SESSION_12.md  SESSION_13.md  SESSION_14.md
     ├── PLAN_CLIENT_ONLY.md  BUILD_INSTRUCTIONS.txt
 ```
 
@@ -118,9 +121,10 @@ Triangle · Right · Equilateral · Isosceles (Triangle + constraint) · Rectang
 Polygon (regular N-gon, 3–24 sides, count in `GuideData.Sides`) · Free-Shape (irregular polyline, `IsClosed`).
 
 **3D volume section (5 tiles):** Sphere · Dome · Cylinder · Cone · Box. Hollow = a one-cell shell, Filled =
-the solid. **Always Volumetric** (Surface + Divisions gated off, server-side and in the GUI). Voxelised by a
-**cell-lattice scan** (not curve-marching): exact surface-crossing (sphere/box/dome) or centre-banded
-(cylinder/cone). Deterministic up-axis (`ShapeGeometry.BaseNormal`); SHIFT inverts (e.g. dome→bowl).
+the solid. **Always Volumetric** (Surface + Divisions gated off, server-side and in the GUI). Box and filled
+volumes use cell-lattice scans; hollow Sphere/Dome use the exact surface-area-oriented
+`SphericalShellScan`; Cylinder/Cone remain centre-banded. Deterministic up-axis
+(`ShapeGeometry.BaseNormal`); SHIFT inverts (e.g. dome→bowl).
 Targeting is a **wireframe** — the anchors and the height handle are the reliable grab points.
 
 Adding a shape starts in `Shapes/ShapeFactory.cs` (the single construction point) + a new `IGuideShape`.
@@ -186,7 +190,7 @@ path.
 
 ---
 
-## 8. Rendering pipeline
+## 8. Rendering pipeline — current bottleneck
 
 - **One compiled mesh per guide, rebuilt only on change** (`GuideRenderer` listens for mirror-apply change
   events). `GuideMeshBuilder` is a stateless `List<VoxelPosition>` → `MeshData` converter.
@@ -200,26 +204,29 @@ path.
   rebuilds once unloaded chunks arrive — fix for B-S10-1).
 - **Marker voxels** are single-voxel nearest-claim (precedence Locked > Primary > Anchor > Division); the
   apex and off-cell division boundaries claim 2 voxels on even spans so they read centered.
+- **No spatial partition/culling:** each guide owns one `{MeshRef, Origin}` and the render loop draws every
+  loaded guide mesh. Replacing a guide deletes and uploads that entire mesh.
 
 ---
 
 ## 9. Performance characteristics & deliberate trade-offs
 
-**This is the section for an optimization pass.** Standing rule: **correctness over performance** — several
-paths below are un-optimized *on purpose*, and the human validates by playing, not profiling. Confirm any
-"slow" claim in real play before optimizing; the biggest guides in real use are modest.
+**This is now the active optimization target.** Standing rule: **correctness over performance**, but the
+human has confirmed visible lag from a roughly 100-block hollow Sphere in v0.1.53. Shell generation is no
+longer the blocker; the mesh representation is.
 
 **Hot paths & large-quantity structures**
-- **Voxel generation per guide** — up to the per-guide cap (25,000) `VoxelPosition`s, de-duplicated via
-  `HashSet`. Regenerated whenever the guide changes.
+- **Voxel generation per guide** — up to the configured cap or unconditional 10M ceiling. Regenerated whenever
+  the guide changes. Hollow Sphere/Dome now use the surface-area-oriented `SphericalShellScan`.
 - **Mesh rebuild** — a full `MeshData` rebuild for a guide on every change event (8 verts + 36 indices per
   voxel on the cube path). Settled guides mesh at **true scale, never coarsened** (see below).
-- **3D volume scan** — a cell-lattice scan is **O(cells³)** in the bounding box. Guarded by
-  `MaxScanCells = 4_000_000` per shape: over the guard, `GetVoxelCount` returns a huge sentinel (so the cap
-  rejects instantly and the ghost coarsens) and `GetVoxelPositions` returns empty. The two disagree only in
-  a regime the cap makes unreachable.
-- **Targeting** samples each guide's curve (`IGuideShape.SampleCurve`) into a polyline **cached behind a
-  content fingerprint** (point count + coordinate sum + constraint) — resampled only on change, not per tick.
+- **Hollow Sphere/Dome generation (v0.1.53)** — scans X/Y columns and only the analytically bounded Z shell
+  bands, then applies the legacy exact predicate. A 20-block hollow dome produced 242,500 voxels in ~5 ms in
+  isolated validation; a roughly 100-block Sphere placed successfully in-game.
+- **Remaining 3D scans** — filled Sphere/Dome and the other volumes still retain bounding-lattice guards.
+  Filled paths remain separate future work; do not undo the new hollow-only specialization.
+- **Targeting** samples each guide's curve (`IGuideShape.SampleCurve`) into a polyline **cached behind a full
+  per-coordinate geometry fingerprint** — resampled only on actual geometry change, not per tick.
 - **Division recolor** — `DivisionMarks.Apply` runs on **every mesh rebuild** (draft ghost + placed),
   walking `SampleCurve(128)` for arc length then a nearest-cell claim per boundary. Cheap, but it walks the
   cell list; watch on very high division counts × large guides.
@@ -245,10 +252,19 @@ paths below are un-optimized *on purpose*, and the human validates by playing, n
 - The **running world-voxel total is a `long`** (v0.1.27) so a caps-off server can't overflow it negative
   (which would read as "under budget" and disable cap checks).
 
-**The known future perf frontier:** the human wants **enormous fine-detail guides** (grand domes, etc.).
-That needs the scan guard / hard ceiling **raised**, and then a real rendering perf pass — **chunked meshes /
-LOD** — because millions of cubes per guide will not mesh acceptably as one buffer, and per-guide counts would
-exceed `int`. This is the single most likely place a performance contribution is wanted. Parked until asked.
+**Active mesh plan (full staged handoff in `dev/SESSION_14.md`):**
+
+1. Add an optimized **Volumetric exposed-face** builder: neighbour lookup, omit shared faces, preserve role
+   colours and private/public anchor shades. Leave Surface/slab rendering on the legacy path initially.
+2. Partition each guide into **16- or 32-block trial chunks** with independent mesh refs/origins. Border
+   neighbour checks must cross chunk boundaries. Dispose all refs on replace/delete/bulk sync/shutdown.
+3. Add distance/frustum culling when dependable, then same-colour/orientation **greedy face merging** inside
+   chunks.
+4. Only if still needed, consider temporary coarse interaction previews or async CPU builds. Never permanently
+   coarsen settled guides without explicit human approval.
+
+Do not begin by raising `HardVoxelCeiling`; v0.1.53 already demonstrates that a near-ceiling one-buffer mesh
+can lag a high-end machine.
 
 ---
 
@@ -273,7 +289,7 @@ exceed `int`. This is the single most likely place a performance contribution is
   Ctrl+Z/Y follows the most recently mutated authority; mode or selection changes do not redirect it.
 - **Admin commands (v0.1.26–0.1.27):** `/layout dispel all` and `/layout dispel <chunk radius>`
   (`controlserver`; namespaced under `/layout` so they can't clash with other mods).
-- **Private commands (unchanged through v0.1.52):** `/layout private`, `/layout public`, `/layout client push all`, plus the
+- **Private commands (unchanged through v0.1.53):** `/layout private`, `/layout public`, `/layout client push all`, plus the
   client-only `.layout client dispel all|<radius>`. Push assigns new public IDs, enforces server caps and
   privilege, removes only confirmed private copies, and is deliberately not undoable.
 
@@ -314,9 +330,10 @@ opacities, and up to **four hard-kept pinned favorite shape codes**. Default sca
 **Confirmed & shipping on `ClientOnlyFallback`:** the full 2D/3D catalog plus F4 place, preview, reshape,
 fill, lock/unlock, divide, project, persist, and undo in public and private authority modes. Vanilla-server
 fallback, reconnect, mixed public/private overlays, commands, push, ownership HUD/palettes, and
-mixed-authority undo routing were playtested through **v0.1.52**. Backup recovery is code-complete; deliberate
+mixed-authority undo routing were playtested through **v0.1.53**. Backup recovery is code-complete; deliberate
 corruption fault injection has not separately been reported. Threshold-aware 3D counting and the natural
-at-cap drag clamp are implemented and playtest-confirmed.
+at-cap drag clamp are implemented and playtest-confirmed. Hollow Sphere/Dome shell scanning is exact-equivalent
+to the legacy predicate; the human placed a roughly 100-block Sphere successfully.
 
 **Active follow-up — B-S9-1 (lock-in-place):** ray-vs-rendered-voxel first-hit picking is now implemented,
 curve target caches use a full geometry fingerprint, cancel restores a complete pre-drag snapshot, and passive
@@ -326,10 +343,11 @@ iteration is better; repeated lock → drag → revert/cancel → unlock cycles 
 bug is declared closed.
 
 **Direction / roadmap (see `dev/TODO.md` for detail):**
-1. **Finish the B-S9-1 interaction regression** against the v0.1.52 marker lifecycle/order changes.
-2. **Final F4 regression and release packaging → v0.2.0 candidate.** Test vanilla fallback, policy denial,
+1. **Implement the mesh pass described in §9 / `SESSION_14.md`:** exposed faces → chunks/culling → greedy
+   same-colour face merging. Preserve true settled-guide scale and established rendering semantics.
+2. **Finish the B-S9-1 interaction regression** against the v0.1.52 marker lifecycle/order changes.
+3. **Final F4 regression and release packaging → v0.2.0 candidate.** Test vanilla fallback, policy denial,
    permitted mixed mode, push/reconnect, and ordinary public multiplayer.
-3. **Enormous fine-detail guides** — the perf frontier in §9 (raise the guards + chunked-mesh/LOD pass).
 4. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill (fill is currently inert on Free-Shapes);
    an F3 re-constrain op; broadcasting the whole Free-Shape draft chain to other players.
 
@@ -349,8 +367,8 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   `GuideShapeType` / `ShapeConstraint` / projection enums, which are pinned append-only).
 - **`UndoManager` folder ≠ namespace:** it lives in `src/Systems/` but is `Layout.Systems.UndoManager` —
   the one file where folder and namespace diverge.
-- **The Session docs are historical.** `SESSION_9/10/11/12/13.md` are point-in-time narratives (SESSION_12
-  covers F4 through v0.1.45; SESSION_13 covers v0.1.46–v0.1.52). For current state, trust
+- **The Session docs are historical.** `SESSION_9/10/11/12/13/14.md` are point-in-time narratives (SESSION_12
+  covers F4 through v0.1.45; SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 mesh handoff). For current state, trust
   `HANDOFF.md` / `ARCHITECTURE.md` / the code, not a mid-session
   checklist inside a session record.
 - **`dev/BUILD_INSTRUCTIONS.txt`** is the original v0.1.0 first-build doc; its build/run steps are still

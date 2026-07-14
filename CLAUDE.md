@@ -23,9 +23,10 @@ servers without Layout and, when permitted, alongside public guides. Status: **v
 - **Versioning rule (standing, human-set):** EVERY revision bumps `modinfo.json` and ships as a NEW
   `Layout<version>.zip` in **`..\LayoutZips\`** (the sibling folder of this repo — human-directed
   location, holds the full 0.1.10+ history) — never overwrite an older release zip. Versions increment
-  monotonically per revision. **Current: v0.1.52.**
+  monotonically per revision. **Current: v0.1.53.**
 - **Git:** `main` remains at v0.1.27; the active **`ClientOnlyFallback`** branch is pushed to
-  **github.com/DodenGruva/Layout** through the v0.1.52 checkpoint. Commit/push ONLY when the human instructs.
+  **github.com/DodenGruva/Layout** through v0.1.52 (`1461c19`). **v0.1.53 is built, packaged, playtested,
+  documented, and still uncommitted.** Commit/push ONLY when the human instructs.
 
 ## The documents (read these before large work)
 - **`HANDOFF.md`** (repo root) — the consolidated current-state brief (scope · status · direction ·
@@ -35,14 +36,17 @@ servers without Layout and, when permitted, alongside public guides. Status: **v
 - **`TODO.md`** — the live punch-list: open bug, deferred requests, flagged decisions, future features.
 - **`PROJECT_STATUS.md`** — where things stand and what each module does.
 - **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix (candidate for 0.2.0).
-- **`SESSION_9.md` / `SESSION_10.md` / `SESSION_11.md` / `SESSION_12.md` / `SESSION_13.md`** — standalone
+- **`SESSION_9.md` / `SESSION_10.md` / `SESSION_11.md` / `SESSION_12.md` / `SESSION_13.md` /
+  `SESSION_14.md`** — standalone
   per-session records; SESSION_12 covers **v0.1.28–v0.1.45 ClientOnlyFallback**, and SESSION_13 covers the
-  **v0.1.46–v0.1.52 optimization and interaction pass**.
+  **v0.1.46–v0.1.52 optimization and interaction pass**. SESSION_14 is the **v0.1.53 hollow-shell + mesh
+  optimization handoff** and should be read before continuing performance work.
 
-## ✅ Docs verified & consolidated to v0.1.52 (2026-07-14)
-The authoritative prose docs are consistent with **v0.1.52, DataVersion 8, protocol 3, 65 source files,
-12 shape types / 18 tiles**. `ARCHITECTURE.md` is **v3.0**; `SESSION_12.md` is the detailed F4 record;
-`SESSION_13.md` records the cap-performance and lock/drag work;
+## ✅ Docs verified & consolidated to v0.1.53 (2026-07-14)
+The authoritative prose docs are consistent with **v0.1.53, DataVersion 8, protocol 3, 66 source files,
+12 shape types / 18 tiles**. `ARCHITECTURE.md` is **v3.1**; `SESSION_12.md` is the detailed F4 record;
+`SESSION_13.md` records the cap-performance and lock/drag work; `SESSION_14.md` records the shell-scan fix,
+100-block Sphere playtest, and exact next mesh plan;
 `HANDOFF.md` is the consolidated brief. Prefer source for exact identifiers, but no from-scratch doc audit is
 needed before ordinary work.
 
@@ -70,17 +74,19 @@ settings-only: left-click **selects** a guide and the GUI's setting rows then ac
 reshaping — geometry stays in Create); this replaced the old panel-expanding "selected-guide section".
 **Delete** dispels. `ToolMode` is client-only (never wired), so it's safe to reorder.
 
-## Current priorities (detail in TODO.md; latest record in SESSION_13.md)
-F4 is feature-complete and playtested through **v0.1.52** on `ClientOnlyFallback`. Normal public multiplayer
-behavior remains in place. DataVersion 8 / protocol 3 add passive, non-deforming lock markers.
-1. **Finish the B-S9-1 interaction regression.** First-hit voxel picking, full drag snapshots, robust curve
+## Current priorities (detail in TODO.md; latest handoff in SESSION_14.md)
+F4 is feature-complete and playtested through **v0.1.53** on `ClientOnlyFallback`. Normal public multiplayer
+behavior remains in place. Hollow Sphere/Dome generation now scales by shell area; a roughly 100-block Sphere
+was placed successfully and exposed the expected one-cube-per-voxel mesh bottleneck.
+1. **Implement the large-guide mesh pass.** Begin with exposed-face volumetric meshing, then spatial chunks,
+   then same-colour greedy face merging. Preserve settled guides at true scale and leave Surface/slab rendering
+   on the legacy path initially. `SESSION_14.md` contains the staged plan and invariants.
+2. **Finish the B-S9-1 interaction regression.** First-hit voxel picking, full drag snapshots, robust curve
    fingerprints, passive lock markers, and marker/order cleanup are implemented. The human confirms that
    locking no longer shifts the guide and v0.1.52 is better, but repeated lock/drag/revert/unlock cycles need
    more playtesting before the bug is closed.
-2. **Final F4 regression/release pass → v0.2.0 candidate.** Cover vanilla-server fallback, policy denial,
+3. **Final F4 regression/release pass → v0.2.0 candidate.** Cover vanilla-server fallback, policy denial,
    mixed public/private mode, push, reconnect, and a public-only multiplayer regression.
-3. **The human wants ENORMOUS fine-detail guides later** (grand domes, etc.) — needs the 3D scan
-   guard / hard ceiling raised (and per-guide counts may then exceed int). Parked until asked.
 4. If asked: **Roof / Tunnel** volumes; concave-safe Free-Shape fill; F3 re-constrain op. Remaining
    flagged decisions are cosmetic.
 
@@ -89,4 +95,4 @@ behavior remains in place. DataVersion 8 / protocol 3 add passive, non-deforming
 `Network/` (packets + handlers), `UI/` (GUI + HUD + `LayoutToolIcons.cs`, the Cairo icon glyphs), `Config/`,
 `Items/`, `Client/` (the tool controller), `Undo/Commands/`. Adding a new shape starts in
 `Shapes/ShapeFactory.cs`. Soft-point flow behavior lives in `Shapes/SoftPointFlow.cs`. (Filenames verified
-against the tree on 2026-07-14 — 65 source files.)
+against the tree on 2026-07-14 — 66 source files.)

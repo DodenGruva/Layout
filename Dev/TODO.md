@@ -1,31 +1,46 @@
-# Layout — TODO / Outstanding Items (current: v0.1.52)
+# Layout — TODO / Outstanding Items (current: v0.1.53)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.1.52)
+## ⭐ Top of the list (v0.1.53)
 
-1. **Finish B-S9-1 interaction regression.** v0.1.49–v0.1.52 implemented first-hit voxel picking, robust
+1. **★ Large-guide mesh implementation — ACTIVE, human-confirmed need.** v0.1.53 removed the hollow
+   Sphere/Dome cubic scan bottleneck. The human placed a roughly 100-block hollow Sphere and finally observed
+   lag. Current rendering emits 8 vertices + 36 indices for every voxel, including shared faces, in one
+   monolithic mesh per guide. Implement the staged plan in `SESSION_14.md`: exposed-face Volumetric meshing,
+   then spatial chunks/culling, then same-colour greedy face merging. Keep settled guides at true scale and
+   retain the old Surface/slab path initially.
+2. **Finish B-S9-1 interaction regression.** v0.1.49–v0.1.52 implemented first-hit voxel picking, robust
    curve-cache invalidation, complete drag snapshots, passive non-deforming Arch lock markers, stale-marker
    removal, and curve-relative insertion ordering. The human confirms that locks no longer shift and the
    latest behavior is better. Test repeated lock → drag → cancel/revert → unlock → relock cycles before
    declaring the bug closed. See OPEN BUGS and `SESSION_13.md`.
-2. **Final F4/public multiplayer regression → v0.2.0 candidate.** Test vanilla-server fallback, server
+3. **Final F4/public multiplayer regression → v0.2.0 candidate.** Test vanilla-server fallback, server
    policy denial, mixed public/private overlays, reconnect persistence, publication, commands, and undo/redo
-   around ownership changes. The feature itself is implemented and playtested through v0.1.52.
-3. **★ Enormous fine-detail guides (human wants this).** The human wants players to build grand structures
-   at fine detail (huge domes etc.). Blocked today by the 3D **scan guard** (`MaxScanCells ≈ 4M`, per
-   shape) and the **hard voxel ceiling** (`GuideManager.HardVoxelCeiling = 10M`) that reject un-renderable
-   giants. Raising them needs care: per-guide voxel COUNTS would then exceed `int` (the running total is
-   already `long` as of v0.1.27), and rendering millions of cubes needs a perf pass (chunked meshes / LOD).
+   around ownership changes. The feature itself is implemented and playtested through v0.1.53.
 4. Remaining flagged decisions (11a–11r, 16a–16d in `SESSION_11.md`) are cosmetic — walk them
    opportunistically.
 
 **Standing workflow rule (human-set — also in CLAUDE.md):** ship a NEW zip per code iteration into
 `..\LayoutZips\`, but update docs / commit ONLY when the human says so. Warn before any context trim if
 the docs are stale.
+
+---
+
+## Implemented in Session 14 (v0.1.53) — full detail and mesh handoff in `SESSION_14.md`
+
+- Added `SphericalShellScan`: hollow Sphere/Dome work now follows shell area rather than scanning the full
+  cubic bounding box. The exact legacy surface predicate and Dome half-space clip are preserved.
+- Exact-equivalence validation passed for every voxel scale, off-grid centres, inverted domes, wall-facing
+  domes, and threshold counts. A 20-block hollow dome produced 242,500 voxels in ~5 ms in isolation.
+- Human playtest: a roughly 100-block hollow Sphere placed successfully and caused visible lag. This is a
+  successful generator test and a confirmed renderer bottleneck.
+- Filled Sphere/Dome still retain the old 4M candidate-cell scan guard. Do not raise the 10M actual-voxel hard
+  ceiling before replacing the current one-complete-cube-per-voxel mesh path.
+- v0.1.53 is built/packaged and good in play, but source/docs are uncommitted. Last pushed commit: `1461c19`.
 
 ---
 
@@ -282,8 +297,9 @@ deliberate (11r).
 
 - **Filled guides recount exactly per drag update** (cells generated each move packet). If big filled discs
   drag sluggishly → add a per-drag count cache. Correctness-first per the standing rule.
-- **Settled guides always mesh at full resolution** (the coarsening-leak fix). Huge guides pay their real
-  cost on every rebuild — watch for hitches while dragging points of 8k+-voxel guides.
+- **Settled guides always mesh at full resolution** (the coarsening-leak fix). v0.1.53 confirms that a roughly
+  100-block hollow Sphere can lag under the current 8-vertices/36-indices-per-voxel monolithic mesh. Optimize
+  representation/chunking; do not silently coarsen settled guides.
 - **`PreviewFullResVoxelCap` = 8,000** — draft-ghost-only; tune if huge drafts stutter.
 - **Division marks add a render-side pass** *(verified)* — `DivisionMarks.Apply` is called on every mesh
   rebuild in `GuideRenderer` (both the draft ghost and placed guides), walking `SampleCurve(128)` for arc
@@ -334,15 +350,16 @@ Park until asked.
 
 ## Next session — start here
 
-**F4 is feature-complete and playtested through v0.1.52 on `ClientOnlyFallback`.** The agenda:
+**F4 is feature-complete and playtested through v0.1.53 on `ClientOnlyFallback`.** The agenda:
 
-1. **Finish B-S9-1 interaction testing.** Focus on repeat lock/drag/cancel-or-revert/unlock cycles and
+1. **Implement the large-guide mesh pass from `SESSION_14.md`.** Start with exact exposed-face Volumetric
+   meshing, then chunk ownership/disposal and culling, then same-colour greedy merging. Validate ordinary
+   guides before testing the 20/40/~100-block Sphere/Dome progression.
+2. **Finish B-S9-1 interaction testing.** Focus on repeat lock/drag/cancel-or-revert/unlock cycles and
    curve-relative targeting around multiple markers. The latest iteration is improved, not yet declared final.
-2. **Final F4/public multiplayer regression → v0.2.0 candidate.** Cover vanilla-server fallback, policy
+3. **Final F4/public multiplayer regression → v0.2.0 candidate.** Cover vanilla-server fallback, policy
    denial, mixed public/private placement and editing, reconnect persistence, publication, commands, and
    undo/redo around ownership boundaries.
-3. **Enormous fine-detail guides (human wants this):** raise the scan guard / hard ceiling + a rendering
-   perf pass (chunked meshes / LOD).
 4. Then, if asked: **Roof / Tunnel** volumes; a concave-safe **Free-Shape fill**; broadcasting the whole
    Free-Shape draft chain to other players (11q); **F3 re-constrain op**.
 
