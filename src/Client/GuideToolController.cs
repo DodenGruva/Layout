@@ -561,10 +561,7 @@ namespace Layout.Client
                 }
                 else
                 {
-                    if (_net.IsLocalGuide(hit.GuideId))
-                        Error("layout-localreshape", "Point insertion and reshaping are not enabled in this test build yet.");
-                    else
-                        _net.SendInsertPoint(hit.GuideId, hit.BodyPos, locked: true);
+                    _net.SendInsertPoint(hit.GuideId, hit.BodyPos, locked: true);
                 }
             }
         }
@@ -598,17 +595,14 @@ namespace Layout.Client
         // play if adoption ever fails silently again.)
         private void BeginBodyInsert(TargetHit hit)
         {
-            if (_net.IsLocalGuide(hit.GuideId))
-            {
-                Error("layout-localreshape", "Point insertion and reshaping are not enabled in this test build yet.");
-                return;
-            }
-
-            _net.SendInsertPoint(hit.GuideId, hit.BodyPos);
+            // Mark the adoption handshake before sending. Networked authority answers asynchronously, while
+            // local authority answers in-process and may publish the inserted point before SendInsertPoint
+            // returns; setting this first makes the same event-driven adoption work for both paths.
             _hasPendingInsert = true;
             _pendingInsertGuide = hit.GuideId;
             _pendingInsertPos = new Vec3d(hit.BodyPos.X, hit.BodyPos.Y, hit.BodyPos.Z);
             _pendingInsertMs = _capi.World.ElapsedMilliseconds;
+            _net.SendInsertPoint(hit.GuideId, hit.BodyPos);
             _capi.Logger.VerboseDebug("[Layout] body-insert sent for {0} at {1}", hit.GuideId, hit.BodyPos);
         }
 
@@ -777,12 +771,6 @@ namespace Layout.Client
 
         private void StartGrab(Guid guideId, int pointIndex)
         {
-            if (_net.IsLocalGuide(guideId))
-            {
-                Error("layout-localreshape", "Point insertion and reshaping are not enabled in this test build yet.");
-                return;
-            }
-
             if (!_net.Guides.TryGetValue(guideId, out GuideData g)) return;
 
             // ABSORB-OR-BREAK, local half (Session 8): if this grab is one the constraint cannot absorb

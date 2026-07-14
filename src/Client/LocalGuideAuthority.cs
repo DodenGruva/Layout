@@ -5,6 +5,7 @@ using Vintagestory.API.Client;
 using Vintagestory.API.MathTools;
 using Layout.Guide;
 using Layout.Network;
+using Layout.Shapes;
 using Layout.Systems;
 using Layout.Undo.Commands;
 
@@ -30,7 +31,23 @@ namespace Layout.Client
         private readonly Action<GuideSetFilledPacket> _applyFilled;
         private readonly Action<GuideSetDivisionsPacket> _applyDivisions;
         private readonly Action<GuideSetSidesPacket> _applySides;
+        private readonly Action<GuideLockStatePacket> _applyLockState;
         private readonly Action<VoxelCapWarningPacket> _applyCapWarning;
+
+        // Client-only mode has one editor, so it needs no contention manager. It still mirrors the server's
+        // drag session so release/cancel and undo have exactly the same gesture semantics.
+        private sealed class DragSession
+        {
+            public Guid GuideId;
+            public readonly Dictionary<int, Vec3d> Origins = new Dictionary<int, Vec3d>();
+            public int InsertedIndex = -1;
+            public SoftPointFlow SoftFlow;
+
+            public DragSession(Guid guideId) { GuideId = guideId; }
+        }
+
+        private Guid _heldGuideId = Guid.Empty;
+        private DragSession _drag;
 
         private string PlayerUid => _capi.World?.Player?.PlayerUID ?? "layout-local-player";
 
@@ -45,6 +62,7 @@ namespace Layout.Client
             Action<GuideSetFilledPacket> applyFilled,
             Action<GuideSetDivisionsPacket> applyDivisions,
             Action<GuideSetSidesPacket> applySides,
+            Action<GuideLockStatePacket> applyLockState,
             Action<VoxelCapWarningPacket> applyCapWarning)
         {
             _capi = capi ?? throw new ArgumentNullException(nameof(capi));
@@ -57,6 +75,7 @@ namespace Layout.Client
             _applyFilled = applyFilled ?? throw new ArgumentNullException(nameof(applyFilled));
             _applyDivisions = applyDivisions ?? throw new ArgumentNullException(nameof(applyDivisions));
             _applySides = applySides ?? throw new ArgumentNullException(nameof(applySides));
+            _applyLockState = applyLockState ?? throw new ArgumentNullException(nameof(applyLockState));
             _applyCapWarning = applyCapWarning ?? throw new ArgumentNullException(nameof(applyCapWarning));
 
             IGuidePersistence persistence;
@@ -112,6 +131,7 @@ namespace Layout.Client
             foreach (Guid id in acceptedIds)
             {
                 if (_guides.DeleteGuide(id).Status != GuideOpStatus.Success) continue;
+                DropHeldGuide(id);
                 _applyDelete(new GuideDeletePacket(id));
                 removedAny = true;
             }
@@ -155,6 +175,7 @@ namespace Layout.Client
             foreach (Guid id in targets)
             {
                 if (_guides.DeleteGuide(id).Status != GuideOpStatus.Success) continue;
+                DropHeldGuide(id);
                 _applyDelete(new GuideDeletePacket(id));
                 removed++;
             }
@@ -181,6 +202,196 @@ namespace Layout.Client
             HandleFailure(Guid.Empty, result);
         }
 
+        public void Grab(Guid id)
+        {
+            if (!TryGet(id, out _)) return;
+            if (_heldGuideId != Guid.Empty && _heldGuideId != id) CancelActiveDrag();
+
+            _heldGuideId = id;
+            _applyLockState(new GuideLockStatePacket(id, PlayerUid));
+        }
+
+        public void Release(Guid id)
+        {
+            if (_heldGuideId != id) return;
+
+            if (_drag != null && _drag.GuideId == id && _guides.TryGetGuide(id, out GuideData guide))
+            {
+                bool removedInsert = false;
+                if (_drag.InsertedIndex >= 0 && _drag.InsertedIndex < guide.ControlPoints.Count)
+                {
+                    bool moved = _drag.Origins.TryGetValue(_drag.InsertedIndex, out Vec3d origin)
+                        && !SamePosition(guide.ControlPoints[_drag.InsertedIndex].WorldPosition, origin);
+                    if (!moved)
+                    {
+                        GuideOperationResult removed = _guides.RemoveControlPoint(id, _drag.InsertedIndex);
+                        removedInsert = removed.IsSuccess;
+                        if (removedInsert) ApplyFull(removed.Guide);
+                    }
+                }
+
+                if (!removedInsert)
+                {
+                    foreach (var pair in _drag.Origins)
+                    {
+                        int index = pair.Key;
+                        if (index < 0 || index >= guide.ControlPoints.Count) continue;
+                        Vec3d current = guide.ControlPoints[index].WorldPosition;
+                        if (!SamePosition(current, pair.Value))
+                            _undo.Record(PlayerUid,
+                                new MoveControlPointCommand(id, index, pair.Value, current));
+                    }
+                }
+            }
+
+            _drag = null;
+            ReleaseHeldGuide(id);
+        }
+
+        public void CancelGrab(Guid id)
+        {
+            if (_heldGuideId != id) return;
+
+            bool mutated = false;
+            GuideData guide = null;
+            if (_drag != null && _drag.GuideId == id && _guides.TryGetGuide(id, out guide))
+            {
+                if (_drag.InsertedIndex >= 0)
+                {
+                    mutated = _guides.RemoveControlPoint(id, _drag.InsertedIndex).IsSuccess;
+                }
+                else if (_drag.Origins.Count > 0)
+                {
+                    foreach (var pair in _drag.Origins)
+                    {
+                        if (pair.Key < 0 || pair.Key >= guide.ControlPoints.Count) continue;
+                        if (SamePosition(guide.ControlPoints[pair.Key].WorldPosition, pair.Value)) continue;
+                        GuideOperationResult restoreResult = _guides.UpdateControlPoints(
+                            id, new[] { new ControlPointEdit(pair.Key, ClonePos(pair.Value)) });
+                        mutated |= restoreResult.IsSuccess;
+                    }
+                }
+            }
+
+            _drag = null;
+            if (mutated && _guides.TryGetGuide(id, out GuideData restored)) ApplyFull(restored);
+            ReleaseHeldGuide(id);
+        }
+
+        public void CancelActiveDrag()
+        {
+            if (_heldGuideId != Guid.Empty) CancelGrab(_heldGuideId);
+        }
+
+        public void MovePoints(Guid id, IReadOnlyList<(int index, Vec3d position)> edits)
+        {
+            if (_heldGuideId != id || edits == null || edits.Count == 0) return;
+            if (!TryGet(id, out GuideData guide))
+            {
+                ReleaseHeldGuide(id);
+                return;
+            }
+
+            DragSession session = DragFor(id);
+            IGuideShape shape = _guides.GetShape(id);
+
+            if (guide.Constraint != ShapeConstraint.None && shape != null)
+            {
+                for (int i = 0; i < edits.Count; i++)
+                {
+                    if (!shape.WouldBreakOnMove(edits[i].index)) continue;
+                    var command = new BreakConstraintCommand(id, guide.Constraint, guide.ControlPoints);
+                    if (_guides.BreakConstraint(id).IsSuccess)
+                        _undo.Record(PlayerUid, command);
+                    break;
+                }
+            }
+
+            var composed = new List<ControlPointEdit>(edits.Count);
+            for (int i = 0; i < edits.Count; i++)
+            {
+                int index = edits[i].index;
+                Vec3d position = ClonePos(edits[i].position);
+                composed.Add(new ControlPointEdit(index, position));
+
+                if (guide.ShapeType == GuideShapeType.Arch && guide.Constraint == ShapeConstraint.None
+                    && index >= 0 && index < guide.ControlPoints.Count)
+                {
+                    session.SoftFlow = session.SoftFlow ?? SoftPointFlow.Capture(guide.ControlPoints, index);
+                    if (session.SoftFlow != null && session.SoftFlow.HasWork)
+                        foreach (var (softIndex, softPosition) in
+                                 session.SoftFlow.ComputeReflowEdits(guide.ControlPoints, index, position))
+                            composed.Add(new ControlPointEdit(softIndex, softPosition));
+                }
+            }
+
+            foreach (ControlPointEdit edit in composed)
+            {
+                if (edit.Index >= 0 && edit.Index < guide.ControlPoints.Count
+                    && !session.Origins.ContainsKey(edit.Index))
+                    session.Origins[edit.Index] = ClonePos(guide.ControlPoints[edit.Index].WorldPosition);
+            }
+
+            GuideOperationResult result = _guides.UpdateControlPoints(id, composed);
+            if (result.IsSuccess) ApplyFull(result.Guide);
+            else HandleFailure(id, result);
+        }
+
+        public void Insert(Guid id, Vec3d position, bool locked)
+        {
+            if (position == null || !TryGet(id, out GuideData guide)) return;
+            if (_heldGuideId != Guid.Empty && _heldGuideId != id) CancelActiveDrag();
+
+            _heldGuideId = id;
+            _applyLockState(new GuideLockStatePacket(id, PlayerUid));
+
+            if (guide.Constraint != ShapeConstraint.None)
+            {
+                var command = new BreakConstraintCommand(id, guide.Constraint, guide.ControlPoints);
+                if (_guides.BreakConstraint(id).IsSuccess)
+                    _undo.Record(PlayerUid, command);
+            }
+
+            IGuideShape shape = _guides.GetShape(id);
+            float t = shape != null ? shape.GetNearestT(position) : 0f;
+
+            if (locked)
+            {
+                Vec3d curvePosition = shape != null ? shape.GetPointAt(t) : ClonePos(position);
+                GuideOperationResult inserted = _guides.InsertControlPoint(id, t, curvePosition);
+                if (inserted.IsSuccess)
+                {
+                    int index = inserted.ControlPointIndex;
+                    GuideOperationResult lockResult = _guides.SetPointLocked(id, index, true);
+                    if (lockResult.IsSuccess)
+                    {
+                        _undo.Record(PlayerUid, new InsertControlPointCommand(id, index, curvePosition));
+                        _undo.Record(PlayerUid, new LockPointCommand(id, index, false, true));
+                        ApplyFull(lockResult.Guide);
+                    }
+                    else HandleFailure(id, lockResult);
+                }
+                else HandleFailure(id, inserted);
+
+                ReleaseHeldGuide(id);
+                return;
+            }
+
+            GuideOperationResult result = _guides.InsertControlPoint(id, t, position);
+            if (result.IsSuccess)
+            {
+                _undo.Record(PlayerUid,
+                    new InsertControlPointCommand(id, result.ControlPointIndex, position));
+                _drag = new DragSession(id) { InsertedIndex = result.ControlPointIndex };
+                ApplyFull(result.Guide);
+            }
+            else
+            {
+                HandleFailure(id, result);
+                ReleaseHeldGuide(id);
+            }
+        }
+
         public void Delete(Guid id)
         {
             if (!_guides.TryGetGuide(id, out GuideData guide))
@@ -193,6 +404,7 @@ namespace Layout.Client
             GuideOperationResult result = _guides.DeleteGuide(id);
             if (result.IsSuccess)
             {
+                DropHeldGuide(id);
                 _undo.Record(PlayerUid, command);
                 _applyDelete(new GuideDeletePacket(id));
             }
@@ -343,6 +555,26 @@ namespace Layout.Client
             return false;
         }
 
+        private DragSession DragFor(Guid id)
+        {
+            if (_drag == null || _drag.GuideId != id) _drag = new DragSession(id);
+            return _drag;
+        }
+
+        private void ReleaseHeldGuide(Guid id)
+        {
+            if (_heldGuideId != id) return;
+            _heldGuideId = Guid.Empty;
+            _applyLockState(new GuideLockStatePacket(id, null));
+        }
+
+        private void DropHeldGuide(Guid id)
+        {
+            if (_heldGuideId != id) return;
+            _drag = null;
+            ReleaseHeldGuide(id);
+        }
+
         private void HandleFailure(Guid id, GuideOperationResult result)
         {
             if (result.Status == GuideOpStatus.RejectedOverCap)
@@ -380,6 +612,19 @@ namespace Layout.Client
                 if (point != null && !point.IsPhantom && point.WorldPosition != null)
                     return point.WorldPosition;
             return null;
+        }
+
+        private static Vec3d ClonePos(Vec3d position) => position == null
+            ? new Vec3d()
+            : new Vec3d(position.X, position.Y, position.Z);
+
+        private static bool SamePosition(Vec3d first, Vec3d second)
+        {
+            if (first == null || second == null) return false;
+            const double epsilon = 1e-6;
+            return Math.Abs(first.X - second.X) <= epsilon
+                && Math.Abs(first.Y - second.Y) <= epsilon
+                && Math.Abs(first.Z - second.Z) <= epsilon;
         }
 
         private void Error(string code, string message) => _capi.TriggerIngameError(this, code, message);

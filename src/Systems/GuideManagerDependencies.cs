@@ -12,6 +12,17 @@ namespace Layout.Systems
         void Store(string key, byte[] data);
     }
 
+    /// <summary>
+    /// Optional recovery extension for persistence providers that keep a previous known-good generation.
+    /// GuideManager uses it only after the primary payload fails to load; server world-save storage is
+    /// intentionally unchanged and does not implement this client-file-specific facility.
+    /// </summary>
+    public interface IRecoverableGuidePersistence : IGuidePersistence
+    {
+        byte[] LoadBackup(string key);
+        void RejectPrimary(string key);
+    }
+
     /// <summary>World-save-backed storage for normal server-authoritative Layout.</summary>
     public sealed class ServerGuidePersistence : IGuidePersistence
     {

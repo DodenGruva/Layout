@@ -428,7 +428,8 @@ namespace Layout.UI
             string editable = _net.LockHolders.TryGetValue(g.Id, out string holder) && !string.IsNullOrEmpty(holder)
                 ? "in use"
                 : "editable";
-            return "Guide " + ShortId(g.Id) + " · " + editable + " · " + voxelCount.ToString("N0") + " vox";
+            string guideLabel = _net.IsLocalGuide(g.Id) ? "Private guide " : "Guide ";
+            return guideLabel + ShortId(g.Id) + " · " + editable + " · " + voxelCount.ToString("N0") + " vox";
         }
 
         // Text-only cap gauge: "Cap [████░░░░] 62%" plus a near/over-cap marker. We keep it

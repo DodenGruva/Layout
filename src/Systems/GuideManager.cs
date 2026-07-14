@@ -364,6 +364,11 @@ namespace Layout.Systems
 
             var live = snapshot.DeepClone();                    // independent of the command's stored snapshot
             if (live.ControlPoints == null) live.ControlPoints = new List<ControlPoint>();
+            // Restore normally receives an internal undo snapshot, but client-only push deliberately reuses
+            // it as an import seam. Reject an invalid client-supplied scale before shape sampling can perform
+            // arithmetic with it. Normal guides and every internal undo snapshot already use these values.
+            if (!GuideData.IsValidVoxelScale(live.VoxelScale))
+                return GuideOperationResult.Invalid(live);
             IGuideShape shape = ShapeFactory.Adopt(live);
             shape.RecalculatePhantomPoints();
 
@@ -375,6 +380,11 @@ namespace Layout.Systems
                 return GuideOperationResult.OverGuideCount(live, CountGuidesBy(live.CreatorUid), _maxGuidesPerPlayer);
 
             int count = shape.GetVoxelCount(live.VoxelScale, live.IsFilled);
+            // Restore is also the import seam used by client-only "push". Keep the absolute rendering
+            // safeguard identical to normal creation even when an administrator disables configurable
+            // per-guide and world caps; otherwise a client-supplied snapshot could bypass the ceiling.
+            if (count > HardVoxelCeiling)
+                return GuideOperationResult.OverCap(live, count, HardVoxelCeiling);
             if (_perGuideVoxelCap > 0 && count > _perGuideVoxelCap)
                 return GuideOperationResult.OverCap(live, count, _perGuideVoxelCap);
             if (_totalVoxelCap > 0 && _totalVoxels + count > _totalVoxelCap)
@@ -906,6 +916,7 @@ namespace Layout.Systems
         // defaults (missing Projection/Plane/IsFilled fall to Volumetric / default plane / hollow).
         public void Load()
         {
+            Exception primaryError = null;
             try
             {
                 byte[] bytes = _persistence.Load(StorageKey);
@@ -915,44 +926,73 @@ namespace Layout.Systems
                     return;
                 }
 
-                string json = Encoding.UTF8.GetString(bytes);
-                var root = JsonConvert.DeserializeObject<PersistedRoot>(json, _jsonSettings);
-
-                _guides.Clear();
-                _shapes.Clear();
-                _voxelCounts.Clear();
-                _totalVoxels = 0;
-
-                if (root?.Guides == null)
-                {
-                    _logger.Warning("[Layout] Guide save blob was empty or unreadable; starting with no guides.");
-                    return;
-                }
-
-                foreach (var g in root.Guides)
-                {
-                    if (g == null) continue;
-                    if (g.ControlPoints == null) g.ControlPoints = new List<ControlPoint>();
-                    g.DataVersion = GuideData.CurrentDataVersion; // normalize after default-driven migration
-
-                    IGuideShape shape = ShapeFactory.Adopt(g);
-                    shape.RecalculatePhantomPoints();             // restore phantoms before first sync
-
-                    _guides[g.Id] = g;
-                    _shapes[g.Id] = shape;
-                    StoreCount(g.Id, shape.GetVoxelCount(g.VoxelScale, g.IsFilled));
-                }
-
+                LoadPayload(bytes);
                 _logger.Notification("[Layout] Loaded {0} guide(s).", _guides.Count);
+                return;
             }
             catch (Exception e)
             {
-                _logger.Error("[Layout] Failed to load guides; starting with none: {0}", e);
-                _guides.Clear();
-                _shapes.Clear();
-                _voxelCounts.Clear();
-                _totalVoxels = 0;
+                primaryError = e;
+                ClearLoadedState();
             }
+
+            if (_persistence is IRecoverableGuidePersistence recoverable)
+            {
+                try
+                {
+                    byte[] backup = recoverable.LoadBackup(StorageKey);
+                    if (backup != null && backup.Length > 0)
+                    {
+                        LoadPayload(backup);
+                        recoverable.RejectPrimary(StorageKey);
+                        _logger.Warning(
+                            "[Layout] Primary guide file was unreadable; recovered {0} guide(s) from its backup.",
+                            _guides.Count);
+                        return;
+                    }
+                }
+                catch (Exception backupError)
+                {
+                    ClearLoadedState();
+                    _logger.Error(
+                        "[Layout] Failed to load both primary and backup guide files; starting with none. Primary: {0} Backup: {1}",
+                        primaryError, backupError);
+                    return;
+                }
+            }
+
+            _logger.Error("[Layout] Failed to load guides; starting with none: {0}", primaryError);
+        }
+
+        private void LoadPayload(byte[] bytes)
+        {
+            string json = Encoding.UTF8.GetString(bytes);
+            var root = JsonConvert.DeserializeObject<PersistedRoot>(json, _jsonSettings);
+            if (root?.Guides == null)
+                throw new JsonSerializationException("The guide payload has no guide collection.");
+
+            ClearLoadedState();
+            foreach (var g in root.Guides)
+            {
+                if (g == null) continue;
+                if (g.ControlPoints == null) g.ControlPoints = new List<ControlPoint>();
+                g.DataVersion = GuideData.CurrentDataVersion; // normalize after default-driven migration
+
+                IGuideShape shape = ShapeFactory.Adopt(g);
+                shape.RecalculatePhantomPoints();             // restore phantoms before first sync
+
+                _guides[g.Id] = g;
+                _shapes[g.Id] = shape;
+                StoreCount(g.Id, shape.GetVoxelCount(g.VoxelScale, g.IsFilled));
+            }
+        }
+
+        private void ClearLoadedState()
+        {
+            _guides.Clear();
+            _shapes.Clear();
+            _voxelCounts.Clear();
+            _totalVoxels = 0;
         }
 
         // Versioned on-disk envelope. Voxels are never part of this — always re-derived from control points.

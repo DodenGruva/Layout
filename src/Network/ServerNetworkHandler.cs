@@ -175,33 +175,29 @@ namespace Layout.Network
                     .WithArgs(parsers.Word("all-or-radius"))
                     .HandleWith(OnDispelCommand)
                 .EndSubCommand()
-                .BeginSubCommand("client")
-                    .WithDescription("Client-only Layout mode commands.")
+                .BeginSubCommand("private")
+                    .WithDescription("Place new guides privately on this client when the server permits it.")
                     .RequiresPrivilege(Privilege.chat)
-                    .BeginSubCommand("set")
-                        .WithDescription("Place new guides client-only when the server permits it.")
-                        .RequiresPrivilege(Privilege.chat)
-                        .HandleWith(OnClientModeSetCommand)
-                    .EndSubCommand()
+                    .HandleWith(OnPrivateModeCommand)
+                .EndSubCommand()
+                .BeginSubCommand("public")
+                    .WithDescription("Place new guides publicly on the server.")
+                    .RequiresPrivilege(Privilege.chat)
+                    .HandleWith(OnPublicModeCommand)
+                .EndSubCommand()
+                .BeginSubCommand("client")
+                    .WithDescription("Private-guide publication commands.")
+                    .RequiresPrivilege(Privilege.chat)
                     .BeginSubCommand("push")
                         .WithDescription("Publish private guides to the server.")
                         .RequiresPrivilege(Privilege.chat)
                         .WithArgs(parsers.Word("all"))
                         .HandleWith(OnClientPushCommand)
                     .EndSubCommand()
-                .EndSubCommand()
-                .BeginSubCommand("server")
-                    .WithDescription("Server-authoritative Layout mode commands.")
-                    .RequiresPrivilege(Privilege.chat)
-                    .BeginSubCommand("set")
-                        .WithDescription("Place new guides on the server.")
-                        .RequiresPrivilege(Privilege.chat)
-                        .HandleWith(OnServerModeSetCommand)
-                    .EndSubCommand()
                 .EndSubCommand();
         }
 
-        private TextCommandResult OnClientModeSetCommand(TextCommandCallingArgs args)
+        private TextCommandResult OnPrivateModeCommand(TextCommandCallingArgs args)
         {
             if (args.Caller.Player is not IServerPlayer player)
                 return TextCommandResult.Error("This command must be run by a player.");
@@ -217,7 +213,7 @@ namespace Layout.Network
             return TextCommandResult.Success("New Layout guides will be client-only.");
         }
 
-        private TextCommandResult OnServerModeSetCommand(TextCommandCallingArgs args)
+        private TextCommandResult OnPublicModeCommand(TextCommandCallingArgs args)
         {
             if (args.Caller.Player is not IServerPlayer player)
                 return TextCommandResult.Error("This command must be run by a player.");
@@ -233,7 +229,7 @@ namespace Layout.Network
             string argument = (args[0] as string)?.Trim().ToLowerInvariant();
             if (argument != "all") return TextCommandResult.Error("Usage: /layout client push all");
             if (_clientOnlyPlayers.Contains(player.PlayerUID))
-                return TextCommandResult.Error("Switch to server mode first with /layout server set.");
+                return TextCommandResult.Error("Switch to public mode first with /layout public.");
 
             _channel.SendPacket(new ClientGuidePushRequestPacket(), player);
             return TextCommandResult.Success("Requested all private guides for server publication.");
@@ -390,7 +386,7 @@ namespace Layout.Network
             {
                 _channel.SendPacket(new ClientGuidePushResultPacket(
                     Array.Empty<byte[]>(), packet?.Guides?.Length ?? 0,
-                    "Switch to server mode before pushing private guides."), player);
+                    "Switch to public mode before pushing private guides (/layout public)."), player);
                 return;
             }
 
@@ -429,7 +425,9 @@ namespace Layout.Network
                         continue;
                     }
 
-                    _undo.Record(player.PlayerUID, new CreateGuideCommand(result.Guide));
+                    // Publishing is a committed transfer, not a normal server-side creation gesture. The
+                    // client removes its private copy after this acceptance is confirmed, so recording a
+                    // CreateGuideCommand here would let Ctrl+Z delete the player's only remaining copy.
                     _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
                     accepted.Add(NetIds.ToBytes(localId));
                 }

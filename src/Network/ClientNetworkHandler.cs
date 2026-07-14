@@ -40,6 +40,10 @@ namespace Layout.Network
         private bool _preferClientOnly;
         private bool _serverLayoutAvailable;
         private bool _serverAllowsClientOnlyMode;
+        // Placement mode answers where NEW guides go. In a mixed world the player can still edit either
+        // public or private guides, so undo/redo must follow the authority of the most recent mutation rather
+        // than blindly following placement mode. Null means no mutation has occurred in this world yet.
+        private bool? _lastMutationWasLocal;
 
         private readonly Dictionary<Guid, GuideData> _guides = new Dictionary<Guid, GuideData>();
         private readonly HashSet<Guid> _serverGuideIds = new HashSet<Guid>();
@@ -200,6 +204,7 @@ namespace Layout.Network
             _receivedServerBulkSync = false;
             _serverLayoutAvailable = false;
             _serverAllowsClientOnlyMode = false;
+            _lastMutationWasLocal = null;
             _local = null;
             _guides.Clear();
             _serverGuideIds.Clear();
@@ -228,7 +233,7 @@ namespace Layout.Network
             _local = new LocalGuideAuthority(
                 _capi,
                 OnLocalCreate, OnLocalDelete, OnHide, OnLockPoint, OnRescale,
-                OnSetProjection, OnSetFilled, OnSetDivisions, OnSetSides, OnCapWarning);
+                OnSetProjection, OnSetFilled, OnSetDivisions, OnSetSides, OnLockState, OnCapWarning);
             OnLocalBulkSync(_local.CreateBulkSyncPacket());
         }
 
@@ -348,6 +353,7 @@ namespace Layout.Network
             }
             else
             {
+                if (AuthorityMode == ClientAuthorityMode.Local) _local?.CancelActiveDrag();
                 SetAuthorityMode(ClientAuthorityMode.Networked);
             }
 
@@ -365,7 +371,7 @@ namespace Layout.Network
         {
             if (AuthorityMode != ClientAuthorityMode.Networked)
             {
-                _capi.ShowChatMessage("[Layout] Switch to server mode before pushing private guides.");
+                _capi.ShowChatMessage("[Layout] Switch to public mode before pushing private guides (/layout public).");
                 return;
             }
 
@@ -534,7 +540,9 @@ namespace Layout.Network
             bool inverted = false, int sides = 0, Vec3d apex = null,
             IReadOnlyList<Vec3d> chain = null, bool closed = false)
         {
-            if (AuthorityMode == ClientAuthorityMode.Local && _local != null)
+            bool localMutation = AuthorityMode == ClientAuthorityMode.Local && _local != null;
+            _lastMutationWasLocal = localMutation;
+            if (localMutation)
             {
                 _local.Create(start, end, settings, shapeType, constraint, shapePlaneAxis,
                     inverted, sides, apex, chain, closed);
@@ -571,28 +579,34 @@ namespace Layout.Network
         /// <summary>Request the edit lock on a guide.</summary>
         public void SendGrab(Guid guideId)
         {
-            if (IsLocalGuide(guideId)) return;
+            if (IsLocalGuide(guideId) && _local != null) { _local.Grab(guideId); return; }
             _channel.SendPacket(new GuideGrabPacket(guideId));
         }
 
         /// <summary>Release the edit lock on a guide (the server commits the drag's undo entry on receipt).</summary>
         public void SendRelease(Guid guideId)
         {
-            if (IsLocalGuide(guideId)) return;
+            if (IsLocalGuide(guideId) && _local != null) { _local.Release(guideId); return; }
             _channel.SendPacket(new GuideReleasePacket(guideId));
         }
 
         /// <summary>Cancel (not commit) our in-progress grab — see <see cref="GuideCancelGrabPacket"/>.</summary>
         public void SendCancelGrab(Guid guideId)
         {
-            if (IsLocalGuide(guideId)) return;
+            if (IsLocalGuide(guideId) && _local != null) { _local.CancelGrab(guideId); return; }
             _channel.SendPacket(new GuideCancelGrabPacket(guideId));
         }
 
         /// <summary>Move a single control point (the common grab-and-drag case).</summary>
         public void SendMovePoint(Guid guideId, int index, Vec3d position)
         {
-            if (IsLocalGuide(guideId)) return;
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation)
+            {
+                _local.MovePoints(guideId, new[] { (index, position) });
+                return;
+            }
             _channel.SendPacket(new GuideUpdatePacket(
                 guideId, new[] { new ControlPointEditDto(index, Vec3Dto.From(position)) }));
         }
@@ -600,8 +614,10 @@ namespace Layout.Network
         /// <summary>Move several control points at once.</summary>
         public void SendMovePoints(Guid guideId, IReadOnlyList<(int index, Vec3d position)> edits)
         {
-            if (IsLocalGuide(guideId)) return;
             if (edits == null || edits.Count == 0) return;
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation) { _local.MovePoints(guideId, edits); return; }
             var dto = new ControlPointEditDto[edits.Count];
             for (int i = 0; i < edits.Count; i++)
                 dto[i] = new ControlPointEditDto(edits[i].index, Vec3Dto.From(edits[i].position));
@@ -616,42 +632,54 @@ namespace Layout.Network
         /// </summary>
         public void SendInsertPoint(Guid guideId, Vec3d position, bool locked = false)
         {
-            if (IsLocalGuide(guideId)) return;
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation) { _local.Insert(guideId, position, locked); return; }
             _channel.SendPacket(new GuideInsertPointPacket(guideId, -1, Vec3Dto.From(position), locked));
         }
 
         /// <summary>Dispel a guide.</summary>
         public void SendDelete(Guid guideId)
         {
-            if (IsLocalGuide(guideId) && _local != null) { _local.Delete(guideId); return; }
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation) { _local.Delete(guideId); return; }
             _channel.SendPacket(new GuideDeletePacket(guideId));
         }
 
         /// <summary>Toggle a guide's hidden flag.</summary>
         public void SendHide(Guid guideId, bool hidden)
         {
-            if (IsLocalGuide(guideId) && _local != null) { _local.SetHidden(guideId, hidden); return; }
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation) { _local.SetHidden(guideId, hidden); return; }
             _channel.SendPacket(new GuideHidePacket(guideId, hidden));
         }
 
         /// <summary>Set a control point's locked-constraint flag.</summary>
         public void SendLockPoint(Guid guideId, int index, bool locked)
         {
-            if (IsLocalGuide(guideId) && _local != null) { _local.SetPointLocked(guideId, index, locked); return; }
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation) { _local.SetPointLocked(guideId, index, locked); return; }
             _channel.SendPacket(new GuideLockPointPacket(guideId, index, locked));
         }
 
         /// <summary>Change a guide's voxel scale.</summary>
         public void SendRescale(Guid guideId, int scale)
         {
-            if (IsLocalGuide(guideId) && _local != null) { _local.Rescale(guideId, scale); return; }
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation) { _local.Rescale(guideId, scale); return; }
             _channel.SendPacket(new GuideRescalePacket(guideId, scale));
         }
 
         /// <summary>Set a guide's projection mode and plane.</summary>
         public void SendSetProjection(Guid guideId, ProjectionMode mode, ProjectionPlane plane)
         {
-            if (IsLocalGuide(guideId) && _local != null) { _local.SetProjection(guideId, mode, plane); return; }
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation) { _local.SetProjection(guideId, mode, plane); return; }
             _channel.SendPacket(new GuideSetProjectionPacket(
                 guideId, (int)mode, (int)plane.FlattenedAxis, plane.PlaneOffset));
         }
@@ -659,43 +687,59 @@ namespace Layout.Network
         /// <summary>Toggle a guide's filled flag.</summary>
         public void SendSetFilled(Guid guideId, bool filled)
         {
-            if (IsLocalGuide(guideId) && _local != null) { _local.SetFilled(guideId, filled); return; }
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation) { _local.SetFilled(guideId, filled); return; }
             _channel.SendPacket(new GuideSetFilledPacket(guideId, filled));
         }
 
         /// <summary>Session 9: set a guide's equal-part division marks (purely visual).</summary>
         public void SendSetDivisions(Guid guideId, int divisions)
         {
-            if (IsLocalGuide(guideId) && _local != null) { _local.SetDivisions(guideId, divisions); return; }
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation) { _local.SetDivisions(guideId, divisions); return; }
             _channel.SendPacket(new GuideSetDivisionsPacket(guideId, divisions));
         }
 
         /// <summary>Session 11: set a polygon guide's side count.</summary>
         public void SendSetSides(Guid guideId, int sides)
         {
-            if (IsLocalGuide(guideId) && _local != null) { _local.SetSides(guideId, sides); return; }
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation) { _local.SetSides(guideId, sides); return; }
             _channel.SendPacket(new GuideSetSidesPacket(guideId, sides));
         }
 
         /// <summary>Session 11: spring a guide back to its as-placed form (SHIFT+click).</summary>
         public void SendSpringBack(Guid guideId)
         {
-            if (IsLocalGuide(guideId) && _local != null) { _local.SpringBack(guideId); return; }
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation) { _local.SpringBack(guideId); return; }
             _channel.SendPacket(new GuideSpringBackPacket(guideId));
         }
 
-        /// <summary>Undo the local player's most recent action.</summary>
+        /// <summary>
+        /// Undo against the authority of the most recently mutated guide. Before the first mutation in a
+        /// world, placement mode remains the intuitive fallback and preserves the original behaviour.
+        /// </summary>
         public void SendUndo()
         {
-            if (AuthorityMode == ClientAuthorityMode.Local && _local != null) { _local.Undo(); return; }
+            if (UndoRedoUsesLocalAuthority()) { _local.Undo(); return; }
             _channel.SendPacket(new UndoRequestPacket());
         }
 
-        /// <summary>Redo the local player's most recently undone action.</summary>
+        /// <summary>Redo against the same most-recent guide authority as undo.</summary>
         public void SendRedo()
         {
-            if (AuthorityMode == ClientAuthorityMode.Local && _local != null) { _local.Redo(); return; }
+            if (UndoRedoUsesLocalAuthority()) { _local.Redo(); return; }
             _channel.SendPacket(new RedoRequestPacket());
         }
+
+        private bool IsLocalMutation(Guid guideId) => _local != null && IsLocalGuide(guideId);
+
+        private bool UndoRedoUsesLocalAuthority() => _local != null
+            && (_lastMutationWasLocal ?? AuthorityMode == ClientAuthorityMode.Local);
     }
 }

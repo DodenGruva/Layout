@@ -6,6 +6,7 @@ using Vintagestory.API.MathTools;
 using Layout.Guide;
 using Layout.Shapes;
 using Layout.Network;
+using Layout.Client;
 
 namespace Layout.Systems
 {
@@ -78,7 +79,7 @@ namespace Layout.Systems
         // is live, the controller feeds (start, current aim, live settings) every tick; the mesh is rebuilt
         // only when one of those actually changes (aim is voxel-snapped, so this is cell-by-cell, not
         // per-tick). The ghost is built by the exact pipeline placed guides use, so what you see is what the
-        // server will build — including the Blue/Indigo far-foot coplanarity shade while aiming.
+    // authority will build — including the ownership palette and far-foot coplanarity shade while aiming.
         private MeshRef _draftPreviewMesh;
         private Vec3d _draftPreviewOrigin;
         private Vec3d _previewStart, _previewEnd, _previewApex;
@@ -402,7 +403,9 @@ namespace Layout.Systems
                 PlaneInset = isSurface ? SurfacePlaneInset : 0f,
                 SurfaceSlabThickness = isSurface ? SurfaceSlabThicknessWorld : 0f,
                 SurfaceSlabSide = slabSide,
-                GrabbedPoint = null
+                GrabbedPoint = null,
+                PrivateAnchors = _network.ServerLayoutAvailable
+                    && _network.AuthorityMode == ClientAuthorityMode.Local
             };
             AssignAnchors(shape.ControlPoints, options);
 
@@ -692,7 +695,9 @@ namespace Layout.Systems
                 PlaneInset = isSurface ? SurfacePlaneInset : 0f,
                 SurfaceSlabThickness = isSurface ? SurfaceSlabThicknessWorld : 0f,
                 SurfaceSlabSide = slabSide,
-                GrabbedPoint = ResolveGrabbedPoint(guide, points)
+                GrabbedPoint = ResolveGrabbedPoint(guide, points),
+                PrivateAnchors = _network.ServerLayoutAvailable
+                    && _network.IsLocalGuide(guide.Id)
             };
             AssignAnchors(points, options);
 
@@ -709,8 +714,8 @@ namespace Layout.Systems
             return cp?.IsPhantom == false ? cp.WorldPosition : null; // phantoms are never grabbed
         }
 
-        // Feed the builder the start (first) and far (last) anchor so it can apply the Blue/Indigo coplanarity
-        // shade. Anchors are identified by role, not fixed indices, to stay robust to future layouts.
+        // Feed the builder the start (first) and far (last) anchor so it can apply the active ownership
+        // palette's coplanarity shade. Anchors are identified by role, not fixed indices.
         private static void AssignAnchors(List<ControlPoint> points, GuideMeshOptions options)
         {
             ControlPoint start = null, far = null;
