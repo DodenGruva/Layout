@@ -52,6 +52,7 @@ namespace Layout.Client
         private const int MoveSendIntervalMs = 100;     // ~10 Hz throttled move packets (the M4 figure)
         private const double MaxReach = 12.0;           // furthest a guide can be targeted, in blocks
         private const int PendingInsertTimeoutMs = 2000;
+        private const int CapClampIterations = 12;      // sub-voxel precision across the maximum grab reach
 
         private readonly ICoreClientAPI _capi;
         private readonly DraftManager _draft;
@@ -76,6 +77,8 @@ namespace Layout.Client
             public long LastSendMs;
             public Vec3d OriginPos;                     // where the point was when grabbed (cancel snap-back)
             public bool WasInsert;                      // grab began as a body insert → cancel removes it
+            public ShapeConstraint OriginConstraint;    // complete pre-gesture state for reliable cancel
+            public List<ControlPoint> OriginPoints;
 
             /// <summary>
             /// Local soft-point preview: captured at grab time for EVERY grab on a free arch (the held
@@ -94,14 +97,16 @@ namespace Layout.Client
         // tests the ACTUAL sampled curve. Sampling every guide at 33 Hz would be wasteful, so polylines are
         // cached per guide behind a cheap content fingerprint (point count + coordinate sum), recomputed
         // per tick per guide in O(points) and resampled only when the fingerprint moves.
-        private readonly Dictionary<Guid, (double fingerprint, List<Vec3d> curve)> _curveCache
-            = new Dictionary<Guid, (double, List<Vec3d>)>();
+        private readonly Dictionary<Guid, (ulong fingerprint, List<Vec3d> curve)> _curveCache
+            = new Dictionary<Guid, (ulong, List<Vec3d>)>();
 
         // --- Pending insert (right-click sent; waiting to adopt the new point as a grab) -----------
         private bool _hasPendingInsert;
         private Guid _pendingInsertGuide;
         private Vec3d _pendingInsertPos;
         private long _pendingInsertMs;
+        private ShapeConstraint _pendingInsertOriginConstraint;
+        private List<ControlPoint> _pendingInsertOriginPoints;
 
         public GuideToolController(
             ICoreClientAPI capi,
@@ -173,7 +178,10 @@ namespace Layout.Client
 
             // Stale pending insert (packet lost / rejected) simply expires.
             if (_hasPendingInsert && _capi.World.ElapsedMilliseconds - _pendingInsertMs > PendingInsertTimeoutMs)
+            {
                 _hasPendingInsert = false;
+                _pendingInsertOriginPoints = null;
+            }
 
             UpdateAim();
         }
@@ -344,6 +352,23 @@ namespace Layout.Client
                     eye.Z + dir.Z * _grab.Depth);
             }
 
+            // The mirror preview normally runs ahead of the authority. Without a local cap check it can
+            // therefore cross the server's per-guide limit, get corrected by a resync, and cross it again
+            // on the next frame while the cursor remains outside — visible as violent size flicker. Clamp
+            // along this frame's drag segment before either previewing or sending, so the guide meets the
+            // cap as a hard geometric boundary instead.
+            target = ClampDragTargetToPerGuideCap(g, target);
+
+            // Lock-in-place markers deliberately do not enter the spline when they are created. Once the
+            // player actually moves this guide, promote them locally after cap validation and before the
+            // preview; the authority performs the identical promotion in its first accepted move. Cancel
+            // restores the pre-drag snapshot, including marker status.
+            if (!NearlySame(cp.WorldPosition, target) && PromoteLockedMarkers(g))
+            {
+                ShapeFactory.Adopt(g).RecalculatePhantomPoints();
+                _curveCache.Remove(g.Id);
+            }
+
             // Local preview ahead of the mirror (see remarks): nudge the live mirror point in place and
             // rebuild just this guide. The White override is already active for this point.
             if (!NearlySame(cp.WorldPosition, target))
@@ -375,6 +400,76 @@ namespace Layout.Client
                 _grab.LastSentPos = new Vec3d(target.X, target.Y, target.Z);
                 _grab.LastSendMs = now;
             }
+        }
+
+        private Vec3d ClampDragTargetToPerGuideCap(GuideData guide, Vec3d requested)
+        {
+            int configuredCap = _net.PerGuideVoxelCap;
+            int cap = configuredCap > 0
+                ? Math.Min(configuredCap, GuideManager.HardVoxelCeiling)
+                : GuideManager.HardVoxelCeiling;
+
+            if (PreviewFitsPerGuideCap(guide, requested, cap)) return requested;
+
+            Vec3d current = guide.ControlPoints[_grab.PointIndex].WorldPosition;
+            Vec3d low = new Vec3d(current.X, current.Y, current.Z);
+            Vec3d high = requested;
+
+            // Current should always be authoritative or a previously validated preview. If an unusual
+            // packet ordering leaves it over-cap, do not search from a false premise; v0.1.47's release
+            // reconciliation will restore the authority's copy.
+            if (!PreviewFitsPerGuideCap(guide, low, cap)) return low;
+
+            for (int i = 0; i < CapClampIterations; i++)
+            {
+                var mid = new Vec3d(
+                    (low.X + high.X) * 0.5,
+                    (low.Y + high.Y) * 0.5,
+                    (low.Z + high.Z) * 0.5);
+
+                if (PreviewFitsPerGuideCap(guide, mid, cap)) low = mid;
+                else high = mid;
+            }
+
+            return low;
+        }
+
+        // Evaluates a drag candidate on an isolated control-point copy. This deliberately follows the
+        // authority's operation order (constraint break, grabbed move, soft reflow) and uses the same
+        // threshold counter, so an accepted preview position will also pass the server's per-guide check.
+        private bool PreviewFitsPerGuideCap(GuideData guide, Vec3d candidate, int cap)
+        {
+            var points = new List<ControlPoint>(guide.ControlPoints.Count);
+            foreach (ControlPoint point in guide.ControlPoints)
+                points.Add(point == null ? new ControlPoint() : point.Clone());
+
+            // Match GuideManager.UpdateControlPoints: the first actual move promotes passive lock markers
+            // before reshaping, so cap acceptance includes the geometry that will really be committed.
+            for (int i = 0; i < points.Count; i++)
+                if (points[i].IsLockMarker && points[i].IsLocked)
+                    points[i].IsLockMarker = false;
+
+            IGuideShape shape = ShapeFactory.Adopt(
+                guide.ShapeType, guide.Constraint, guide.ShapePlaneAxis, points,
+                guide.Sides, guide.IsClosed);
+
+            if (guide.Constraint != ShapeConstraint.None && shape.WouldBreakOnMove(_grab.PointIndex))
+                shape.BreakConstraint();
+
+            shape.MoveControlPoint(_grab.PointIndex, candidate);
+            if (_grab.SoftFlow != null && _grab.SoftFlow.HasWork)
+            {
+                foreach (var (softIndex, softPosition) in
+                         _grab.SoftFlow.ComputeReflowEdits(
+                             guide.ControlPoints, _grab.PointIndex, candidate))
+                {
+                    if (softIndex >= 0 && softIndex < shape.ControlPoints.Count)
+                        shape.MoveControlPoint(softIndex, softPosition);
+                }
+            }
+
+            return GuideShapeVoxelCounting.CountUpTo(
+                shape, guide.VoxelScale, guide.IsFilled, cap) <= cap;
         }
 
         // ==========================================================================================
@@ -552,16 +647,20 @@ namespace Layout.Client
                 // Genuine lock-in-place (aimed clearly away from any point) is unchanged.
                 // [Flagged: right-click only — left-click body near a marker still means "insert here"
                 //  under the chisel-precision ethos; symmetric snap is one line if wanted.]
+                // B-S9-1: forgiving curve-nearest targeting can name an adjacent cell that the view ray
+                // never entered. Lock-in-place instead requires a real hit on a rendered outline voxel.
+                if (!TryFindFirstGuideVoxelHit(g, out Vec3d lockCellCentre)) return;
+
                 double snap = Math.Max(0.20, g.VoxelScale / 16.0 * 1.5);
-                int nearPoint = NearestHandleIndex(g, hit.BodyPos);
+                int nearPoint = NearestHandleIndex(g, lockCellCentre);
                 if (nearPoint >= 0 &&
-                    Dist(g.ControlPoints[nearPoint].WorldPosition, hit.BodyPos) <= snap)
+                    Dist(g.ControlPoints[nearPoint].WorldPosition, lockCellCentre) <= snap)
                 {
                     _net.SendLockPoint(hit.GuideId, nearPoint, !g.ControlPoints[nearPoint].IsLocked);
                 }
                 else
                 {
-                    _net.SendInsertPoint(hit.GuideId, hit.BodyPos, locked: true);
+                    _net.SendInsertPoint(hit.GuideId, lockCellCentre, locked: true);
                 }
             }
         }
@@ -581,6 +680,7 @@ namespace Layout.Client
             for (int i = 0; i < g.ControlPoints.Count; i++)
             {
                 if (g.ControlPoints[i].IsPhantom) continue;
+                if (g.ControlPoints[i].IsLockMarker && !g.ControlPoints[i].IsLocked) continue;
                 Vec3d p = g.ControlPoints[i].WorldPosition;
                 double dx = p.X - pos.X, dy = p.Y - pos.Y, dz = p.Z - pos.Z;
                 double d2 = dx * dx + dy * dy + dz * dz;
@@ -598,6 +698,16 @@ namespace Layout.Client
             // Mark the adoption handshake before sending. Networked authority answers asynchronously, while
             // local authority answers in-process and may publish the inserted point before SendInsertPoint
             // returns; setting this first makes the same event-driven adoption work for both paths.
+            if (_net.Guides.TryGetValue(hit.GuideId, out GuideData beforeInsert))
+            {
+                _pendingInsertOriginConstraint = beforeInsert.Constraint;
+                _pendingInsertOriginPoints = CloneControlPoints(beforeInsert.ControlPoints);
+            }
+            else
+            {
+                _pendingInsertOriginConstraint = ShapeConstraint.None;
+                _pendingInsertOriginPoints = null;
+            }
             _hasPendingInsert = true;
             _pendingInsertGuide = hit.GuideId;
             _pendingInsertPos = new Vec3d(hit.BodyPos.X, hit.BodyPos.Y, hit.BodyPos.Z);
@@ -773,6 +883,9 @@ namespace Layout.Client
         {
             if (!_net.Guides.TryGetValue(guideId, out GuideData g)) return;
 
+            ShapeConstraint originConstraint = g.Constraint;
+            List<ControlPoint> originPoints = CloneControlPoints(g.ControlPoints);
+
             // ABSORB-OR-BREAK, local half (Session 8): if this grab is one the constraint cannot absorb
             // (a circle's minor handle), clear the constraint on the MIRROR now so the drag preview
             // samples the free parent immediately — the server breaks authoritatively on the first move
@@ -804,6 +917,8 @@ namespace Layout.Client
                 LastSendMs = 0,
                 OriginPos = new Vec3d(at.X, at.Y, at.Z),    // deep copy (the Vec3d aliasing rule)
                 WasInsert = false,
+                OriginConstraint = originConstraint,
+                OriginPoints = originPoints,
                 SoftFlow = softFlow
             };
 
@@ -811,23 +926,31 @@ namespace Layout.Client
             _renderer.SetGrabbedPoint(guideId, pointIndex);         // optimistic White; revoked via lock event
         }
 
-        // Session-8 right-click cancel: the anti-release. Sends GuideCancelGrabPacket (the server restores
-        // the drag origins — or removes the point outright if the grab began as a body insert — and frees
-        // the lock, then broadcasts the corrected guide). For a pre-existing point we also snap the local
-        // mirror back to the grab origin immediately, so cancel FEELS instant rather than round-trip-late;
-        // this is the same sanctioned mirror-write the drag preview uses, and the authoritative broadcast
-        // lands on the same value. A fresh insert can't be removed locally (indices would shift under the
-        // pending broadcast), so its removal pops in with the round trip — acceptably fast at ~10 Hz scale.
+        // Session-8 right-click cancel: the anti-release. Restore the complete pre-gesture snapshot in the
+        // local mirror immediately, then ask the authority to restore the same snapshot and release the
+        // lock. This includes soft-flow points, an inserted body point, and any constraint broken by the
+        // drag, so cancellation is atomic and does not wait for a network correction to look complete.
         private void CancelGrab()
         {
             if (_grab == null) return;
 
-            if (!_grab.WasInsert && _grab.OriginPos != null &&
-                _net.Guides.TryGetValue(_grab.GuideId, out GuideData g) &&
-                _grab.PointIndex >= 0 && _grab.PointIndex < g.ControlPoints.Count)
+            if (_grab.OriginPoints != null &&
+                _net.Guides.TryGetValue(_grab.GuideId, out GuideData g))
             {
-                ControlPoint cp = g.ControlPoints[_grab.PointIndex];
+                g.ControlPoints.Clear();
+                foreach (ControlPoint point in _grab.OriginPoints)
+                    g.ControlPoints.Add(point == null ? new ControlPoint() : point.Clone());
+                g.Constraint = _grab.OriginConstraint;
+                ShapeFactory.Adopt(g).RecalculatePhantomPoints();
+                _curveCache.Remove(g.Id);
+            }
+            else if (!_grab.WasInsert && _grab.OriginPos != null &&
+                     _net.Guides.TryGetValue(_grab.GuideId, out GuideData fallback) &&
+                     _grab.PointIndex >= 0 && _grab.PointIndex < fallback.ControlPoints.Count)
+            {
+                ControlPoint cp = fallback.ControlPoints[_grab.PointIndex];
                 cp.SetPosition(_grab.OriginPos.X, _grab.OriginPos.Y, _grab.OriginPos.Z);
+                _curveCache.Remove(fallback.Id);
             }
 
             _net.SendCancelGrab(_grab.GuideId);
@@ -839,12 +962,12 @@ namespace Layout.Client
         {
             if (_grab == null) return;
 
-            if (_grab.LastSentPos != null &&
-                _net.Guides.TryGetValue(_grab.GuideId, out GuideData g) &&
+            if (_net.Guides.TryGetValue(_grab.GuideId, out GuideData g) &&
                 _grab.PointIndex >= 0 && _grab.PointIndex < g.ControlPoints.Count)
             {
                 Vec3d final = g.ControlPoints[_grab.PointIndex].WorldPosition;
-                if (!NearlySame(_grab.LastSentPos, final))
+                Vec3d comparison = _grab.LastSentPos ?? _grab.OriginPos;
+                if (comparison != null && !NearlySame(comparison, final))
                     _net.SendMovePoint(_grab.GuideId, _grab.PointIndex, final);
             }
 
@@ -878,6 +1001,7 @@ namespace Layout.Client
             if (_grab != null) DropGrabLocally();
             if (_draft.HasActiveDraft) _draft.ClearDraft();
             _hasPendingInsert = false;
+            _pendingInsertOriginPoints = null;
             _hud.ClearDraftAim();
             _hud.SetExaminedGuide(null);
             _renderer.ClearDraftPreview();
@@ -887,7 +1011,11 @@ namespace Layout.Client
         {
             if (_grab != null && _grab.GuideId == guideId) DropGrabLocally();
             if (_draft.SelectedGuideId == guideId) _draft.ClearSelection();
-            if (_hasPendingInsert && _pendingInsertGuide == guideId) _hasPendingInsert = false;
+            if (_hasPendingInsert && _pendingInsertGuide == guideId)
+            {
+                _hasPendingInsert = false;
+                _pendingInsertOriginPoints = null;
+            }
         }
 
         // Adopt a freshly-inserted point as a grab: the server gave us the lock as part of the insert, so
@@ -908,12 +1036,15 @@ namespace Layout.Client
             for (int i = 0; i < g.ControlPoints.Count; i++)
             {
                 ControlPoint cp = g.ControlPoints[i];
-                if (cp.IsPhantom || cp.IsLocked) continue;
+                if (cp.IsPhantom || cp.IsLocked || cp.IsLockMarker) continue;
                 double d = Dist(cp.WorldPosition, _pendingInsertPos);
                 if (d < best) { best = d; nearest = i; }
             }
 
+            ShapeConstraint originConstraint = _pendingInsertOriginConstraint;
+            List<ControlPoint> originPoints = _pendingInsertOriginPoints;
             _hasPendingInsert = false;
+            _pendingInsertOriginPoints = null;
             if (nearest < 0) return;
 
             Vec3d at = g.ControlPoints[nearest].WorldPosition;
@@ -934,6 +1065,8 @@ namespace Layout.Client
                 LastSendMs = 0,
                 OriginPos = new Vec3d(at.X, at.Y, at.Z),
                 WasInsert = true,       // cancel removes this point rather than restoring it
+                OriginConstraint = originConstraint,
+                OriginPoints = originPoints,
                 SoftFlow = adoptedFlow
             };
             _renderer.SetGrabbedPoint(g.Id, nearest);
@@ -1012,8 +1145,9 @@ namespace Layout.Client
 
                 for (int i = 0; i < g.ControlPoints.Count; i++)
                 {
-                    ControlPoint cp = g.ControlPoints[i];
-                    if (cp.IsPhantom) continue;
+                ControlPoint cp = g.ControlPoints[i];
+                if (cp.IsPhantom) continue;
+                if (cp.IsLockMarker && !cp.IsLocked) continue;
 
                     bool pointTargetable = (!g.IsHidden || cp.IsAnchor) && (includeLockedPoints || !cp.IsLocked);
                     if (pointTargetable &&
@@ -1053,18 +1187,139 @@ namespace Layout.Client
             return bestHit;
         }
 
-        // Cached dense polyline of a guide's visible curve; resampled only when the guide's control points
-        // actually change (fingerprint = count + coordinate sum — cheap, and any real edit moves it).
+        // Exact lock-in-place picker for B-S9-1. It intentionally samples the outline even when the guide
+        // is filled: body targeting means the defining curve, not arbitrary interior fill cells. This work
+        // happens only on a right-click, never in the per-tick targeting loop.
+        private bool TryFindFirstGuideVoxelHit(GuideData guide, out Vec3d cellCentre)
+        {
+            cellCentre = null;
+            if (guide?.ControlPoints == null || guide.ControlPoints.Count < 2) return false;
+
+            GuideData copy = guide.DeepClone();
+            IGuideShape shape = ShapeFactory.Adopt(copy);
+            shape.RecalculatePhantomPoints();
+            List<VoxelPosition> voxels = shape.GetVoxelPositions(guide.VoxelScale, filled: false);
+            if (voxels.Count == 0) return false;
+
+            Vec3d origin = EyePos();
+            Vec3d dir = ViewDir();
+            double edge = guide.VoxelScale / 16.0;
+            double half = edge * 0.5;
+            bool surface = guide.Projection == ProjectionMode.Surface;
+            PlaneAxis flatAxis = guide.Plane.FlattenedAxis;
+            double plane = guide.Plane.PlaneOffset / 16.0;
+            double surfaceHalfThickness = Math.Min(half, 0.02);
+
+            // Raw outline cells can collapse onto one Surface slab, so test each visible tangential cell once.
+            HashSet<(int, int)> surfaceCells = surface ? new HashSet<(int, int)>() : null;
+            double bestT = double.MaxValue;
+            double bestCentreDistance = double.MaxValue;
+
+            foreach (VoxelPosition voxel in voxels)
+            {
+                double minX = voxel.X / 16.0;
+                double minY = voxel.Y / 16.0;
+                double minZ = voxel.Z / 16.0;
+                double maxX = minX + edge;
+                double maxY = minY + edge;
+                double maxZ = minZ + edge;
+                double cx = minX + half;
+                double cy = minY + half;
+                double cz = minZ + half;
+
+                if (surface)
+                {
+                    (int, int) key = flatAxis == PlaneAxis.X ? (voxel.Y, voxel.Z)
+                        : flatAxis == PlaneAxis.Y ? (voxel.X, voxel.Z)
+                        : (voxel.X, voxel.Y);
+                    if (!surfaceCells.Add(key)) continue;
+
+                    if (flatAxis == PlaneAxis.X)
+                    {
+                        minX = plane - surfaceHalfThickness; maxX = plane + surfaceHalfThickness; cx = plane;
+                    }
+                    else if (flatAxis == PlaneAxis.Y)
+                    {
+                        minY = plane - surfaceHalfThickness; maxY = plane + surfaceHalfThickness; cy = plane;
+                    }
+                    else
+                    {
+                        minZ = plane - surfaceHalfThickness; maxZ = plane + surfaceHalfThickness; cz = plane;
+                    }
+                }
+
+                if (!RayAabbEntry(origin, dir, minX, minY, minZ, maxX, maxY, maxZ, out double t)
+                    || t > MaxReach) continue;
+
+                var centre = new Vec3d(cx, cy, cz);
+                RayPointDistance(origin, dir, centre, out double centreDistance, out _);
+                if (t < bestT - 1e-7
+                    || (Math.Abs(t - bestT) <= 1e-7 && centreDistance < bestCentreDistance))
+                {
+                    bestT = t;
+                    bestCentreDistance = centreDistance;
+                    cellCentre = centre;
+                }
+            }
+
+            return cellCentre != null;
+        }
+
+        // Slab-method ray/AABB intersection. Returns the first non-negative distance along a normalized ray.
+        private static bool RayAabbEntry(
+            Vec3d origin, Vec3d dir,
+            double minX, double minY, double minZ, double maxX, double maxY, double maxZ,
+            out double entry)
+        {
+            double tMin = 0.0;
+            double tMax = double.MaxValue;
+
+            if (!ClipRayAxis(origin.X, dir.X, minX, maxX, ref tMin, ref tMax)
+                || !ClipRayAxis(origin.Y, dir.Y, minY, maxY, ref tMin, ref tMax)
+                || !ClipRayAxis(origin.Z, dir.Z, minZ, maxZ, ref tMin, ref tMax))
+            {
+                entry = double.MaxValue;
+                return false;
+            }
+
+            entry = tMin;
+            return tMax >= tMin;
+        }
+
+        private static bool ClipRayAxis(
+            double origin, double direction, double min, double max, ref double tMin, ref double tMax)
+        {
+            const double epsilon = 1e-12;
+            if (Math.Abs(direction) <= epsilon) return origin >= min && origin <= max;
+
+            double a = (min - origin) / direction;
+            double b = (max - origin) / direction;
+            if (a > b) { double swap = a; a = b; b = swap; }
+            if (a > tMin) tMin = a;
+            if (b < tMax) tMax = b;
+            return tMax >= tMin && tMax >= 0.0;
+        }
+
+        // Cached dense polyline of a guide's visible curve; resampled only when its full geometry fingerprint
+        // changes. Hashing every coordinate separately prevents stale targeting when multi-point drag deltas
+        // cancel each other out in a simple coordinate sum.
         private List<Vec3d> GetCurvePolyline(GuideData g)
         {
-            double fp = g.ControlPoints.Count * 1000.0;
+            ulong fp = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            fp = unchecked((fp ^ (uint)g.ControlPoints.Count) * prime);
             for (int i = 0; i < g.ControlPoints.Count; i++)
             {
                 Vec3d p = g.ControlPoints[i].WorldPosition;
-                fp += p.X + p.Y * 3.0 + p.Z * 7.0;      // asymmetric weights: axis swaps don't cancel out
+                fp = unchecked((fp ^ (ulong)BitConverter.DoubleToInt64Bits(p.X)) * prime);
+                fp = unchecked((fp ^ (ulong)BitConverter.DoubleToInt64Bits(p.Y)) * prime);
+                fp = unchecked((fp ^ (ulong)BitConverter.DoubleToInt64Bits(p.Z)) * prime);
+                fp = unchecked((fp ^ (g.ControlPoints[i].IsPhantom ? 1UL : 0UL)) * prime);
+                fp = unchecked((fp ^ (g.ControlPoints[i].IsLockMarker ? 1UL : 0UL)) * prime);
             }
-            fp += (int)g.Constraint * 13.0;             // a break re-shapes the curve without moving points
-            fp += g.Sides * 29.0;                       // a side-count change re-shapes a polygon the same way
+            fp = unchecked((fp ^ (uint)g.Constraint) * prime);
+            fp = unchecked((fp ^ (uint)g.Sides) * prime);
+            fp = unchecked((fp ^ (g.IsClosed ? 1UL : 0UL)) * prime);
 
             if (_curveCache.TryGetValue(g.Id, out var entry) && entry.fingerprint == fp)
                 return entry.curve;
@@ -1257,6 +1512,28 @@ namespace Layout.Client
         // ==========================================================================================
         //  Small helpers
         // ==========================================================================================
+
+        private static List<ControlPoint> CloneControlPoints(IReadOnlyList<ControlPoint> points)
+        {
+            var copy = new List<ControlPoint>(points?.Count ?? 0);
+            if (points != null)
+                for (int i = 0; i < points.Count; i++)
+                    copy.Add(points[i] == null ? new ControlPoint() : points[i].Clone());
+            return copy;
+        }
+
+        private static bool PromoteLockedMarkers(GuideData guide)
+        {
+            bool changed = false;
+            for (int i = 0; i < guide.ControlPoints.Count; i++)
+            {
+                ControlPoint point = guide.ControlPoints[i];
+                if (!point.IsLockMarker || !point.IsLocked) continue;
+                point.IsLockMarker = false;
+                changed = true;
+            }
+            return changed;
+        }
 
         private string MyUid => _capi.World.Player.PlayerUID;
 

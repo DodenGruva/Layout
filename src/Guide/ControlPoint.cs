@@ -46,6 +46,13 @@ namespace Layout.Guide
         public bool IsPrimary { get; set; }
 
         /// <summary>
+        /// A lock-in-place marker that initially constrains the existing curve without becoming a spline
+        /// knot. This prevents the act of locking from reparameterizing and shifting a Catmull-Rom arch.
+        /// It is promoted to a regular knot only when the player later actively reshapes that guide.
+        /// </summary>
+        public bool IsLockMarker { get; set; }
+
+        /// <summary>
         /// Parameterless constructor for deserialization. Initializes a non-null zero position
         /// so the WorldPosition getter never returns null before or during deserialization.
         /// </summary>
@@ -63,7 +70,8 @@ namespace Layout.Guide
             bool isLocked = false,
             bool isPhantom = false,
             bool isAnchor = false,
-            bool isPrimary = false)
+            bool isPrimary = false,
+            bool isLockMarker = false)
         {
             WorldPosition = worldPosition != null
                 ? new Vec3d(worldPosition.X, worldPosition.Y, worldPosition.Z)
@@ -72,6 +80,7 @@ namespace Layout.Guide
             IsPhantom = isPhantom;
             IsAnchor = isAnchor;
             IsPrimary = isPrimary;
+            IsLockMarker = isLockMarker;
         }
 
         /// <summary>
@@ -89,6 +98,7 @@ namespace Layout.Guide
             IsPhantom = other.IsPhantom;
             IsAnchor = other.IsAnchor;
             IsPrimary = other.IsPrimary;
+            IsLockMarker = other.IsLockMarker;
         }
 
         /// <summary>Returns a fully independent deep copy. Equivalent to the copy constructor.</summary>

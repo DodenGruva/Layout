@@ -85,6 +85,8 @@ namespace Layout.Network
         {
             public Guid GuideId;
             public readonly Dictionary<int, Vec3d> Origins = new Dictionary<int, Vec3d>();
+            public ShapeConstraint OriginConstraint;
+            public List<ControlPoint> OriginPoints;
 
             /// <summary>
             /// Index of the point this grab CREATED (body insert), or −1 for a grab of a pre-existing
@@ -550,6 +552,15 @@ namespace Layout.Network
             }
 
             LockAcquireOutcome outcome = _locks.TryAcquireLock(id, fromPlayer.PlayerUID);
+            if (outcome.CanEdit && _guides.TryGetGuide(id, out GuideData grabbedGuide))
+            {
+                DragSession session = DragFor(fromPlayer.PlayerUID, id);
+                if (session.OriginPoints == null)
+                {
+                    session.OriginConstraint = grabbedGuide.Constraint;
+                    session.OriginPoints = ClonePoints(grabbedGuide.ControlPoints);
+                }
+            }
             // Everyone learns the holder; the requester learns whether the grab was granted or denied.
             _channel.BroadcastPacket(new GuideLockStatePacket(id, outcome.HolderUid));
         }
@@ -590,7 +601,15 @@ namespace Layout.Network
                     // removed there is nothing left to commit (and its index is void anyway).
                     if (!removedInsert)
                     {
-                        foreach (var pair in session.Origins)
+                        bool promotedMarker = HasPromotedMarker(
+                            session.OriginPoints, g.ControlPoints);
+                        if (promotedMarker)
+                        {
+                            _undo.Record(uid, new SpringBackCommand(
+                                id, session.OriginConstraint, session.OriginPoints,
+                                g.Constraint, g.ControlPoints));
+                        }
+                        else foreach (var pair in session.Origins)
                         {
                             int idx = pair.Key;
                             Vec3d origin = pair.Value;
@@ -606,6 +625,11 @@ namespace Layout.Network
 
             if (_locks.ReleaseLock(id, uid))
                 _channel.BroadcastPacket(new GuideLockStatePacket(id, null));
+
+            // Dragging is optimistically previewed in the mover's client mirror. Restate the complete
+            // authoritative guide after release so a rejected or not-yet-sent final preview cannot remain
+            // locally oversized (and therefore invisible while its control points are still targetable).
+            ResyncOrDrop(fromPlayer, id);
         }
 
         // Session-8 right-click-cancel: the anti-release. Where OnRelease COMMITS the drag (one undo entry),
@@ -629,7 +653,14 @@ namespace Layout.Network
             if (_drags.TryGetValue(uid, out DragSession session) && session.GuideId == id
                 && _guides.TryGetGuide(id, out GuideData g))
             {
-                if (session.InsertedIndex >= 0)
+                if (session.OriginPoints != null)
+                {
+                    // Restore the gesture atomically: every soft-flow point, the grabbed point, phantom
+                    // geometry, and any constraint broken by the first move all return together.
+                    mutated = _guides.RestoreConstraint(
+                        id, session.OriginConstraint, session.OriginPoints).Status == GuideOpStatus.Success;
+                }
+                else if (session.InsertedIndex >= 0)
                 {
                     // Fresh body insert: cancel removes the whole gesture. RemoveControlPoint validates the
                     // index itself (the guide may have changed shape under an admin op while we dragged).
@@ -658,6 +689,8 @@ namespace Layout.Network
 
             if (_locks.ReleaseLock(id, uid))
                 _channel.BroadcastPacket(new GuideLockStatePacket(id, null));
+
+            if (!mutated) ResyncOrDrop(fromPlayer, id);
         }
 
         // ==========================================================================================
@@ -737,13 +770,18 @@ namespace Layout.Network
                     session.Origins[e.Index] = ClonePos(g.ControlPoints[e.Index].WorldPosition);
             }
 
+            bool promotedLockMarker = false;
+            for (int i = 0; i < g.ControlPoints.Count && !promotedLockMarker; i++)
+                promotedLockMarker = g.ControlPoints[i].IsLockMarker && g.ControlPoints[i].IsLocked;
+
             GuideOperationResult result = _guides.UpdateControlPoints(id, composed.ToArray());
             switch (result.Status)
             {
                 case GuideOpStatus.Success:
                     // Authoritative — every client (including the mover, keeping its mirror exact) applies
                     // it. A constraint break changed more than positions, so that case sends full state.
-                    if (broke && _guides.TryGetGuide(id, out GuideData gPostMove))
+                    if ((broke || promotedLockMarker) &&
+                        _guides.TryGetGuide(id, out GuideData gPostMove))
                     {
                         _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(gPostMove)));
                     }
@@ -796,6 +834,13 @@ namespace Layout.Network
             }
 
             Vec3d pos = p.Position.ToVec3d();
+            ShapeConstraint insertOriginConstraint = ShapeConstraint.None;
+            List<ControlPoint> insertOriginPoints = null;
+            if (_guides.TryGetGuide(id, out GuideData insertOriginGuide))
+            {
+                insertOriginConstraint = insertOriginGuide.Constraint;
+                insertOriginPoints = ClonePoints(insertOriginGuide.ControlPoints);
+            }
 
             // ABSORB-OR-BREAK (Session 8): a body insert is a grab no constraint can absorb — an arbitrary
             // interpolation point has no place on a perfect half-circle. Break first (undoable as one
@@ -822,13 +867,14 @@ namespace Layout.Network
             if (p.Locked)
             {
                 Vec3d curvePos = shape != null ? shape.GetPointAt(t) : pos;
-                GuideOperationResult ins = _guides.InsertControlPoint(id, t, curvePos);
+                bool marker = gPre != null && gPre.ShapeType == GuideShapeType.Arch;
+                GuideOperationResult ins = _guides.InsertControlPoint(id, t, curvePos, marker);
                 if (ins.Status == GuideOpStatus.Success)
                 {
                     int idx = ins.ControlPointIndex;
                     _guides.SetPointLocked(id, idx, true);
                     // Two undo steps, honestly: first Ctrl+Z unlocks, second removes the point.
-                    _undo.Record(uid, new InsertControlPointCommand(id, idx, curvePos));
+                    _undo.Record(uid, new InsertControlPointCommand(id, idx, curvePos, marker));
                     _undo.Record(uid, new LockPointCommand(id, idx, false, true));
                     // One full-state broadcast carries the new point AND its locked flag together.
                     if (_guides.TryGetGuide(id, out GuideData withLock))
@@ -858,6 +904,8 @@ namespace Layout.Network
                 // GuideCancelGrabPacket that arrives before any move still knows to remove the point.
                 DragSession session = DragFor(uid, id);
                 session.InsertedIndex = landedIndex;
+                session.OriginConstraint = insertOriginConstraint;
+                session.OriginPoints = insertOriginPoints;
 
                 // Announce the lock (the player now holds it) and the new point to everyone. After a
                 // constraint break the point LIST changed shape, so one full-state packet replaces the
@@ -938,7 +986,21 @@ namespace Layout.Network
             if (BlockedByEditLock(fromPlayer, id)) return;
             if (p.Index < 0 || p.Index >= g.ControlPoints.Count) { SendResync(fromPlayer, g); return; }
 
-            bool before = g.ControlPoints[p.Index].IsLocked;
+            ControlPoint target = g.ControlPoints[p.Index];
+            if (!p.Locked && target.IsLockMarker)
+            {
+                var command = new RemoveLockMarkerCommand(id, p.Index, target.WorldPosition);
+                GuideOperationResult removed = _guides.RemoveControlPoint(id, p.Index);
+                if (removed.Status == GuideOpStatus.Success)
+                {
+                    _undo.Record(fromPlayer.PlayerUID, command);
+                    _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(removed.Guide)));
+                }
+                else HandleNonSuccessToggle(fromPlayer, id, removed, g);
+                return;
+            }
+
+            bool before = target.IsLocked;
             GuideOperationResult result = _guides.SetPointLocked(id, p.Index, p.Locked);
             if (result.Status == GuideOpStatus.Success)
             {
@@ -1224,6 +1286,26 @@ namespace Layout.Network
         }
 
         private static Vec3d ClonePos(Vec3d v) => v == null ? new Vec3d() : new Vec3d(v.X, v.Y, v.Z);
+
+        private static List<ControlPoint> ClonePoints(IReadOnlyList<ControlPoint> points)
+        {
+            var copy = new List<ControlPoint>(points?.Count ?? 0);
+            if (points != null)
+                for (int i = 0; i < points.Count; i++)
+                    copy.Add(points[i] == null ? new ControlPoint() : points[i].Clone());
+            return copy;
+        }
+
+        private static bool HasPromotedMarker(
+            IReadOnlyList<ControlPoint> before, IReadOnlyList<ControlPoint> after)
+        {
+            if (before == null || after == null || before.Count != after.Count) return false;
+            for (int i = 0; i < before.Count; i++)
+                if (before[i].IsLockMarker && before[i].IsLocked &&
+                    !after[i].IsLockMarker && after[i].IsLocked)
+                    return true;
+            return false;
+        }
 
         private static bool SamePosition(Vec3d a, Vec3d b)
         {

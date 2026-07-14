@@ -761,7 +761,9 @@ namespace Layout.Systems
             {
                 if (scales[i] < guideScale) continue;
                 chosen = scales[i];
-                if (shape.GetVoxelCount(scales[i], filled) <= PreviewFullResVoxelCap) return scales[i];
+                if (GuideShapeVoxelCounting.CountUpTo(
+                    shape, scales[i], filled, PreviewFullResVoxelCap) <= PreviewFullResVoxelCap)
+                    return scales[i];
             }
             return chosen;
         }

@@ -133,6 +133,7 @@ namespace Layout.Shapes
             for (int i = 0; i < pts.Count; i++)
             {
                 if (pts[i].IsPhantom) continue;
+                if (pts[i].IsLockMarker && !pts[i].IsLocked) continue;
                 if (IsStructural(pts[i]) || i == grabbedIndex) structural.Add(i);
                 else soft.Add(i);
             }

@@ -336,7 +336,7 @@ namespace Layout.Systems
                 shape is Shapes.FreeShape fs && fs.IsClosed);
             data.CreatorUid = creatorUid;
 
-            int count = shape.GetVoxelCount(data.VoxelScale, data.IsFilled);
+            int count = CountForCaps(data.Id, shape, data.VoxelScale, data.IsFilled);
             if (count > HardVoxelCeiling)                        // scan-guard sentinel — too big to render
                 return GuideOperationResult.OverCap(data, count, HardVoxelCeiling);
             if (_perGuideVoxelCap > 0 && count > _perGuideVoxelCap)
@@ -364,6 +364,7 @@ namespace Layout.Systems
 
             var live = snapshot.DeepClone();                    // independent of the command's stored snapshot
             if (live.ControlPoints == null) live.ControlPoints = new List<ControlPoint>();
+            RemoveInactiveLockMarkers(live.ControlPoints);
             // Restore normally receives an internal undo snapshot, but client-only push deliberately reuses
             // it as an import seam. Reject an invalid client-supplied scale before shape sampling can perform
             // arithmetic with it. Normal guides and every internal undo snapshot already use these values.
@@ -379,7 +380,7 @@ namespace Layout.Systems
             if (_maxGuidesPerPlayer > 0 && live.CreatorUid != null && CountGuidesBy(live.CreatorUid) >= _maxGuidesPerPlayer)
                 return GuideOperationResult.OverGuideCount(live, CountGuidesBy(live.CreatorUid), _maxGuidesPerPlayer);
 
-            int count = shape.GetVoxelCount(live.VoxelScale, live.IsFilled);
+            int count = CountForCaps(live.Id, shape, live.VoxelScale, live.IsFilled);
             // Restore is also the import seam used by client-only "push". Keep the absolute rendering
             // safeguard identical to normal creation even when an administrator disables configurable
             // per-guide and world caps; otherwise a client-supplied snapshot could bypass the ceiling.
@@ -423,10 +424,13 @@ namespace Layout.Systems
             }
 
             var snapshot = SnapshotPoints(g);
+            // A body lock begins as a non-deforming marker. The first real reshape promotes it to an
+            // ordinary spline knot as part of that active gesture, so it can constrain the edited curve.
+            PromoteLockedMarkers(g);
             for (int i = 0; i < edits.Count; i++)
                 shape.MoveControlPoint(edits[i].Index, edits[i].Position);
 
-            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled);
             if (WouldExceedCaps(id, count, out int cap))
             {
                 RestorePoints(id, snapshot);
@@ -450,17 +454,23 @@ namespace Layout.Systems
         /// the network packet carries <c>t</c> or the resulting index is a Module 4 (networking) decision, and
         /// the index seam makes either recoverable.
         /// </remarks>
-        public GuideOperationResult InsertControlPoint(Guid id, float t, Vec3d position)
+        public GuideOperationResult InsertControlPoint(Guid id, float t, Vec3d position, bool isLockMarker = false)
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             if (position == null) return GuideOperationResult.Invalid(g);
             var shape = _shapes[id];
 
             var snapshot = SnapshotPoints(g);
-            shape.InsertControlPoint(t, position);
-            int insertedIndex = shape.GetNearestControlPointIndex(position); // the just-inserted point
+            int insertedIndex;
+            if (isLockMarker && shape is ArchShape arch)
+                insertedIndex = arch.InsertLockMarker(t, position);
+            else
+            {
+                shape.InsertControlPoint(t, position);
+                insertedIndex = shape.GetNearestControlPointIndex(position); // the just-inserted point
+            }
 
-            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled);
             if (WouldExceedCaps(id, count, out int cap))
             {
                 RestorePoints(id, snapshot);
@@ -470,6 +480,21 @@ namespace Layout.Systems
             StoreCount(id, count);
             Persist();
             return GuideOperationResult.Success(g, count, insertedIndex);
+        }
+
+        private static void PromoteLockedMarkers(GuideData guide)
+        {
+            for (int i = 0; i < guide.ControlPoints.Count; i++)
+            {
+                ControlPoint point = guide.ControlPoints[i];
+                if (point.IsLockMarker && point.IsLocked) point.IsLockMarker = false;
+            }
+        }
+
+        private static void RemoveInactiveLockMarkers(List<ControlPoint> points)
+        {
+            if (points == null) return;
+            points.RemoveAll(point => point != null && point.IsLockMarker && !point.IsLocked);
         }
 
         /// <summary>
@@ -596,7 +621,7 @@ namespace Layout.Systems
             g.Projection = mode;
             g.Plane = plane;
 
-            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled);
             if (WouldExceedCaps(id, count, out int cap))
             {
                 g.Projection = oldMode;
@@ -659,7 +684,7 @@ namespace Layout.Systems
             IGuideShape shape = ShapeFactory.Adopt(g);          // side count is baked into the shape view
             _shapes[id] = shape;
 
-            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled);
             if (WouldExceedCaps(id, count, out int cap))
             {
                 g.Sides = oldSides;
@@ -776,7 +801,7 @@ namespace Layout.Systems
             bool oldFilled = g.IsFilled;
             g.IsFilled = filled;
 
-            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled);
             if (WouldExceedCaps(id, count, out int cap))
             {
                 g.IsFilled = oldFilled;
@@ -801,7 +826,7 @@ namespace Layout.Systems
             int oldScale = g.VoxelScale;
             g.VoxelScale = newScale;
 
-            int count = shape.GetVoxelCount(newScale, g.IsFilled);
+            int count = CountForCaps(id, shape, newScale, g.IsFilled);
             if (WouldExceedCaps(id, count, out int cap))
             {
                 g.VoxelScale = oldScale;
@@ -814,6 +839,28 @@ namespace Layout.Systems
         }
 
         // --- Cap + count bookkeeping --------------------------------------------------------------
+
+        // Counts only as far as cap enforcement needs. Volume shapes can stop their cell scan as soon as
+        // this threshold is crossed; other shapes fall back to their exact counter. When the result is
+        // accepted it is still exact, so the running total/cache retain their existing invariant.
+        private int CountForCaps(Guid id, IGuideShape shape, int scale, bool filled)
+        {
+            int limit = HardVoxelCeiling;
+            if (_perGuideVoxelCap > 0) limit = Math.Min(limit, _perGuideVoxelCap);
+
+            if (_totalVoxelCap > 0)
+            {
+                int currentForId = _voxelCounts.TryGetValue(id, out int current) ? current : 0;
+                long totalWithoutGuide = _totalVoxels - currentForId;
+                long available = (long)_totalVoxelCap - totalWithoutGuide;
+                int totalLimit = available <= 0 ? 0
+                    : available >= int.MaxValue ? int.MaxValue
+                    : (int)available;
+                limit = Math.Min(limit, totalLimit);
+            }
+
+            return GuideShapeVoxelCounting.CountUpTo(shape, scale, filled, limit);
+        }
 
         // True if making guide `id`'s count `newCount` would breach the per-guide or projected total cap.
         // A cap of 0 means unlimited — that check is skipped (normalised in the ctor).
@@ -976,6 +1023,7 @@ namespace Layout.Systems
             {
                 if (g == null) continue;
                 if (g.ControlPoints == null) g.ControlPoints = new List<ControlPoint>();
+                RemoveInactiveLockMarkers(g.ControlPoints);
                 g.DataVersion = GuideData.CurrentDataVersion; // normalize after default-driven migration
 
                 IGuideShape shape = ShapeFactory.Adopt(g);

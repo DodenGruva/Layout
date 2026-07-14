@@ -298,11 +298,10 @@ namespace Layout.Shapes
             if (_constraint == ShapeConstraint.SemiCircle) BreakConstraint();
             if (_controlPoints.Count < 4) return; // no curve to insert into
 
-            CatmullRomSpline spline = BuildSpline();
+            CatmullRomSpline spline = BuildSpline(out List<int> sourceIndices);
             if (!spline.HasCurve) return;
 
-            int segStart = spline.SegmentStartIndexForT(Clamp(t, 0f, 1f));
-            int insertIndex = segStart + 1; // always interior: never 0 and never the trailing phantom
+            int insertIndex = OrderedInsertIndex(spline, sourceIndices, Clamp(t, 0f, 1f));
 
             // Plain body point; the ControlPoint constructor deep-copies the position.
             var inserted = new ControlPoint(position);
@@ -311,6 +310,44 @@ namespace Layout.Shapes
             RecalculatePhantomPoints();
             // Post-condition (per IGuideShape): the inserted point sits exactly at `position`, so it is now
             // the nearest grabbable control point to `position`.
+        }
+
+        /// <summary>
+        /// Inserts a lock-in-place marker in list order without making it a Catmull-Rom knot. The visible
+        /// curve is therefore byte-for-byte unchanged when the red lock appears. GuideManager promotes the
+        /// marker to a regular knot only if a later active drag needs it to constrain the reshaped curve.
+        /// </summary>
+        public int InsertLockMarker(float t, Vec3d position)
+        {
+            if (_constraint == ShapeConstraint.SemiCircle) BreakConstraint();
+            CatmullRomSpline spline = BuildSpline(out List<int> sourceIndices);
+            if (!spline.HasCurve) return -1;
+
+            int insertIndex = OrderedInsertIndex(spline, sourceIndices, Clamp(t, 0f, 1f));
+            _controlPoints.Insert(insertIndex,
+                new ControlPoint(position, isLockMarker: true));
+            RecalculatePhantomPoints();
+            return insertIndex;
+        }
+
+        // Passive markers are omitted from the spline but still live in the shared control-point list.
+        // Preserve their actual along-curve order when a later marker or grabbed body point enters the same
+        // geometric segment; otherwise SoftPointFlow reads a folded baseline and can throw a right-side grab
+        // back toward the apex.
+        private int OrderedInsertIndex(CatmullRomSpline spline, List<int> sourceIndices, float t)
+        {
+            int segStart = spline.SegmentStartIndexForT(t);
+            int insertIndex = sourceIndices[segStart] + 1;
+            int segmentEnd = sourceIndices[segStart + 1];
+            for (int i = insertIndex; i < segmentEnd; i++)
+            {
+                ControlPoint point = _controlPoints[i];
+                if (!point.IsLockMarker) continue;
+                float markerT = GetNearestT(point.WorldPosition);
+                if (markerT <= t) insertIndex = i + 1;
+                else break;
+            }
+            return insertIndex;
         }
 
         public void MoveControlPoint(int index, Vec3d newPosition)
@@ -360,9 +397,15 @@ namespace Layout.Shapes
             if (n < 4) return;
 
             Vec3d startAnchor = list[1].WorldPosition;
-            Vec3d startNeighbor = list[2].WorldPosition;
+            int startNeighborIndex = 2;
+            while (startNeighborIndex < n - 1 && list[startNeighborIndex].IsLockMarker)
+                startNeighborIndex++;
+            Vec3d startNeighbor = list[startNeighborIndex].WorldPosition;
             Vec3d endAnchor = list[n - 2].WorldPosition;
-            Vec3d endNeighbor = list[n - 3].WorldPosition;
+            int endNeighborIndex = n - 3;
+            while (endNeighborIndex > 0 && list[endNeighborIndex].IsLockMarker)
+                endNeighborIndex--;
+            Vec3d endNeighbor = list[endNeighborIndex].WorldPosition;
 
             // OPENING DIRECTION (Session 11, SHIFT-invert). The phantoms used to drop unconditionally
             // BELOW the feet (up-opening arches only); a downward-opening arch needs them ABOVE so the
@@ -377,11 +420,17 @@ namespace Layout.Shapes
             if (n >= 5)
             {
                 double interiorY = 0;
-                for (int i = 2; i <= n - 3; i++) interiorY += list[i].WorldPosition.Y;
-                interiorY /= n - 4;
+                int interiorCount = 0;
+                for (int i = 2; i <= n - 3; i++)
+                {
+                    if (list[i].IsLockMarker) continue;
+                    interiorY += list[i].WorldPosition.Y;
+                    interiorCount++;
+                }
+                if (interiorCount > 0) interiorY /= interiorCount;
                 double anchorY = (startAnchor.Y + endAnchor.Y) * 0.5;
                 const double eps = 1e-9;
-                if (interiorY < anchorY - eps) openSign = -1.0;
+                if (interiorCount > 0 && interiorY < anchorY - eps) openSign = -1.0;
             }
             else
             {
@@ -593,9 +642,19 @@ namespace Layout.Shapes
 
         private CatmullRomSpline BuildSpline()
         {
+            return BuildSpline(out _);
+        }
+
+        private CatmullRomSpline BuildSpline(out List<int> sourceIndices)
+        {
             var pts = new List<Vec3d>(_controlPoints.Count);
+            sourceIndices = new List<int>(_controlPoints.Count);
             for (int i = 0; i < _controlPoints.Count; i++)
+            {
+                if (_controlPoints[i].IsLockMarker) continue;
                 pts.Add(_controlPoints[i].WorldPosition); // spline deep-copies; no aliasing
+                sourceIndices.Add(i);
+            }
             return new CatmullRomSpline(pts, _alpha);
         }
 

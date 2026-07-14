@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 2;
+        public const int ProtocolVersion = 3;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -96,6 +96,7 @@ namespace Layout.Network
         [ProtoMember(3)] public bool IsPhantom;
         [ProtoMember(4)] public bool IsAnchor;
         [ProtoMember(5)] public bool IsPrimary;
+        [ProtoMember(6)] public bool IsLockMarker;
 
         public ControlPointDto() { }
 
@@ -108,7 +109,8 @@ namespace Layout.Network
                 IsLocked = cp.IsLocked,
                 IsPhantom = cp.IsPhantom,
                 IsAnchor = cp.IsAnchor,
-                IsPrimary = cp.IsPrimary
+                IsPrimary = cp.IsPrimary,
+                IsLockMarker = cp.IsLockMarker
             };
         }
 
@@ -116,7 +118,7 @@ namespace Layout.Network
         public ControlPoint ToControlPoint()
         {
             Vec3d pos = Position != null ? Position.ToVec3d() : new Vec3d();
-            return new ControlPoint(pos, IsLocked, IsPhantom, IsAnchor, IsPrimary);
+            return new ControlPoint(pos, IsLocked, IsPhantom, IsAnchor, IsPrimary, IsLockMarker);
         }
     }
 

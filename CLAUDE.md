@@ -6,8 +6,9 @@
 ## What this project is
 Layout is a mod for **Vintage Story 1.22.3** (C# / **.NET 10**). It's a CAD-like, voxel-resolution
 construction-planning tool: players place translucent geometric guide overlays in the world and build against
-them by hand. The mod is visual-only — it never places, removes, or modifies blocks. Guides are
-server-authoritative, world-shared, and persist across logout/chunk-unload. Status: **v0.1.x, in real play.**
+them by hand. The mod is visual-only — it never places, removes, or modifies blocks. Normal guides are
+server-authoritative/world-shared; ClientOnlyFallback also supports private client-authoritative guides on
+servers without Layout and, when permitted, alongside public guides. Status: **v0.1.x, in real play.**
 
 ## Build & run
 - **Build:** `dotnet build` from the repo root (the folder with `Layout.csproj`).
@@ -20,29 +21,30 @@ server-authoritative, world-shared, and persist across logout/chunk-unload. Stat
   `Layout.dll` at the **zip root** (forward-slash entry paths), drop into `VintagestoryData/Mods`. Config
   files (`layout.json`, `layout-client.json`) appear in `ModConfig` after first run.
 - **Versioning rule (standing, human-set):** EVERY revision bumps `modinfo.json` and ships as a NEW
-  `Layout<version>.zip` in **`..\Layout Zips\`** (the sibling folder of this repo — human-directed
+  `Layout<version>.zip` in **`..\LayoutZips\`** (the sibling folder of this repo — human-directed
   location, holds the full 0.1.10+ history) — never overwrite an older release zip. Versions increment
-  monotonically per revision. **Current: v0.1.27.**
-- **Git:** `main` is the mainline (the human authorised committing to it); pushed to
-  **github.com/DodenGruva/Layout** through v0.1.27. Commit/push ONLY when the human instructs.
+  monotonically per revision. **Current: v0.1.52.**
+- **Git:** `main` remains at v0.1.27; the active **`ClientOnlyFallback`** branch is pushed to
+  **github.com/DodenGruva/Layout** through the v0.1.52 checkpoint. Commit/push ONLY when the human instructs.
 
 ## The documents (read these before large work)
 - **`HANDOFF.md`** (repo root) — the consolidated current-state brief (scope · status · direction ·
   performance characteristics), written for external analysis; the fastest way to get oriented.
-- **`ARCHITECTURE.md`** (in `dev/`, v2.8) — the authoritative plan. Its **Settled Decisions Register** lists
+- **`ARCHITECTURE.md`** (in `dev/`, v2.9) — the authoritative plan. Its **Settled Decisions Register** lists
   locked-in design choices; **do not reopen those without the human explicitly asking.**
 - **`TODO.md`** — the live punch-list: open bug, deferred requests, flagged decisions, future features.
 - **`PROJECT_STATUS.md`** — where things stand and what each module does.
-- **`PLAN_CLIENT_ONLY.md`** — the phased implementation plan for the client-only fallback mode (F4 → 0.2.0).
-- **`SESSION_9.md` / `SESSION_10.md` / `SESSION_11.md`** — standalone per-session records (SESSION_11 is the
-  most recent and runs through **v0.1.27**: the Session-11 backlog, the 3D volume family §16, and the
-  0.1.24–0.1.27 hardening §17; flagged decisions 11a–11r and 16a–16d).
+- **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix (candidate for 0.2.0).
+- **`SESSION_9.md` / `SESSION_10.md` / `SESSION_11.md` / `SESSION_12.md` / `SESSION_13.md`** — standalone
+  per-session records; SESSION_12 covers **v0.1.28–v0.1.45 ClientOnlyFallback**, and SESSION_13 covers the
+  **v0.1.46–v0.1.52 optimization and interaction pass**.
 
-## ✅ Docs verified & consolidated to v0.1.27 (2026-07-12)
-All prose docs were audited against the source and brought consistent to the current state — **v0.1.27,
-DataVersion 7, 59 files, 12 shape types / 18 tiles**. `ARCHITECTURE.md` is **v2.8**; `HANDOFF.md` (repo root)
-is the consolidated brief for external analysis. Docs are trustworthy — but still prefer reading the `.cs`
-files over any identifier quoted in prose. No need to re-run a from-scratch verification pass.
+## ✅ Docs verified & consolidated to v0.1.52 (2026-07-14)
+The authoritative prose docs are consistent with **v0.1.52, DataVersion 8, protocol 3, 65 source files,
+12 shape types / 18 tiles**. `ARCHITECTURE.md` is **v3.0**; `SESSION_12.md` is the detailed F4 record;
+`SESSION_13.md` records the cap-performance and lock/drag work;
+`HANDOFF.md` is the consolidated brief. Prefer source for exact identifiers, but no from-scratch doc audit is
+needed before ordinary work.
 
 ## How to work on this project (the human's established workflow)
 - **The human is not a programmer** and does not read code. They validate by *playing the mod* and describing
@@ -59,8 +61,8 @@ files over any identifier quoted in prose. No need to re-run a from-scratch veri
   "finalize the session"). The playtest loop iterates fast; per-iteration doc churn wastes tokens.
   **Exception:** if the conversation is close to a context trim while docs are stale, WARN the human first
   so nothing is lost to the trim un-recorded.
-- **Commit only when the human instructs.** `main` is the mainline now (the human directs commits/pushes
-  to it); the Session-11 fork era is over.
+- **Commit only when the human instructs.** Work is currently isolated on `ClientOnlyFallback`; do not merge
+  or push to `main` unless the human directs it.
 
 ## Tool modes (Session 10): Create · Edit · Delete
 **Create** owns all geometry (place, grab/reshape, insert, lock; right-click = cancel/lock). **Edit** is
@@ -68,15 +70,15 @@ settings-only: left-click **selects** a guide and the GUI's setting rows then ac
 reshaping — geometry stays in Create); this replaced the old panel-expanding "selected-guide section".
 **Delete** dispels. `ToolMode` is client-only (never wired), so it's safe to reorder.
 
-## Current priorities (detail in TODO.md; full 0.1.14–0.1.27 record in SESSION_11.md)
-The **3D shape family is in and confirmed** (v0.1.20–0.1.21: Sphere, Dome, Cylinder, Cone, Box — cell-lattice
-shell/solid scan, always Volumetric, deterministic up-axis `ShapeGeometry.BaseNormal`). Everything through
-v0.1.26 is playtest-confirmed; v0.1.27 (running-total → `long`, `/dispel` renamed to **`/layout dispel`**)
-awaits a quick look.
-1. **B-S9-1 — lock-in-place bug: the top open *bug* (human-confirmed).** Right-clicking to lock often locks
-   the wrong (adjacent) voxel and the guide shifts. Untried fix: **ray-vs-voxel-box first-hit picking**.
-2. **F4 (MAJOR, deferred): client-only / server-less mode** — run on servers without the mod
-   (single-player-visible guides). Design in `TODO.md` F4.
+## Current priorities (detail in TODO.md; latest record in SESSION_13.md)
+F4 is feature-complete and playtested through **v0.1.52** on `ClientOnlyFallback`. Normal public multiplayer
+behavior remains in place. DataVersion 8 / protocol 3 add passive, non-deforming lock markers.
+1. **Finish the B-S9-1 interaction regression.** First-hit voxel picking, full drag snapshots, robust curve
+   fingerprints, passive lock markers, and marker/order cleanup are implemented. The human confirms that
+   locking no longer shifts the guide and v0.1.52 is better, but repeated lock/drag/revert/unlock cycles need
+   more playtesting before the bug is closed.
+2. **Final F4 regression/release pass → v0.2.0 candidate.** Cover vanilla-server fallback, policy denial,
+   mixed public/private mode, push, reconnect, and a public-only multiplayer regression.
 3. **The human wants ENORMOUS fine-detail guides later** (grand domes, etc.) — needs the 3D scan
    guard / hard ceiling raised (and per-guide counts may then exceed int). Parked until asked.
 4. If asked: **Roof / Tunnel** volumes; concave-safe Free-Shape fill; F3 re-constrain op. Remaining
@@ -87,4 +89,4 @@ awaits a quick look.
 `Network/` (packets + handlers), `UI/` (GUI + HUD + `LayoutToolIcons.cs`, the Cairo icon glyphs), `Config/`,
 `Items/`, `Client/` (the tool controller), `Undo/Commands/`. Adding a new shape starts in
 `Shapes/ShapeFactory.cs`. Soft-point flow behavior lives in `Shapes/SoftPointFlow.cs`. (Filenames verified
-against the tree on 2026-07-12 — 59 source files.)
+against the tree on 2026-07-14 — 65 source files.)

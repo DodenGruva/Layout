@@ -40,6 +40,8 @@ namespace Layout.Client
         {
             public Guid GuideId;
             public readonly Dictionary<int, Vec3d> Origins = new Dictionary<int, Vec3d>();
+            public ShapeConstraint OriginConstraint;
+            public List<ControlPoint> OriginPoints;
             public int InsertedIndex = -1;
             public SoftPointFlow SoftFlow;
 
@@ -204,10 +206,15 @@ namespace Layout.Client
 
         public void Grab(Guid id)
         {
-            if (!TryGet(id, out _)) return;
+            if (!TryGet(id, out GuideData guide)) return;
             if (_heldGuideId != Guid.Empty && _heldGuideId != id) CancelActiveDrag();
 
             _heldGuideId = id;
+            _drag = new DragSession(id)
+            {
+                OriginConstraint = guide.Constraint,
+                OriginPoints = SnapshotPoints(guide)
+            };
             _applyLockState(new GuideLockStatePacket(id, PlayerUid));
         }
 
@@ -232,7 +239,15 @@ namespace Layout.Client
 
                 if (!removedInsert)
                 {
-                    foreach (var pair in _drag.Origins)
+                    bool promotedMarker = HasPromotedMarker(
+                        _drag.OriginPoints, guide.ControlPoints);
+                    if (promotedMarker)
+                    {
+                        _undo.Record(PlayerUid, new SpringBackCommand(
+                            id, _drag.OriginConstraint, _drag.OriginPoints,
+                            guide.Constraint, guide.ControlPoints));
+                    }
+                    else foreach (var pair in _drag.Origins)
                     {
                         int index = pair.Key;
                         if (index < 0 || index >= guide.ControlPoints.Count) continue;
@@ -245,6 +260,10 @@ namespace Layout.Client
             }
 
             _drag = null;
+            // The client preview writes directly to its mirror while the local GuideManager remains
+            // authoritative. Always restate that authoritative state when the gesture ends, including
+            // after an over-cap final move was rejected.
+            if (_guides.TryGetGuide(id, out GuideData authoritative)) ApplyFull(authoritative);
             ReleaseHeldGuide(id);
         }
 
@@ -256,7 +275,12 @@ namespace Layout.Client
             GuideData guide = null;
             if (_drag != null && _drag.GuideId == id && _guides.TryGetGuide(id, out guide))
             {
-                if (_drag.InsertedIndex >= 0)
+                if (_drag.OriginPoints != null)
+                {
+                    mutated = _guides.RestoreConstraint(
+                        id, _drag.OriginConstraint, _drag.OriginPoints).IsSuccess;
+                }
+                else if (_drag.InsertedIndex >= 0)
                 {
                     mutated = _guides.RemoveControlPoint(id, _drag.InsertedIndex).IsSuccess;
                 }
@@ -274,7 +298,7 @@ namespace Layout.Client
             }
 
             _drag = null;
-            if (mutated && _guides.TryGetGuide(id, out GuideData restored)) ApplyFull(restored);
+            if (_guides.TryGetGuide(id, out GuideData restored)) ApplyFull(restored);
             ReleaseHeldGuide(id);
         }
 
@@ -342,6 +366,9 @@ namespace Layout.Client
             if (position == null || !TryGet(id, out GuideData guide)) return;
             if (_heldGuideId != Guid.Empty && _heldGuideId != id) CancelActiveDrag();
 
+            ShapeConstraint insertOriginConstraint = guide.Constraint;
+            List<ControlPoint> insertOriginPoints = SnapshotPoints(guide);
+
             _heldGuideId = id;
             _applyLockState(new GuideLockStatePacket(id, PlayerUid));
 
@@ -358,14 +385,16 @@ namespace Layout.Client
             if (locked)
             {
                 Vec3d curvePosition = shape != null ? shape.GetPointAt(t) : ClonePos(position);
-                GuideOperationResult inserted = _guides.InsertControlPoint(id, t, curvePosition);
+                bool marker = guide.ShapeType == GuideShapeType.Arch;
+                GuideOperationResult inserted = _guides.InsertControlPoint(id, t, curvePosition, marker);
                 if (inserted.IsSuccess)
                 {
                     int index = inserted.ControlPointIndex;
                     GuideOperationResult lockResult = _guides.SetPointLocked(id, index, true);
                     if (lockResult.IsSuccess)
                     {
-                        _undo.Record(PlayerUid, new InsertControlPointCommand(id, index, curvePosition));
+                        _undo.Record(PlayerUid,
+                            new InsertControlPointCommand(id, index, curvePosition, marker));
                         _undo.Record(PlayerUid, new LockPointCommand(id, index, false, true));
                         ApplyFull(lockResult.Guide);
                     }
@@ -382,7 +411,12 @@ namespace Layout.Client
             {
                 _undo.Record(PlayerUid,
                     new InsertControlPointCommand(id, result.ControlPointIndex, position));
-                _drag = new DragSession(id) { InsertedIndex = result.ControlPointIndex };
+                _drag = new DragSession(id)
+                {
+                    InsertedIndex = result.ControlPointIndex,
+                    OriginConstraint = insertOriginConstraint,
+                    OriginPoints = insertOriginPoints
+                };
                 ApplyFull(result.Guide);
             }
             else
@@ -427,7 +461,22 @@ namespace Layout.Client
         {
             if (!TryGet(id, out GuideData guide)) return;
             if (index < 0 || index >= guide.ControlPoints.Count) { ApplyFull(guide); return; }
-            bool before = guide.ControlPoints[index].IsLocked;
+
+            ControlPoint target = guide.ControlPoints[index];
+            if (!locked && target.IsLockMarker)
+            {
+                var command = new RemoveLockMarkerCommand(id, index, target.WorldPosition);
+                GuideOperationResult removed = _guides.RemoveControlPoint(id, index);
+                if (removed.IsSuccess)
+                {
+                    _undo.Record(PlayerUid, command);
+                    ApplyFull(removed.Guide);
+                }
+                else HandleFailure(id, removed);
+                return;
+            }
+
+            bool before = target.IsLocked;
             GuideOperationResult result = _guides.SetPointLocked(id, index, locked);
             if (result.IsSuccess)
             {
@@ -579,6 +628,10 @@ namespace Layout.Client
         {
             if (result.Status == GuideOpStatus.RejectedOverCap)
             {
+                // UpdateControlPoints rolls the authoritative guide back before returning this result.
+                // Correct the optimistic client preview immediately instead of leaving an oversized,
+                // non-renderable mirror around until another operation happens to refresh it.
+                if (result.Guide != null) ApplyFull(result.Guide);
                 Guid warningId = result.Guide?.Id ?? id;
                 _applyCapWarning(new VoxelCapWarningPacket(warningId, result.VoxelCount, result.CapLimit));
                 Error("layout-toolarge",
@@ -603,6 +656,17 @@ namespace Layout.Client
             foreach (ControlPoint point in guide.ControlPoints)
                 copy.Add(point == null ? new ControlPoint() : point.Clone());
             return copy;
+        }
+
+        private static bool HasPromotedMarker(
+            IReadOnlyList<ControlPoint> before, IReadOnlyList<ControlPoint> after)
+        {
+            if (before == null || after == null || before.Count != after.Count) return false;
+            for (int i = 0; i < before.Count; i++)
+                if (before[i].IsLockMarker && before[i].IsLocked &&
+                    !after[i].IsLockMarker && after[i].IsLocked)
+                    return true;
+            return false;
         }
 
         private static Vec3d FirstAnchorPosition(GuideData guide)

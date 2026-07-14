@@ -1,30 +1,62 @@
-# Layout — TODO / Outstanding Items (current: v0.1.27)
+# Layout — TODO / Outstanding Items (current: v0.1.52)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.1.27)
+## ⭐ Top of the list (v0.1.52)
 
-1. **B-S9-1 — Lock-in-place (UNRESOLVED; the top open *bug*, human-confirmed).** Right-clicking to lock
-   often locks an adjacent voxel and the guide visibly shifts. Untried fix: **ray-vs-voxel-box first-hit
-   picking** so the aimed cell is authoritative. See OPEN BUGS.
-2. **★ MAJOR (deferred, human-requested): client-only / server-less fallback mode** — run on servers that
-   don't have the mod (single-player-visible guides). Feasible, moderate effort; full design in **F4**.
+1. **Finish B-S9-1 interaction regression.** v0.1.49–v0.1.52 implemented first-hit voxel picking, robust
+   curve-cache invalidation, complete drag snapshots, passive non-deforming Arch lock markers, stale-marker
+   removal, and curve-relative insertion ordering. The human confirms that locks no longer shift and the
+   latest behavior is better. Test repeated lock → drag → cancel/revert → unlock → relock cycles before
+   declaring the bug closed. See OPEN BUGS and `SESSION_13.md`.
+2. **Final F4/public multiplayer regression → v0.2.0 candidate.** Test vanilla-server fallback, server
+   policy denial, mixed public/private overlays, reconnect persistence, publication, commands, and undo/redo
+   around ownership changes. The feature itself is implemented and playtested through v0.1.52.
 3. **★ Enormous fine-detail guides (human wants this).** The human wants players to build grand structures
    at fine detail (huge domes etc.). Blocked today by the 3D **scan guard** (`MaxScanCells ≈ 4M`, per
    shape) and the **hard voxel ceiling** (`GuideManager.HardVoxelCeiling = 10M`) that reject un-renderable
    giants. Raising them needs care: per-guide voxel COUNTS would then exceed `int` (the running total is
    already `long` as of v0.1.27), and rendering millions of cubes needs a perf pass (chunked meshes / LOD).
-4. **Playtest-confirm 0.1.27** (running total → `long`; `/dispel` → `/layout dispel`). Everything through
-   **0.1.26 is playtest-CONFIRMED**.
-5. Remaining flagged decisions (11a–11r, 16a–16d in `SESSION_11.md`) are cosmetic — walk them
+4. Remaining flagged decisions (11a–11r, 16a–16d in `SESSION_11.md`) are cosmetic — walk them
    opportunistically.
 
 **Standing workflow rule (human-set — also in CLAUDE.md):** ship a NEW zip per code iteration into
-`..\Layout Zips\`, but update docs / commit ONLY when the human says so. Warn before any context trim if
+`..\LayoutZips\`, but update docs / commit ONLY when the human says so. Warn before any context trim if
 the docs are stale.
+
+---
+
+## Implemented in Session 13 (v0.1.46 → v0.1.52) — full detail in `SESSION_13.md`
+
+- **Threshold-aware 3D counting:** Box/Cone/Cylinder/Dome/Sphere cap checks can stop once the threshold is
+  exceeded instead of building an entire rejected voxel set.
+- **Natural drag cap:** an over-cap release safely reconciles, and client drag binary-search clamping stops
+  at the largest accepted size without flicker. Playtest-confirmed.
+- **Interaction restoration:** exact rendered-voxel first-hit lock picking, full geometry cache fingerprints,
+  and complete pre-drag snapshots improve lock targeting and make right-click cancellation reliable.
+- **Non-deforming Arch locks:** passive `IsLockMarker` control points do not alter the curve until deliberately
+  dragged. DataVersion is now **8** and protocol is **3**. The human confirms lock placement no longer shifts.
+- **v0.1.52 follow-up:** unlocked passive markers are removed and new lock/grab insertions preserve their
+  position along the curve. This latest behavior is better but remains under wider playtest; B-S9-1 is not
+  yet marked closed.
+
+---
+
+## Resolved in Session 12 (v0.1.28 → v0.1.45) — full detail in `SESSION_12.md`
+
+F4 is implemented and playtested on `ClientOnlyFallback`: automatic local authority when the server lacks
+Layout; policy-controlled private overlays on Layout servers; Hammer + Flax Twine vanilla-server activation;
+the unchanged Layout tool on mixed servers; per-world/per-player persistence with backup recovery; normal
+create/edit/reshape/settings/undo parity; `.layout client dispel`; `/layout private`, `/layout public`, and
+`/layout client push all`; private HUD/target indicators; mixed-server orange private anchors; ownership and
+last-operation routing; and protocol-2 policy/mode/publication messages. DataVersion remains **7** and the
+source count is **64**. See `PLAN_CLIENT_ONLY.md` for the final behavior matrix and architectural record.
+
+The reported pre-drag restoration and lock/constraint oddities predate F4 and remain parked for a later
+interaction-focused pass; they are not ClientOnlyFallback regressions.
 
 ---
 
@@ -89,24 +121,24 @@ native number input, floored at 0; division markers pair on off-cell boundaries.
 
 ## OPEN BUGS
 
-**B-S9-1 — Lock-in-place imprecise and still deforms the guide (UNRESOLVED after multiple Session-9 fixes).**
-Symptoms (confirmed still present in play at Session-9 end): the voxel targeted by the right-click is
-frequently **not** the one locked (an adjacent voxel goes red), and placing the lock still **visibly
-shifts/deforms** the guide. Intended behavior (human, restated): only the targeted voxel locks and turns red;
-the guide must **never** move except when the user is actively moving it.
+**B-S9-1 — Lock-in-place interaction regression (ACTIVE FOLLOW-UP; substantially improved in v0.1.49–v0.1.52).**
 
-Fixes attempted, each verified in code but insufficient in play:
-- (s9) near-point body-hit → lock-toggle conversion.
-- (s9) **chord-invariant phantom drop** — killed the neighbor-height reflection lurch (whole-arch tilt from a
-  near-foot insert). Helped, didn't fully resolve.
-- (s9) **slave-regime flow model** — removed soft-point pull. Helped grabbing feel; didn't resolve the lock
-  shift.
+The original symptoms were an adjacent voxel turning red and the Arch visibly shifting merely because a lock
+was placed. The following fixes are now implemented:
 
-**Leading un-tried suspect:** body hits resolve to *nearest-point-on-curve to the ray*, which can land in a
-cell **adjacent** to the aimed voxel → fix candidate is **ray-vs-voxel-box first-hit picking** so the clicked
-CELL is authoritative. Secondary: phantom neighbor-X/Z tracking when locking near a foot; centripetal-CR
-reparameterization from the inserted knot. Parked at the human's direction ("make note of this bug, but let's
-move on for now").
+- **Rendered-voxel first-hit picking:** the clicked cell, not nearest-point-on-curve, is authoritative.
+- **Full geometry cache fingerprint:** post-drag targeting cannot reuse stale curve voxels.
+- **Complete pre-drag snapshots:** right-click cancel restores points, constraints, soft flow, and inserted
+  gesture state for both server and local authority.
+- **Passive lock markers:** locking an Arch no longer inserts an active Catmull-Rom knot. The marker promotes
+  only when deliberately dragged. Human-confirmed: placing a lock no longer shifts the guide.
+- **Marker lifecycle/order (v0.1.52):** unlock removes passive markers; restored old data is cleaned; inactive
+  markers are not adopted or targeted; later inserts are ordered by curve position so right-side grabs do not
+  jump toward the apex.
+
+The human reports v0.1.52 is better but wants more testing. Before closing B-S9-1, exercise repeated
+lock → drag → cancel/revert → unlock → relock cycles at several scales and on both sides of an Arch. Record a
+precise reproduction for any residual jump rather than replacing the confirmed passive-marker design.
 
 ~~**B-S10-2 — Surface→Volumetric bake grows the WRONG way (into the block).**~~ **FIXED in 0.1.14 and
 PLAYTEST-CONFIRMED ("This was fixed" — human, same session).** The bake runs exactly the fix this entry
@@ -264,7 +296,7 @@ deliberate (11r).
 
 ---
 
-## Future features (specced or sketched, not started)
+## Feature ledger (delivered and future)
 
 ### F1. Remaining shape catalog — ✅ FIRST WAVE DONE (Session 9)
 **Built this session:** Line, Triangle (+ Right / Equilateral / Isosceles), Rectangle (+ Square). *(Verified
@@ -275,41 +307,23 @@ against `GuideShapeType` = {Arch,Ellipse,Line,Triangle,Rectangle}, `ShapeConstra
 Cone, Box.** The "planar-only, 3D LATER" decision has been **reopened and delivered** — see the resolved
 section near the top. Natural next volumes if wanted: **Roof, Tunnel** (a walk-through extruded arch).
 
-### F2. Favorites — ✅ DELIVERED (Session 11, 0.1.14; awaiting playtest)
-Built exactly as the human redesigned it: the picker is 3 pinned slots + a ▾ catalog fold-out; right-click a
-catalog tile to pin (newest pin = slot 1). Persisted per-player in `layout-client.json` as shape codes
-(each code = a {type + constraint} pair). The old placeholder row is deleted.
+### F2. Favorites — ✅ DELIVERED AND CONFIRMED (Session 11, 0.1.15)
+The picker has four hard-kept pinned slots + a ▾ catalog fold-out; right-click pins/unpins and never evicts an
+existing favorite. Persisted per-player in `layout-client.json` as shape codes (each code = a
+{type + constraint} pair).
 
-### ★ MAJOR — F4. Client-only / server-less fallback mode (human-requested, deferred; discussed v0.1.23)
-> **Full implementation plan: `PLAN_CLIENT_ONLY.md`** (phased, target **0.2.0**). The sketch below is the
-> feasibility discussion that plan expands into phases; read the plan before starting.
+### ★ MAJOR — F4. Client-only / server-less fallback mode — ✅ DELIVERED (v0.1.28–v0.1.45)
 
-**Goal:** let a player use the mod on a server that does NOT have it installed — guides visible to that one
-player only, no server needed. **Discussed and judged feasible — moderate effort, NOT a foundation rewrite**
-(the shape math, data model, renderer, HUD, GUI, and interaction controller are all authority-agnostic and
-carry over untouched). The work is confined to the authority + sync + activation + persistence seam:
+The implemented design deliberately differs from the original feasibility sketch: it uses a tangible
+vanilla-item gate (Hammer offhand + Flax Twine main hand) on servers without Layout, persists private guides
+per world/server + player UID, and retains normal locks/caps/undo semantics through a client-side instance of
+the same `GuideManager`. On Layout servers, private mode is denied by default unless the server enables
+`allowClientOnlyMode`; mixed-mode players keep using the real Layout tool. Public and private guides share
+one renderer/controller, ownership routes edits, and last-operation authority routes undo/redo.
 
-- **Mode detection.** On join, decide networked vs. local by whether the `"layout"` network channel actually
-  handshook (a vanilla server never registers it → channel stays unconnected → run local).
-- **Local authority.** In local mode the client becomes its own authority instead of the server. Cleanest:
-  abstract `GuideManager`'s few server couplings (persistence, save/load events, logger, `World.BlockAccessor`)
-  behind an interface and run the SAME manager client-side; its return-value API and the existing
-  mirror-update events mean the renderer/HUD/GUI light up unchanged. (Alternative: a slimmer local
-  create/move/delete store.) An **authority interface** both `ServerNetworkHandler` and a new `LocalAuthority`
-  implement — routed at the `ClientNetworkHandler.Send*` seam — lets ONE codebase serve both modes.
-- **Activation without the custom item.** A vanilla server can't have `layout:guidetool` (the server owns the
-  item registry, and registration happens at mod LOAD before any server is known). Drive the tool from a
-  **hotkey toggle** in this mode (drop the held-item gate); a vanilla-item trigger is a fallback. Going
-  fully item-less is the robust route — it sidesteps a client-only item/recipe the server never heard of.
-- **Persistence.** In-memory for the session is the natural default (guides gone on logout — exactly the
-  "temporary persist until logout" the human asked about). Chunk-unload eviction is an optional extra;
-  a client-side file keyed by server+world (survive reconnect) is optional polish.
-
-**The semantic caveat to weigh:** local guides are single-player-visible; the settled "world-shared,
-server-authoritative, concurrent-edit-with-locks" pillar simply doesn't apply (locks/caps/undo-gating become
-local no-ops). It's a solo sketch layer that runs anywhere, not the collaborative tool. **Biggest unknown to
-verify first:** exactly how a VS client behaves when a client-only mod has registered an item/recipe the
-joined server doesn't know — the strongest argument for the hotkey-only, item-less approach.
+The finalized behavior matrix, command/config contract, persistence/recovery details, publication semantics,
+protocol rules, and remaining validation are in `PLAN_CLIENT_ONLY.md`. The only remaining F4 work is the
+release-candidate regression pass listed below.
 
 ### F3. Re-constrain op (idea, unrequested)
 The inverse of a break: a menu action to snap a free shape back under a constraint (arch → half-circle,
@@ -320,24 +334,21 @@ Park until asked.
 
 ## Next session — start here
 
-**Everything through v0.1.26 is playtest-confirmed; v0.1.27 (running total → `long`, `/dispel` →
-`/layout dispel`) awaits a quick look. The full 2D catalog and the 3D volume family are in and confirmed.**
-The agenda:
+**F4 is feature-complete and playtested through v0.1.52 on `ClientOnlyFallback`.** The agenda:
 
-1. **Confirm v0.1.27** in passing — both changes are low-risk (the widened running total and the namespaced
-   admin command). (The queued Divisions-field width tweak already shipped in 0.1.24.)
-2. **B-S9-1 — the lock-in-place bug is the top remaining *bug*.** Attempt the untried fix: ray-vs-voxel-box
-   first-hit picking so the aimed cell is authoritative (see OPEN BUGS for the full history of attempts).
-3. **F4 — client-only / server-less mode (MAJOR, deferred).** Full phased plan in `PLAN_CLIENT_ONLY.md`
-   (→ 0.2.0); start with Phase 0 de-risking.
-4. **Enormous fine-detail guides (human wants this):** raise the scan guard / hard ceiling + a rendering
+1. **Finish B-S9-1 interaction testing.** Focus on repeat lock/drag/cancel-or-revert/unlock cycles and
+   curve-relative targeting around multiple markers. The latest iteration is improved, not yet declared final.
+2. **Final F4/public multiplayer regression → v0.2.0 candidate.** Cover vanilla-server fallback, policy
+   denial, mixed public/private placement and editing, reconnect persistence, publication, commands, and
+   undo/redo around ownership boundaries.
+3. **Enormous fine-detail guides (human wants this):** raise the scan guard / hard ceiling + a rendering
    perf pass (chunked meshes / LOD).
-5. Then, if asked: **Roof / Tunnel** volumes; a concave-safe **Free-Shape fill**; broadcasting the whole
+4. Then, if asked: **Roof / Tunnel** volumes; a concave-safe **Free-Shape fill**; broadcasting the whole
    Free-Shape draft chain to other players (11q); **F3 re-constrain op**.
 
-**Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;
-docs are updated ONLY when the human says so; commits/pushes only when the human instructs (main is now the
-mainline — pushed to github.com/DodenGruva/Layout through v0.1.27).
+**Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\LayoutZips\`;
+docs are updated ONLY when the human says so; commits/pushes only when the human instructs. Continue on
+`ClientOnlyFallback`; do not merge to `main` without explicit direction.
 
 ---
 

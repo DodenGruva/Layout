@@ -20,7 +20,7 @@ namespace Layout.Shapes
     /// correctly). Same scan guard as the other volumes. The base corners absorb as resize; the lid
     /// handle slides along the height axis.
     /// </remarks>
-    public sealed class BoxShape : IGuideShape
+    public sealed class BoxShape : IGuideShape, IThresholdVoxelCounter
     {
         private const double MinSide = 0.05;
         private const double MinHeight = 0.05;
@@ -167,10 +167,52 @@ namespace Layout.Shapes
         }
 
         public int GetVoxelCount(int scale, bool filled = false)
+            => GetVoxelCountUpTo(scale, filled, int.MaxValue);
+
+        public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter)
         {
-            if (!TryGetFull(out _, out _, out _, out _, out double du, out double dv, out double h)) return 0;
-            if (ScanTooBig(scale, du, dv, h)) return int.MaxValue / 4;
-            return GetVoxelPositions(scale, filled).Count;
+            if (!TryGetFull(out Vec3d a, out Vec3d u1, out Vec3d u2, out Vec3d n,
+                out double du, out double dv, out double h)) return 0;
+            if (ScanTooBig(scale, du, dv, h)) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+
+            stopAfter = Math.Max(0, stopAfter);
+            double cell = scale / 16.0;
+            double sLo = Math.Min(0, du), sHi = Math.Max(0, du);
+            double tLo = Math.Min(0, dv), tHi = Math.Max(0, dv);
+            double wLo = Math.Min(0, h), wHi = Math.Max(0, h);
+            int count = 0;
+
+            GetAabb(a, u1, u2, n, du, dv, h, cell,
+                out double x0, out double y0, out double z0, out double x1, out double y1, out double z1);
+
+            for (int ix = AlignDown(x0, scale); ix <= AlignDown(x1, scale); ix += scale)
+            {
+                double px = ix / 16.0 + cell * 0.5 - a.X;
+                for (int iy = AlignDown(y0, scale); iy <= AlignDown(y1, scale); iy += scale)
+                {
+                    double py = iy / 16.0 + cell * 0.5 - a.Y;
+                    for (int iz = AlignDown(z0, scale); iz <= AlignDown(z1, scale); iz += scale)
+                    {
+                        double pz = iz / 16.0 + cell * 0.5 - a.Z;
+                        double s = px * u1.X + py * u1.Y + pz * u1.Z;
+                        double t = px * u2.X + py * u2.Y + pz * u2.Z;
+                        double w = px * n.X + py * n.Y + pz * n.Z;
+
+                        if (s < sLo || s > sHi || t < tLo || t > tHi || w < wLo || w > wHi)
+                            continue;
+                        if (!filled)
+                        {
+                            bool interior = s >= sLo + cell && s <= sHi - cell
+                                         && t >= tLo + cell && t <= tHi - cell
+                                         && w >= wLo + cell && w <= wHi - cell;
+                            if (interior) continue;
+                        }
+                        count++;
+                        if (count > stopAfter) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+                    }
+                }
+            }
+            return count;
         }
 
         private static bool ScanTooBig(int scale, double du, double dv, double h)
