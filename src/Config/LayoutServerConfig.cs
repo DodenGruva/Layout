@@ -57,6 +57,13 @@ namespace Layout.Config
         [JsonProperty("adminCanOverrideLocks")]
         public bool AdminCanOverrideLocks { get; set; } = true;
 
+        /// <summary>
+        /// Allows compliant clients to place private, client-stored guides while remaining connected to
+        /// this Layout-enabled server. False by default: server-installed Layout remains public/shared.
+        /// </summary>
+        [JsonProperty("allowClientOnlyMode")]
+        public bool AllowClientOnlyMode { get; set; } = false;
+
         /// <summary>Folds out-of-range values to their canonical forms. Call once after loading.</summary>
         public void Normalize()
         {

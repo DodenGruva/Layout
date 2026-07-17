@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Vintagestory.API.MathTools;
 using Layout.Guide;
@@ -148,5 +149,35 @@ namespace Layout.Shapes
         /// the control points were populated by another path, e.g. deserialization.
         /// </summary>
         void RecalculatePhantomPoints();
+    }
+
+    /// <summary>
+    /// Optional fast path for shapes that can count occupied cells directly without materialising their
+    /// render list. The result is exact while it is at or below <paramref name="stopAfter"/>; once the
+    /// real count exceeds that threshold the implementation may return the threshold-plus-one sentinel and
+    /// stop immediately. This is sufficient for cap enforcement and prevents a rejected guide from doing
+    /// millions of unnecessary allocations merely to prove that it is over a much smaller server limit.
+    /// </summary>
+    public interface IThresholdVoxelCounter
+    {
+        int GetVoxelCountUpTo(int scale, bool filled, int stopAfter);
+    }
+
+    /// <summary>Shared dispatch and overflow-safe sentinel helpers for threshold-aware counting.</summary>
+    public static class GuideShapeVoxelCounting
+    {
+        public static int CountUpTo(IGuideShape shape, int scale, bool filled, int stopAfter)
+        {
+            if (shape == null) return 0;
+            stopAfter = Math.Max(0, stopAfter);
+            if (shape is IThresholdVoxelCounter thresholdCounter)
+                return thresholdCounter.GetVoxelCountUpTo(scale, filled, stopAfter);
+
+            int count = shape.GetVoxelCount(scale, filled);
+            return count > stopAfter ? Exceeded(stopAfter) : count;
+        }
+
+        public static int Exceeded(int stopAfter) =>
+            stopAfter >= int.MaxValue ? int.MaxValue : Math.Max(0, stopAfter) + 1;
     }
 }

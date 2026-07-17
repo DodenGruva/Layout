@@ -1,39 +1,108 @@
-# Layout — Architecture Document (v2.8)
+# Layout — Architecture Document (v3.1)
 
-**Supersedes v2.7 — Session-11 + 3D-family delta (covers v0.1.14 → v0.1.27).** v2.5 consolidated five
+**Supersedes v3.0 — hollow-shell scaling and mesh-frontier delta (v0.1.53).** v2.5 consolidated five
 revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
 catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
 surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
-**v2.8 folds in Session 11 and the post-finalize 3D work:** the **three-click triangle**, the
+v2.8 folded in Session 11 and the post-finalize 3D work: the **three-click triangle**, the
 **CTRL/SHIFT remap** (CTRL = cardinal, SHIFT = draft-invert + placed-guide spring-back) with
 **every-shape-defaults-up**, the **Polygon** and **Free-Shape**, the **hard-kept favorites picker + catalog
 fold-out**, a long GUI-polish loop, the **3D VOLUME family** (Sphere/Dome/Cylinder/Cone/Box — cell-lattice
 scan, always Volumetric), the **`/layout dispel` admin commands**, the **hard voxel ceiling**, and the
-**running-total→`long`** widening. The register, Overview, file tree, and Data Model below are updated in
-place to the v0.1.27 / DataVersion 7 / 59-file state; the changelogs under this header are the quick deltas.
+**running-total→`long`** widening. **v2.9 folds in F4:** automatic local authority on servers without Layout,
+policy-controlled private overlays on Layout servers, the side-neutral `GuideManager` seam, per-world/per-UID
+client persistence, mixed ownership/undo routing, private publication, and ownership presentation. **v3.0
+folds in the cap-performance and interaction pass:** threshold-aware 3D counting, natural at-cap drag
+clamping, rendered-voxel first-hit picking, complete drag snapshots, robust curve-cache invalidation, and
+passive non-deforming Arch lock markers. **v3.1 adds the exact surface-area-oriented hollow Sphere/Dome
+scanner and records the now-playtest-confirmed mesh frontier.** The register, file tree, module map,
+persistence, and edge cases below are updated in place to the v0.1.53 / DataVersion 8 / protocol-3 / 66-file
+state; the changelogs under this header are the quick deltas.
 
-**Where the project stands:** Layout **v0.1.27** is a built, playtested mod **deployed to real-played game
-worlds** — everything through **v0.1.26 is playtest-confirmed**; v0.1.27 awaits a quick look. All seven
-modules, the Session-8/9/10 capability waves, the full Session-11 backlog, and the post-finalize **3D volume
-family** run against VS 1.22.3 / .NET 10. The catalog is **12 shape types / 18 picker tiles** (2D + 3D),
-**DataVersion 7**, **59 source files**, committed to `main` and pushed to github.com/DodenGruva/Layout.
-**One open bug:** lock-in-place (B-S9-1) is unresolved — the targeted voxel is often not the one locked and
-the guide still shifts; it is the top priority and does **not** have a settled design here yet (leading
-approach: ray-vs-voxel-box cell picking). Parked by the human ("not gamebreaking"). See `TODO.md`.
+**Where the project stands:** Layout **v0.1.53** is built, packaged, and playtested on the
+`ClientOnlyFallback` branch; its source/docs are uncommitted and the last pushed commit is `1461c19`.
+`main` remains at v0.1.27. All seven modules, the complete
+2D/3D catalog, normal public multiplayer, vanilla-server local fallback, and mixed public/private operation
+run against VS 1.22.3 / .NET 10. The catalog is **12 shape types / 18 picker tiles**, **DataVersion 8**,
+**protocol 3**, and **66 source files**. F4 is feature-complete. A roughly 100-block hollow Sphere now places
+successfully and exposes visible lag in the monolithic full-cube mesh path. The immediate task is the staged
+mesh pass in `SESSION_14.md`; B-S9-1 and the broad F4/public regression follow. See `TODO.md`.
 
-> **▶ DIRECTION — the next major arc: client-only / server-less fallback mode (F4, target 0.2.0).** This is a
-> deliberately-planned, high-priority direction — not a vague someday. **Goal:** let a player use Layout on a
-> server that does NOT have the mod installed, with guides **visible only to that player** and held **in
-> memory for the session**. Architecturally the pure layers (shape math, data model, renderer, HUD, GUI, most
-> of the controller) are already authority-agnostic and carry over untouched; the work is confined to a
-> **local-authority seam** — a `LocalGuideAuthority` running a client-side `GuideManager` (its few server
-> couplings — persistence, save/load events, block-solidity probe — narrowed behind interfaces), **join-time
-> mode detection** (did the `"layout"` network channel actually handshake?), and **item-less activation**
-> (a hotkey toggle, since a vanilla server can't register the `layout:guidetool` item). It is an explicit
-> DIVERGENCE from the settled server-authoritative / world-shared pillar (Multiplayer register below): in
-> this mode locks, caps, and undo-gating become local no-ops — a solo sketch layer that runs anywhere, not
-> the collaborative tool. **The full phased implementation plan is `PLAN_CLIENT_ONLY.md` — read it before
-> starting F4.**
+> **▶ IMPLEMENTED — client-only / server-less fallback mode (F4, v0.1.28–v0.1.45).** On a server without
+> Layout, a three-second positive-proof detection window falls back to a client-side
+> `LocalGuideAuthority`; Hammer offhand + Flax Twine main hand activates the normal HUD and F-menu. On a
+> Layout server, private overlays are denied by default and require `allowClientOnlyMode=true`; the real
+> Layout tool remains the gate in both public and private placement modes. The same side-neutral
+> `GuideManager` supplies local parity, while guide ownership routes edits and last-operation authority
+> routes undo/redo. Private guides persist per server/world + player UID. `PLAN_CLIENT_ONLY.md` is the final
+> behavior and implementation record; `SESSION_12.md` is the version history.
+
+---
+
+## Changelog — v3.0 → v3.1 (hollow shell scaling, v0.1.53; full handoff in `SESSION_14.md`)
+
+- **Exact shell-focused scan:** `SphericalShellScan` walks X/Y columns, analytically narrows each to the two Z
+  surface bands, and applies the prior nearest/farthest predicate. Hollow Sphere/Dome preserve exact voxel
+  output while work scales approximately with shell area rather than bounding-cube volume.
+- **Filled paths unchanged:** filled Sphere/Dome retain the 4M candidate-cell guard and cubic scan. No save or
+  wire change; DataVersion 8 / protocol 3 remain current.
+- **Validation:** cell-for-cell parity across every scale, off-grid placement, inversion, wall orientations,
+  and threshold counts. A 20-block hollow Dome generated 242,500 voxels in ~5 ms in isolation.
+- **Human playtest:** a roughly 100-block hollow Sphere placed successfully and caused visible lag. This
+  confirms the next bottleneck is `GuideMeshBuilder`'s 8-vertex/36-index full cube per voxel, one monolithic
+  uploaded mesh per guide, full rebuild on every change, and no spatial culling.
+- **Next architecture:** exposed-face Volumetric meshing → per-guide spatial chunk meshes with reliable
+  ownership/disposal and culling → same-colour/orientation greedy merging. Keep Surface/slabs on the legacy
+  path initially and never permanently coarsen settled guides without explicit human approval.
+
+---
+
+## Changelog — v2.9 → v3.0 (optimization + interaction correctness, v0.1.46 → v0.1.52; full record in `SESSION_13.md`)
+
+- **Threshold-aware counts:** `IGuideShape` supports cap-limited counting. Box, Cone, Cylinder, Dome, and
+  Sphere stop once rejection is certain, avoiding full voxel materialization for ordinary cap checks.
+- **Natural cap clamp:** rejected over-cap releases reconcile safely, while the client binary-searches a drag
+  segment to the largest acceptable size. The live shape stops at the cap instead of flickering between an
+  oversized preview and server state.
+- **Precise targeting and cancellation:** lock picking uses the first rendered voxel box intersected by the
+  ray. Curve target caches use a complete geometry fingerprint, and both authority paths retain full pre-drag
+  snapshots for exact right-click cancellation.
+- **Passive lock markers:** `ControlPoint.IsLockMarker` lets an Arch display and target a lock without adding
+  a shape-defining Catmull-Rom knot. Deliberate dragging promotes the marker. This additive field advances the
+  save schema to DataVersion 8 and the wire protocol to 3.
+- **Marker lifecycle/order:** v0.1.52 removes passive markers on unlock, cleans obsolete markers during
+  restoration, ignores inactive markers during target/adoption, and inserts later points by curve position.
+  Lock placement is playtest-confirmed non-deforming; the wider interaction regression remains open.
+
+---
+
+## Changelog — v2.8 → v2.9 (ClientOnlyFallback, v0.1.28 → v0.1.45; full record in `SESSION_12.md`)
+
+- **Authority seam:** `GuideManager` no longer assumes a server. `IGuidePersistence`,
+  `IRecoverableGuidePersistence`, a block-solidity probe, and injected logging let
+  `LocalGuideAuthority` run the same validation, reshape, lock/constraint, cap, and undo machinery on the
+  client. Local caps are unlimited except for the shared 10M hard safety ceiling.
+- **Detection and activation:** `ClientAuthorityMode` is Detecting, Networked, or Local. A received bulk
+  sync is positive proof of a Layout server; otherwise a three-second grace resolves to Local. Local fallback
+  requires any vanilla Hammer variant/durability offhand + Flax Twine main hand. Networked public/private
+  modes both require the registered Layout tool.
+- **Mixed authority:** `ClientNetworkHandler` presents one mirror while tracking server/local guide IDs.
+  Ownership, not the current placement mode, routes operations on existing guides. Placement mode controls
+  only new guides. The last successful mutation authority routes Ctrl+Z/Y, so selection or mode changes do
+  not redirect history.
+- **Policy, commands, and publication:** server `allowClientOnlyMode` defaults false; client
+  `forceClientOnly` is only honored when policy allows it. `/layout private` and `/layout public` choose
+  placement authority; `.layout client dispel all|<chunk radius>` affects local guides; existing
+  `/layout dispel` remains server/admin; `/layout client push all` transfers at most 100 private guides after
+  server privilege/cap checks. Accepted guides get new server IDs and creator UID, then are removed locally;
+  publication is committed and deliberately absent from server undo history.
+- **Persistence and presentation:** local JSON is keyed by server/world + player UID under
+  `Layout/ClientOnlyGuides`, written by atomic temporary replace with one `.bak` and corrupt-file quarantine.
+  Vanilla-server fallback uses the normal blue/indigo anchors. Only mixed Layout servers render private
+  anchors orange/burnt-orange; the compact HUD says `Client-Only Guides`, and targeted local guides say
+  `Private guide`. The main GUI remains unchanged.
+- **Compatibility:** public save format remains DataVersion 7. Protocol 2 adds append-only policy, mode, and
+  push packets. `requiredOnServer=false` remains essential for vanilla-server fallback.
 
 ---
 
@@ -124,7 +193,8 @@ approach: ray-vs-voxel-box cell picking). Parked by the human ("not gamebreaking
   (arch end-tangent phantoms derive from the anchor chord at 0.4×chord, not the neighbor knot's height), so
   interior inserts/locks no longer re-tilt the whole curve.
 - **Deferred:** divisions scroll-wheel (drop the dropdown, keep the type-in field, wheel-adjusts-while-focused)
-  — specced, not built. **Unresolved:** B-S9-1 lock-in-place.
+  — specced, not built. **Active follow-up:** B-S9-1 is substantially improved by first-hit picking, complete
+  drag snapshots, and passive lock markers; final repeated-interaction playtesting remains.
 
 ---
 
@@ -228,7 +298,8 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 
 ### Data & wire
 - **Pinned, append-only enums** everywhere a value crosses wire or disk; **default-driven migration** via
-  `DataVersion` (currently **7**: v7 added `IsClosed` (Free-Shape loop flag); v6 added `Sides` + the
+  `DataVersion` (currently **8**: v8 added passive `ControlPoint.IsLockMarker`; v7 added `IsClosed`
+  (Free-Shape loop flag); v6 added `Sides` + the
   as-placed spring-back snapshot (`OriginalControlPoints`/`OriginalConstraint` — persisted, never wired);
   v5 added `Divisions`; v4 added `Constraint`, `ShapePlaneAxis`; v3 added `CreatorUid`; v2 added
   `Projection`/`Plane`/`IsFilled`).
@@ -283,9 +354,9 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   and shipped).** `GuideShapeTypes.IsVolume` gates the family. **Sphere / Dome** = two clicks (a diameter /
   a base diameter); **Cylinder / Cone / Box** = three clicks (base, then a height click — reusing the
   triangle's apex machinery, `NeedsApexClick`). Box is a true box (independent side lengths). **Hollow = a
-  one-cell shell, Filled = the solid**, voxelised by a **cell-lattice scan** (not curve-marching): exact
-  surface-crossing (sphere/box/dome) or centre-banded (cylinder/cone), with a `MaxScanCells` **scan guard**
-  that short-circuits absurd fine-scale sizes so the cap rejects them without a freeze. Volumes are **always
+  one-cell shell, Filled = the solid**. v0.1.53 routes hollow Sphere/Dome through the exact
+  surface-area-oriented `SphericalShellScan`; Box and filled volumes retain lattice scans, while
+  Cylinder/Cone remain centre-banded. The remaining cubic paths keep `MaxScanCells` guards. Volumes are **always
   Volumetric** (Surface + Divisions gated off server-side and greyed/hidden in the GUI). The base plane / axis
   comes from the clicked face; the axis is the **deterministic `ShapeGeometry.BaseNormal`** (+up regardless of
   anchor order — SHIFT is the only invert, e.g. dome → bowl). **Targeting is a wireframe** (equator/meridians,
@@ -312,6 +383,12 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   blocks arrived sank behind the face on reload (B-S10-1).
 - **Settled guides always render at their true scale**; `ChooseRenderScale` coarsening (8,000-voxel cap) is
   a **draft-ghost-only** courtesy — it once leaked into placed guides and permanently degraded them.
+- **Current large-guide bottleneck (v0.1.53, human-confirmed):** `GuideMeshBuilder` emits an independent full
+  cube for every voxel (8 vertices / 36 indices, shared faces included), stores one uploaded mesh per guide,
+  and `GuideRenderer` rebuilds/reuploads the whole guide on any change while drawing all loaded guide meshes.
+  A roughly 100-block hollow Sphere caused visible lag. The approved next seam is exposed-face Volumetric
+  meshing → spatial chunk meshes/culling → same-colour greedy merging. Preserve the verified draw recipe and
+  keep Surface/slabs on the legacy builder initially; full invariants in `SESSION_14.md`.
 - **Leaving Surface bakes the flattened positions into the control points** (undoable, full-state
   broadcast): Surface-mode edits are made against the view, so the view is what leaving it keeps. Returning
   to Surface restores the stored plane; only never-Surface guides get the floor-at-anchor seed.
@@ -337,30 +414,39 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   points it had.
 - **Systems communicate by return value (`GuideOperationResult`), not events**; undo is validate-then-apply
   with stale-command skip and the `Blocked` outcome for cap-rejected-but-valid commands.
-- **Planned divergence — client-only mode (F4, → 0.2.0).** Everything in this section describes NETWORKED
-  mode, which stays the collaborative product and is unchanged by F4. The planned local fallback (guides
-  visible to one player, in-memory, no server) makes locks / caps / undo-gating **local no-ops** and adds a
-  `LocalGuideAuthority` at the `ClientNetworkHandler.Send*` seam — it does **not** reopen any settled
-  decision for networked play. Full design: `PLAN_CLIENT_ONLY.md`; see the ▶ DIRECTION callout at the top.
+- **Implemented divergence — client-only authority (F4).** Networked public play remains server-authoritative.
+  Local guides use a client-side instance of the same `GuideManager`, so locks, constraints, caps, and undo
+  semantics remain real rather than becoming no-ops. On mixed servers, public and private guides coexist in
+  one mirror; a guide's recorded ownership routes every existing-guide mutation, while placement mode only
+  chooses the destination of a new guide. Undo/redo follows the last successful mutation authority. Full
+  contract: `PLAN_CLIENT_ONLY.md`.
 
 ### Configuration, assets, GUI
 - **Server `layout.json`:** perGuideVoxelCap 25,000 · totalVoxelCap 250,000 · maxGuidesPerPlayer 0 ·
-  maxGuidesWorldWide 0 · undoHistoryDepth 50 · requiredPrivilege "" · adminCanOverrideLocks true
+  maxGuidesWorldWide 0 · undoHistoryDepth 50 · requiredPrivilege "" · adminCanOverrideLocks true ·
+  **allowClientOnlyMode false**
   (0/negative = unlimited; **construction-time injection — edits need a server restart**). Caps sync to
   clients on join so the pre-check matches enforcement. **The running total is a `long`** (v0.1.27) so a
   caps-off server can't overflow it negative. A **hard voxel ceiling** (`GuideManager.HardVoxelCeiling`,
-  10M) rejects un-renderable giant guides ALWAYS, even with caps disabled — the 3D scan guard returns a
-  huge sentinel count for over-size volumes, and without this ceiling a caps-off server could create
-  invisible giants that silently max the world total. Server-side create rejections send a **clear in-game
+  10M) rejects giant guides ALWAYS, even with caps disabled. Remaining guarded 3D scans return a huge sentinel
+  for over-size filled/volume paths; hollow Sphere/Dome now count exactly beyond the old guard. Do not raise
+  the hard ceiling before the mesh pass: a near-ceiling monolithic mesh already lags. Server-side create
+  rejections send a **clear in-game
   error** (the HUD cap-flash is keyed to a guide id that doesn't exist yet on a create, so it was silent).
 - **Admin commands (v0.1.26–0.1.27):** **`/layout dispel all`** (whole world) and **`/layout dispel <chunk
   radius>`** (Chebyshev radius around the caller), both `controlserver`. Namespaced under `/layout` so they
   can't clash with other mods. Registered in `ServerNetworkHandler`; they delete + force-free locks +
   broadcast, and reset the running total.
+- **F4 commands:** `/layout private` asks an allowing Layout server to make new guides local;
+  `/layout public` returns new placement to server authority; `/layout client push all` publishes up to 100
+  local guides after privilege/cap validation. `.layout client dispel all|<chunk radius>` is intentionally a
+  client command and deletes only private guides. Push is a committed ownership transfer and is not inserted
+  into server undo history.
 - **Client `layout-client.json`:** remembers scale / projection / fill / **shape + constraint** (validated
   pairs) / divisions / **sides** plus the six opacities and (Session 11) the **pinned favorite shape codes
   (up to FOUR since 0.1.15; hard-kept — never auto-padded)**; client-retained, never synced. **Default
-  scale 1** (chisel-matched).
+  scale 1** (chisel-matched). **`forceClientOnly` defaults false** and requests private placement when an
+  installed Layout server explicitly allows it; `_forceClientOnlyNote` documents that dependency.
 - **The tile GUI (icon form since Session 10):** every control is a row of exclusive SQUARE ICON tiles
   (custom Cairo glyphs — `LayoutToolIcons` — rendered by stock toggle buttons; hover names the option,
   auto-sized since Session 11). **Mode-aware rows (Session 10, replacing the appended Selected-guide
@@ -379,8 +465,11 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   (wheel ±1, spinners, typed, floored at 0, clamped to `MaxDivisions`) — the one non-icon control. F-modal
   press-to-open, not the vanilla radial. Draft settings are **live** — mid-draft changes apply to the ghost
   and the completed guide.
-- **Hotkeys are rebindable and inert unless the tool is held** (Ctrl+Z/Y never hijack other UIs). Item art
-  borrows the vanilla abacus; recipe 6 sticks + 3 any-metal nuggets; infinite durability.
+- **Hotkeys are rebindable and gate-aware** (Ctrl+Z/Y never hijack other UIs). On Layout servers the real
+  guide tool is required in public and private placement modes. On servers without Layout, any vanilla
+  Hammer variant/durability in the offhand + Flax Twine in the main hand substitutes for it; F opens the
+  unchanged GUI and the HUD appears immediately. Item art for the real tool borrows the vanilla abacus;
+  recipe 6 sticks + 3 any-metal nuggets; infinite durability.
 - **Runtime is .NET 10** (VS 1.22); `Entity.SidedPos` is obsolete — use `Pos`.
 
 ---
@@ -404,8 +493,8 @@ Layout/
     ├── Items/
     │   └── ItemGuideTool.cs
     ├── Guide/                            [pure data]
-    │   ├── GuideData.cs                  [DataVersion 7; + Sides, IsClosed, Original{ControlPoints,Constraint}]
-    │   ├── ControlPoint.cs
+    │   ├── GuideData.cs                  [DataVersion 8; + Sides, IsClosed, Original{ControlPoints,Constraint}]
+    │   ├── ControlPoint.cs               [+ IsLockMarker: passive, non-deforming Arch lock]
     │   ├── VoxelPosition.cs              [VoxelRenderType: … Grabbed, Division (magenta, S9)]
     │   ├── GuideShapeType.cs             [Arch, Ellipse, Line, Triangle, Rectangle, Polygon, FreeShape, Sphere, Dome, Cylinder, Cone, Box; + GuideShapeTypes.IsVolume]
     │   ├── ShapeConstraint.cs            [None, SemiCircle, Circle, Right, Equilateral, Isosceles, Square]
@@ -422,8 +511,9 @@ Layout/
     │   ├── RectangleShape.cs             [S9: diagonal corners stored, other two derived; Square]
     │   ├── PolygonShape.cs               [S11: regular N-gon, MinSides 3 / MaxSides 24 (GuideData.Sides)]
     │   ├── FreeShape.cs                  [S11 (0.1.15): irregular polyline; IsClosed; MaxCorners 64; takes body inserts]
-    │   ├── SphereShape.cs                [3D (0.1.20): cell-lattice shell/solid scan; MaxScanCells 4M guard]
-    │   ├── DomeShape.cs                  [3D (0.1.21): half-sphere clipped to the apex half-space]
+    │   ├── SphereShape.cs                [3D (0.1.20; S14 hollow shell scan / guarded filled scan)]
+    │   ├── DomeShape.cs                  [3D (0.1.21; S14 exact shell + half-space clip)]
+    │   ├── SphericalShellScan.cs         [S14: shared surface-area-oriented hollow Sphere/Dome scan]
     │   ├── CylinderShape.cs              [3D (0.1.21): centre-banded lateral shell; 3-click]
     │   ├── ConeShape.cs                  [3D (0.1.21): centre-banded sloped shell; 3-click]
     │   ├── BoxShape.cs                   [3D (0.1.21): independent side lengths; exact shell; 3-click]
@@ -434,6 +524,7 @@ Layout/
     │   └── VoxelMarch.cs                 [shared cell marching, spline-identical quantise]
     ├── Systems/
     │   ├── GuideManager.cs
+    │   ├── GuideManagerDependencies.cs  [F4: persistence/recovery, block-probe, and logging seams]
     │   ├── GuideLockManager.cs
     │   ├── DraftManager.cs
     │   ├── UndoManager.cs
@@ -451,6 +542,10 @@ Layout/
     │   ├── LayoutServerConfig.cs
     │   └── LayoutClientConfig.cs
     ├── Client/
+    │   ├── ClientAuthorityMode.cs        [F4: Detecting / Networked / Local]
+    │   ├── ClientToolGate.cs             [F4: Layout tool vs. Hammer + Flax Twine]
+    │   ├── ClientWorldGuidePersistence.cs [F4: world+UID JSON, atomic replace, backup recovery]
+    │   ├── LocalGuideAuthority.cs        [F4: client-side GuideManager + UndoManager]
     │   └── GuideToolController.cs
     └── Undo/
         ├── IGuideCommand.cs
@@ -461,6 +556,7 @@ Layout/
             ├── MoveControlPointCommand.cs
             ├── InsertControlPointCommand.cs
             ├── LockPointCommand.cs
+            ├── RemoveLockMarkerCommand.cs [S13: remove/restore passive markers on unlock]
             ├── RescaleGuideCommand.cs
             ├── HideGuideCommand.cs
             ├── SetProjectionCommand.cs   [optional pre-bake point snapshot]
@@ -471,10 +567,12 @@ Layout/
             └── BreakConstraintCommand.cs
 ```
 
-**59 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
+**66 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
 ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 in Session 10: LayoutToolIcons; + 4 in Session 11:
 PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 for the 3D family (v0.1.20–0.1.21):
-SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape). Namespaces match
+SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape; + 5 for F4: ClientAuthorityMode,
+ClientToolGate, ClientWorldGuidePersistence, LocalGuideAuthority, GuideManagerDependencies; + 1 in Session 13:
+RemoveLockMarkerCommand; + 1 in Session 14: SphericalShellScan). Namespaces match
 folders: `Layout`, `Layout.Guide`, `Layout.Shapes`, `Layout.Systems`,
 `Layout.Network`, `Layout.UI`, `Layout.Config`, `Layout.Items`, `Layout.Client`, `Layout.Undo`,
 `Layout.Undo.Commands`. (`UndoManager` is the one file whose folder differs from its namespace: it lives in
@@ -501,7 +599,7 @@ GuideData {
     ProjectionPlane   Plane             // the Surface PROJECTION plane (≠ ShapePlaneAxis)
     bool              IsFilled          // hollow vs filled (Tier 2, built)
     string            CreatorUid        // nullable; bookkeeping only, never ownership, never wired
-    int               DataVersion       // 7 (const CurrentDataVersion); older saves migrate by defaults
+    int               DataVersion       // 8 (const CurrentDataVersion); older saves migrate by defaults
     int               Divisions          // Session 9: visual equal-parts count (0/1 = none)
     int               Sides              // Session 11: polygon side count (3–24; 0 on other shapes)
     bool              IsClosed           // Session 11 (0.1.15): Free-Shape loop flag (false elsewhere)
@@ -524,6 +622,7 @@ ControlPoint {
     bool    IsPhantom       // math only, never rendered or grabbed
     bool    IsAnchor        // start/end — Blue — structural
     bool    IsPrimary       // apex / minor handle — Green — SOFT (flows)
+    bool    IsLockMarker    // passive Arch lock; rendered/targetable but not a curve knot until dragged
 }
 ```
 
@@ -564,16 +663,19 @@ Unchanged since v2: `ProjectionMode { Volumetric, Surface }`; `ProjectionPlane` 
 ## 3. Module Map
 
 ### `LayoutModSystem.cs`
-Entry point and composition root: registers systems, the tool item, network channels, keybinds, and HUD on
-both sides; owns the single shared instances per side; seeds `DraftManager` from client config
-(scale/projection/fill/shape) and persists them back. All keybinds are rebindable, none hard-coded.
+Entry point and composition root: registers systems, the tool item, protocol-2 network channels, commands,
+keybinds, and HUD on both sides; owns the shared instances per side; seeds `DraftManager` from client config
+and persists it back. Client startup begins in Detecting, creates the local-authority/persistence stack, and
+lets the network handler resolve Networked vs. Local. All keybinds are rebindable, none hard-coded.
 
 ### Items — `ItemGuideTool.cs`
 Stateless glue (VS items are singletons); all interaction lives in `GuideToolController` (below). F opens the
 GUI; clicks route to the controller.
 
-### Client — `GuideToolController.cs`
-The interaction brain, per-tick while held (30 ms):
+### Client — authority and `GuideToolController.cs`
+`ClientAuthorityMode`, `ClientToolGate`, `ClientWorldGuidePersistence`, and `LocalGuideAuthority` provide
+detection, activation, durable local storage, and the client-side manager/undo stack. The controller remains
+the interaction brain, ticking while the active gate is satisfied (30 ms):
 - **Left-click priority chain (Create):** release grab → second foot → point grab (radius
   `max(0.10, voxel)`) → body hit (arch family: insert+grab in one gesture; ellipse family: nearest-handle
   grab) → first anchor. **Edit:** release grab → SELECT the aimed guide (empty click deselects) — select-only,
@@ -641,8 +743,9 @@ client `StartGrab`, client insert-adoption.
 
 ### Systems
 
-**`GuideManager.cs`** — server-side single authority. Registry + JSON persistence (versioned root, Newtonsoft
-`Vec3d` converter); builds shapes via the factory on create (shape/constraint/plane from the request) and
+**`GuideManager.cs`** — side-neutral guide authority. Registry + injected `IGuidePersistence` (versioned
+JSON on the server or per-world/per-UID JSON on the client), optional recovery, injected block probe/logger;
+builds shapes via the factory on create (shape/constraint/plane from the request) and
 re-adopts on load/restore; validates every mutation (**filled-aware voxel caps**, lock, existence) and
 reverts on rejection. Mutations: `CreateGuide`, `RestoreGuide`, `UpdateControlPoints` (multi-edit, atomic),
 `InsertControlPoint`, `RemoveControlPoint`, `SetPointLocked`, `DeleteGuide`, `SetHidden`, `SetProjection`
@@ -658,7 +761,8 @@ Volumetric), `SetFilled` (recounts with the new value, rolls back over cap), `Re
 Holds only the draft's start point; settings are read live at completion. Cap pre-check builds a throwaway
 shape via the factory, counted filled-aware.
 
-**`UndoManager.cs`** — server-side, per-player bounded stacks (default 50), session-only. Validate-then-apply
+**`UndoManager.cs`** — per-authority, per-player bounded stacks (server default 50; local uses the same
+semantics). Validate-then-apply
 with stale-command skip; `Blocked` for valid-but-cap-rejected commands (pushed back, history preserved);
 returns results, never broadcasts.
 
@@ -678,6 +782,9 @@ Yellow   (1.0, 0.85, 0.1)   Normal body          Red    (0.9, 0.15, 0.15)  Locke
 Green    (0.2, 0.9, 0.3)    Primary/apex/handle  Blue   (0.2, 0.5, 1.0)    Anchors (coplanar)
 Indigo   (0.45, 0.45, 1.0)  Far-foot off-shade   White  (1.0, 1.0, 1.0)    Grabbed
 ```
+Only on a mixed Layout server, locally-owned anchors substitute orange/burnt-orange for blue/indigo. A
+vanilla-server local fallback retains blue/indigo as Layout's normal visual identity. Color is derived from
+current ownership/context at render time, so a published guide immediately renders blue.
 
 ### Network
 
@@ -696,6 +803,8 @@ ints, Guids as 16 bytes, positions as three doubles, full point lists verbatim (
 | `GuideGrabPacket` / `GuideReleasePacket` / `GuideLockStatePacket` | C→S / S→C | Edit-lock lifecycle |
 | `DraftStartPacket` / `DraftCancelPacket` / `DraftAnchorBroadcastPacket` / `DraftAnchorRemovePacket` | mixed | Draft lifecycle (anchor dot only) |
 | `UndoRequestPacket` / `RedoRequestPacket` / `VoxelCapWarningPacket` | C→S / S→C | Undo + cap warnings |
+| `ClientOnlyPolicyPacket` / `ClientOnlyModeRequestPacket` / `ClientOnlyModeResultPacket` | mixed | Server permission and private/public placement negotiation |
+| `ClientGuidePushRequestPacket` / `ClientGuidePushResultPacket` | C→S / S→C | Publish up to 100 private guides and confirm accepted local removals |
 
 **`ServerNetworkHandler.cs`** — validates, calls the managers, reads results, broadcasts (or corrective
 resync / cap warning). Owns: the create request (shape-aware), **auto-break** before constrained inserts and
@@ -705,9 +814,11 @@ session, reflow edits folded into the same `UpdateControlPoints` batch — one c
 generic origins), the projection bake snapshot, drag coalescing (one drag = one undo entry), join/leave
 cleanup (locks freed + broadcast, undo cleared, drag sessions and draft anchors dropped).
 
-**`ClientNetworkHandler.cs`** — applies S→C packets to the mirror, raises change events for renderer/HUD/GUI,
-exposes read-only views (mirror, lock holders, remote anchors, synced caps) and every send method. Never
-writes server state.
+**`ClientNetworkHandler.cs`** — applies S→C packets to a combined mirror, separately tracks server/local IDs,
+raises change events for renderer/HUD/GUI, and exposes ownership, locks, remote anchors, caps, policy, and
+send methods. Existing-guide operations route by ownership; new placement routes by current placement mode;
+undo/redo routes by last successful mutation authority. Networked writes still go only through packets;
+local writes go through `LocalGuideAuthority` and then update the same mirror.
 
 ### UI
 
@@ -834,13 +945,14 @@ restores its stored plane. Plane and Fill apply atomically with cap re-checks (t
 rejected over cap and rolls back). All rebuild every client's mesh via the normal change events.
 
 ### Delete mode
-Left-click a guide → dispel (no client-side lock pre-check — the server owns exclusivity and the admin
-override). The GUI's other rows disable.
+Left-click a guide → dispel. Ownership routes the request to local or server authority; the authority owns
+lock validation and any admin override. The GUI's other rows disable.
 
 ### Undo / redo
-Ctrl+Z / Ctrl+Y (inert unless the tool is held) → the server finds the player's most recent still-valid
-command (stale ones skipped), applies it, broadcasts full current state or a delete — one rule for every
-command type, breaks and bakes included. Cap-blocked commands are pushed back and reported.
+Ctrl+Z / Ctrl+Y (inert unless the active tool gate is satisfied) → the authority of the last successful
+mutation finds that player's most recent still-valid command. Stale ones are skipped; cap-blocked commands
+are preserved and reported. Merely selecting a guide or changing public/private placement mode does not
+redirect history. Publication is a committed transfer and is intentionally not undoable.
 
 ### Cross-plane behaviour
 Volumetric points move freely in 3D — guides can be non-planar. Surface re-flattens the render onto the
@@ -857,15 +969,22 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
   world-save event; load/save never throw out of VS event handlers. On load: version-checked (defaults
   migrate v3-era records), factory-adopted, phantoms recalculated before first sync.
 - **Save format ≠ wire format:** JSON persists; protobuf DTOs travel. The paths are independent.
+- **Private client persistence:** `ClientWorldGuidePersistence` stores local guides under
+  `Layout/ClientOnlyGuides/<hash server-or-savegame>-<hash player UID>.json`. Writes use a temporary file
+  and atomic replacement, retain one `.bak`, and quarantine unreadable primary files as `.corrupt-*` before
+  attempting recovery. If the storage identity/path is unavailable, local authority remains usable with
+  transient in-memory persistence for that session. This never touches the world's main save payload.
 
 ---
 
 ## 7. Concurrency and Edge Cases
 
-- **Multiplayer model (settled):** world-shared, no ownership, no private guides; edit-locks prevent only
-  simultaneous edits; grief is a server-administration concern, out of scope.
-- **Guides are non-targetable without the tool:** pure mesh draws, no selection/collision/entity backing;
-  all interaction inside the held-item path; nothing registers with engine picking.
+- **Multiplayer model:** public guides remain world-shared and server-authoritative. Private guides are
+  player-owned client data and can overlay public guides only when `allowClientOnlyMode` permits it. They are
+  not visible or backed up by the server until explicitly published. Server administrators can prohibit the
+  private overlay (default) but cannot inspect guides that exist only on a client.
+- **Guides are non-targetable without the active gate:** pure mesh draws, no selection/collision/entity
+  backing; interaction stays inside the Layout-tool path or the Hammer+Flax fallback path.
 - **Disconnect mid-grab** → locks freed and broadcast; uncommitted drag never recorded; undo history cleared.
   **Mid-draft** → draft cancelled, anchor dot removed.
 - **Two players grab one guide** → first packet wins; the second sees the lock state, click is a no-op.
@@ -873,14 +992,18 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
   pre-check to avoid jank.
 - **Cross-player undo** → stale commands are skipped, never corrupting state; valid-but-rejected commands
   are `Blocked` and preserved.
+- **Mixed selection/mode changes** → do not change ownership and do not reroute undo. A pushed guide receives
+  a new public ID, creator UID, public anchor palette, and no inherited private undo entry.
 - **Block under a guide removed** → nothing happens; guides never bind to blocks.
 
 ---
 
-This v2.8 document is the authoritative plan, consolidated to current state: **Layout v0.1.27, in real play**
-on live game worlds. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
+This v3.1 document is the authoritative architecture, consolidated to current state: **Layout v0.1.53 on
+`ClientOnlyFallback`, built and playtested**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
 (+ right/equilateral/isosceles), rectangles (+ square), polygons, and Free-Shapes — plus the **3D volume
 family** (spheres, domes, cylinders, cones, boxes) place, preview, reshape, fill, lock/unlock, divide, and
-project onto surfaces in live multiplayer against VS 1.22.3 / .NET 10. Status, flagged decisions, and the
+project onto surfaces under server or local authority against VS 1.22.3 / .NET 10. Status, flagged decisions, and the
 punch-list live in `PROJECT_STATUS.md` and `TODO.md`; the current-state brief for external analysis lives in
-`HANDOFF.md` at the repo root; the client-only-mode plan lives in `PLAN_CLIENT_ONLY.md`.
+`HANDOFF.md` at the repo root; F4's final behavior record lives in `PLAN_CLIENT_ONLY.md`, its implementation
+history in `SESSION_12.md`, the interaction checkpoint in `SESSION_13.md`, and the active mesh resume plan in
+`SESSION_14.md`.

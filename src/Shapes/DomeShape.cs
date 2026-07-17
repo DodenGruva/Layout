@@ -17,10 +17,11 @@ namespace Layout.Shapes
     /// Base normal = the intrinsic plane axis (first click's face) with the base direction projected out,
     /// so a ground dome rises up and a wall dome bulges out of the wall. Voxelisation reuses the sphere's
     /// EXACT surface-crossing lattice test, clipped to the apex's half-space (cells with any part on the
-    /// apex side survive) — watertight, one cell thick. Same scan guard as the sphere. Dragging the apex
-    /// is absorbed (it snaps back to the derived position — no break target in v1).
+    /// apex side survive) — watertight, one cell thick. Hollow domes use the shared shell-focused scan;
+    /// filled domes retain the bounding-lattice scan guard. Dragging the apex is absorbed (it snaps back to
+    /// the derived position — no break target in v1).
     /// </remarks>
-    public sealed class DomeShape : IGuideShape
+    public sealed class DomeShape : IGuideShape, IThresholdVoxelCounter
     {
         private const double MinRadius = 0.05;
         private const long MaxScanCells = 4_000_000;
@@ -104,8 +105,15 @@ namespace Layout.Shapes
             var result = new List<VoxelPosition>();
             if (!TryGetFrame(out Vec3d c, out double r, out _, out _, out Vec3d n)) return result;
 
+            if (!filled)
+            {
+                SphericalShellScan.Scan(c, r, scale, n, int.MaxValue, result);
+                ClaimHandleMarkers(result, scale);
+                return result;
+            }
+
             long cellsPerAxis = (long)(2.0 * r * 16.0 / scale) + 3;
-            if (cellsPerAxis * cellsPerAxis * cellsPerAxis > MaxScanCells) return result;   // scan guard
+            if (cellsPerAxis * cellsPerAxis * cellsPerAxis > MaxScanCells) return result;   // filled scan guard
 
             double cell = scale / 16.0;
             double r2 = r * r;
@@ -119,15 +127,14 @@ namespace Layout.Shapes
             for (int ix = min16X; ix <= max16X; ix += scale)
             {
                 double lox = ix / 16.0;
-                double nx = Nearest(c.X, lox, lox + cell), fx = Farthest(c.X, lox, lox + cell);
+                double nx = Nearest(c.X, lox, lox + cell);
                 double ccx = lox + cell * 0.5 - c.X;
                 for (int iy = min16Y; iy <= max16Y; iy += scale)
                 {
                     double loy = iy / 16.0;
-                    double ny = Nearest(c.Y, loy, loy + cell), fy = Farthest(c.Y, loy, loy + cell);
+                    double ny = Nearest(c.Y, loy, loy + cell);
                     double nxy2 = nx * nx + ny * ny;
                     if (nxy2 > r2) continue;
-                    double fxy2 = fx * fx + fy * fy;
                     double ccy = loy + cell * 0.5 - c.Y;
                     for (int iz = min16Z; iz <= max16Z; iz += scale)
                     {
@@ -141,11 +148,6 @@ namespace Layout.Shapes
                         double sc = ccx * n.X + ccy * n.Y + ccz * n.Z;
                         if (sc + spread < 0) continue;
 
-                        if (!filled)
-                        {
-                            double fz = Farthest(c.Z, loz, loz + cell);
-                            if (fxy2 + fz * fz < r2) continue;   // entirely inside the ball → interior
-                        }
                         result.Add(new VoxelPosition(ix, iy, iz, VoxelRenderType.Normal));
                     }
                 }
@@ -156,11 +158,56 @@ namespace Layout.Shapes
         }
 
         public int GetVoxelCount(int scale, bool filled = false)
+            => GetVoxelCountUpTo(scale, filled, int.MaxValue);
+
+        public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter)
         {
-            if (!TryGetFrame(out _, out double r, out _, out _, out _)) return 0;
+            if (!TryGetFrame(out Vec3d c, out double r, out _, out _, out Vec3d n)) return 0;
+
+            if (!filled)
+                return SphericalShellScan.Scan(c, r, scale, n, stopAfter, null);
+
             long cellsPerAxis = (long)(2.0 * r * 16.0 / scale) + 3;
-            if (cellsPerAxis * cellsPerAxis * cellsPerAxis > MaxScanCells) return int.MaxValue / 4;
-            return GetVoxelPositions(scale, filled).Count;
+            if (cellsPerAxis * cellsPerAxis * cellsPerAxis > MaxScanCells)
+                return GuideShapeVoxelCounting.Exceeded(stopAfter);
+
+            stopAfter = Math.Max(0, stopAfter);
+            double cell = scale / 16.0;
+            double r2 = r * r;
+            double spread = (Math.Abs(n.X) + Math.Abs(n.Y) + Math.Abs(n.Z)) * cell * 0.5;
+            int count = 0;
+
+            int min16X = AlignDown(c.X - r, scale), max16X = AlignDown(c.X + r, scale);
+            int min16Y = AlignDown(c.Y - r, scale), max16Y = AlignDown(c.Y + r, scale);
+            int min16Z = AlignDown(c.Z - r, scale), max16Z = AlignDown(c.Z + r, scale);
+
+            for (int ix = min16X; ix <= max16X; ix += scale)
+            {
+                double lox = ix / 16.0;
+                double nx = Nearest(c.X, lox, lox + cell);
+                double ccx = lox + cell * 0.5 - c.X;
+                for (int iy = min16Y; iy <= max16Y; iy += scale)
+                {
+                    double loy = iy / 16.0;
+                    double ny = Nearest(c.Y, loy, loy + cell);
+                    double nxy2 = nx * nx + ny * ny;
+                    if (nxy2 > r2) continue;
+                    double ccy = loy + cell * 0.5 - c.Y;
+                    for (int iz = min16Z; iz <= max16Z; iz += scale)
+                    {
+                        double loz = iz / 16.0;
+                        double nz = Nearest(c.Z, loz, loz + cell);
+                        if (nxy2 + nz * nz > r2) continue;
+
+                        double ccz = loz + cell * 0.5 - c.Z;
+                        double sc = ccx * n.X + ccy * n.Y + ccz * n.Z;
+                        if (sc + spread < 0) continue;
+                        count++;
+                        if (count > stopAfter) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+                    }
+                }
+            }
+            return count;
         }
 
         private void ClaimHandleMarkers(List<VoxelPosition> cells, int scale)
@@ -179,9 +226,6 @@ namespace Layout.Shapes
 
         private static double Nearest(double centre, double lo, double hi) =>
             centre < lo ? lo - centre : centre > hi ? centre - hi : 0.0;
-
-        private static double Farthest(double centre, double lo, double hi) =>
-            Math.Max(Math.Abs(centre - lo), Math.Abs(centre - hi));
 
         // --- IGuideShape: curve queries (targeting wireframe) ----------------------------------------
 

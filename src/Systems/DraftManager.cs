@@ -323,7 +323,9 @@ namespace Layout.Systems
                 return new DraftCompletion(DraftCompletionStatus.NoActiveDraft, null, null, 0, 0);
 
             IGuideShape preview = new Shapes.FreeShape(_draftChain, closed);
-            int count = preview.GetVoxelCount(_scale, _filled);
+            int count = _perGuideVoxelCap > 0
+                ? GuideShapeVoxelCounting.CountUpTo(preview, _scale, _filled, _perGuideVoxelCap)
+                : preview.GetVoxelCount(_scale, _filled);
 
             DraftCompletionStatus status = _perGuideVoxelCap > 0 && count > _perGuideVoxelCap
                 ? DraftCompletionStatus.RejectedOverCap
@@ -403,7 +405,9 @@ namespace Layout.Systems
                 inverted, _sides);
             if (apex != null && NeedsApexClick(_shape, _constraint) && preview.ControlPoints.Count > 2)
                 preview.MoveControlPoint(2, apex);
-            int count = preview.GetVoxelCount(_scale, _filled);
+            int count = _perGuideVoxelCap > 0
+                ? GuideShapeVoxelCounting.CountUpTo(preview, _scale, _filled, _perGuideVoxelCap)
+                : preview.GetVoxelCount(_scale, _filled);
 
             // Cap of 0 or less = the server enforces no per-guide cap (unlimited); everything passes.
             DraftCompletionStatus status = _perGuideVoxelCap > 0 && count > _perGuideVoxelCap

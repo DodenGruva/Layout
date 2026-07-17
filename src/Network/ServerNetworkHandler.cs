@@ -74,6 +74,9 @@ namespace Layout.Network
         // Server-config policy (Module 7). Empty/null privilege = everyone may use the tool.
         private readonly string _requiredPrivilege;
         private readonly bool _adminCanOverrideLocks;
+        private readonly bool _allowClientOnlyMode;
+        private readonly HashSet<string> _clientOnlyPlayers = new HashSet<string>();
+        private const int MaxGuidesPerPush = 100;
 
         // Per-player in-progress drag: the guide being edited and each moved point's pre-drag origin.
         // Used to coalesce a drag into a single undo entry on release — and, since Session 8, to service
@@ -82,6 +85,8 @@ namespace Layout.Network
         {
             public Guid GuideId;
             public readonly Dictionary<int, Vec3d> Origins = new Dictionary<int, Vec3d>();
+            public ShapeConstraint OriginConstraint;
+            public List<ControlPoint> OriginPoints;
 
             /// <summary>
             /// Index of the point this grab CREATED (body insert), or −1 for a grab of a pre-existing
@@ -111,7 +116,8 @@ namespace Layout.Network
             GuideLockManager lockManager,
             UndoManager undoManager,
             string requiredPrivilege = null,
-            bool adminCanOverrideLocks = true)
+            bool adminCanOverrideLocks = true,
+            bool allowClientOnlyMode = false)
         {
             _sapi = sapi ?? throw new ArgumentNullException(nameof(sapi));
             _guides = guideManager ?? throw new ArgumentNullException(nameof(guideManager));
@@ -119,6 +125,7 @@ namespace Layout.Network
             _undo = undoManager ?? throw new ArgumentNullException(nameof(undoManager));
             _requiredPrivilege = string.IsNullOrWhiteSpace(requiredPrivilege) ? null : requiredPrivilege.Trim();
             _adminCanOverrideLocks = adminCanOverrideLocks;
+            _allowClientOnlyMode = allowClientOnlyMode;
 
             _channel = _sapi.Network.RegisterChannel(LayoutChannel.Name);
             LayoutPackets.RegisterMessageTypes(_channel);
@@ -142,7 +149,9 @@ namespace Layout.Network
                 .SetMessageHandler<DraftStartPacket>(OnDraftStart)
                 .SetMessageHandler<DraftCancelPacket>(OnDraftCancel)
                 .SetMessageHandler<UndoRequestPacket>(OnUndo)
-                .SetMessageHandler<RedoRequestPacket>(OnRedo);
+                .SetMessageHandler<RedoRequestPacket>(OnRedo)
+                .SetMessageHandler<ClientPlacementModeRequestPacket>(OnClientPlacementModeRequest)
+                .SetMessageHandler<ClientGuidePushPacket>(OnClientGuidePush);
 
             _sapi.Event.PlayerNowPlaying += OnPlayerNowPlaying;
             _sapi.Event.PlayerDisconnect += OnPlayerDisconnect;
@@ -160,14 +169,72 @@ namespace Layout.Network
             var parsers = _sapi.ChatCommands.Parsers;
             _sapi.ChatCommands
                 .Create("layout")
-                .WithDescription("Layout mod admin commands.")
-                .RequiresPrivilege(Privilege.controlserver)
+                .WithDescription("Layout guide and placement-mode commands.")
+                .RequiresPrivilege(Privilege.chat)
                 .BeginSubCommand("dispel")
                     .WithDescription("Dispel guides. 'all' clears the whole world; a number clears within that chunk radius of you.")
                     .RequiresPrivilege(Privilege.controlserver)
                     .WithArgs(parsers.Word("all-or-radius"))
                     .HandleWith(OnDispelCommand)
+                .EndSubCommand()
+                .BeginSubCommand("private")
+                    .WithDescription("Place new guides privately on this client when the server permits it.")
+                    .RequiresPrivilege(Privilege.chat)
+                    .HandleWith(OnPrivateModeCommand)
+                .EndSubCommand()
+                .BeginSubCommand("public")
+                    .WithDescription("Place new guides publicly on the server.")
+                    .RequiresPrivilege(Privilege.chat)
+                    .HandleWith(OnPublicModeCommand)
+                .EndSubCommand()
+                .BeginSubCommand("client")
+                    .WithDescription("Private-guide publication commands.")
+                    .RequiresPrivilege(Privilege.chat)
+                    .BeginSubCommand("push")
+                        .WithDescription("Publish private guides to the server.")
+                        .RequiresPrivilege(Privilege.chat)
+                        .WithArgs(parsers.Word("all"))
+                        .HandleWith(OnClientPushCommand)
+                    .EndSubCommand()
                 .EndSubCommand();
+        }
+
+        private TextCommandResult OnPrivateModeCommand(TextCommandCallingArgs args)
+        {
+            if (args.Caller.Player is not IServerPlayer player)
+                return TextCommandResult.Error("This command must be run by a player.");
+
+            if (!_allowClientOnlyMode)
+            {
+                SendPlacementMode(player, false, false, false,
+                    null);
+                return TextCommandResult.Error("This server does not allow client-only Layout mode.");
+            }
+
+            SetClientOnlyMode(player, true, updatePreference: true);
+            return TextCommandResult.Success("New Layout guides will be client-only.");
+        }
+
+        private TextCommandResult OnPublicModeCommand(TextCommandCallingArgs args)
+        {
+            if (args.Caller.Player is not IServerPlayer player)
+                return TextCommandResult.Error("This command must be run by a player.");
+
+            SetClientOnlyMode(player, false, updatePreference: true);
+            return TextCommandResult.Success("New Layout guides will be stored on the server.");
+        }
+
+        private TextCommandResult OnClientPushCommand(TextCommandCallingArgs args)
+        {
+            if (args.Caller.Player is not IServerPlayer player)
+                return TextCommandResult.Error("This command must be run by a player.");
+            string argument = (args[0] as string)?.Trim().ToLowerInvariant();
+            if (argument != "all") return TextCommandResult.Error("Usage: /layout client push all");
+            if (_clientOnlyPlayers.Contains(player.PlayerUID))
+                return TextCommandResult.Error("Switch to public mode first with /layout public.");
+
+            _channel.SendPacket(new ClientGuidePushRequestPacket(), player);
+            return TextCommandResult.Success("Requested all private guides for server publication.");
         }
 
         private TextCommandResult OnDispelCommand(TextCommandCallingArgs args)
@@ -183,12 +250,12 @@ namespace Layout.Network
             if (int.TryParse(arg, out int radius) && radius >= 0)
             {
                 if (args.Caller.Player is not IServerPlayer p)
-                    return TextCommandResult.Error("A radius dispel must be run by a player (use '/dispel all' from the console).");
+                    return TextCommandResult.Error("A radius dispel must be run by a player (use '/layout dispel all' from the console).");
                 int n = DispelGuides(p, radius);
                 return TextCommandResult.Success($"Dispelled {n} Layout guide(s) within {radius} chunk(s).");
             }
 
-            return TextCommandResult.Error("Usage: /dispel all   OR   /dispel <chunk radius>");
+            return TextCommandResult.Error("Usage: /layout dispel all   OR   /layout dispel <chunk radius>");
         }
 
         // Dispels guides, force-freeing their locks and broadcasting the removals. A null player dispels
@@ -243,7 +310,8 @@ namespace Layout.Network
             var all = new List<GuideDataDto>(_guides.AllGuides.Count);
             foreach (var g in _guides.AllGuides.Values) all.Add(GuideDataDto.From(g));
             _channel.SendPacket(
-                new GuideBulkSyncPacket(all.ToArray(), _guides.PerGuideVoxelCap, _guides.TotalVoxelCap),
+                new GuideBulkSyncPacket(all.ToArray(), _guides.PerGuideVoxelCap, _guides.TotalVoxelCap,
+                    _allowClientOnlyMode),
                 player);
 
             // 2) Current lock state of any locked guide, so the joiner sees what is being edited.
@@ -269,9 +337,112 @@ namespace Layout.Network
 
             _undo.ClearPlayer(uid);
             _drags.Remove(uid);
+            _clientOnlyPlayers.Remove(uid);
 
             if (_draftAnchors.Remove(uid))
                 _channel.BroadcastPacket(new DraftAnchorRemovePacket(uid));
+        }
+
+        private void OnClientPlacementModeRequest(IServerPlayer player, ClientPlacementModeRequestPacket packet)
+        {
+            bool wantsClientOnly = packet?.ClientOnly == true;
+            if (wantsClientOnly && !_allowClientOnlyMode)
+            {
+                SendPlacementMode(player, false, false, false,
+                    "This server does not allow client-only Layout mode.");
+                return;
+            }
+
+            SetClientOnlyMode(player, wantsClientOnly, updatePreference: false);
+        }
+
+        private void SetClientOnlyMode(IServerPlayer player, bool clientOnly, bool updatePreference)
+        {
+            bool wasClientOnly = _clientOnlyPlayers.Contains(player.PlayerUID);
+            if (clientOnly) _clientOnlyPlayers.Add(player.PlayerUID);
+            else _clientOnlyPlayers.Remove(player.PlayerUID);
+
+            if (wasClientOnly != clientOnly)
+            {
+                IReadOnlyList<Guid> freed = _locks.ReleaseAllLocksForPlayer(player.PlayerUID);
+                foreach (Guid id in freed)
+                    _channel.BroadcastPacket(new GuideLockStatePacket(id, null));
+                _drags.Remove(player.PlayerUID);
+                if (_draftAnchors.Remove(player.PlayerUID))
+                    _channel.BroadcastPacket(new DraftAnchorRemovePacket(player.PlayerUID));
+            }
+
+            SendPlacementMode(player, clientOnly, true, updatePreference, null);
+        }
+
+        private void SendPlacementMode(IServerPlayer player, bool clientOnly, bool allowed,
+            bool updatePreference, string message)
+        {
+            _channel.SendPacket(
+                new ClientPlacementModePacket(clientOnly, allowed, updatePreference, message), player);
+        }
+
+        private void OnClientGuidePush(IServerPlayer player, ClientGuidePushPacket packet)
+        {
+            if (_clientOnlyPlayers.Contains(player.PlayerUID))
+            {
+                _channel.SendPacket(new ClientGuidePushResultPacket(
+                    Array.Empty<byte[]>(), packet?.Guides?.Length ?? 0,
+                    "Switch to public mode before pushing private guides (/layout public)."), player);
+                return;
+            }
+
+            if (DeniedByPrivilege(player))
+            {
+                _channel.SendPacket(new ClientGuidePushResultPacket(
+                    Array.Empty<byte[]>(), packet?.Guides?.Length ?? 0,
+                    "You lack the privilege required to publish Layout guides."), player);
+                return;
+            }
+
+            ClientGuidePushDto[] incoming = packet?.Guides ?? Array.Empty<ClientGuidePushDto>();
+            var accepted = new List<byte[]>();
+            int rejected = Math.Max(0, incoming.Length - MaxGuidesPerPush);
+            int count = Math.Min(incoming.Length, MaxGuidesPerPush);
+
+            for (int i = 0; i < count; i++)
+            {
+                try
+                {
+                    GuideData candidate = incoming[i]?.ToGuideData();
+                    Guid localId = candidate?.Id ?? Guid.Empty;
+                    if (candidate == null || localId == Guid.Empty)
+                    {
+                        rejected++;
+                        continue;
+                    }
+
+                    candidate.Id = Guid.NewGuid();
+                    candidate.CreatorUid = player.PlayerUID;
+                    candidate.DataVersion = GuideData.CurrentDataVersion;
+                    GuideOperationResult result = _guides.RestoreGuide(candidate);
+                    if (!result.IsSuccess)
+                    {
+                        rejected++;
+                        continue;
+                    }
+
+                    // Publishing is a committed transfer, not a normal server-side creation gesture. The
+                    // client removes its private copy after this acceptance is confirmed, so recording a
+                    // CreateGuideCommand here would let Ctrl+Z delete the player's only remaining copy.
+                    _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
+                    accepted.Add(NetIds.ToBytes(localId));
+                }
+                catch (Exception e)
+                {
+                    rejected++;
+                    _sapi.Logger.Warning("[Layout] Rejected a pushed guide from {0}: {1}",
+                        player.PlayerUID, e.Message);
+                }
+            }
+
+            string summary = $"Published {accepted.Count} private guide(s); {rejected} rejected.";
+            _channel.SendPacket(new ClientGuidePushResultPacket(accepted.ToArray(), rejected, summary), player);
         }
 
         // ==========================================================================================
@@ -381,6 +552,15 @@ namespace Layout.Network
             }
 
             LockAcquireOutcome outcome = _locks.TryAcquireLock(id, fromPlayer.PlayerUID);
+            if (outcome.CanEdit && _guides.TryGetGuide(id, out GuideData grabbedGuide))
+            {
+                DragSession session = DragFor(fromPlayer.PlayerUID, id);
+                if (session.OriginPoints == null)
+                {
+                    session.OriginConstraint = grabbedGuide.Constraint;
+                    session.OriginPoints = ClonePoints(grabbedGuide.ControlPoints);
+                }
+            }
             // Everyone learns the holder; the requester learns whether the grab was granted or denied.
             _channel.BroadcastPacket(new GuideLockStatePacket(id, outcome.HolderUid));
         }
@@ -421,7 +601,15 @@ namespace Layout.Network
                     // removed there is nothing left to commit (and its index is void anyway).
                     if (!removedInsert)
                     {
-                        foreach (var pair in session.Origins)
+                        bool promotedMarker = HasPromotedMarker(
+                            session.OriginPoints, g.ControlPoints);
+                        if (promotedMarker)
+                        {
+                            _undo.Record(uid, new SpringBackCommand(
+                                id, session.OriginConstraint, session.OriginPoints,
+                                g.Constraint, g.ControlPoints));
+                        }
+                        else foreach (var pair in session.Origins)
                         {
                             int idx = pair.Key;
                             Vec3d origin = pair.Value;
@@ -437,6 +625,11 @@ namespace Layout.Network
 
             if (_locks.ReleaseLock(id, uid))
                 _channel.BroadcastPacket(new GuideLockStatePacket(id, null));
+
+            // Dragging is optimistically previewed in the mover's client mirror. Restate the complete
+            // authoritative guide after release so a rejected or not-yet-sent final preview cannot remain
+            // locally oversized (and therefore invisible while its control points are still targetable).
+            ResyncOrDrop(fromPlayer, id);
         }
 
         // Session-8 right-click-cancel: the anti-release. Where OnRelease COMMITS the drag (one undo entry),
@@ -460,7 +653,14 @@ namespace Layout.Network
             if (_drags.TryGetValue(uid, out DragSession session) && session.GuideId == id
                 && _guides.TryGetGuide(id, out GuideData g))
             {
-                if (session.InsertedIndex >= 0)
+                if (session.OriginPoints != null)
+                {
+                    // Restore the gesture atomically: every soft-flow point, the grabbed point, phantom
+                    // geometry, and any constraint broken by the first move all return together.
+                    mutated = _guides.RestoreConstraint(
+                        id, session.OriginConstraint, session.OriginPoints).Status == GuideOpStatus.Success;
+                }
+                else if (session.InsertedIndex >= 0)
                 {
                     // Fresh body insert: cancel removes the whole gesture. RemoveControlPoint validates the
                     // index itself (the guide may have changed shape under an admin op while we dragged).
@@ -489,6 +689,8 @@ namespace Layout.Network
 
             if (_locks.ReleaseLock(id, uid))
                 _channel.BroadcastPacket(new GuideLockStatePacket(id, null));
+
+            if (!mutated) ResyncOrDrop(fromPlayer, id);
         }
 
         // ==========================================================================================
@@ -568,13 +770,18 @@ namespace Layout.Network
                     session.Origins[e.Index] = ClonePos(g.ControlPoints[e.Index].WorldPosition);
             }
 
+            bool promotedLockMarker = false;
+            for (int i = 0; i < g.ControlPoints.Count && !promotedLockMarker; i++)
+                promotedLockMarker = g.ControlPoints[i].IsLockMarker && g.ControlPoints[i].IsLocked;
+
             GuideOperationResult result = _guides.UpdateControlPoints(id, composed.ToArray());
             switch (result.Status)
             {
                 case GuideOpStatus.Success:
                     // Authoritative — every client (including the mover, keeping its mirror exact) applies
                     // it. A constraint break changed more than positions, so that case sends full state.
-                    if (broke && _guides.TryGetGuide(id, out GuideData gPostMove))
+                    if ((broke || promotedLockMarker) &&
+                        _guides.TryGetGuide(id, out GuideData gPostMove))
                     {
                         _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(gPostMove)));
                     }
@@ -627,6 +834,13 @@ namespace Layout.Network
             }
 
             Vec3d pos = p.Position.ToVec3d();
+            ShapeConstraint insertOriginConstraint = ShapeConstraint.None;
+            List<ControlPoint> insertOriginPoints = null;
+            if (_guides.TryGetGuide(id, out GuideData insertOriginGuide))
+            {
+                insertOriginConstraint = insertOriginGuide.Constraint;
+                insertOriginPoints = ClonePoints(insertOriginGuide.ControlPoints);
+            }
 
             // ABSORB-OR-BREAK (Session 8): a body insert is a grab no constraint can absorb — an arbitrary
             // interpolation point has no place on a perfect half-circle. Break first (undoable as one
@@ -653,13 +867,14 @@ namespace Layout.Network
             if (p.Locked)
             {
                 Vec3d curvePos = shape != null ? shape.GetPointAt(t) : pos;
-                GuideOperationResult ins = _guides.InsertControlPoint(id, t, curvePos);
+                bool marker = gPre != null && gPre.ShapeType == GuideShapeType.Arch;
+                GuideOperationResult ins = _guides.InsertControlPoint(id, t, curvePos, marker);
                 if (ins.Status == GuideOpStatus.Success)
                 {
                     int idx = ins.ControlPointIndex;
                     _guides.SetPointLocked(id, idx, true);
                     // Two undo steps, honestly: first Ctrl+Z unlocks, second removes the point.
-                    _undo.Record(uid, new InsertControlPointCommand(id, idx, curvePos));
+                    _undo.Record(uid, new InsertControlPointCommand(id, idx, curvePos, marker));
                     _undo.Record(uid, new LockPointCommand(id, idx, false, true));
                     // One full-state broadcast carries the new point AND its locked flag together.
                     if (_guides.TryGetGuide(id, out GuideData withLock))
@@ -689,6 +904,8 @@ namespace Layout.Network
                 // GuideCancelGrabPacket that arrives before any move still knows to remove the point.
                 DragSession session = DragFor(uid, id);
                 session.InsertedIndex = landedIndex;
+                session.OriginConstraint = insertOriginConstraint;
+                session.OriginPoints = insertOriginPoints;
 
                 // Announce the lock (the player now holds it) and the new point to everyone. After a
                 // constraint break the point LIST changed shape, so one full-state packet replaces the
@@ -769,7 +986,21 @@ namespace Layout.Network
             if (BlockedByEditLock(fromPlayer, id)) return;
             if (p.Index < 0 || p.Index >= g.ControlPoints.Count) { SendResync(fromPlayer, g); return; }
 
-            bool before = g.ControlPoints[p.Index].IsLocked;
+            ControlPoint target = g.ControlPoints[p.Index];
+            if (!p.Locked && target.IsLockMarker)
+            {
+                var command = new RemoveLockMarkerCommand(id, p.Index, target.WorldPosition);
+                GuideOperationResult removed = _guides.RemoveControlPoint(id, p.Index);
+                if (removed.Status == GuideOpStatus.Success)
+                {
+                    _undo.Record(fromPlayer.PlayerUID, command);
+                    _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(removed.Guide)));
+                }
+                else HandleNonSuccessToggle(fromPlayer, id, removed, g);
+                return;
+            }
+
+            bool before = target.IsLocked;
             GuideOperationResult result = _guides.SetPointLocked(id, p.Index, p.Locked);
             if (result.Status == GuideOpStatus.Success)
             {
@@ -1055,6 +1286,26 @@ namespace Layout.Network
         }
 
         private static Vec3d ClonePos(Vec3d v) => v == null ? new Vec3d() : new Vec3d(v.X, v.Y, v.Z);
+
+        private static List<ControlPoint> ClonePoints(IReadOnlyList<ControlPoint> points)
+        {
+            var copy = new List<ControlPoint>(points?.Count ?? 0);
+            if (points != null)
+                for (int i = 0; i < points.Count; i++)
+                    copy.Add(points[i] == null ? new ControlPoint() : points[i].Clone());
+            return copy;
+        }
+
+        private static bool HasPromotedMarker(
+            IReadOnlyList<ControlPoint> before, IReadOnlyList<ControlPoint> after)
+        {
+            if (before == null || after == null || before.Count != after.Count) return false;
+            for (int i = 0; i < before.Count; i++)
+                if (before[i].IsLockMarker && before[i].IsLocked &&
+                    !after[i].IsLockMarker && after[i].IsLocked)
+                    return true;
+            return false;
+        }
 
         private static bool SamePosition(Vec3d a, Vec3d b)
         {

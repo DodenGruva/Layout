@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Vintagestory.API.Client;
 using Vintagestory.API.MathTools;
+using Layout.Client;
 using Layout.Guide;
 using Layout.Network;
 using Layout.Shapes;
@@ -90,6 +91,7 @@ namespace Layout.UI
         // The HUD's copy of the Current Shape chip (0.1.16): which "-current" glyph is composed right
         // now, or null when hidden (non-Create modes). A change recomposes the HUD (rare — shape picks).
         private string _chipIcon;
+        private bool _showClientOnlyIndicator;
 
         public GuideHud(ICoreClientAPI capi, DraftManager tool, ClientNetworkHandler net) : base(capi)
         {
@@ -192,6 +194,7 @@ namespace Layout.UI
             // two text lines narrow so they never run under it.
             const double chip = 42;
             bool showChip = _tool.Mode == ToolMode.Create;
+            _showClientOnlyIndicator = _net.AuthorityMode == ClientAuthorityMode.Local;
             _chipIcon = showChip
                 ? GuideToolGui.CurrentShapeIconName(_tool.Shape, _tool.Constraint)
                 : null;
@@ -203,7 +206,9 @@ namespace Layout.UI
                 c.AddInteractiveElement(chipBtn, "hudcurshape");
             }
 
-            string[] keys = { "mode", "scale", "proj", "fill", "dims", "guide", "cap" };
+            var keys = new List<string>();
+            if (_showClientOnlyIndicator) keys.Add("authority");
+            keys.AddRange(new[] { "mode", "scale", "proj", "fill", "dims", "guide", "cap" });
             foreach (string key in keys)
             {
                 double lineW = showChip && (key == "mode" || key == "scale") ? panelW - chip - 6 : panelW;
@@ -230,6 +235,13 @@ namespace Layout.UI
         {
             if (SingleComposer == null) return;
 
+            bool wantsClientOnlyIndicator = _net.AuthorityMode == ClientAuthorityMode.Local;
+            if (wantsClientOnlyIndicator != _showClientOnlyIndicator)
+            {
+                SetupHud();
+                if (SingleComposer == null) return;
+            }
+
             // Current Shape chip upkeep (0.1.16): a shape pick or mode flip swaps/hides the glyph, which
             // needs a recompose — rare (only on those changes), so it's done here on the cheap tick.
             string wantIcon = _tool.Mode == ToolMode.Create
@@ -238,6 +250,7 @@ namespace Layout.UI
             if (wantIcon != _chipIcon && IsOpened()) SetupHud();
 
             // --- always-present tool state ---
+            if (_showClientOnlyIndicator) SetText("authority", "Client-Only Guides");
             // Session 8: the mode line also carries the next guide's shape in Create mode, so the
             // player can confirm the pick without opening the F-menu.
             SetText("mode", _tool.Mode == ToolMode.Create
@@ -415,7 +428,8 @@ namespace Layout.UI
             string editable = _net.LockHolders.TryGetValue(g.Id, out string holder) && !string.IsNullOrEmpty(holder)
                 ? "in use"
                 : "editable";
-            return "Guide " + ShortId(g.Id) + " · " + editable + " · " + voxelCount.ToString("N0") + " vox";
+            string guideLabel = _net.IsLocalGuide(g.Id) ? "Private guide " : "Guide ";
+            return guideLabel + ShortId(g.Id) + " · " + editable + " · " + voxelCount.ToString("N0") + " vox";
         }
 
         // Text-only cap gauge: "Cap [████░░░░] 62%" plus a near/over-cap marker. We keep it

@@ -16,7 +16,7 @@ namespace Layout.Shapes
     /// <see cref="CylinderShape"/> for the reasoning. The cone's band compares the cell centre's radial
     /// distance against the LOCAL radius at its axial station.
     /// </remarks>
-    public sealed class ConeShape : IGuideShape
+    public sealed class ConeShape : IGuideShape, IThresholdVoxelCounter
     {
         private const double MinRadius = 0.05;
         private const double MinHeight = 0.05;
@@ -132,10 +132,47 @@ namespace Layout.Shapes
         }
 
         public int GetVoxelCount(int scale, bool filled = false)
+            => GetVoxelCountUpTo(scale, filled, int.MaxValue);
+
+        public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter)
         {
-            if (!TryGetFull(out _, out double r, out _, out _, out _, out double h)) return 0;
-            if (ScanTooBig(scale, r, h)) return int.MaxValue / 4;
-            return GetVoxelPositions(scale, filled).Count;
+            if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h)) return 0;
+            if (ScanTooBig(scale, r, h)) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+
+            stopAfter = Math.Max(0, stopAfter);
+            double cell = scale / 16.0;
+            double hd = cell * 0.866;
+            double lo = Math.Min(0, h), hi = Math.Max(0, h);
+
+            double ex = c.X + n.X * h, ey = c.Y + n.Y * h, ez = c.Z + n.Z * h;
+            double pad = r + cell;
+            double x0 = Math.Min(c.X, ex) - pad, x1 = Math.Max(c.X, ex) + pad;
+            double y0 = Math.Min(c.Y, ey) - pad, y1 = Math.Max(c.Y, ey) + pad;
+            double z0 = Math.Min(c.Z, ez) - pad, z1 = Math.Max(c.Z, ez) + pad;
+            int count = 0;
+
+            for (int ix = AlignDown(x0, scale); ix <= AlignDown(x1, scale); ix += scale)
+            {
+                double px = ix / 16.0 + cell * 0.5 - c.X;
+                for (int iy = AlignDown(y0, scale); iy <= AlignDown(y1, scale); iy += scale)
+                {
+                    double py = iy / 16.0 + cell * 0.5 - c.Y;
+                    for (int iz = AlignDown(z0, scale); iz <= AlignDown(z1, scale); iz += scale)
+                    {
+                        double pz = iz / 16.0 + cell * 0.5 - c.Z;
+                        double a = px * n.X + py * n.Y + pz * n.Z;
+                        if (a < lo || a > hi) continue;
+                        double localR = r * (1.0 - a / h);
+                        double rx = px - n.X * a, ry = py - n.Y * a, rz = pz - n.Z * a;
+                        double rho = Math.Sqrt(rx * rx + ry * ry + rz * rz);
+                        bool keep = filled ? rho <= localR + hd : Math.Abs(rho - localR) <= hd;
+                        if (!keep) continue;
+                        count++;
+                        if (count > stopAfter) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+                    }
+                }
+            }
+            return count;
         }
 
         private static bool ScanTooBig(int scale, double r, double h)

@@ -63,6 +63,9 @@ namespace Layout
         public GuideToolGui ToolGui { get; private set; }
         public GuideHud Hud { get; private set; }
         public GuideToolController Controller { get; private set; }
+        private long _modeDetectionTickId;
+        private float _modeDetectionElapsedSeconds;
+        private const float ModeDetectionGraceSeconds = 3f;
 
         // ==========================================================================================
         //  Common (both sides)
@@ -88,11 +91,18 @@ namespace Layout
             ServerConfig = LoadServerConfig(sapi);
 
             Guides = new GuideManager(
-                sapi,
+                new ServerGuidePersistence(sapi),
+                new BlockAccessorGuideProbe(() => sapi.World?.BlockAccessor),
+                sapi.Logger,
                 ServerConfig.PerGuideVoxelCap,
                 ServerConfig.TotalVoxelCap,
                 ServerConfig.MaxGuidesPerPlayer,
                 ServerConfig.MaxGuidesWorldWide);
+
+            // Server save/load event ownership stays in the server composition root. GuideManager itself is
+            // now side-neutral and can also back an intentionally transient client-only authority.
+            sapi.Event.SaveGameLoaded += Guides.Load;
+            sapi.Event.GameWorldSave += Guides.Persist;
 
             Locks = new GuideLockManager();
             Undo = new UndoManager(Guides, ServerConfig.UndoHistoryDepth, Locks);
@@ -100,15 +110,17 @@ namespace Layout
             ServerNet = new ServerNetworkHandler(
                 sapi, Guides, Locks, Undo,
                 ServerConfig.RequiredPrivilege,
-                ServerConfig.AdminCanOverrideLocks);
+                ServerConfig.AdminCanOverrideLocks,
+                ServerConfig.AllowClientOnlyMode);
 
             sapi.Logger.Notification(
-                "[Layout] Server started. Caps: {0} voxels/guide, {1} total, {2} guides/player, {3} world-wide (0 = unlimited); undo depth {4}; privilege '{5}'; admin lock-override {6}.",
+                "[Layout] Server started. Caps: {0} voxels/guide, {1} total, {2} guides/player, {3} world-wide (0 = unlimited); undo depth {4}; privilege '{5}'; admin lock-override {6}; client-only mode {7}.",
                 ServerConfig.PerGuideVoxelCap, ServerConfig.TotalVoxelCap,
                 ServerConfig.MaxGuidesPerPlayer, ServerConfig.MaxGuidesWorldWide,
                 ServerConfig.UndoHistoryDepth,
                 ServerConfig.RequiredPrivilege == "" ? "(none)" : ServerConfig.RequiredPrivilege,
-                ServerConfig.AdminCanOverrideLocks ? "on" : "off");
+                ServerConfig.AdminCanOverrideLocks ? "on" : "off",
+                ServerConfig.AllowClientOnlyMode ? "allowed" : "disallowed");
         }
 
         // Load-or-create: a malformed file logs a warning and falls back to defaults rather than killing the
@@ -172,7 +184,18 @@ namespace Layout
             // The one ClientNetworkHandler (mirror + send-API). On every bulk sync (join), push the server's
             // per-guide cap into the placement pre-check so client and server agree on the same figure.
             ClientNet = new ClientNetworkHandler(capi);
+            ClientNet.ResetAuthorityMode(ClientConfig.ForceClientOnly);
             ClientNet.GuidesBulkSynced += OnGuidesBulkSynced;
+            ClientNet.AuthorityModeChanged += OnAuthorityModeChanged;
+            ClientNet.ForceClientOnlyPreferenceChanged += OnForceClientOnlyPreferenceChanged;
+
+            // The channel is registered during client startup, but its final state is not knowable until
+            // the server sends its channel list. Resolve once the world finalizes; if that event catches the
+            // handshake in its last instant, keep checking briefly rather than guessing the wrong mode.
+            capi.Event.LevelFinalize += OnLevelFinalize;
+            capi.Event.LeftWorld += OnLeftWorld;
+
+            RegisterClientCommands(capi);
 
             // Renderer over the mirror (constructed here, disposed in Dispose — the seam Module 5 left open).
             Renderer = new GuideRenderer(capi, ClientNet);
@@ -206,6 +229,96 @@ namespace Layout
                 Draft.Scale, Draft.Projection, Draft.Filled ? "filled" : "hollow");
         }
 
+        private void OnLevelFinalize()
+        {
+            StopModeDetection();
+            _modeDetectionElapsedSeconds = 0f;
+
+            if (ClientNet.AuthorityMode != ClientAuthorityMode.Detecting) return;
+
+            if (!ClientNet.TryResolveAuthorityMode())
+                _modeDetectionTickId = _capi.Event.RegisterGameTickListener(OnModeDetectionTick, 100);
+        }
+
+        private void OnModeDetectionTick(float dt)
+        {
+            _modeDetectionElapsedSeconds += Math.Max(0f, dt);
+            bool graceExpired = _modeDetectionElapsedSeconds >= ModeDetectionGraceSeconds;
+            if (ClientNet.TryResolveAuthorityMode(graceExpired)) StopModeDetection();
+        }
+
+        private void OnLeftWorld()
+        {
+            StopModeDetection();
+            ClientNet?.EndWorldSession();
+        }
+
+        private void OnAuthorityModeChanged(ClientAuthorityMode mode)
+        {
+            if (mode == ClientAuthorityMode.Detecting) return;
+
+            _capi.Logger.Notification("[Layout] Authority mode for this world: {0}.",
+                mode == ClientAuthorityMode.Networked ? "networked" : "client-only");
+
+            if (mode == ClientAuthorityMode.Local && !ClientNet.ServerLayoutAvailable)
+                _capi.ShowChatMessage(
+                    "[Layout] Client-only mode is available. Hold Flax Twine in your main hand and a Hammer in your off-hand; press F for Layout settings.");
+
+            Draft.SetPerGuideVoxelCap(ClientNet.PerGuideVoxelCap);
+        }
+
+        private void RegisterClientCommands(ICoreClientAPI capi)
+        {
+            var parsers = capi.ChatCommands.Parsers;
+            capi.ChatCommands
+                .Create("layout")
+                .WithDescription("Client-side Layout commands.")
+                .BeginSubCommand("client")
+                    .BeginSubCommand("dispel")
+                        .WithDescription("Dispel private guides locally.")
+                        .WithArgs(parsers.Word("all-or-radius"))
+                        .HandleWith(OnClientDispelCommand)
+                    .EndSubCommand()
+                .EndSubCommand();
+        }
+
+        private TextCommandResult OnClientDispelCommand(TextCommandCallingArgs args)
+        {
+            string argument = (args[0] as string)?.Trim();
+            if (argument != null && argument.Equals("all", StringComparison.OrdinalIgnoreCase))
+            {
+                int count = ClientNet.DispelLocalGuides(null, 0);
+                return TextCommandResult.Success($"Dispelled all {count} client-only guide(s) in this world.");
+            }
+
+            if (int.TryParse(argument, out int radius) && radius >= 0)
+            {
+                var position = _capi.World?.Player?.Entity?.Pos;
+                if (position == null)
+                    return TextCommandResult.Error("Your position is unavailable; try again after entering the world.");
+
+                int count = ClientNet.DispelLocalGuides(
+                    new Vintagestory.API.MathTools.Vec3d(position.X, position.Y, position.Z), radius);
+                return TextCommandResult.Success(
+                    $"Dispelled {count} client-only guide(s) within {radius} chunk(s).");
+            }
+
+            return TextCommandResult.Error("Usage: .layout client dispel all   OR   .layout client dispel <chunk radius>");
+        }
+
+        private void OnForceClientOnlyPreferenceChanged(bool forceClientOnly)
+        {
+            ClientConfig.ForceClientOnly = forceClientOnly;
+            SaveClientConfig();
+        }
+
+        private void StopModeDetection()
+        {
+            if (_modeDetectionTickId == 0 || _capi == null) return;
+            _capi.Event.UnregisterGameTickListener(_modeDetectionTickId);
+            _modeDetectionTickId = 0;
+        }
+
         private void OnGuidesBulkSynced()
         {
             Draft.SetPerGuideVoxelCap(ClientNet.PerGuideVoxelCap);
@@ -225,6 +338,16 @@ namespace Layout
 
             if (cfg == null) cfg = new LayoutClientConfig();
             cfg.Normalize();
+
+            // Rewrite normalized config so newly introduced options appear for existing installations.
+            try
+            {
+                capi.StoreModConfig(cfg, ClientConfigFile);
+            }
+            catch (Exception e)
+            {
+                capi.Logger.Warning("[Layout] Could not update {0}: {1}", ClientConfigFile, e.Message);
+            }
             return cfg;
         }
 
@@ -265,7 +388,16 @@ namespace Layout
             {
                 SaveClientConfig();
 
-                if (ClientNet != null) ClientNet.GuidesBulkSynced -= OnGuidesBulkSynced;
+                StopModeDetection();
+                _capi.Event.LevelFinalize -= OnLevelFinalize;
+                _capi.Event.LeftWorld -= OnLeftWorld;
+
+                if (ClientNet != null)
+                {
+                    ClientNet.GuidesBulkSynced -= OnGuidesBulkSynced;
+                    ClientNet.AuthorityModeChanged -= OnAuthorityModeChanged;
+                    ClientNet.ForceClientOnlyPreferenceChanged -= OnForceClientOnlyPreferenceChanged;
+                }
 
                 try { Controller?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] Controller dispose: {0}", e.Message); }
                 Controller = null;

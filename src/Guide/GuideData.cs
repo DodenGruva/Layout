@@ -56,8 +56,9 @@ namespace Layout.Guide
         /// <see cref="OriginalConstraint"/>) behind SHIFT spring-back; older records load with a null
         /// snapshot (spring-back reports "no original recorded" for them) — default-driven migration.
         /// Version 7 (Session 11, 0.1.15) added <see cref="IsClosed"/> for the Free-Shape (default false —
-        /// harmless on every earlier shape).
-        public const int CurrentDataVersion = 7;
+        /// harmless on every earlier shape). Version 8 (0.1.51) added the default-false
+        /// <see cref="ControlPoint.IsLockMarker"/> role used by non-deforming Arch lock markers.
+        public const int CurrentDataVersion = 8;
 
         /// <summary>The voxel edge lengths a guide may use, in 1/16-block units (1 → 1/16 block, 16 → 1 block).</summary>
         public static readonly int[] ValidVoxelScales = { 1, 2, 4, 8, 16 };

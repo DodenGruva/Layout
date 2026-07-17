@@ -15,17 +15,20 @@ namespace Layout.Undo.Commands
     {
         private readonly Guid _guideId;
         private readonly Vec3d _position;
+        private readonly bool _isLockMarker;
         private int _insertedIndex;
 
         /// <inheritdoc/>
         public Guid TargetGuideId => _guideId;
 
-        public InsertControlPointCommand(Guid guideId, int insertedIndex, Vec3d insertedPosition)
+        public InsertControlPointCommand(Guid guideId, int insertedIndex, Vec3d insertedPosition,
+            bool isLockMarker = false)
         {
             if (insertedPosition == null) throw new ArgumentNullException(nameof(insertedPosition));
             _guideId = guideId;
             _insertedIndex = insertedIndex;
             _position = new Vec3d(insertedPosition.X, insertedPosition.Y, insertedPosition.Z);
+            _isLockMarker = isLockMarker;
         }
 
         // Undo (remove) needs the inserted point still present, unchanged, and removable (a plain body point).
@@ -45,7 +48,8 @@ namespace Layout.Undo.Commands
         {
             IGuideShape shape = manager.GetShape(_guideId);
             float t = shape != null ? shape.GetNearestT(_position) : 0f;
-            GuideOperationResult result = manager.InsertControlPoint(_guideId, t, _position);
+            GuideOperationResult result = manager.InsertControlPoint(
+                _guideId, t, _position, _isLockMarker);
             if (result.IsSuccess) _insertedIndex = result.ControlPointIndex;   // keep the landing index fresh
             return result;
         }

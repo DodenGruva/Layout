@@ -13,18 +13,16 @@ namespace Layout.Shapes
     /// through — watertight and one cell thick by construction); Filled = the SOLID ball.
     /// </summary>
     /// <remarks>
-    /// VOXELISATION. Unlike every planar shape (which march along curves), a volume scans the cell lattice
-    /// inside the ball's bounding box and keeps the cells that satisfy the predicate:
+    /// VOXELISATION. Unlike every planar shape (which march along curves), a volume evaluates lattice cells
+    /// against these predicates:
     ///   shell — the surface crosses the cell (nearest-point distance ≤ R ≤ farthest-corner distance);
     ///   solid — the cell touches the ball (nearest-point distance ≤ R).
     /// The shell test is exact, so the shell is hole-free and minimally thick at every scale.
     ///
-    /// SCAN GUARD. A shell's cell count grows with R², a solid's with R³, and the SCAN itself with the
-    /// bounding box's R³ — a huge fine-scale drag could stall the game computing voxels the cap will
-    /// reject anyway. Above <see cref="MaxScanCells"/> lattice cells the shape SHORT-CIRCUITS:
-    /// <see cref="GetVoxelCount"/> reports a huge count (so cap checks reject instantly and the draft
-    /// ghost's coarsening picks a coarser preview scale) and <see cref="GetVoxelPositions"/> returns
-    /// empty. The two disagree ONLY in that regime, which cap rejection makes unreachable for real guides.
+    /// Hollow spheres use <see cref="SphericalShellScan"/>: it walks X/Y columns, solves the two Z surface
+    /// bands analytically, then applies the exact predicate above. Its work follows surface area instead of
+    /// the bounding cube. Filled spheres still scan the solid bounding lattice and retain
+    /// <see cref="MaxScanCells"/> because their output and scan cost both grow with R³.
     ///
     /// TARGETING. The visible body is a whole surface, but targeting tests polylines — so
     /// <see cref="SampleCurve"/> returns a WIREFRAME: the equator plus two meridians, routed so
@@ -34,12 +32,11 @@ namespace Layout.Shapes
     /// policy). No inserts, no constraints in v1, no phantoms; Surface projection and Divisions do not
     /// apply (the GUI greys them).
     /// </remarks>
-    public sealed class SphereShape : IGuideShape
+    public sealed class SphereShape : IGuideShape, IThresholdVoxelCounter
     {
         private const double MinRadius = 0.05;
 
-        /// <summary>Lattice-scan ceiling (cells in the bounding box) before the short-circuit kicks in.
-        /// ~158³ — covers shells far beyond any sane per-guide voxel cap before it ever triggers.</summary>
+        /// <summary>Filled-volume lattice-scan ceiling (cells in the bounding box).</summary>
         private const long MaxScanCells = 4_000_000;
 
         private readonly List<ControlPoint> _controlPoints;
@@ -89,7 +86,15 @@ namespace Layout.Shapes
         {
             var result = new List<VoxelPosition>();
             if (!TryGetBall(out Vec3d c, out double r)) return result;
-            if (ScanTooBig(scale, c, r)) return result;          // see SCAN GUARD in the remarks
+
+            if (!filled)
+            {
+                SphericalShellScan.Scan(c, r, scale, null, int.MaxValue, result);
+                ClaimHandleMarkers(result, scale);
+                return result;
+            }
+
+            if (ScanTooBig(scale, c, r)) return result;          // filled-volume scan guard
 
             double cell = scale / 16.0;
             double r2 = r * r;
@@ -102,14 +107,13 @@ namespace Layout.Shapes
             for (int ix = min16X; ix <= max16X; ix += scale)
             {
                 double lox = ix / 16.0;
-                double nx = Nearest(c.X, lox, lox + cell), fx = Farthest(c.X, lox, lox + cell);
+                double nx = Nearest(c.X, lox, lox + cell);
                 for (int iy = min16Y; iy <= max16Y; iy += scale)
                 {
                     double loy = iy / 16.0;
-                    double ny = Nearest(c.Y, loy, loy + cell), fy = Farthest(c.Y, loy, loy + cell);
+                    double ny = Nearest(c.Y, loy, loy + cell);
                     double nxy2 = nx * nx + ny * ny;
                     if (nxy2 > r2) continue;                     // whole row is outside the ball
-                    double fxy2 = fx * fx + fy * fy;
                     for (int iz = min16Z; iz <= max16Z; iz += scale)
                     {
                         double loz = iz / 16.0;
@@ -117,33 +121,69 @@ namespace Layout.Shapes
                         double dmin2 = nxy2 + nz * nz;
                         if (dmin2 > r2) continue;                // cell entirely outside
 
-                        if (!filled)
-                        {
-                            // Shell: the surface must also REACH the cell — its farthest corner is outside.
-                            double fz = Farthest(c.Z, loz, loz + cell);
-                            if (fxy2 + fz * fz < r2) continue;   // cell entirely inside → interior, skip
-                        }
                         result.Add(new VoxelPosition(ix, iy, iz, VoxelRenderType.Normal));
                     }
                 }
             }
 
-            for (int i = 0; i < 2 && i < _controlPoints.Count; i++)
-            {
-                ControlPoint cp = _controlPoints[i];
-                ShapeGeometry.ClaimMarker(result, scale, cp.WorldPosition,
-                    cp.IsLocked ? VoxelRenderType.Locked : VoxelRenderType.Anchor);
-            }
+            ClaimHandleMarkers(result, scale);
             return result;
         }
 
         public int GetVoxelCount(int scale, bool filled = false)
+            => GetVoxelCountUpTo(scale, filled, int.MaxValue);
+
+        public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter)
         {
             if (!TryGetBall(out Vec3d c, out double r)) return 0;
+
+            if (!filled)
+                return SphericalShellScan.Scan(c, r, scale, null, stopAfter, null);
+
             // The short-circuit: report "far too many" without scanning, so cap checks reject instantly
-            // and the ghost's scale-coarsening steps past this scale (see SCAN GUARD in the remarks).
-            if (ScanTooBig(scale, c, r)) return int.MaxValue / 4;
-            return GetVoxelPositions(scale, filled).Count;
+            // and the ghost's scale-coarsening steps past this scale for filled volumes.
+            if (ScanTooBig(scale, c, r)) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+
+            stopAfter = Math.Max(0, stopAfter);
+            double cell = scale / 16.0;
+            double r2 = r * r;
+            int count = 0;
+
+            int min16X = AlignDown(c.X - r, scale), max16X = AlignDown(c.X + r, scale);
+            int min16Y = AlignDown(c.Y - r, scale), max16Y = AlignDown(c.Y + r, scale);
+            int min16Z = AlignDown(c.Z - r, scale), max16Z = AlignDown(c.Z + r, scale);
+
+            for (int ix = min16X; ix <= max16X; ix += scale)
+            {
+                double lox = ix / 16.0;
+                double nx = Nearest(c.X, lox, lox + cell);
+                for (int iy = min16Y; iy <= max16Y; iy += scale)
+                {
+                    double loy = iy / 16.0;
+                    double ny = Nearest(c.Y, loy, loy + cell);
+                    double nxy2 = nx * nx + ny * ny;
+                    if (nxy2 > r2) continue;
+                    for (int iz = min16Z; iz <= max16Z; iz += scale)
+                    {
+                        double loz = iz / 16.0;
+                        double nz = Nearest(c.Z, loz, loz + cell);
+                        if (nxy2 + nz * nz > r2) continue;
+                        count++;
+                        if (count > stopAfter) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+                    }
+                }
+            }
+            return count;
+        }
+
+        private void ClaimHandleMarkers(List<VoxelPosition> cells, int scale)
+        {
+            for (int i = 0; i < 2 && i < _controlPoints.Count; i++)
+            {
+                ControlPoint cp = _controlPoints[i];
+                ShapeGeometry.ClaimMarker(cells, scale, cp.WorldPosition,
+                    cp.IsLocked ? VoxelRenderType.Locked : VoxelRenderType.Anchor);
+            }
         }
 
         private static int AlignDown(double world, int scale) =>
@@ -153,9 +193,6 @@ namespace Layout.Shapes
         // the cell's [lo, hi] span on that axis.
         private static double Nearest(double centre, double lo, double hi) =>
             centre < lo ? lo - centre : centre > hi ? centre - hi : 0.0;
-
-        private static double Farthest(double centre, double lo, double hi) =>
-            Math.Max(Math.Abs(centre - lo), Math.Abs(centre - hi));
 
         // --- IGuideShape: curve queries (the targeting wireframe) -----------------------------------
 

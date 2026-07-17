@@ -1,8 +1,12 @@
 ======================================================================
-NOTE (updated 2026-07-12): This is the ORIGINAL first-build doc
+NOTE (updated 2026-07-14): This is the ORIGINAL first-build doc
 (Module 7 / v0.1.0 / 35 source files). The BUILD, RUN, and first-run
 steps below are still accurate, but the project has moved on:
-  - CURRENT is v0.1.27, 59 source files, DataVersion 7.
+  - CURRENT is v0.1.53 on ClientOnlyFallback: 66 source files,
+    DataVersion 8, network protocol 3.
+  - F4 is implemented: the mod can run client-only on a server without
+    Layout and can overlay policy-approved private guides on a Layout
+    server. See dev/PLAN_CLIENT_ONLY.md for the final behavior matrix.
   - One dependency was ADDED since: cairo-sharp.dll (in Lib\, for the
     GUI icon glyphs, Session 10) — it also ships with the game, and
     like the others it does NOT go in the mod zip.

@@ -9,7 +9,7 @@ namespace Layout.Systems
     /// <summary>
     /// Options controlling how <see cref="GuideMeshBuilder.Build"/> turns a voxel set into a mesh: the voxel
     /// scale, the projection mode/plane, the mesh origin, and the runtime overrides the pure shape cannot know
-    /// (anchor-coplanarity shade, grabbed-point highlight, hidden-guide dimming).
+    /// (anchor-coplanarity shade, private-guide anchor palette, grabbed-point highlight, hidden-guide dimming).
     /// </summary>
     /// <remarks>
     /// VEC3D FIELDS ARE READ-ONLY AND NEVER RETAINED. The builder only reads these positions — to classify and
@@ -66,17 +66,23 @@ namespace Layout.Systems
 
         /// <summary>
         /// The start (reference) anchor world position — the arch's index-1 foot. Used to split
-        /// <see cref="VoxelRenderType.Anchor"/> voxels into the start foot (always Blue) and the far foot.
-        /// Null → every anchor voxel renders Blue (no coplanarity split).
+        /// <see cref="VoxelRenderType.Anchor"/> voxels into the start foot (the aligned ownership colour)
+        /// and the far foot. Null → every anchor voxel uses the aligned ownership colour.
         /// </summary>
         public Vec3d StartAnchor = null;
 
         /// <summary>
         /// The far anchor world position — the arch's index-(N−2) foot. When it is NOT coplanar with
         /// <see cref="StartAnchor"/> (same elevation AND on a cardinal line from it), the far foot's anchor
-        /// voxels take the Indigo off-shade instead of Blue.
+        /// voxels take the ownership palette's off-shade (Indigo public, Burnt Orange private).
         /// </summary>
         public Vec3d FarAnchor = null;
+
+        /// <summary>
+        /// Uses the private-guide Orange/Burnt-Orange anchor palette instead of the public Blue/Indigo
+        /// palette. Render-only ownership cue; never persisted or sent over the network.
+        /// </summary>
+        public bool PrivateAnchors = false;
 
         /// <summary>
         /// World position of the control point currently held in an active drag, or null. Exactly ONE voxel —
@@ -88,7 +94,7 @@ namespace Layout.Systems
 
         /// <summary>
         /// Hidden guide: only anchor voxels are emitted, at reduced alpha, so the guide reads as two faint foot
-        /// markers rather than its full body. The Blue/Indigo coplanarity cue is preserved.
+        /// markers rather than its full body. The public/private palette and coplanarity cue are preserved.
         /// </summary>
         public bool Hidden = false;
     }
@@ -135,15 +141,14 @@ namespace Layout.Systems
     /// <remarks>
     /// COLOUR TABLE (authoritative — this file is the single source of truth for guide colours; the role
     /// comments on <see cref="VoxelRenderType"/> and <c>ControlPoint</c> agree with it):
-    ///   Normal → Yellow, Locked → Red, Primary/apex → Green, Anchor → Blue,
-    ///   far Anchor when not level+cardinal → Indigo off-shade, Grabbed → White,
+    ///   Normal → Yellow, Locked → Red, Primary/apex → Green, public Anchor → Blue,
+    ///   private Anchor → Orange; far anchors use Indigo/Burnt-Orange off-shades; Grabbed → White,
     ///   hidden-guide anchors → the anchor colour at reduced alpha.
     ///
     /// ANCHOR SPLIT. The shape tags BOTH feet <see cref="VoxelRenderType.Anchor"/> and cannot express the
     /// pairwise "is the far foot clean?" test, so that lives here. Given the two anchor world positions, each
-    /// Anchor voxel is bucketed to its nearer foot: the start foot is always Blue; the far foot is Blue when
-    /// coplanar (same elevation AND on a cardinal line from the start) and Indigo otherwise. With no anchors
-    /// supplied, every Anchor voxel falls back to Blue.
+    /// Anchor voxel is bucketed to its nearer foot. The far foot uses the aligned ownership colour when
+    /// coplanar (same elevation AND on a cardinal line from the start) and that palette's off-shade otherwise.
     ///
     /// GRABBED HIGHLIGHT. The grabbed control point may be an unmarked body point (Yellow), so a fresh White
     /// marker is painted on it — SINGLE-VOXEL NEAREST-CLAIM (the one rendered voxel whose centre is nearest
@@ -174,12 +179,14 @@ namespace Layout.Systems
         private static readonly float[] ColGreen  = { 0.20f, 0.90f, 0.30f, 0.50f }; // Primary / apex
         private static readonly float[] ColBlue   = { 0.20f, 0.50f, 1.00f, 0.80f }; // Anchor (aligned)
         private static readonly float[] ColIndigo = { 0.45f, 0.45f, 1.00f, 0.80f }; // Anchor far off-shade
+        private static readonly float[] ColOrange = { 1.00f, 0.45f, 0.05f, 0.80f }; // Private anchor (aligned)
+        private static readonly float[] ColBurntOrange = { 0.90f, 0.28f, 0.05f, 0.80f }; // Private far off-shade
         private static readonly float[] ColWhite  = { 1.00f, 1.00f, 1.00f, 0.95f }; // Grabbed
         // Session-9 division marks: magenta — the one hue distinct from all six existing roles
         // (yellow/red/green/blue/indigo/white). [Flagged: color choice open to review.]
         private static readonly float[] ColMagenta = { 0.90f, 0.20f, 0.90f, 0.80f }; // Division mark
 
-        // Hidden guides show their anchors only, at this alpha (rgb still Blue/Indigo). Configurable too.
+        // Hidden guides show their anchors only at this alpha; the public/private RGB palette is preserved.
         private static float HiddenAnchorAlpha = 0.35f;
 
         /// <summary>
@@ -195,6 +202,8 @@ namespace Layout.Systems
             ColGreen[3] = apex;
             ColBlue[3] = anchor;
             ColIndigo[3] = anchor;   // the off-shade is the same role at the same alpha
+            ColOrange[3] = anchor;
+            ColBurntOrange[3] = anchor;
             ColWhite[3] = grabbed;
             HiddenAnchorAlpha = hiddenAnchor;
         }
@@ -281,6 +290,7 @@ namespace Layout.Systems
                 else
                 {
                     ResolveColor(v.Type, cx, cy, cz, start, far, haveBothAnchors, farAligned,
+                                 options.PrivateAnchors,
                                  out r, out g, out b, out a);
                     if (options.Hidden) a = HiddenAnchorAlpha; // only anchor voxels reach here when hidden
                 }
@@ -394,16 +404,20 @@ namespace Layout.Systems
         private static void ResolveColor(
             VoxelRenderType type, double cx, double cy, double cz,
             Vec3d start, Vec3d far, bool haveBothAnchors, bool farAligned,
+            bool privateAnchors,
             out float r, out float g, out float b, out float a)
         {
-            float[] c = ColorArray(type);
+            float[] c = type == VoxelRenderType.Anchor && privateAnchors
+                ? ColOrange
+                : ColorArray(type);
 
             // Only Anchor voxels can take the far-foot off-shade, and only when the far foot is not aligned.
             if (type == VoxelRenderType.Anchor && haveBothAnchors && !farAligned)
             {
                 double dStart = Dist2(cx, cy, cz, start);
                 double dFar = Dist2(cx, cy, cz, far);
-                if (dFar < dStart) c = ColIndigo; // this voxel belongs to the far foot
+                if (dFar < dStart)
+                    c = privateAnchors ? ColBurntOrange : ColIndigo; // this voxel belongs to the far foot
             }
 
             r = c[0]; g = c[1]; b = c[2]; a = c[3];

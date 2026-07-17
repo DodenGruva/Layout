@@ -13,6 +13,17 @@ namespace Layout.Config
     /// </summary>
     public class LayoutClientConfig
     {
+        /// <summary>
+        /// When true, prefers placing new guides in this client's per-world local file. On a server that
+        /// runs Layout this preference applies only when its allowClientOnlyMode setting permits it.
+        /// </summary>
+        [JsonProperty("forceClientOnly")]
+        public bool ForceClientOnly { get; set; } = false;
+
+        [JsonProperty("_forceClientOnlyNote")]
+        public string ForceClientOnlyNote { get; set; } =
+            "Only applies on Layout-enabled servers when allowClientOnlyMode is enabled by the server owner.";
+
         /// <summary>Voxel scale the tool starts with (one of 1/2/4/8/16). Default 1 — chisel resolution.</summary>
         [JsonProperty("defaultScale")]
         public int DefaultScale { get; set; } = 1;

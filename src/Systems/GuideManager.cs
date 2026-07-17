@@ -4,8 +4,8 @@ using System.Linq;
 using System.Text;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
-using Vintagestory.API.Server;
 using Layout.Guide;
 using Layout.Shapes;
 
@@ -180,7 +180,9 @@ namespace Layout.Systems
         /// </summary>
         public const int HardVoxelCeiling = 10_000_000;
 
-        private readonly ICoreServerAPI _sapi;
+        private readonly IGuidePersistence _persistence;
+        private readonly IGuideBlockProbe _blockProbe;
+        private readonly ILogger _logger;
         private readonly int _perGuideVoxelCap;
         private readonly int _totalVoxelCap;
         private readonly int _maxGuidesPerPlayer;
@@ -243,23 +245,21 @@ namespace Layout.Systems
         /// eject persisted state a server admin lowered a cap underneath).
         /// </summary>
         public GuideManager(
-            ICoreServerAPI sapi,
+            IGuidePersistence persistence,
+            IGuideBlockProbe blockProbe,
+            ILogger logger,
             int perGuideVoxelCap = 25000,
             int totalVoxelCap = 250000,
             int maxGuidesPerPlayer = 0,
             int maxGuidesWorldWide = 0)
         {
-            _sapi = sapi ?? throw new ArgumentNullException(nameof(sapi));
+            _persistence = persistence ?? throw new ArgumentNullException(nameof(persistence));
+            _blockProbe = blockProbe ?? throw new ArgumentNullException(nameof(blockProbe));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _perGuideVoxelCap = perGuideVoxelCap > 0 ? perGuideVoxelCap : 0;
             _totalVoxelCap = totalVoxelCap > 0 ? totalVoxelCap : 0;
             _maxGuidesPerPlayer = maxGuidesPerPlayer > 0 ? maxGuidesPerPlayer : 0;
             _maxGuidesWorldWide = maxGuidesWorldWide > 0 ? maxGuidesWorldWide : 0;
-
-            // VS-API touch points (verify signatures at compile-check):
-            //   sapi.Event.SaveGameLoaded  — fired once when the save loads; we read guides here.
-            //   sapi.Event.GameWorldSave   — fired before each world save; we flush the latest blob here.
-            _sapi.Event.SaveGameLoaded += Load;
-            _sapi.Event.GameWorldSave += Persist;
         }
 
         // --- Lookups ------------------------------------------------------------------------------
@@ -336,7 +336,7 @@ namespace Layout.Systems
                 shape is Shapes.FreeShape fs && fs.IsClosed);
             data.CreatorUid = creatorUid;
 
-            int count = shape.GetVoxelCount(data.VoxelScale, data.IsFilled);
+            int count = CountForCaps(data.Id, shape, data.VoxelScale, data.IsFilled);
             if (count > HardVoxelCeiling)                        // scan-guard sentinel — too big to render
                 return GuideOperationResult.OverCap(data, count, HardVoxelCeiling);
             if (_perGuideVoxelCap > 0 && count > _perGuideVoxelCap)
@@ -364,6 +364,12 @@ namespace Layout.Systems
 
             var live = snapshot.DeepClone();                    // independent of the command's stored snapshot
             if (live.ControlPoints == null) live.ControlPoints = new List<ControlPoint>();
+            RemoveInactiveLockMarkers(live.ControlPoints);
+            // Restore normally receives an internal undo snapshot, but client-only push deliberately reuses
+            // it as an import seam. Reject an invalid client-supplied scale before shape sampling can perform
+            // arithmetic with it. Normal guides and every internal undo snapshot already use these values.
+            if (!GuideData.IsValidVoxelScale(live.VoxelScale))
+                return GuideOperationResult.Invalid(live);
             IGuideShape shape = ShapeFactory.Adopt(live);
             shape.RecalculatePhantomPoints();
 
@@ -374,7 +380,12 @@ namespace Layout.Systems
             if (_maxGuidesPerPlayer > 0 && live.CreatorUid != null && CountGuidesBy(live.CreatorUid) >= _maxGuidesPerPlayer)
                 return GuideOperationResult.OverGuideCount(live, CountGuidesBy(live.CreatorUid), _maxGuidesPerPlayer);
 
-            int count = shape.GetVoxelCount(live.VoxelScale, live.IsFilled);
+            int count = CountForCaps(live.Id, shape, live.VoxelScale, live.IsFilled);
+            // Restore is also the import seam used by client-only "push". Keep the absolute rendering
+            // safeguard identical to normal creation even when an administrator disables configurable
+            // per-guide and world caps; otherwise a client-supplied snapshot could bypass the ceiling.
+            if (count > HardVoxelCeiling)
+                return GuideOperationResult.OverCap(live, count, HardVoxelCeiling);
             if (_perGuideVoxelCap > 0 && count > _perGuideVoxelCap)
                 return GuideOperationResult.OverCap(live, count, _perGuideVoxelCap);
             if (_totalVoxelCap > 0 && _totalVoxels + count > _totalVoxelCap)
@@ -413,10 +424,13 @@ namespace Layout.Systems
             }
 
             var snapshot = SnapshotPoints(g);
+            // A body lock begins as a non-deforming marker. The first real reshape promotes it to an
+            // ordinary spline knot as part of that active gesture, so it can constrain the edited curve.
+            PromoteLockedMarkers(g);
             for (int i = 0; i < edits.Count; i++)
                 shape.MoveControlPoint(edits[i].Index, edits[i].Position);
 
-            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled);
             if (WouldExceedCaps(id, count, out int cap))
             {
                 RestorePoints(id, snapshot);
@@ -440,17 +454,23 @@ namespace Layout.Systems
         /// the network packet carries <c>t</c> or the resulting index is a Module 4 (networking) decision, and
         /// the index seam makes either recoverable.
         /// </remarks>
-        public GuideOperationResult InsertControlPoint(Guid id, float t, Vec3d position)
+        public GuideOperationResult InsertControlPoint(Guid id, float t, Vec3d position, bool isLockMarker = false)
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             if (position == null) return GuideOperationResult.Invalid(g);
             var shape = _shapes[id];
 
             var snapshot = SnapshotPoints(g);
-            shape.InsertControlPoint(t, position);
-            int insertedIndex = shape.GetNearestControlPointIndex(position); // the just-inserted point
+            int insertedIndex;
+            if (isLockMarker && shape is ArchShape arch)
+                insertedIndex = arch.InsertLockMarker(t, position);
+            else
+            {
+                shape.InsertControlPoint(t, position);
+                insertedIndex = shape.GetNearestControlPointIndex(position); // the just-inserted point
+            }
 
-            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled);
             if (WouldExceedCaps(id, count, out int cap))
             {
                 RestorePoints(id, snapshot);
@@ -460,6 +480,21 @@ namespace Layout.Systems
             StoreCount(id, count);
             Persist();
             return GuideOperationResult.Success(g, count, insertedIndex);
+        }
+
+        private static void PromoteLockedMarkers(GuideData guide)
+        {
+            for (int i = 0; i < guide.ControlPoints.Count; i++)
+            {
+                ControlPoint point = guide.ControlPoints[i];
+                if (point.IsLockMarker && point.IsLocked) point.IsLockMarker = false;
+            }
+        }
+
+        private static void RemoveInactiveLockMarkers(List<ControlPoint> points)
+        {
+            if (points == null) return;
+            points.RemoveAll(point => point != null && point.IsLockMarker && !point.IsLocked);
         }
 
         /// <summary>
@@ -586,7 +621,7 @@ namespace Layout.Systems
             g.Projection = mode;
             g.Plane = plane;
 
-            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled);
             if (WouldExceedCaps(id, count, out int cap))
             {
                 g.Projection = oldMode;
@@ -607,9 +642,6 @@ namespace Layout.Systems
         // This is the server-side mirror of the renderer's CountSolidProbes decal-side vote (B-S10-2).
         private int ProbeAirSide(GuideData g, ProjectionPlane plane)
         {
-            var accessor = _sapi.World?.BlockAccessor;
-            if (accessor == null) return 1;
-
             double planeCoord = plane.PlaneOffset / 16.0;
             int solidsPos = 0, solidsNeg = 0;
             foreach (ControlPoint cp in g.ControlPoints)
@@ -623,9 +655,8 @@ namespace Layout.Systems
                     double wy = plane.FlattenedAxis == PlaneAxis.Y ? c : w.Y;
                     double wz = plane.FlattenedAxis == PlaneAxis.Z ? c : w.Z;
                     var pos = new BlockPos((int)Math.Floor(wx), (int)Math.Floor(wy), (int)Math.Floor(wz));
-                    if (accessor.GetChunkAtBlockPos(pos) == null) continue;   // unloaded: no vote
-                    var block = accessor.GetBlock(pos);
-                    if (block != null && block.Id != 0)
+                    if (!_blockProbe.TryIsSolid(pos, out bool solid)) continue;   // unloaded: no vote
+                    if (solid)
                     {
                         if (side == 0) solidsPos++; else solidsNeg++;
                     }
@@ -653,7 +684,7 @@ namespace Layout.Systems
             IGuideShape shape = ShapeFactory.Adopt(g);          // side count is baked into the shape view
             _shapes[id] = shape;
 
-            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled);
             if (WouldExceedCaps(id, count, out int cap))
             {
                 g.Sides = oldSides;
@@ -770,7 +801,7 @@ namespace Layout.Systems
             bool oldFilled = g.IsFilled;
             g.IsFilled = filled;
 
-            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled);
             if (WouldExceedCaps(id, count, out int cap))
             {
                 g.IsFilled = oldFilled;
@@ -795,7 +826,7 @@ namespace Layout.Systems
             int oldScale = g.VoxelScale;
             g.VoxelScale = newScale;
 
-            int count = shape.GetVoxelCount(newScale, g.IsFilled);
+            int count = CountForCaps(id, shape, newScale, g.IsFilled);
             if (WouldExceedCaps(id, count, out int cap))
             {
                 g.VoxelScale = oldScale;
@@ -808,6 +839,28 @@ namespace Layout.Systems
         }
 
         // --- Cap + count bookkeeping --------------------------------------------------------------
+
+        // Counts only as far as cap enforcement needs. Volume shapes can stop their cell scan as soon as
+        // this threshold is crossed; other shapes fall back to their exact counter. When the result is
+        // accepted it is still exact, so the running total/cache retain their existing invariant.
+        private int CountForCaps(Guid id, IGuideShape shape, int scale, bool filled)
+        {
+            int limit = HardVoxelCeiling;
+            if (_perGuideVoxelCap > 0) limit = Math.Min(limit, _perGuideVoxelCap);
+
+            if (_totalVoxelCap > 0)
+            {
+                int currentForId = _voxelCounts.TryGetValue(id, out int current) ? current : 0;
+                long totalWithoutGuide = _totalVoxels - currentForId;
+                long available = (long)_totalVoxelCap - totalWithoutGuide;
+                int totalLimit = available <= 0 ? 0
+                    : available >= int.MaxValue ? int.MaxValue
+                    : (int)available;
+                limit = Math.Min(limit, totalLimit);
+            }
+
+            return GuideShapeVoxelCounting.CountUpTo(shape, scale, filled, limit);
+        }
 
         // True if making guide `id`'s count `newCount` would breach the per-guide or projected total cap.
         // A cap of 0 means unlimited — that check is skipped (normalised in the ctor).
@@ -886,7 +939,7 @@ namespace Layout.Systems
 
         // Serializes all guides into the save blob. Cheap (in-memory); the actual disk write happens on world
         // save. Never throws out of here — a serialization fault must not crash the server.
-        private void Persist()
+        public void Persist()
         {
             try
             {
@@ -897,66 +950,97 @@ namespace Layout.Systems
                 };
                 string json = JsonConvert.SerializeObject(root, _jsonSettings);
                 byte[] bytes = Encoding.UTF8.GetBytes(json);
-                _sapi.WorldManager.SaveGame.StoreData(StorageKey, bytes);
+                _persistence.Store(StorageKey, bytes);
             }
             catch (Exception e)
             {
-                _sapi.Logger.Error("[Layout] Failed to persist guides: {0}", e);
+                _logger.Error("[Layout] Failed to persist guides: {0}", e);
             }
         }
 
         // Reads guides back from the save blob, rebuilds each guide's shape over its (shared) control-point
         // list, re-derives phantoms, and rebuilds the count caches. Older records migrate by deserialization
         // defaults (missing Projection/Plane/IsFilled fall to Volumetric / default plane / hollow).
-        private void Load()
+        public void Load()
         {
+            Exception primaryError = null;
             try
             {
-                byte[] bytes = _sapi.WorldManager.SaveGame.GetData(StorageKey);
+                byte[] bytes = _persistence.Load(StorageKey);
                 if (bytes == null || bytes.Length == 0)
                 {
-                    _sapi.Logger.Notification("[Layout] No saved guides found.");
+                    _logger.Notification("[Layout] No saved guides found.");
                     return;
                 }
 
-                string json = Encoding.UTF8.GetString(bytes);
-                var root = JsonConvert.DeserializeObject<PersistedRoot>(json, _jsonSettings);
-
-                _guides.Clear();
-                _shapes.Clear();
-                _voxelCounts.Clear();
-                _totalVoxels = 0;
-
-                if (root?.Guides == null)
-                {
-                    _sapi.Logger.Warning("[Layout] Guide save blob was empty or unreadable; starting with no guides.");
-                    return;
-                }
-
-                foreach (var g in root.Guides)
-                {
-                    if (g == null) continue;
-                    if (g.ControlPoints == null) g.ControlPoints = new List<ControlPoint>();
-                    g.DataVersion = GuideData.CurrentDataVersion; // normalize after default-driven migration
-
-                    IGuideShape shape = ShapeFactory.Adopt(g);
-                    shape.RecalculatePhantomPoints();             // restore phantoms before first sync
-
-                    _guides[g.Id] = g;
-                    _shapes[g.Id] = shape;
-                    StoreCount(g.Id, shape.GetVoxelCount(g.VoxelScale, g.IsFilled));
-                }
-
-                _sapi.Logger.Notification("[Layout] Loaded {0} guide(s).", _guides.Count);
+                LoadPayload(bytes);
+                _logger.Notification("[Layout] Loaded {0} guide(s).", _guides.Count);
+                return;
             }
             catch (Exception e)
             {
-                _sapi.Logger.Error("[Layout] Failed to load guides; starting with none: {0}", e);
-                _guides.Clear();
-                _shapes.Clear();
-                _voxelCounts.Clear();
-                _totalVoxels = 0;
+                primaryError = e;
+                ClearLoadedState();
             }
+
+            if (_persistence is IRecoverableGuidePersistence recoverable)
+            {
+                try
+                {
+                    byte[] backup = recoverable.LoadBackup(StorageKey);
+                    if (backup != null && backup.Length > 0)
+                    {
+                        LoadPayload(backup);
+                        recoverable.RejectPrimary(StorageKey);
+                        _logger.Warning(
+                            "[Layout] Primary guide file was unreadable; recovered {0} guide(s) from its backup.",
+                            _guides.Count);
+                        return;
+                    }
+                }
+                catch (Exception backupError)
+                {
+                    ClearLoadedState();
+                    _logger.Error(
+                        "[Layout] Failed to load both primary and backup guide files; starting with none. Primary: {0} Backup: {1}",
+                        primaryError, backupError);
+                    return;
+                }
+            }
+
+            _logger.Error("[Layout] Failed to load guides; starting with none: {0}", primaryError);
+        }
+
+        private void LoadPayload(byte[] bytes)
+        {
+            string json = Encoding.UTF8.GetString(bytes);
+            var root = JsonConvert.DeserializeObject<PersistedRoot>(json, _jsonSettings);
+            if (root?.Guides == null)
+                throw new JsonSerializationException("The guide payload has no guide collection.");
+
+            ClearLoadedState();
+            foreach (var g in root.Guides)
+            {
+                if (g == null) continue;
+                if (g.ControlPoints == null) g.ControlPoints = new List<ControlPoint>();
+                RemoveInactiveLockMarkers(g.ControlPoints);
+                g.DataVersion = GuideData.CurrentDataVersion; // normalize after default-driven migration
+
+                IGuideShape shape = ShapeFactory.Adopt(g);
+                shape.RecalculatePhantomPoints();             // restore phantoms before first sync
+
+                _guides[g.Id] = g;
+                _shapes[g.Id] = shape;
+                StoreCount(g.Id, shape.GetVoxelCount(g.VoxelScale, g.IsFilled));
+            }
+        }
+
+        private void ClearLoadedState()
+        {
+            _guides.Clear();
+            _shapes.Clear();
+            _voxelCounts.Clear();
+            _totalVoxels = 0;
         }
 
         // Versioned on-disk envelope. Voxels are never part of this — always re-derived from control points.
