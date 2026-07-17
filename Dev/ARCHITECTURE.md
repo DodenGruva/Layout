@@ -468,8 +468,12 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 - **Hotkeys are rebindable and gate-aware** (Ctrl+Z/Y never hijack other UIs). On Layout servers the real
   guide tool is required in public and private placement modes. On servers without Layout, any vanilla
   Hammer variant/durability in the offhand + Flax Twine in the main hand substitutes for it; F opens the
-  unchanged GUI and the HUD appears immediately. Item art for the real tool borrows the vanilla abacus;
-  recipe 6 sticks + 3 any-metal nuggets; infinite durability.
+  unchanged GUI and the HUD appears immediately. Item art for the real tool is a **custom Chalking Kit
+  model** (v0.2.0; was the vanilla abacus) and the item is now named **Chalking Kit**; recipe 6 sticks + 3
+  any-metal nuggets; **still infinite durability**. **(The chalking-kit VISUAL reskin — model + name — shipped
+  in v0.2.0; the finite, refillable DURABILITY mechanic is designed but NOT built — see
+  `PLAN_CHALKING_KIT.md`. The tool is infinite-durability today. Note the interaction with the fallback gate above — a vanilla Hammer + Flax
+  Twine cannot carry custom durability, so that mode most likely treats durability as a local no-op.)**
 - **Runtime is .NET 10** (VS 1.22); `Entity.SidedPos` is obsolete — use `Pos`.
 
 ---

@@ -77,8 +77,9 @@ in a versioned subfolder).
 
 ## 4. What the mod does (mechanics & scope)
 
-- **The tool** is normally the held Layout item (borrows the vanilla abacus art; recipe 6 sticks + 3
-  any-metal nuggets; infinite durability). On a server without Layout, the equivalent gate is **Flax Twine
+- **The tool** is normally the held **Chalking Kit** item (custom model as of v0.2.0, was the vanilla
+  abacus; recipe 6 sticks + 3 any-metal nuggets; infinite durability — the durability/refill mechanic is
+  F5, designed not built). On a server without Layout, the equivalent gate is **Flax Twine
   main-hand + any vanilla Hammer variant off-hand** (damage irrelevant). Interaction is entirely
   **first-person clicks + crosshair raycast** — no transform
   gizmos. Guides are **visible but untargetable when the tool is not held** (pure mesh draws, no

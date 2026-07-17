@@ -31,11 +31,13 @@ servers without Layout and, when permitted, alongside public guides. Status: **v
 ## The documents (read these before large work)
 - **`HANDOFF.md`** (repo root) — the consolidated current-state brief (scope · status · direction ·
   performance characteristics), written for external analysis; the fastest way to get oriented.
-- **`ARCHITECTURE.md`** (in `dev/`, v2.9) — the authoritative plan. Its **Settled Decisions Register** lists
+- **`ARCHITECTURE.md`** (in `dev/`, v3.1) — the authoritative plan. Its **Settled Decisions Register** lists
   locked-in design choices; **do not reopen those without the human explicitly asking.**
 - **`TODO.md`** — the live punch-list: open bug, deferred requests, flagged decisions, future features.
 - **`PROJECT_STATUS.md`** — where things stand and what each module does.
 - **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix (candidate for 0.2.0).
+- **`PLAN_CHALKING_KIT.md`** — the design record for reskinning the tool as a chalking kit with finite,
+  refillable durability (F5, in active design; not started).
 - **`SESSION_9.md` / `SESSION_10.md` / `SESSION_11.md` / `SESSION_12.md` / `SESSION_13.md` /
   `SESSION_14.md`** — standalone
   per-session records; SESSION_12 covers **v0.1.28–v0.1.45 ClientOnlyFallback**, and SESSION_13 covers the

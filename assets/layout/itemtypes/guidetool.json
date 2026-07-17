@@ -3,24 +3,33 @@
   "class": "LayoutGuideTool",
   "maxstacksize": 1,
   "creativeinventory": { "general": ["*"], "tools": ["*"] },
-  "shape": { "base": "game:block/clutter/abacus-pristine" },
+  "shape": { "base": "tools/guidetool" },
+  "behaviors": [
+    { "name": "GroundStorable", "properties": { "layout": "SingleCenter", "collisionBox": { "x1": 0.25, "y1": 0, "z1": 0.25, "x2": 0.75, "y2": 0.3, "z2": 0.75 } } }
+  ],
   "guiTransform": {
-    "rotation": { "x": -55, "y": 35, "z": 0 },
-    "origin": { "x": 0.5, "y": 0.1, "z": 0.5 },
-    "scale": 2.4
-  },
+		rotation: { x: -8, y: -123, z: -173 },
+		origin: { x: 0.5, y: 0.25, z: 0.5 },
+		scaleXyz: { x: -2.88, y: 2.88, z: 2.88 }
+	},
   "fpHandTransform": {
     "translation": { "x": 0.05, "y": 0.1, "z": 0 },
     "rotation": { "x": 25, "y": -30, "z": 10 },
     "scale": 1.2
   },
   "tpHandTransform": {
-    "translation": { "x": -0.6, "y": -0.05, "z": -0.4 },
-    "rotation": { "x": 0, "y": 90, "z": -25 },
-    "scale": 0.65
+		translation: { x: -0.5, y: -0.53, z: -0.5 },
+		rotation: { x: -9, y: -180, z: 0 },
+		origin: { x: 0, y: 0, z: 0 },
+		scale: 0.65
   },
   "groundTransform": {
     "origin": { "x": 0.5, "y": 0, "z": 0.5 },
-    "scale": 2.0
+    "scale": 3.0
+  },
+  "attributes": {
+    "groundStorageTransform": {
+      "rotation": { "x": 0, "y": 90, "z": 0 }
+    }
   }
 }

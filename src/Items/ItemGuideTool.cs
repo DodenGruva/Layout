@@ -42,11 +42,37 @@ namespace Layout.Items
             ItemSlot slot, EntityAgent byEntity, BlockSelection blockSel, EntitySelection entitySel,
             bool firstEvent, ref EnumHandHandling handling)
         {
+            // CTRL+SHIFT+right-click on a block, while the tool is idle: set the kit down as ground storage.
+            // Delegate to the base collectible so the GroundStorable behavior (declared in guidetool.json)
+            // handles placement, instead of suppressing the click and running the tool's secondary action.
+            if (blockSel != null && IsGroundStoreGesture(byEntity))
+            {
+                base.OnHeldInteractStart(slot, byEntity, blockSel, entitySel, firstEvent, ref handling);
+                return;
+            }
+
             handling = EnumHandHandling.PreventDefault;
             if (!IsLocalClientPlayer(byEntity)) return;
             if (!firstEvent) return;                       // one action per click, not per held-frame
 
             Controller?.OnSecondaryClick(blockSel);
+        }
+
+        /// <summary>
+        /// The ground-storage set-down gesture: CTRL + SHIFT both held. Read from <c>byEntity.Controls</c>
+        /// (the SAME source the vanilla <c>GroundStorable</c> behavior checks — its <c>Interact</c> bails
+        /// unless <c>Controls.ShiftKey</c> is set), so that whenever this gate passes, the behavior's own
+        /// modifier check passes too. Reading the raw keyboard instead can diverge from these separable
+        /// interaction-modifier controls and leave the delegated set-down silently doing nothing. On the
+        /// client the tool must also be idle, so a mid-draft click can never become a set-down; the server
+        /// has no draft state and trusts the client (these controls are network-synced).
+        /// </summary>
+        private bool IsGroundStoreGesture(EntityAgent byEntity)
+        {
+            EntityControls c = byEntity?.Controls;
+            if (c == null || !c.ShiftKey || !c.CtrlKey) return false;
+            if (api is ICoreClientAPI) return Controller?.IsIdle ?? true;
+            return true;   // server: modifier check only; trust the client's idle gate
         }
 
         // Interaction runs purely client-side and only for the player actually holding OUR tool locally —

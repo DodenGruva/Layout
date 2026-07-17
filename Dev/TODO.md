@@ -346,6 +346,19 @@ The inverse of a break: a menu action to snap a free shape back under a constrai
 ellipse → circle, triangle → equilateral, rectangle → square) with a best-fit. Natural undo pairing exists.
 Park until asked.
 
+### F5. Chalking-kit durability + refill loop (in active design; not started)
+Reskin the guide tool as a **chalking kit** (3D model already made) and give it finite, refillable durability
+— a light material loop for psychological reward without deterring use. **Agreed starting point:** 32
+durability; 2D placement −1 / 3D −2 (flat, never size-scaled — protects the enormous-guides direction);
+charge on **completed placement only** (reshape/dispel/cancelled drafts are free); **no lockout at 0**
+(view/edit/dispel stay open, only *new* placement is blocked); refill by right-clicking **Yellow Chalking
+Powder** (any powder stack + 1 L yellow dye → 1 stack, **1:1**) onto the kit at **4 durability each**
+(tap +4 / hold-to-fill). The refill *is* the intended loop — there is deliberately no restock treadmill.
+**Open question raised by F4:** the loop assumes the real Layout item, but the client-only fallback gate is a
+vanilla Hammer + Flax Twine, which can neither carry custom durability nor hold a custom powder item —
+durability most likely becomes a **local no-op** there, matching how locks/caps/undo-gating already degrade
+in that mode. **Full design, rationale, and open items: `PLAN_CHALKING_KIT.md`.**
+
 ---
 
 ## Next session — start here

@@ -89,6 +89,12 @@ namespace Layout.Client
         }
         private GrabSession _grab;
 
+        /// <summary>
+        /// True when the tool is at rest — no draft in progress and no grabbed point. Gates the
+        /// ground-storage set-down gesture (CTRL+SHIFT+right-click) so it can never fire mid-edit.
+        /// </summary>
+        public bool IsIdle => !_draft.HasActiveDraft && _grab == null;
+
         // --- Targeting cache (Session-8 fix): per-guide sampled-curve polylines --------------------
         // The near-anchor grab bug, finally at the root: targeting used the CHORDS between control points,
         // but the rendered curve near an arch's feet is nowhere near its chord (the phantom design departs
@@ -199,9 +205,30 @@ namespace Layout.Client
             }
             else if (action == EnumEntityAction.InWorldRightMouseDown)
             {
+                // Ground-storage set-down (CTRL+SHIFT+right-click, tool idle, REAL item held): step aside
+                // instead of consuming, so the engine dispatches to ItemGuideTool.OnHeldInteractStart,
+                // which delegates to the vanilla GroundStorable behavior. This hook otherwise consumes
+                // right-clicks in BOTH modes (it fires before any held-item hook), so without this early
+                // return the set-down gesture could never reach the item. Local mode is deliberately
+                // excluded: its vanilla gate items keep the full F4 interception.
+                if (IsGroundStoreSetDownGesture()) return;
+
                 OnSecondaryClick(_capi.World.Player.CurrentBlockSelection);
                 handled = EnumHandling.PreventDefault;
             }
+        }
+
+        /// <summary>
+        /// True when this right-click should fall through to ground storage: the REAL Layout item is held
+        /// (never the client-only vanilla gate), the tool is idle (no draft, no grab), and CTRL+SHIFT are
+        /// down — read from the entity's interaction-modifier controls, the same source the vanilla
+        /// GroundStorable behavior checks, so the two gates can never disagree.
+        /// </summary>
+        private bool IsGroundStoreSetDownGesture()
+        {
+            if (!IsToolHeld() || !IsIdle) return false;
+            var c = _capi.World?.Player?.Entity?.Controls;
+            return c != null && c.ShiftKey && c.CtrlKey;
         }
 
         private void OnHeldChanged(bool held)
