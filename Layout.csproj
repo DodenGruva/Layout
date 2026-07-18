@@ -60,6 +60,13 @@
       <HintPath>$(VintagestoryDir)\Lib\cairo-sharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
+
+    <!-- VSSurvivalMod: game-content types the chalk-fill rendering hooks into — IContainedMeshSource, -->
+    <!-- so ground-stored kits show the right fill-state mesh. Ships in the game's Mods\ subfolder.     -->
+    <Reference Include="VSSurvivalMod">
+      <HintPath>$(VintagestoryDir)\Mods\VSSurvivalMod.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>

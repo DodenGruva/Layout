@@ -1,6 +1,6 @@
-# Layout — Architecture Document (v3.1)
+# Layout — Architecture Document (v3.2)
 
-**Supersedes v3.0 — hollow-shell scaling and mesh-frontier delta (v0.1.53).** v2.5 consolidated five
+**Supersedes v3.1 — the Chalking Kit delta (F5, v0.2.0–v0.2.9).** v2.5 consolidated five
 revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
 catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
 surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
@@ -14,19 +14,21 @@ policy-controlled private overlays on Layout servers, the side-neutral `GuideMan
 client persistence, mixed ownership/undo routing, private publication, and ownership presentation. **v3.0
 folds in the cap-performance and interaction pass:** threshold-aware 3D counting, natural at-cap drag
 clamping, rendered-voxel first-hit picking, complete drag snapshots, robust curve-cache invalidation, and
-passive non-deforming Arch lock markers. **v3.1 adds the exact surface-area-oriented hollow Sphere/Dome
-scanner and records the now-playtest-confirmed mesh frontier.** The register, file tree, module map,
-persistence, and edge cases below are updated in place to the v0.1.53 / DataVersion 8 / protocol-3 / 66-file
-state; the changelogs under this header are the quick deltas.
+passive non-deforming Arch lock markers. **v3.1 added the exact surface-area-oriented hollow Sphere/Dome
+scanner and recorded the now-playtest-confirmed mesh frontier. v3.2 folds in F5 — the Chalking Kit:** the
+custom deflating 4-state model, 32-chalk durability with powder refills, ground storage + in-place ground
+refill, the private-placement charge packet (protocol 4), and the placement/refill feedback effects. The
+register, file tree, module map, persistence, and edge cases below are updated in place to the
+v0.2.9 / DataVersion 8 / protocol-4 / 68-file state; the changelogs under this header are the quick deltas.
 
-**Where the project stands:** Layout **v0.1.53** is built, packaged, and playtested on the
-`ClientOnlyFallback` branch; its source/docs are uncommitted and the last pushed commit is `1461c19`.
-`main` remains at v0.1.27. All seven modules, the complete
-2D/3D catalog, normal public multiplayer, vanilla-server local fallback, and mixed public/private operation
-run against VS 1.22.3 / .NET 10. The catalog is **12 shape types / 18 picker tiles**, **DataVersion 8**,
-**protocol 3**, and **66 source files**. F4 is feature-complete. A roughly 100-block hollow Sphere now places
-successfully and exposes visible lag in the monolithic full-cube mesh path. The immediate task is the staged
-mesh pass in `SESSION_14.md`; B-S9-1 and the broad F4/public regression follow. See `TODO.md`.
+**Where the project stands:** Layout **v0.2.9** is built, packaged, playtested, and pushed on **`main`**
+(the `ClientOnlyFallback` branch merged via PR #1). All seven modules, the complete
+2D/3D catalog, normal public multiplayer, vanilla-server local fallback, mixed public/private operation, and
+the full F5 chalk system run against VS 1.22.3 / .NET 10. The catalog is **12 shape types / 18 picker
+tiles**, **DataVersion 8**, **protocol 4**, and **68 source files**. F4 and F5 are feature-complete. A
+roughly 100-block hollow Sphere places successfully and exposes visible lag in the monolithic full-cube mesh
+path. The immediate tasks are the staged mesh pass in `SESSION_14.md` and the F5 held refill decision;
+B-S9-1 and the broad F4/public regression follow. See `TODO.md`.
 
 > **▶ IMPLEMENTED — client-only / server-less fallback mode (F4, v0.1.28–v0.1.45).** On a server without
 > Layout, a three-second positive-proof detection window falls back to a client-side
@@ -36,6 +38,47 @@ mesh pass in `SESSION_14.md`; B-S9-1 and the broad F4/public regression follow. 
 > `GuideManager` supplies local parity, while guide ownership routes edits and last-operation authority
 > routes undo/redo. Private guides persist per server/world + player UID. `PLAN_CLIENT_ONLY.md` is the final
 > behavior and implementation record; `SESSION_12.md` is the version history.
+
+> **▶ IMPLEMENTED — the Chalking Kit (F5, v0.2.0–v0.2.9).** The tool is the **Chalking Kit** (custom
+> deflating 4-state model; mod name stays Layout) with **32-chalk durability**: completed placements cost
+> 2D −1 / 3D −2 (flat, never size-scaled), nothing else costs anything, undo never refunds, and at 0 only
+> NEW placement is blocked — the kit can never break (custom clamp; vanilla `DamageItem` is never called).
+> **Chalking Powder** refills +4 per powder (tap/hold; hotbar, or SHIFT+right-click a ground-stored kit in
+> place — the bag re-inflates live). **Private placements on a Layout server charge too** via the
+> client-reported, server-validated `ChalkChargePacket` (protocol 4); the only chalk-free case is a server
+> without Layout, where no custom item can exist. Creative exempt; `enableChalkDurability` server config.
+> Ground storage: CTRL+SHIFT+right-click set-down, idle-gated. Placement feedback: chalk-puff at each
+> anchor + the bow-release chalk-line snap. `PLAN_CHALKING_KIT.md` carries the design rationale and
+> plan-vs-shipped deltas; `SESSION_15.md` is the version history.
+
+---
+
+## Changelog — v3.1 → v3.2 (the Chalking Kit, F5, v0.2.0 → v0.2.9; full record in `SESSION_15.md`)
+
+- **Reskin + ground storage (0.2.0–0.2.4):** custom model + rename; vanilla `GroundStorable`
+  (`SingleCenter`) set-down behind an idle-gated CTRL+SHIFT gesture. Architectural note: the F4 input-layer
+  right-click hook had made `ItemGuideTool`'s held-interact hooks unreachable in BOTH authority modes — the
+  controller now steps aside for the set-down gesture (`IsGroundStoreSetDownGesture`, reading the same
+  `Controls` modifiers the vanilla behavior checks).
+- **Durability core (0.2.5):** `durability: 32` on the itemtype; all chalk mutation via
+  `ItemGuideTool.ConsumeChalk`/`TryAddChalk` (clamped [0, max], never vanilla `DamageItem` → never breaks);
+  client pre-check at the first draft click + authoritative server gate/charge in `OnCreateRequest`;
+  `ItemChalkingPowder` (tap/hold refill, server-side consumption, per-entity repeat counter);
+  `enableChalkDurability` config; recipes (powder + 0.1 L yellow dye → 8; the 8-powder kit craft).
+- **Private-mode charge (0.2.6):** "private is private, not free" — `ChalkChargePacket` (**protocol 3 → 4**),
+  client-reported on successful private creates (`LocalGuideAuthority.Create` now returns success),
+  server-validated and clamped. Recipe breadth: `flour-*` joins `powder-*`; dye containers bucket/bowl/jug.
+- **Fill-state rendering (0.2.7):** four shapes (`chalkbag-{full,medium,low,empty}`) each carrying its own
+  texture set; thresholds full ≥22 · medium 11–21 · low 1–10 · empty 0; `OnBeforeRender` swaps the
+  `MultiTextureMeshRef` per stack (lazy `ShapeTextureSource` tesselation, disposed on unload);
+  `IContainedMeshSource` covers ground storage/display rendering — new **`VSSurvivalMod.dll`** reference.
+- **Ground refill + effects (0.2.8):** SHIFT+right-click a stored kit pours into it in place (per-pour
+  `MarkDirty(true)` re-inflates the bag live); `ChalkEffects` (side-agnostic): chalk-puff on refill and at
+  both anchors on placement + the `bow-release` snap at the guide midpoint (server-broadcast for public,
+  client-local for private — matching guide visibility). Fixed in passing: powder pile placement (vanilla
+  GroundStorable) had been unreachable since 0.2.5; sneak-clicks not aimed at a stored kit now fall through.
+- **Process:** versions 0.2.0–0.2.9 each shipped as zips in `..\Layout Zips\`; no save-format change
+  (DataVersion 8; kits and saves from older versions load with full chalk).
 
 ---
 
@@ -424,7 +467,7 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 ### Configuration, assets, GUI
 - **Server `layout.json`:** perGuideVoxelCap 25,000 · totalVoxelCap 250,000 · maxGuidesPerPlayer 0 ·
   maxGuidesWorldWide 0 · undoHistoryDepth 50 · requiredPrivilege "" · adminCanOverrideLocks true ·
-  **allowClientOnlyMode false**
+  **allowClientOnlyMode false** · **enableChalkDurability true** (F5)
   (0/negative = unlimited; **construction-time injection — edits need a server restart**). Caps sync to
   clients on join so the pre-check matches enforcement. **The running total is a `long`** (v0.1.27) so a
   caps-off server can't overflow it negative. A **hard voxel ceiling** (`GuideManager.HardVoxelCeiling`,
@@ -468,12 +511,11 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 - **Hotkeys are rebindable and gate-aware** (Ctrl+Z/Y never hijack other UIs). On Layout servers the real
   guide tool is required in public and private placement modes. On servers without Layout, any vanilla
   Hammer variant/durability in the offhand + Flax Twine in the main hand substitutes for it; F opens the
-  unchanged GUI and the HUD appears immediately. Item art for the real tool is a **custom Chalking Kit
-  model** (v0.2.0; was the vanilla abacus) and the item is now named **Chalking Kit**; recipe 6 sticks + 3
-  any-metal nuggets; **still infinite durability**. **(The chalking-kit VISUAL reskin — model + name — shipped
-  in v0.2.0; the finite, refillable DURABILITY mechanic is designed but NOT built — see
-  `PLAN_CHALKING_KIT.md`. The tool is infinite-durability today. Note the interaction with the fallback gate above — a vanilla Hammer + Flax
-  Twine cannot carry custom durability, so that mode most likely treats durability as a local no-op.)**
+  unchanged GUI and the HUD appears immediately. The real tool is the **Chalking Kit** (custom deflating
+  4-state model, Session 15): recipe **8× Chalking Powder + linen sack + flax twine + rope + copper nails**;
+  **32-chalk durability** (F5 — see the ▶ IMPLEMENTED callout up top for the full contract). The vanilla
+  Hammer + Flax Twine fallback gate cannot carry custom durability, so a server WITHOUT Layout is the one
+  chalk-free mode — physically unenforceable there, by accepted design.
 - **Runtime is .NET 10** (VS 1.22); `Entity.SidedPos` is obsolete — use `Pos`.
 
 ---
@@ -486,16 +528,18 @@ Layout/
 ├── assets/
 │   └── layout/
 │       ├── itemtypes/
-│       │   └── guidetool.json
-│       ├── textures/
-│       │   └── items/
-│       │       └── guidetool.png
+│       │   ├── guidetool.json            [Chalking Kit: durability 32, GroundStorable, chalkbag-full shape]
+│       │   └── chalkingpowder.json       [S15: the refill item; powdered-sulfur look, Messy12 storable]
+│       ├── recipes/grid/                 [guidetool (8-powder kit craft) + chalkingpowder (dye mixes)]
+│       ├── shapes/tools/                 [chalkbag-{full,medium,low,empty}.json — the 4 fill states]
+│       ├── textures/                     [20 per-state kit textures + sulfur + white]
 │       └── lang/
 │           └── en.json
 └── src/
     ├── LayoutModSystem.cs
     ├── Items/
-    │   └── ItemGuideTool.cs
+    │   ├── ItemGuideTool.cs              [S15: + chalk helpers, fill-state OnBeforeRender, IContainedMeshSource, ground-store gesture]
+    │   └── ItemChalkingPowder.cs         [S15: tap/hold refill — hotbar or ground-stored kit in place]
     ├── Guide/                            [pure data]
     │   ├── GuideData.cs                  [DataVersion 8; + Sides, IsClosed, Original{ControlPoints,Constraint}]
     │   ├── ControlPoint.cs               [+ IsLockMarker: passive, non-deforming Arch lock]
@@ -533,7 +577,8 @@ Layout/
     │   ├── DraftManager.cs
     │   ├── UndoManager.cs
     │   ├── GuideRenderer.cs
-    │   └── GuideMeshBuilder.cs
+    │   ├── GuideMeshBuilder.cs
+    │   └── ChalkEffects.cs               [S15: chalk-puff particles + the bow-release placement snap]
     ├── Network/
     │   ├── PacketTypes.cs
     │   ├── ServerNetworkHandler.cs
@@ -571,12 +616,13 @@ Layout/
             └── BreakConstraintCommand.cs
 ```
 
-**66 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
+**68 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
 ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 in Session 10: LayoutToolIcons; + 4 in Session 11:
 PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 for the 3D family (v0.1.20–0.1.21):
 SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape; + 5 for F4: ClientAuthorityMode,
 ClientToolGate, ClientWorldGuidePersistence, LocalGuideAuthority, GuideManagerDependencies; + 1 in Session 13:
-RemoveLockMarkerCommand; + 1 in Session 14: SphericalShellScan). Namespaces match
+RemoveLockMarkerCommand; + 1 in Session 14: SphericalShellScan; + 2 in Session 15: ItemChalkingPowder,
+ChalkEffects). Namespaces match
 folders: `Layout`, `Layout.Guide`, `Layout.Shapes`, `Layout.Systems`,
 `Layout.Network`, `Layout.UI`, `Layout.Config`, `Layout.Items`, `Layout.Client`, `Layout.Undo`,
 `Layout.Undo.Commands`. (`UndoManager` is the one file whose folder differs from its namespace: it lives in
@@ -809,6 +855,7 @@ ints, Guids as 16 bytes, positions as three doubles, full point lists verbatim (
 | `UndoRequestPacket` / `RedoRequestPacket` / `VoxelCapWarningPacket` | C→S / S→C | Undo + cap warnings |
 | `ClientOnlyPolicyPacket` / `ClientOnlyModeRequestPacket` / `ClientOnlyModeResultPacket` | mixed | Server permission and private/public placement negotiation |
 | `ClientGuidePushRequestPacket` / `ClientGuidePushResultPacket` | C→S / S→C | Publish up to 100 private guides and confirm accepted local removals |
+| `ChalkChargePacket` (S15, protocol 4) | C→S | Self-report a completed PRIVATE placement so the server (which owns the inventory but cannot see private guides) applies the chalk charge; validated + clamped 1–2 |
 
 **`ServerNetworkHandler.cs`** — validates, calls the managers, reads results, broadcasts (or corrective
 resync / cap warning). Owns: the create request (shape-aware), **auto-break** before constrained inserts and
@@ -1002,11 +1049,12 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
 
 ---
 
-This v3.1 document is the authoritative architecture, consolidated to current state: **Layout v0.1.53 on
-`ClientOnlyFallback`, built and playtested**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
+This v3.2 document is the authoritative architecture, consolidated to current state: **Layout v0.2.9 on
+`main`, built and playtested**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
 (+ right/equilateral/isosceles), rectangles (+ square), polygons, and Free-Shapes — plus the **3D volume
 family** (spheres, domes, cylinders, cones, boxes) place, preview, reshape, fill, lock/unlock, divide, and
-project onto surfaces under server or local authority against VS 1.22.3 / .NET 10. Status, flagged decisions, and the
+project onto surfaces under server or local authority against VS 1.22.3 / .NET 10, drawn with the
+**Chalking Kit**'s finite, powder-refillable chalk. Status, flagged decisions, and the
 punch-list live in `PROJECT_STATUS.md` and `TODO.md`; the current-state brief for external analysis lives in
 `HANDOFF.md` at the repo root; F4's final behavior record lives in `PLAN_CLIENT_ONLY.md`, its implementation
 history in `SESSION_12.md`, the interaction checkpoint in `SESSION_13.md`, and the active mesh resume plan in

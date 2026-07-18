@@ -1,8 +1,11 @@
 {
-  "ingredientPattern": "SSS,NNN,SSS",
+  "ingredientPattern": "_P_,TSR,_N_",
   "ingredients": {
-    "S": { "type": "item", "code": "game:stick" },
-    "N": { "type": "item", "code": "game:nugget-*" }
+    "P": { "type": "item", "code": "chalkingpowder", "quantity": 8 },
+    "T": { "type": "item", "code": "game:flaxtwine" },
+    "S": { "type": "item", "code": "game:linensack" },
+    "R": { "type": "item", "code": "game:rope" },
+    "N": { "type": "item", "code": "game:metalnailsandstrips-copper" }
   },
   "width": 3,
   "height": 3,

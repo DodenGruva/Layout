@@ -2,13 +2,13 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-14 against **v0.1.53** on
-> `ClientOnlyFallback`. Where this file and the
-> code disagree, **the code wins** — treat this as a map, then read the `.cs` files it points at.
+> and the performance-relevant mechanics. Updated 2026-07-18 against **v0.2.9** on `main`. Where this file and
+> the code disagree, **the code wins** — treat this as a map, then read the `.cs` files it points at.
 >
 > **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/10/11/12/13/14.md` (per-session
-> history), `dev/PLAN_CLIENT_ONLY.md` (F4 implementation record), `CLAUDE.md` (working conventions).
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/15.md` (per-session
+> history), `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
+> `CLAUDE.md` (working conventions).
 
 ---
 
@@ -20,13 +20,19 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.1.53, **playtested in multiplayer and vanilla-server fallback**. F4 is feature-complete on
-  `ClientOnlyFallback`; hollow Sphere/Dome shell generation now scales beyond the old 10-block boundary.
-  The v0.1.53 source/docs are uncommitted; last pushed commit is `1461c19`. `main` remains at v0.1.27.
-- **Size:** **66 source files** (`src/`), ~one asset tree, one `.csproj`.
+- **Status:** v0.2.9 on `main`, **playtested in multiplayer and vanilla-server fallback**. F4 (client-only /
+  private guides) and F5 (**the Chalking Kit**: finite chalk durability + powder refills + deflating
+  4-state models) are both feature-complete; hollow Sphere/Dome shell generation scales beyond the old
+  10-block boundary.
+- **Size:** **68 source files** (`src/`), ~one asset tree, one `.csproj`.
 - **Data schema:** **DataVersion 8** (additive passive-lock-marker flag; pinned enums/default migration).
-- **Wire protocol:** **3** (append-only lock-marker field after the protocol-2 F4 additions).
+- **Wire protocol:** **4** (append-only `ChalkChargePacket` after the protocol-3 lock-marker field).
 - **Catalog:** **12 shape types**, shown as **18 picker tiles** — a full 2D family plus a **3D volume family**.
+- **The tool:** the **Chalking Kit** — 32-chalk durability (2D −1 / 3D −2, completed placements only; no
+  lockout at 0, the kit can never break), refilled with **Chalking Powder** (tap +4 / hold-to-pour; hotbar
+  or a ground-stored kit in place); private placements charge via a client-reported, server-validated
+  packet; creative exempt; `enableChalkDurability` server config. Four fill-state models (full ≥22 · medium
+  11–21 · low 1–10 · empty 0) render in every context including ground storage.
 - **Active follow-up:** B-S9-1 is substantially improved; lock placement no longer deforms the guide, but
   repeated lock/drag/revert/unlock behavior still needs broader playtesting before closure.
 - **Top performance task:** a roughly 100-block hollow Sphere was successfully placed and caused visible lag.
@@ -42,14 +48,14 @@ guides on servers without Layout and, when server policy permits, alongside publ
 - **Build:** `dotnet build Layout.csproj` from the **repo root** (the folder containing `Layout.csproj`).
 - **Target:** `net10.0`, Vintage Story 1.22.3. References resolve via the `<VintagestoryDir>` csproj
   property (default `C:\Users\Zech\AppData\Roaming\Vintagestory`) — change that one line for another install.
-- **Dependencies** (all ship with the game): `VintagestoryAPI.dll` (install root),
-  `Newtonsoft.Json.dll`, `protobuf-net.dll`, `cairo-sharp.dll` (GUI icon glyphs) — the last three live in
-  `Lib\`. None are bundled into the mod zip.
+- **Dependencies** (all ship with the game): `VintagestoryAPI.dll` (install root), `Newtonsoft.Json.dll`,
+  `protobuf-net.dll`, `cairo-sharp.dll` (GUI icon glyphs) in `Lib\`, and `VSSurvivalMod.dll` (in the game's
+  `Mods\`; `IContainedMeshSource` for ground-storage fill meshes). None are bundled into the mod zip.
 - **Package a runnable mod:** build **Release**, then zip `modinfo.json` + `modicon.png` + `assets/` +
   `Layout.dll` at the **zip root** (forward-slash entry paths); drop into `VintagestoryData/Mods`. Config
   files (`layout.json`, `layout-client.json`) appear in `ModConfig` after first run.
 - **Versioning rule (standing):** every revision bumps `modinfo.json` and ships as a new
-  `Layout<version>.zip` in the **sibling `..\LayoutZips\`** folder — older zips are never overwritten.
+  `Layout<version>.zip` in the **sibling `..\Layout Zips\`** folder — older zips are never overwritten.
 - **Runtime note:** `Entity.SidedPos` is obsolete in this API version — use `Pos`.
 
 ---
@@ -77,12 +83,14 @@ in a versioned subfolder).
 
 ## 4. What the mod does (mechanics & scope)
 
-- **The tool** is normally the held **Chalking Kit** item (custom model as of v0.2.0, was the vanilla
-  abacus; recipe 6 sticks + 3 any-metal nuggets; infinite durability — the durability/refill mechanic is
-  F5, designed not built). On a server without Layout, the equivalent gate is **Flax Twine
-  main-hand + any vanilla Hammer variant off-hand** (damage irrelevant). Interaction is entirely
-  **first-person clicks + crosshair raycast** — no transform
-  gizmos. Guides are **visible but untargetable when the tool is not held** (pure mesh draws, no
+- **The tool** is normally the held **Chalking Kit** item (custom deflating 4-state model; recipe: 8×
+  Chalking Powder + linen sack + flax twine + rope + copper nails; **32-chalk durability**, F5 — completed
+  placements cost 2D −1 / 3D −2, refills via Chalking Powder [8× any powder/flour + 0.1 L yellow dye → 8],
+  no lockout at 0, never breaks; also **ground-storable**: CTRL+SHIFT+right-click sets it down, SHIFT+
+  right-click with powder refills it in place). On a server without Layout, the equivalent gate is
+  **Flax Twine main-hand + any vanilla Hammer variant off-hand** (damage irrelevant; no chalk there — a
+  custom item cannot exist on a vanilla server). Interaction is entirely **first-person clicks + crosshair
+  raycast** — no transform gizmos. Guides are **visible but untargetable when the tool is not held** (pure mesh draws, no
   selection/collision/entity backing), so they never interfere with the blocks underneath.
 - **Three tool modes** (`ToolMode`, client-only, never wired): **Create** owns ALL geometry (place, grab &
   reshape, insert, lock; right-click = cancel / lock-in-place). **Edit** is settings-only: left-click
@@ -311,6 +319,7 @@ can lag a high-end machine.
 | `requiredPrivilege` | "" (everyone) |
 | `adminCanOverrideLocks` | true |
 | `allowClientOnlyMode` | false |
+| `enableChalkDurability` | true |
 
 **Hard-coded limits (in code, not config):** `HardVoxelCeiling` 10M · `MaxScanCells` 4M (per 3D shape) ·
 `MaxDivisions` 256 · Polygon `MinSides` 3 / `MaxSides` 24 · Free-Shape `MaxCorners` 64 ·
@@ -347,9 +356,12 @@ bug is declared closed.
 1. **Implement the mesh pass described in §9 / `SESSION_14.md`:** exposed faces → chunks/culling → greedy
    same-colour face merging. Preserve true settled-guide scale and established rendering semantics.
 2. **Finish the B-S9-1 interaction regression** against the v0.1.52 marker lifecycle/order changes.
-3. **Final F4 regression and release packaging → v0.2.0 candidate.** Test vanilla fallback, policy denial,
-   permitted mixed mode, push/reconnect, and ordinary public multiplayer.
-4. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill (fill is currently inert on Free-Shapes);
+3. **The final F4/public multiplayer regression pass.** Test vanilla fallback, policy denial, permitted
+   mixed mode, push/reconnect, ordinary public multiplayer, and chalk in multiplayer (public + private
+   charging, refills). Owed before any release-grade stamp.
+4. **F5 held decision:** cursor-stack inventory refill vs. requiring ground refills — pending the human's
+   ground-refill playtesting. Effects tuning (puff, snap volume) by feel.
+5. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill (fill is currently inert on Free-Shapes);
    an F3 re-constrain op; broadcasting the whole Free-Shape draft chain to other players.
 
 **Settled decisions — do NOT reopen without the human explicitly asking** (full list in

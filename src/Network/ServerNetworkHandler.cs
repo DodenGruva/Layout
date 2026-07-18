@@ -75,6 +75,7 @@ namespace Layout.Network
         private readonly string _requiredPrivilege;
         private readonly bool _adminCanOverrideLocks;
         private readonly bool _allowClientOnlyMode;
+        private readonly bool _chalkDurabilityEnabled;
         private readonly HashSet<string> _clientOnlyPlayers = new HashSet<string>();
         private const int MaxGuidesPerPush = 100;
 
@@ -117,7 +118,8 @@ namespace Layout.Network
             UndoManager undoManager,
             string requiredPrivilege = null,
             bool adminCanOverrideLocks = true,
-            bool allowClientOnlyMode = false)
+            bool allowClientOnlyMode = false,
+            bool chalkDurabilityEnabled = true)
         {
             _sapi = sapi ?? throw new ArgumentNullException(nameof(sapi));
             _guides = guideManager ?? throw new ArgumentNullException(nameof(guideManager));
@@ -126,12 +128,14 @@ namespace Layout.Network
             _requiredPrivilege = string.IsNullOrWhiteSpace(requiredPrivilege) ? null : requiredPrivilege.Trim();
             _adminCanOverrideLocks = adminCanOverrideLocks;
             _allowClientOnlyMode = allowClientOnlyMode;
+            _chalkDurabilityEnabled = chalkDurabilityEnabled;
 
             _channel = _sapi.Network.RegisterChannel(LayoutChannel.Name);
             LayoutPackets.RegisterMessageTypes(_channel);
 
             _channel
                 .SetMessageHandler<GuideCreateRequestPacket>(OnCreateRequest)
+                .SetMessageHandler<ChalkChargePacket>(OnChalkCharge)
                 .SetMessageHandler<GuideGrabPacket>(OnGrab)
                 .SetMessageHandler<GuideReleasePacket>(OnRelease)
                 .SetMessageHandler<GuideCancelGrabPacket>(OnCancelGrab)
@@ -454,6 +458,17 @@ namespace Layout.Network
             if (DeniedByPrivilege(fromPlayer)) return;
             if (p?.Start == null || p.End == null || p.Settings == null) return;
 
+            // F5 chalk gate (NO LOCKOUT rule): a kit at 0 chalk blocks NEW placements only — every other
+            // operation (edit, dispel, undo) has no gate. The client pre-checks at draft start; this is the
+            // authoritative backstop.
+            if (ChalkApplies(fromPlayer, out ItemSlot kitSlot)
+                && Items.ItemGuideTool.GetChalk(kitSlot.Itemstack) <= 0)
+            {
+                fromPlayer.SendIngameError("layout-outofchalk",
+                    "Out of chalk. Refill the Chalking Kit with Chalking Powder (hold it and right-click).");
+                return;
+            }
+
             Vec3d start = p.Start.ToVec3d();
             Vec3d end = p.End.ToVec3d();
             GuideRenderSettings settings = p.Settings.ToRenderSettings();
@@ -485,6 +500,17 @@ namespace Layout.Network
                     // The placement is done — drop this player's draft anchor for everyone else.
                     if (_draftAnchors.Remove(fromPlayer.PlayerUID))
                         _channel.BroadcastPacket(new DraftAnchorRemovePacket(fromPlayer.PlayerUID), fromPlayer);
+                    // Placement feedback for everyone in range: the chalk-line snap + anchor dust puffs.
+                    ChalkEffects.PlacementEffects(_sapi.World, start, end);
+                    // F5: a COMPLETED placement is the one thing that spends chalk (2D −1, volume −2).
+                    // Deliberately outside the undo system: undoing a guide does not refund its chalk, and
+                    // redo re-creates via the command path so it never double-charges. Clamped at 0; the
+                    // kit itself can never break (see ItemGuideTool.ConsumeChalk).
+                    if (ChalkApplies(fromPlayer, out ItemSlot chargeSlot))
+                        Items.ItemGuideTool.ConsumeChalk(chargeSlot,
+                            GuideShapeTypes.IsVolume(shapeType)
+                                ? Items.ItemGuideTool.ChalkCostVolume
+                                : Items.ItemGuideTool.ChalkCostFlat);
                     break;
 
                 case GuideOpStatus.RejectedOverCap:
@@ -516,6 +542,43 @@ namespace Layout.Network
 
                 // InvalidArgument: malformed input — ignore.
             }
+        }
+
+        /// <summary>
+        /// True when chalk durability applies to this player's placement right now: the feature is enabled
+        /// (server config), the player is in a consuming game mode (not Creative/Spectator), and the ACTIVE
+        /// hotbar item is the real Chalking Kit; that kit slot comes back for the gate/charge. Client-only
+        /// and private placements never reach this server path at all, so they are chalk-free by
+        /// construction — the F4 no-op the plan records.
+        /// </summary>
+        /// <summary>
+        /// F5 (protocol 4): a client reports a completed PRIVATE placement so its chalk can be charged —
+        /// the server owns the inventory but cannot see private guides, so this self-report is the only
+        /// charge path for them. Everything checkable is validated (feature enabled, game mode, the real
+        /// kit actually held) and the cost is clamped to the legal 1–2 range; a dishonest client could at
+        /// most skip its own charge, which no server-side check could prevent anyway.
+        /// </summary>
+        private void OnChalkCharge(IServerPlayer fromPlayer, ChalkChargePacket p)
+        {
+            if (p == null || !_allowClientOnlyMode) return;
+            if (!ChalkApplies(fromPlayer, out ItemSlot kitSlot)) return;
+
+            Items.ItemGuideTool.ConsumeChalk(kitSlot, Math.Max(1, Math.Min(2, p.Cost)));
+        }
+
+        private bool ChalkApplies(IServerPlayer player, out ItemSlot kitSlot)
+        {
+            kitSlot = null;
+            if (!_chalkDurabilityEnabled) return false;
+
+            EnumGameMode mode = player.WorldData?.CurrentGameMode ?? EnumGameMode.Survival;
+            if (mode == EnumGameMode.Creative || mode == EnumGameMode.Spectator) return false;
+
+            ItemSlot slot = player.InventoryManager?.ActiveHotbarSlot;
+            if (!(slot?.Itemstack?.Collectible is Items.ItemGuideTool)) return false;
+
+            kitSlot = slot;
+            return true;
         }
 
         private void OnDraftStart(IServerPlayer fromPlayer, DraftStartPacket p)

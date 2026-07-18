@@ -162,6 +162,30 @@ namespace Layout.Client
             return ClientToolGate.HasRequiredItems(_capi.World?.Player);
         }
 
+        /// <summary>
+        /// F5 advisory pre-check: true when a NEW draft must be refused because the held Chalking Kit is
+        /// empty. Chalk applies to public placements AND to private placements on a Layout server (private
+        /// is private, not free — the server applies that charge from the client's report). The one
+        /// chalk-free case is a server WITHOUT Layout, where no real kit item can even exist — the accepted
+        /// client-only caveat. Creative/spectator players never consume. The server enforces the public
+        /// gate authoritatively; if durability is disabled in its config, chalk never drops, so this check
+        /// simply never trips.
+        /// </summary>
+        private bool OutOfChalkForNewDraft()
+        {
+            bool chalkApplies = _net.AuthorityMode == ClientAuthorityMode.Networked
+                || (_net.AuthorityMode == ClientAuthorityMode.Local && _net.ServerLayoutAvailable);
+            if (!chalkApplies) return false;
+
+            EnumGameMode mode = _capi.World?.Player?.WorldData?.CurrentGameMode ?? EnumGameMode.Survival;
+            if (mode == EnumGameMode.Creative || mode == EnumGameMode.Spectator) return false;
+
+            var stack = _capi.World?.Player?.InventoryManager?.ActiveHotbarSlot?.Itemstack;
+            if (!(stack?.Collectible is Items.ItemGuideTool)) return false;
+
+            return Items.ItemGuideTool.GetChalk(stack) <= 0;
+        }
+
         private void OnTick(float dt)
         {
             if (_disposed) return;
@@ -755,6 +779,17 @@ namespace Layout.Client
 
             if (!_draft.HasActiveDraft)
             {
+                // F5 chalk pre-check, at the FIRST click so no drawing effort is wasted: an empty kit
+                // cannot start a new (public, server-authoritative) draft. Advisory only — the server
+                // enforces the same gate on create. Local/private placements are chalk-free (F4 no-op),
+                // creative mode never consumes, and everything except NEW placement stays open at 0.
+                if (OutOfChalkForNewDraft())
+                {
+                    Error("layout-outofchalk",
+                        "Out of chalk. Refill the Chalking Kit with Chalking Powder (hold it and right-click).");
+                    return;
+                }
+
                 // The first click also fixes the INTRINSIC plane for the ellipse family (Session 8): click
                 // the ground → a flat ring (normal Y); click a wall → a ring on the wall (normal X/Z). The
                 // arch family carries it unused.

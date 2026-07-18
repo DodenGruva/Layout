@@ -1,15 +1,25 @@
 # Chalking Kit — Durability & Refill Design
 
-> Design record for retheming the Layout guide tool as a **chalking kit** and giving it a durability +
-> powder-refill loop. **Status: DESIGN / NOT STARTED** (tracked as **F5** in `TODO.md`). These are the
-> decisions reached in design discussion; the numbers are the agreed **starting point**, to be tuned by
-> playtest (the project's standing "feel over theory" rule). Named to match the `PLAN_CLIENT_ONLY.md`
-> plan-doc convention — rename to `ChalkingKit.md` if preferred.
+> **Status: ✅ IMPLEMENTED AND PLAYTESTED — v0.2.0–v0.2.9 (F5 delivered).** The reskin shipped in v0.2.0,
+> ground storage in 0.2.1–0.2.4, the durability/refill system in 0.2.5–0.2.6, the fill-state models in
+> 0.2.7, and ground refill + feedback effects in 0.2.8. **Full implementation record: `SESSION_15.md`.**
+> The body below is the original design discussion, kept as the rationale record.
 >
-> **⚠ Interacts with F4, which has since shipped (v0.1.53).** This plan was written before the client-only
-> fallback landed. That mode is gated by a vanilla **Hammer + Flax Twine**, not the real Layout item, which
-> the durability/refill loop assumes — see **"Client-only mode (F4)"** under *Open* below for the
-> reconciliation and the recommended resolution.
+> **Where the implementation deliberately DIFFERS from this plan** (all human-directed during the build):
+> - The refill item is named **Chalking Powder** (not "Yellow Chalking Powder").
+> - **Recipe:** `8× any powder OR flour + 0.1 L yellow dye (bucket/bowl/jug) → 8 Chalking Powder` — batches
+>   of 8, not the stack+1L 1:1 conversion sketched below. Same spirit (dye amortized, ~no loss), finer grain.
+> - **Private placements on a Layout server DO spend chalk** — "private is private, not free" — via a
+>   client-reported, server-validated `ChalkChargePacket` (protocol 4). This supersedes the local-no-op
+>   recommendation below; the no-op survives only where it is physically forced (a server without Layout has
+>   no channel and no real kit item — the accepted caveat).
+> - The kit's own recipe costs **8 Chalking Powder** (+ linen sack, flax twine, rope, copper nails) — its
+>   craft cost equals the 32 chalk it ships full with.
+> - Refill = tap +4 / hold-to-pour, targeting the hotbar **or a ground-stored kit in place** (SHIFT+
+>   right-click; the bag re-inflates live). Four **fill-state models** (full ≥22 · medium 11–21 · low 1–10 ·
+>   empty 0) with progressively chalkier textures render in every context, ground storage included.
+> - **Held open:** cursor-stack refill in the inventory UI — the human may instead require ground refills;
+>   decision pending playtest.
 
 ## Concept
 The guide tool gets a new **3D model** and a **chalking-kit** theme: guides read as **yellow chalk lines**
@@ -139,5 +149,5 @@ lockout. **Tune by playtest feel, not theory** — per the project's standing ru
 
 ---
 
-*This is a design record, not an implementation. Nothing here is built yet; the guide tool currently has
-infinite durability.*
+*This was the pre-implementation design record. The system is now built — see the status banner at the top
+for the plan-vs-shipped deltas and `SESSION_15.md` for the implementation record.*

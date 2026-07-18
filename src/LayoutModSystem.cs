@@ -75,9 +75,10 @@ namespace Layout
         {
             base.Start(api);
 
-            // The custom item class behind assets/layout/itemtypes/guidetool.json ("class": "LayoutGuideTool").
-            // Must exist on BOTH sides — the server instantiates the item too, it just stays inert there.
+            // The custom item classes behind assets/layout/itemtypes/*.json. Must exist on BOTH sides —
+            // the server instantiates the items too (and the powder's refill consumption runs server-side).
             api.RegisterItemClass("LayoutGuideTool", typeof(ItemGuideTool));
+            api.RegisterItemClass("LayoutChalkingPowder", typeof(ItemChalkingPowder));
         }
 
         // ==========================================================================================
@@ -111,7 +112,8 @@ namespace Layout
                 sapi, Guides, Locks, Undo,
                 ServerConfig.RequiredPrivilege,
                 ServerConfig.AdminCanOverrideLocks,
-                ServerConfig.AllowClientOnlyMode);
+                ServerConfig.AllowClientOnlyMode,
+                ServerConfig.EnableChalkDurability);
 
             sapi.Logger.Notification(
                 "[Layout] Server started. Caps: {0} voxels/guide, {1} total, {2} guides/player, {3} world-wide (0 = unlimited); undo depth {4}; privilege '{5}'; admin lock-override {6}; client-only mode {7}.",

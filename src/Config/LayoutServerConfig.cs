@@ -64,6 +64,15 @@ namespace Layout.Config
         [JsonProperty("allowClientOnlyMode")]
         public bool AllowClientOnlyMode { get; set; } = false;
 
+        /// <summary>
+        /// F5 chalk durability: when true (the default), each completed server-authoritative guide placement
+        /// spends the Chalking Kit's chalk (2D −1, 3D volume −2; refilled with Chalking Powder), and a kit
+        /// at 0 cannot place NEW guides (editing/dispelling always stays open). False disables consumption
+        /// entirely — e.g. for creative-leaning servers. Creative-mode players never consume regardless.
+        /// </summary>
+        [JsonProperty("enableChalkDurability")]
+        public bool EnableChalkDurability { get; set; } = true;
+
         /// <summary>Folds out-of-range values to their canonical forms. Call once after loading.</summary>
         public void Normalize()
         {

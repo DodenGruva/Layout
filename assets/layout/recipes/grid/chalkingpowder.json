@@ -1,0 +1,110 @@
+[
+  {
+    "ingredientPattern": "PPP,PLP,PPP",
+    "ingredients": {
+      "P": { "type": "item", "code": "game:powder-*" },
+      "L": { "type": "block", "code": "game:woodbucket" }
+    },
+    "width": 3,
+    "height": 3,
+    "shapeless": false,
+    "attributes": {
+      "liquidContainerProps": {
+        "requiresContent": { "type": "item", "code": "game:dye-yellow" },
+        "requiresLitres": 0.1
+      }
+    },
+    "name": "chalking powder (powder, bucket)",
+    "output": { "type": "item", "code": "chalkingpowder", "quantity": 8 }
+  },
+  {
+    "ingredientPattern": "PPP,PLP,PPP",
+    "ingredients": {
+      "P": { "type": "item", "code": "game:powder-*" },
+      "L": { "type": "block", "code": "game:bowl-*-fired" }
+    },
+    "width": 3,
+    "height": 3,
+    "shapeless": false,
+    "attributes": {
+      "liquidContainerProps": {
+        "requiresContent": { "type": "item", "code": "game:dye-yellow" },
+        "requiresLitres": 0.1
+      }
+    },
+    "name": "chalking powder (powder, bowl)",
+    "output": { "type": "item", "code": "chalkingpowder", "quantity": 8 }
+  },
+  {
+    "ingredientPattern": "PPP,PLP,PPP",
+    "ingredients": {
+      "P": { "type": "item", "code": "game:powder-*" },
+      "L": { "type": "block", "code": "game:jug-*" }
+    },
+    "width": 3,
+    "height": 3,
+    "shapeless": false,
+    "attributes": {
+      "liquidContainerProps": {
+        "requiresContent": { "type": "item", "code": "game:dye-yellow" },
+        "requiresLitres": 0.1
+      }
+    },
+    "name": "chalking powder (powder, jug)",
+    "output": { "type": "item", "code": "chalkingpowder", "quantity": 8 }
+  },
+  {
+    "ingredientPattern": "PPP,PLP,PPP",
+    "ingredients": {
+      "P": { "type": "item", "code": "game:flour-*" },
+      "L": { "type": "block", "code": "game:woodbucket" }
+    },
+    "width": 3,
+    "height": 3,
+    "shapeless": false,
+    "attributes": {
+      "liquidContainerProps": {
+        "requiresContent": { "type": "item", "code": "game:dye-yellow" },
+        "requiresLitres": 0.1
+      }
+    },
+    "name": "chalking powder (flour, bucket)",
+    "output": { "type": "item", "code": "chalkingpowder", "quantity": 8 }
+  },
+  {
+    "ingredientPattern": "PPP,PLP,PPP",
+    "ingredients": {
+      "P": { "type": "item", "code": "game:flour-*" },
+      "L": { "type": "block", "code": "game:bowl-*-fired" }
+    },
+    "width": 3,
+    "height": 3,
+    "shapeless": false,
+    "attributes": {
+      "liquidContainerProps": {
+        "requiresContent": { "type": "item", "code": "game:dye-yellow" },
+        "requiresLitres": 0.1
+      }
+    },
+    "name": "chalking powder (flour, bowl)",
+    "output": { "type": "item", "code": "chalkingpowder", "quantity": 8 }
+  },
+  {
+    "ingredientPattern": "PPP,PLP,PPP",
+    "ingredients": {
+      "P": { "type": "item", "code": "game:flour-*" },
+      "L": { "type": "block", "code": "game:jug-*" }
+    },
+    "width": 3,
+    "height": 3,
+    "shapeless": false,
+    "attributes": {
+      "liquidContainerProps": {
+        "requiresContent": { "type": "item", "code": "game:dye-yellow" },
+        "requiresLitres": 0.1
+      }
+    },
+    "name": "chalking powder (flour, jug)",
+    "output": { "type": "item", "code": "chalkingpowder", "quantity": 8 }
+  }
+]

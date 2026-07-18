@@ -186,7 +186,9 @@ namespace Layout.Client
             return removed;
         }
 
-        public void Create(Vec3d start, Vec3d end, GuideRenderSettings settings,
+        /// <summary>Returns true when the guide was actually created — the F5 chalk charge keys off it,
+        /// so a rejected (over-cap) placement never costs chalk.</summary>
+        public bool Create(Vec3d start, Vec3d end, GuideRenderSettings settings,
             GuideShapeType shapeType, ShapeConstraint constraint, PlaneAxis shapePlaneAxis,
             bool inverted, int sides, Vec3d apex, IReadOnlyList<Vec3d> chain, bool closed)
         {
@@ -198,10 +200,11 @@ namespace Layout.Client
             {
                 _undo.Record(PlayerUid, new CreateGuideCommand(result.Guide));
                 ApplyFull(result.Guide);
-                return;
+                return true;
             }
 
             HandleFailure(Guid.Empty, result);
+            return false;
         }
 
         public void Grab(Guid id)

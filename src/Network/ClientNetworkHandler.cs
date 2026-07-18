@@ -544,8 +544,23 @@ namespace Layout.Network
             _lastMutationWasLocal = localMutation;
             if (localMutation)
             {
-                _local.Create(start, end, settings, shapeType, constraint, shapePlaneAxis,
+                bool created = _local.Create(start, end, settings, shapeType, constraint, shapePlaneAxis,
                     inverted, sides, apex, chain, closed);
+
+                // F5: PRIVATE placement on a Layout server still spends chalk — private is private, not
+                // free. The server owns the inventory but cannot see private guides, so the honest client
+                // reports the completed placement and the server applies (and validates) the charge. On a
+                // server WITHOUT Layout there is no channel, no real kit item, and thus no charge — the
+                // accepted client-only caveat.
+                if (created && ServerLayoutAvailable)
+                {
+                    _channel.SendPacket(new ChalkChargePacket(Guide.GuideShapeTypes.IsVolume(shapeType)
+                        ? Items.ItemGuideTool.ChalkCostVolume
+                        : Items.ItemGuideTool.ChalkCostFlat));
+                }
+                // Local placement feedback (snap + puffs), client-side only — matching a private guide's
+                // visibility: nobody else can see the guide, so nobody else hears its chalk line snap.
+                if (created) Systems.ChalkEffects.PlacementEffects(_capi.World, start, end);
                 return;
             }
 

@@ -1,17 +1,19 @@
 # Layout — Project Status & Handoff
 
-**Checkpoint: Layout v0.1.53 on `ClientOnlyFallback`.** F4 is implemented and playtested: automatic
-client-only authority on servers without Layout; opt-in private overlays on Layout servers; per-world/per-UID
-client persistence; normal placement, reshape, settings, and undo parity; public/private commands and
-publication; HUD and anchor ownership cues; mixed-authority undo routing; and backup-recovery hardening.
-The latest pass replaces hollow Sphere/Dome cubic scanning with exact shell-focused generation. The human
-placed a roughly 100-block Sphere and confirmed the next bottleneck: one full cube per voxel in one monolithic
-GPU mesh. **DataVersion 8; protocol 3; 66 source files.** `main` remains at v0.1.27. Release zips live in
-**`..\LayoutZips\`** through v0.1.53. The v0.1.53 source/docs are uncommitted; last pushed commit is
-`1461c19`. **Top task: chunked exposed-face/greedy mesh implementation.** B-S9-1 remains improved but under
-focused playtest. Standing rule: ship a zip per code iteration; update docs / commit ONLY on the human's
-say-so. Detail lives in **`SESSION_12.md`**, **`SESSION_13.md`**, **`SESSION_14.md`**,
-`PLAN_CLIENT_ONLY.md`, and `TODO.md`; the authoritative plan is **`ARCHITECTURE.md`**.
+**Checkpoint: Layout v0.2.9 on `main`** (the `ClientOnlyFallback` branch merged via PR #1). **F4** is
+implemented and playtested: automatic client-only authority on servers without Layout; opt-in private
+overlays on Layout servers; per-world/per-UID client persistence; placement/reshape/settings/undo parity;
+public/private commands and publication; ownership cues; mixed-authority undo routing; backup-recovery
+hardening. **F5 (Session 15) is implemented and playtested:** the tool is the **Chalking Kit** — custom
+deflating 4-state model, 32-chalk durability (2D −1 / 3D −2, completed placements only, no lockout at 0,
+kit can never break), **Chalking Powder** refills (tap/hold; hotbar or ground-stored kit in place), private
+placements charge via `ChalkChargePacket`, ground storage, chalk-puff/snap feedback. **DataVersion 8;
+protocol 4; 68 source files.** Release zips: `..\Layout Zips\` (0.1.10–0.1.27 + 0.2.x;
+the 0.1.28–0.1.53 line lives in `Documents\ChatGPT\LayoutZips\`). **Top tasks: the chunked
+exposed-face/greedy mesh implementation (SESSION_14), the F5 cursor-vs-ground-refill decision, B-S9-1 soak
+testing, the F4 multiplayer regression pass.** Standing rule: ship a zip per code iteration; update docs /
+commit ONLY on the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_15.md`**,
+`PLAN_CLIENT_ONLY.md`, `PLAN_CHALKING_KIT.md`, and `TODO.md`; the authoritative plan is **`ARCHITECTURE.md`**.
 
 ---
 
@@ -19,30 +21,32 @@ say-so. Detail lives in **`SESSION_12.md`**, **`SESSION_13.md`**, **`SESSION_14.
 
 The doc set (now a Claude Code repo):
 
-1. **`ARCHITECTURE.md`** — the authoritative plan (v3.1); Settled Decisions Register updated through v0.1.53.
-2. **The code** — `src/` (**66 files**: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
+1. **`ARCHITECTURE.md`** — the authoritative plan (v3.2); Settled Decisions Register updated through v0.2.9.
+2. **The code** — `src/` (**68 files**: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
    RectangleShape, ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 Session-10 — LayoutToolIcons;
    + 4 Session-11 — PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 the 3D family
    (v0.1.20–0.1.21) — SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape; + 5 F4 —
    ClientAuthorityMode, ClientToolGate, ClientWorldGuidePersistence, LocalGuideAuthority,
    GuideManagerDependencies; + 1 Session-13 — RemoveLockMarkerCommand; + 1 Session-14 —
-   SphericalShellScan),
+   SphericalShellScan; + 2 Session-15 — ItemChalkingPowder, ChalkEffects),
    `assets/layout/`, `modinfo.json`, `modicon.png`, `Layout.csproj`, `BUILD_INSTRUCTIONS.txt`.
 3. **`TODO.md`** — the live punch-list (renamed from `OUTSTANDING_ITEMS.md`).
-4. **`SESSION_9.md`** / **`SESSION_10.md`** / **`SESSION_11.md`** / **`SESSION_12.md`** /
-   **`SESSION_13.md`** / **`SESSION_14.md`** — standalone records (SESSION_12 runs through v0.1.45;
-   SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 shell/mesh handoff).
+4. **`SESSION_9.md`** … **`SESSION_15.md`** — standalone records (SESSION_12 runs through v0.1.45;
+   SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 shell/mesh handoff; SESSION_15 is the
+   v0.2.0–v0.2.9 Chalking Kit arc).
 5. **`HANDOFF.md`** (repo root) — the consolidated current-state brief for external AI analysis
    (scope / status / direction / performance characteristics).
 6. **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix.
-7. **This status doc.**
+7. **`PLAN_CHALKING_KIT.md`** — F5's design rationale, marked implemented with plan-vs-shipped deltas.
+8. **This status doc.**
 
 > Precedence: **`ARCHITECTURE.md` is the plan; `HANDOFF.md` (repo root) is the consolidated brief.** This
 > doc tracks *status and intent*. The source of truth is the `.cs` files — prefer reading the code over any
 > identifier quoted in prose.
 
-> **Build dependencies:** `VintagestoryAPI.dll`, `Newtonsoft.Json.dll`, `protobuf-net.dll`, and (since
-> Session 10, for the icon glyphs) `cairo-sharp.dll` — all ship with the game; all but the first live in `Lib\`.
+> **Build dependencies:** `VintagestoryAPI.dll`, `Newtonsoft.Json.dll`, `protobuf-net.dll`, `cairo-sharp.dll`
+> (Session 10, icon glyphs), and `VSSurvivalMod.dll` (Session 15, `IContainedMeshSource` for ground-storage
+> fill meshes; lives in the game's `Mods\`) — all ship with the game; Newtonsoft/protobuf/cairo live in `Lib\`.
 
 > **Runnable-mod packaging:** build, then zip `modinfo.json` + `modicon.png` + `assets\` + `Layout.dll` at
 > the **zip root** into `VintagestoryData\Mods`. Server `layout.json` + client `layout-client.json` appear in
@@ -151,6 +155,21 @@ The doc set (now a Claude Code repo):
   - **Confirmed frontier:** `GuideMeshBuilder` still emits 8 vertices + 36 indices for every voxel, shared
     faces included, as one uploaded mesh per guide. Next pass is exposed faces → chunks/culling → greedy
     same-colour merging. Filled Sphere/Dome retain their old guarded cubic path.
+- **Session 15 — the Chalking Kit, F5 (v0.2.0–v0.2.9): playtest-CONFIRMED.** Detail in `SESSION_15.md`.
+  - **Reskin + ground storage (0.2.0–0.2.4):** custom model, item renamed Chalking Kit, CTRL+SHIFT set-down
+    (idle-gated; the F4 input hook now steps aside for the gesture — it had made the item's interact hooks
+    unreachable).
+  - **Durability (0.2.5–0.2.6):** 32 chalk; 2D −1 / 3D −2 on completed placements only; no refunds; NO
+    lockout at 0 and the kit can never break (custom clamp, never vanilla `DamageItem`); creative exempt;
+    `enableChalkDurability` config; **private placements charge** via client-reported `ChalkChargePacket`
+    (**protocol 3 → 4**); Chalking Powder + recipes (8× powder/flour + 0.1 L yellow dye → 8; kit = 8 powder
+    + sack/twine/rope/nails).
+  - **Fill-state models (0.2.7):** four human-made deflating models with progressively chalkier textures
+    (full ≥22 · medium 11–21 · low 1–10 · empty 0), rendered everywhere via `OnBeforeRender` +
+    `IContainedMeshSource` (new `VSSurvivalMod.dll` reference).
+  - **Ground refill + feedback (0.2.8):** SHIFT+right-click a stored kit refills in place (bag re-inflates
+    live); chalk-puff particles on refill/placement; the bow-release chalk-line snap on placement.
+  - **Held:** cursor-stack inventory refill vs. ground-refill-only — human decision pending playtest.
 - **IN REAL PLAY:** save-compatibility matters — DataVersion **8** saves (v8: passive `IsLockMarker`; v7:
   IsClosed; v6: Sides + the
   never-wired spring-back snapshot); pinned-enum / additive-protobuf / default-migration rules remain in
@@ -263,19 +282,22 @@ feature branch to a v0.2.0 candidate.
 
 ## 7. Next session — start here
 
-**F4 is feature-complete and playtested through v0.1.53 on `ClientOnlyFallback`.** Normal public multiplayer
-behavior is intentionally preserved. Read `SESSION_14.md` first: it is the current mesh-optimization handoff.
+**F4 and F5 are both feature-complete and playtested through v0.2.9 on `main`.** Normal public multiplayer
+behavior is intentionally preserved. Read `SESSION_14.md` first for performance work (the mesh handoff) and
+`SESSION_15.md` for the Chalking Kit state.
 
-1. **Implement large-guide meshes.** Add an exposed-face Volumetric path, then per-guide spatial chunk mesh
+1. **Resolve the F5 held decision** once the human has playtested ground refills: add cursor-stack inventory
+   refill, or make ground refill the only path (delete the hotbar branch). Tune puff/snap by feel.
+2. **Implement large-guide meshes.** Add an exposed-face Volumetric path, then per-guide spatial chunk mesh
    ownership/disposal and culling, then same-colour/orientation greedy merging. Preserve the verified shader,
    true settled-guide scale, marker palettes, and legacy Surface/slab path. See `SESSION_14.md`.
-2. **Finish B-S9-1 interaction testing.** Exercise adjacent locks and repeated lock → drag → cancel/revert →
+3. **Finish B-S9-1 interaction testing.** Exercise adjacent locks and repeated lock → drag → cancel/revert →
    unlock → relock cycles, especially on both sides of an Arch and around existing markers. Fix only any
    reproducible residual behavior; do not reopen the confirmed non-deforming design.
-3. **Final F4/public multiplayer regression → v0.2.0 candidate.** Cover vanilla-server fallback, Layout
-   policy denial, mixed public/private placement and editing, reconnect persistence, publication, commands,
-   and undo/redo around ownership boundaries.
-4. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill; broadcasting the whole Free-Shape draft
+4. **The final F4/public multiplayer regression pass.** Cover vanilla-server fallback, Layout policy denial,
+   mixed public/private placement and editing, reconnect persistence, publication, commands, undo/redo around
+   ownership boundaries — plus chalk in multiplayer (public + private charging, refills).
+5. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill; broadcasting the whole Free-Shape draft
    chain (11q); the F3 re-constrain op. Remaining flagged decisions (11a–11r, 16a–16d) are cosmetic.
 
 ---

@@ -2,12 +2,14 @@
   "code": "guidetool",
   "class": "LayoutGuideTool",
   "maxstacksize": 1,
+  "durability": 32,
   "creativeinventory": { "general": ["*"], "tools": ["*"] },
-  "shape": { "base": "tools/guidetool" },
+  "shape": { "base": "tools/chalkbag-full" },
   "behaviors": [
     { "name": "GroundStorable", "properties": { "layout": "SingleCenter", "collisionBox": { "x1": 0.25, "y1": 0, "z1": 0.25, "x2": 0.75, "y2": 0.3, "z2": 0.75 } } }
   ],
   "guiTransform": {
+		translation: { x: 0, y: -3, z: 0 },
 		rotation: { x: -8, y: -123, z: -173 },
 		origin: { x: 0.5, y: 0.25, z: 0.5 },
 		scaleXyz: { x: -2.88, y: 2.88, z: 2.88 }
@@ -24,12 +26,16 @@
 		scale: 0.65
   },
   "groundTransform": {
-    "origin": { "x": 0.5, "y": 0, "z": 0.5 },
-    "scale": 3.0
+    "translation": { "x": 0, "y": 0, "z": 0 },
+    "rotation": { "x": 0, "y": 0, "z": 0 },
+    "origin": { "x": 0, "y": 0, "z": 0 },
+    "scale": 3
   },
   "attributes": {
     "groundStorageTransform": {
-      "rotation": { "x": 0, "y": 90, "z": 0 }
+      "translation": { "x": 0.02, "y": 0, "z": 0 },
+      "rotation": { "x": 0, "y": 90, "z": 0 },
+      "origin": { "x": 0.465, "y": 0.5, "z": 0.465 }
     }
   }
 }

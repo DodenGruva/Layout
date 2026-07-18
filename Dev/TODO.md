@@ -1,11 +1,11 @@
-# Layout — TODO / Outstanding Items (current: v0.1.53)
+# Layout — TODO / Outstanding Items (current: v0.2.9)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.1.53)
+## ⭐ Top of the list (v0.2.9)
 
 1. **★ Large-guide mesh implementation — ACTIVE, human-confirmed need.** v0.1.53 removed the hollow
    Sphere/Dome cubic scan bottleneck. The human placed a roughly 100-block hollow Sphere and finally observed
@@ -18,15 +18,35 @@
    removal, and curve-relative insertion ordering. The human confirms that locks no longer shift and the
    latest behavior is better. Test repeated lock → drag → cancel/revert → unlock → relock cycles before
    declaring the bug closed. See OPEN BUGS and `SESSION_13.md`.
-3. **Final F4/public multiplayer regression → v0.2.0 candidate.** Test vanilla-server fallback, server
-   policy denial, mixed public/private overlays, reconnect persistence, publication, commands, and undo/redo
-   around ownership changes. The feature itself is implemented and playtested through v0.1.53.
-4. Remaining flagged decisions (11a–11r, 16a–16d in `SESSION_11.md`) are cosmetic — walk them
+3. **The final F4/public multiplayer regression pass.** Test vanilla-server fallback, server policy denial,
+   mixed public/private overlays, reconnect persistence, publication, commands, and undo/redo around
+   ownership changes — still owed before any release-grade stamp (the 0.2.x version line was promoted at the
+   human's direction for the Chalking Kit; this regression debt carries forward).
+4. **F5 held decision:** cursor-stack inventory refill (right-click powder onto the kit icon) — the human may
+   instead REQUIRE refills on the ground; decision pending ground-refill playtesting. Effects tuning (puff
+   density/size, snap volume 0.55) by feel.
+5. Remaining flagged decisions (11a–11r, 16a–16d in `SESSION_11.md`) are cosmetic — walk them
    opportunistically.
 
 **Standing workflow rule (human-set — also in CLAUDE.md):** ship a NEW zip per code iteration into
-`..\LayoutZips\`, but update docs / commit ONLY when the human says so. Warn before any context trim if
+`..\Layout Zips\`, but update docs / commit ONLY when the human says so. Warn before any context trim if
 the docs are stale.
+
+---
+
+## Implemented in Session 15 (v0.2.0 → v0.2.9) — full detail in `SESSION_15.md`
+
+**F5 delivered:** the tool is now the **Chalking Kit** — custom model, renamed item (mod stays Layout),
+**32-chalk durability** (2D −1 / 3D volume −2, completed placements only; no refunds; NO lockout at 0 —
+edit/dispel always work and the kit can never break), **Chalking Powder** refills (tap +4 / hold-to-pour;
+hotbar or SHIFT+right-click a ground-stored kit in place), **private placements charge too** (client-reported
+`ChalkChargePacket`, protocol 3 → 4; chalk-free only where physically unenforceable — servers without
+Layout), **four deflating fill-state models** with progressively chalkier textures (full ≥22 · medium 11–21 ·
+low 1–10 · empty 0) rendering in every context including ground storage, **ground storage** of the kit
+(CTRL+SHIFT+right-click, idle-gated), chalk-puff particles on refill + placement, and the **chalk-line snap**
+(bow-release twang) on placement. Recipes: `8× powder/flour + 0.1 L yellow dye (bucket/bowl/jug) → 8 powder`;
+the kit = 8 powder + linen sack + flax twine + rope + copper nails. Config: `enableChalkDurability`
+(default true); creative never consumes. Plan-vs-shipped deltas listed atop `PLAN_CHALKING_KIT.md`.
 
 ---
 
@@ -346,39 +366,37 @@ The inverse of a break: a menu action to snap a free shape back under a constrai
 ellipse → circle, triangle → equilateral, rectangle → square) with a best-fit. Natural undo pairing exists.
 Park until asked.
 
-### F5. Chalking-kit durability + refill loop (in active design; not started)
-Reskin the guide tool as a **chalking kit** (3D model already made) and give it finite, refillable durability
-— a light material loop for psychological reward without deterring use. **Agreed starting point:** 32
-durability; 2D placement −1 / 3D −2 (flat, never size-scaled — protects the enormous-guides direction);
-charge on **completed placement only** (reshape/dispel/cancelled drafts are free); **no lockout at 0**
-(view/edit/dispel stay open, only *new* placement is blocked); refill by right-clicking **Yellow Chalking
-Powder** (any powder stack + 1 L yellow dye → 1 stack, **1:1**) onto the kit at **4 durability each**
-(tap +4 / hold-to-fill). The refill *is* the intended loop — there is deliberately no restock treadmill.
-**Open question raised by F4:** the loop assumes the real Layout item, but the client-only fallback gate is a
-vanilla Hammer + Flax Twine, which can neither carry custom durability nor hold a custom powder item —
-durability most likely becomes a **local no-op** there, matching how locks/caps/undo-gating already degrade
-in that mode. **Full design, rationale, and open items: `PLAN_CHALKING_KIT.md`.**
+### F5. Chalking-kit durability + refill loop — ✅ DELIVERED AND CONFIRMED (Session 15, v0.2.0–v0.2.9)
+Shipped as designed with human-directed refinements during the build: 32 chalk, 2D −1 / 3D −2 on completed
+placements only, no refunds, NO lockout at 0 (the kit can never break); **Chalking Powder** refills (tap +4 /
+hold-to-pour, hotbar or ground-stored kit in place); **private placements charge chalk too** (the plan's
+local-no-op survives only where unenforceable — servers without Layout); recipes `8× powder/flour + 0.1 L
+yellow dye → 8` and the 8-powder kit craft; four deflating fill-state models; placement/refill effects.
+Plan-vs-shipped deltas atop `PLAN_CHALKING_KIT.md`; full record in `SESSION_15.md`. **Held open:**
+cursor-stack inventory refill (or ground-refill-only) — see Top of the list.
 
 ---
 
 ## Next session — start here
 
-**F4 is feature-complete and playtested through v0.1.53 on `ClientOnlyFallback`.** The agenda:
+**F4 and F5 are both feature-complete and playtested through v0.2.9 on `main`.** The agenda:
 
-1. **Implement the large-guide mesh pass from `SESSION_14.md`.** Start with exact exposed-face Volumetric
+1. **Resolve the F5 held decision** if the human has playtested ground refills: cursor-stack inventory
+   refill, or ground-refill-only (delete the hotbar branch). Tune puff/snap by feel.
+2. **Implement the large-guide mesh pass from `SESSION_14.md`.** Start with exact exposed-face Volumetric
    meshing, then chunk ownership/disposal and culling, then same-colour greedy merging. Validate ordinary
    guides before testing the 20/40/~100-block Sphere/Dome progression.
-2. **Finish B-S9-1 interaction testing.** Focus on repeat lock/drag/cancel-or-revert/unlock cycles and
+3. **Finish B-S9-1 interaction testing.** Focus on repeat lock/drag/cancel-or-revert/unlock cycles and
    curve-relative targeting around multiple markers. The latest iteration is improved, not yet declared final.
-3. **Final F4/public multiplayer regression → v0.2.0 candidate.** Cover vanilla-server fallback, policy
-   denial, mixed public/private placement and editing, reconnect persistence, publication, commands, and
-   undo/redo around ownership boundaries.
-4. Then, if asked: **Roof / Tunnel** volumes; a concave-safe **Free-Shape fill**; broadcasting the whole
+4. **The final F4/public multiplayer regression pass.** Cover vanilla-server fallback, policy denial, mixed
+   public/private placement and editing, reconnect persistence, publication, commands, and undo/redo around
+   ownership boundaries — plus a chalk pass (public + private charging, refills) in multiplayer.
+5. Then, if asked: **Roof / Tunnel** volumes; a concave-safe **Free-Shape fill**; broadcasting the whole
    Free-Shape draft chain to other players (11q); **F3 re-constrain op**.
 
-**Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\LayoutZips\`;
-docs are updated ONLY when the human says so; commits/pushes only when the human instructs. Continue on
-`ClientOnlyFallback`; do not merge to `main` without explicit direction.
+**Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;
+docs are updated ONLY when the human says so; commits/pushes only when the human instructs. `main` is the
+mainline.
 
 ---
 

@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 3;
+        public const int ProtocolVersion = 4;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -819,6 +819,23 @@ namespace Layout.Network
         public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
     }
 
+    /// <summary>
+    /// Client → server (F5 chalk, protocol 4). An honest client reports a completed PRIVATE placement on a
+    /// mixed Layout server so the server — which owns the inventory but cannot see private guides — applies
+    /// the chalk charge to the held kit. Public placements never send this: the server charges those itself
+    /// inside the create handler. The server validates everything it can (feature enabled, game mode, kit
+    /// actually held) and clamps the cost to the legal 1–2 range.
+    /// </summary>
+    [ProtoContract]
+    public class ChalkChargePacket
+    {
+        [ProtoMember(1)] public int Cost;
+
+        public ChalkChargePacket() { }
+
+        public ChalkChargePacket(int cost) { Cost = cost; }
+    }
+
     // ----------------------------------------------------------------------------------------------
     //  Registration — the single source of truth for type order on BOTH sides
     // ----------------------------------------------------------------------------------------------
@@ -891,7 +908,9 @@ namespace Layout.Network
             typeof(ClientGuidePushRequestPacket),
             typeof(ClientGuidePushResultPacket),
             typeof(ClientPlacementModeRequestPacket),
-            typeof(ClientGuidePushPacket)
+            typeof(ClientGuidePushPacket),
+            // F5 chalk durability (protocol 4)
+            typeof(ChalkChargePacket)
         };
     }
 }
