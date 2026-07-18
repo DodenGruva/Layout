@@ -208,6 +208,17 @@ namespace Layout.Systems
             HiddenAnchorAlpha = hiddenAnchor;
         }
 
+        // World-block inset applied to any voxel FACE that lies exactly on a block-grid plane (its 1/16
+        // coordinate is a multiple of 16) — those are the only faces that can be coplanar with world block
+        // faces and z-fight them (jarring at scale 16, where every face is grid-coplanar). Insetting ONLY
+        // grid-coplanar faces sidesteps the Module-7 all-axes-shrink mistake almost entirely: the seam it
+        // can open between two guide voxels meeting across a block boundary is 2×0.004 blocks — a hairline
+        // the human has accepted (0.2.11). The lowest layer's bottom face is additionally always lifted,
+        // covering guides resting on non-grid tops (slabs, chiseled blocks). Tuned by playtest: 0.004 was
+        // safe but seamy; 0.001 shimmered when moving toward/away from the guide (depth precision falls
+        // with distance); 0.002 is the settled value (0.2.13).
+        private const float BlockPlaneInset = 0.002f;
+
         // Coplanarity tolerance, world blocks. Anchors placed by voxel/block targeting (and Shift-to-constrain)
         // land on exact grid coordinates, so an effectively-exact epsilon is right: a clean foot reads clean, a
         // deliberately raised or angled one reads off.
@@ -269,6 +280,13 @@ namespace Layout.Systems
                     if (d2 < bestD2) { bestD2 = d2; grabbedIdx = i; }
                 }
             }
+
+            // Z-fight pre-pass: the lowest voxel layer's bottom face is always lifted (guides resting on
+            // slab/chiseled tops sit off-grid); grid-coplanar faces are handled per-face in the cube
+            // branch below — see BlockPlaneInset.
+            int minY = int.MaxValue;
+            for (int i = 0; i < voxels.Count; i++)
+                if (voxels[i].Y < minY) minY = voxels[i].Y;
 
             MeshData mesh = NewMesh(voxels.Count);
 
@@ -343,7 +361,21 @@ namespace Layout.Systems
                     float lx = (float)(v.X / 16.0 - ox) + ix;
                     float ly = (float)(v.Y / 16.0 - oy) + iy;
                     float lz = (float)(v.Z / 16.0 - oz) + iz;
-                    AddBox(mesh, lx, ly, lz, edge - 2f * ix, edge - 2f * iy, edge - 2f * iz, color);
+
+                    // Z-fight clearance: inset every face sitting exactly on a block-grid plane, plus the
+                    // lowest layer's bottom face (see BlockPlaneInset). `& 15` == "multiple of 16", valid
+                    // for negatives too. Face coordinates: min face = v coord, max face = v coord + scale.
+                    float fx0 = (v.X & 15) == 0 ? BlockPlaneInset : 0f;
+                    float fx1 = ((v.X + scale) & 15) == 0 ? BlockPlaneInset : 0f;
+                    float fy0 = (v.Y & 15) == 0 || v.Y == minY ? BlockPlaneInset : 0f;
+                    float fy1 = ((v.Y + scale) & 15) == 0 ? BlockPlaneInset : 0f;
+                    float fz0 = (v.Z & 15) == 0 ? BlockPlaneInset : 0f;
+                    float fz1 = ((v.Z + scale) & 15) == 0 ? BlockPlaneInset : 0f;
+
+                    AddBox(mesh, lx + fx0, ly + fy0, lz + fz0,
+                        edge - 2f * ix - fx0 - fx1,
+                        edge - 2f * iy - fy0 - fy1,
+                        edge - 2f * iz - fz0 - fz1, color);
                 }
             }
 

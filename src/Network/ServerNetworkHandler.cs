@@ -500,8 +500,10 @@ namespace Layout.Network
                     // The placement is done — drop this player's draft anchor for everyone else.
                     if (_draftAnchors.Remove(fromPlayer.PlayerUID))
                         _channel.BroadcastPacket(new DraftAnchorRemovePacket(fromPlayer.PlayerUID), fromPlayer);
-                    // Placement feedback for everyone in range: the chalk-line snap + anchor dust puffs.
-                    ChalkEffects.PlacementEffects(_sapi.World, start, end);
+                    // Placement feedback for everyone in range: the chalk-line snap + dust along the whole
+                    // guide (2D) or its base ring (3D volumes — a full-shell puff would flood the particle
+                    // system on big spheres).
+                    ChalkEffects.PlacementEffects(_sapi.World, result.Guide);
                     // F5: a COMPLETED placement is the one thing that spends chalk (2D −1, volume −2).
                     // Deliberately outside the undo system: undoing a guide does not refund its chalk, and
                     // redo re-creates via the command path so it never double-charges. Clamped at 0; the

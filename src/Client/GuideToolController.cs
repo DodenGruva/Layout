@@ -347,7 +347,7 @@ namespace Layout.Client
                         _hud.SetDraftAim(aim);
                         _renderer.SetDraftPreview(_draft.DraftStart, aim, BuildSettings(blockSel, aim),
                             _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
-                            sides: _draft.Sides, inverted: ShiftHeld());
+                            sides: _draft.Sides, inverted: EffectiveInverted());
                     }
                 }
                 else
@@ -793,7 +793,7 @@ namespace Layout.Client
                 // The first click also fixes the INTRINSIC plane for the ellipse family (Session 8): click
                 // the ground → a flat ring (normal Y); click a wall → a ring on the wall (normal X/Z). The
                 // arch family carries it unused.
-                _draft.StartDraft(anchor, AxisFromFace(blockSel));
+                _draft.StartDraft(anchor, AxisFromFace(blockSel), FaceIsNegative(blockSel));
                 _net.SendDraftStart(anchor, BuildSettings(blockSel, anchor));
                 return;
             }
@@ -850,9 +850,10 @@ namespace Layout.Client
             }
 
             // SHIFT at the completing click bakes the inverted (upside-down) form — only meaningful for
-            // the shapes that derive an "up" (arch family, equilateral triangle); apex-clicked triangles
-            // take their height from the click itself.
-            bool inverted = apex == null && ShiftHeld();
+            // the shapes that derive an "up" (arch family, equilateral triangle, Dome); apex-clicked
+            // triangles take their height from the click itself. For a Dome the clicked face's SIGN is
+            // folded in first, so it defaults away from the surface it was placed on (see EffectiveInverted).
+            bool inverted = apex == null && EffectiveInverted();
 
             DraftCompletion completion = _draft.TryCompleteDraft(end, apex, inverted);
             if (completion.IsReady)
@@ -1533,6 +1534,28 @@ namespace Layout.Client
         {
             Vec3i n = blockSel.Face.Normali;
             return n.Y != 0 ? PlaneAxis.Y : (n.Z != 0 ? PlaneAxis.Z : PlaneAxis.X);
+        }
+
+        // True when the clicked face's outward normal points toward its axis's NEGATIVE side (a ceiling,
+        // a north or west wall face). PlaneAxis alone cannot carry this sign.
+        private static bool FaceIsNegative(BlockSelection blockSel)
+        {
+            if (blockSel?.Face == null) return false;
+            Vec3i n = blockSel.Face.Normali;
+            return n.X + n.Y + n.Z < 0;      // exactly one component is nonzero
+        }
+
+        /// <summary>
+        /// The draft's effective inversion: SHIFT is the player's invert, and for the DOME — the one shape
+        /// that rises OUT of its clicked plane — the first click's face sign is folded in first, so a dome
+        /// placed on a ceiling or the far side of a wall defaults AWAY from that surface instead of always
+        /// growing toward the axis's positive side (0.2.11 fix; SHIFT still inverts relative to that).
+        /// </summary>
+        private bool EffectiveInverted()
+        {
+            bool inv = ShiftHeld();
+            if (_draft.Shape == GuideShapeType.Dome && _draft.DraftPlaneNegative) inv = !inv;
+            return inv;
         }
 
         private GuideRenderSettings BuildSettings(BlockSelection blockSel, Vec3d anchor)

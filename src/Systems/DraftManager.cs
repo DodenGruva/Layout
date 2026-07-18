@@ -241,6 +241,15 @@ namespace Layout.Systems
         /// <summary>The intrinsic plane the active draft captured from its first click's block face.</summary>
         public PlaneAxis DraftPlaneAxis => _draftPlaneAxis;
 
+        /// <summary>
+        /// Whether the first click's face NORMAL points toward the axis's negative side (a ceiling, a
+        /// north/west wall face). <see cref="DraftPlaneAxis"/> alone loses this sign — and the deterministic
+        /// +axis default then grows a Dome INTO the surface it was placed on. The controller folds this into
+        /// the Dome's inverted flag so it always rises AWAY from the clicked surface (0.2.11).
+        /// </summary>
+        public bool DraftPlaneNegative => _draftPlaneNegative;
+        private bool _draftPlaneNegative;
+
         // --- Tool state: Edit-mode selection ----------------------------------------------------
 
         public Guid? SelectedGuideId => _selectedGuideId;
@@ -339,7 +348,8 @@ namespace Layout.Systems
         /// captured here — they are read live when the draft completes — so mid-draft setting changes take effect.
         /// Starting a new draft replaces any existing one.
         /// </summary>
-        public void StartDraft(Vec3d startPoint, PlaneAxis shapePlaneAxis = PlaneAxis.Y)
+        public void StartDraft(Vec3d startPoint, PlaneAxis shapePlaneAxis = PlaneAxis.Y,
+            bool planeNegative = false)
         {
             if (startPoint == null) throw new ArgumentNullException(nameof(startPoint));
             _draftStart = new Vec3d(startPoint.X, startPoint.Y, startPoint.Z);
@@ -347,6 +357,7 @@ namespace Layout.Systems
             _draftChain.Clear();
             _draftChain.Add(new Vec3d(startPoint.X, startPoint.Y, startPoint.Z));
             _draftPlaneAxis = shapePlaneAxis;
+            _draftPlaneNegative = planeNegative;
             _hasDraft = true;
         }
 

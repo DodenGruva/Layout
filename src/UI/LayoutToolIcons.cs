@@ -527,8 +527,11 @@ namespace Layout.UI
             ctx.LineTo(c.X(23), c.Y(45)); ctx.LineTo(c.X(15), c.Y(37)); ctx.ClosePath(); ctx.Stroke();
             // sharpened tip point
             ctx.MoveTo(c.X(15), c.Y(37)); ctx.LineTo(c.X(11), c.Y(49)); ctx.LineTo(c.X(23), c.Y(45)); ctx.Stroke();
-            // wood/graphite band near the tip
-            ctx.MoveTo(c.X(18), c.Y(40)); ctx.LineTo(c.X(26), c.Y(48)); ctx.Stroke();
+            // graphite boundary INSIDE the tip triangle — both endpoints sit on the tip's edges (the old
+            // band ran to (26,48), outside the pencil: the "dangling piece", snipped 0.2.10)
+            ctx.MoveTo(c.X(14), c.Y(40)); ctx.LineTo(c.X(19), c.Y(46)); ctx.Stroke();
+            // eraser: a band across the body near the upper-right end; the segment beyond it is the eraser
+            ctx.MoveTo(c.X(31), c.Y(21)); ctx.LineTo(c.X(39), c.Y(29)); ctx.Stroke();
         }
 
         private static void DrawModeDelete(Context ctx, int x, int y, float w, float h, double[] rgba)
