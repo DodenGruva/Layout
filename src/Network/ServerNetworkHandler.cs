@@ -76,6 +76,8 @@ namespace Layout.Network
         private readonly bool _adminCanOverrideLocks;
         private readonly bool _allowClientOnlyMode;
         private readonly bool _chalkDurabilityEnabled;
+        private readonly bool _allowHotbarChalkRefill;
+        private readonly bool _allowInventoryChalkRefill;
         private readonly HashSet<string> _clientOnlyPlayers = new HashSet<string>();
         private const int MaxGuidesPerPush = 100;
 
@@ -119,7 +121,9 @@ namespace Layout.Network
             string requiredPrivilege = null,
             bool adminCanOverrideLocks = true,
             bool allowClientOnlyMode = false,
-            bool chalkDurabilityEnabled = true)
+            bool chalkDurabilityEnabled = true,
+            bool allowHotbarChalkRefill = false,
+            bool allowInventoryChalkRefill = false)
         {
             _sapi = sapi ?? throw new ArgumentNullException(nameof(sapi));
             _guides = guideManager ?? throw new ArgumentNullException(nameof(guideManager));
@@ -129,6 +133,8 @@ namespace Layout.Network
             _adminCanOverrideLocks = adminCanOverrideLocks;
             _allowClientOnlyMode = allowClientOnlyMode;
             _chalkDurabilityEnabled = chalkDurabilityEnabled;
+            _allowHotbarChalkRefill = allowHotbarChalkRefill;
+            _allowInventoryChalkRefill = allowInventoryChalkRefill;
 
             _channel = _sapi.Network.RegisterChannel(LayoutChannel.Name);
             LayoutPackets.RegisterMessageTypes(_channel);
@@ -136,6 +142,7 @@ namespace Layout.Network
             _channel
                 .SetMessageHandler<GuideCreateRequestPacket>(OnCreateRequest)
                 .SetMessageHandler<ChalkChargePacket>(OnChalkCharge)
+                .SetMessageHandler<ChalkInventoryRefillPacket>(OnInventoryChalkRefill)
                 .SetMessageHandler<GuideGrabPacket>(OnGrab)
                 .SetMessageHandler<GuideReleasePacket>(OnRelease)
                 .SetMessageHandler<GuideCancelGrabPacket>(OnCancelGrab)
@@ -315,7 +322,7 @@ namespace Layout.Network
             foreach (var g in _guides.AllGuides.Values) all.Add(GuideDataDto.From(g));
             _channel.SendPacket(
                 new GuideBulkSyncPacket(all.ToArray(), _guides.PerGuideVoxelCap, _guides.TotalVoxelCap,
-                    _allowClientOnlyMode),
+                    _allowClientOnlyMode, _allowHotbarChalkRefill, _allowInventoryChalkRefill),
                 player);
 
             // 2) Current lock state of any locked guide, so the joiner sees what is being edited.
@@ -566,6 +573,36 @@ namespace Layout.Network
             if (!ChalkApplies(fromPlayer, out ItemSlot kitSlot)) return;
 
             Items.ItemGuideTool.ConsumeChalk(kitSlot, Math.Max(1, Math.Min(2, p.Cost)));
+        }
+
+        /// <summary>
+        /// F5 (protocol 5): refill the kit in a named inventory slot from the powder on the player's cursor.
+        /// Re-validates everything the client claimed — the channel is permitted, the slot really holds a
+        /// non-full kit, the cursor really holds powder — before consuming one powder and adding its chalk.
+        /// If the client's default slot-swap actually ran first (mouse hook ordering), the cursor will hold
+        /// the KIT here, this validation fails, and nothing happens: the worst case degrades to a harmless
+        /// swap, never a corrupt inventory.
+        /// </summary>
+        private void OnInventoryChalkRefill(IServerPlayer fromPlayer, ChalkInventoryRefillPacket p)
+        {
+            if (p == null || !_allowInventoryChalkRefill || string.IsNullOrEmpty(p.InventoryId)) return;
+
+            IInventory inv = fromPlayer.InventoryManager?.GetInventory(p.InventoryId);
+            if (inv == null || p.SlotId < 0 || p.SlotId >= inv.Count) return;
+
+            ItemSlot kitSlot = inv[p.SlotId];
+            if (!(kitSlot?.Itemstack?.Collectible is Items.ItemGuideTool)) return;
+
+            ItemSlot cursor = fromPlayer.InventoryManager?.MouseItemSlot;
+            if (!(cursor?.Itemstack?.Collectible is Items.ItemChalkingPowder) || cursor.Itemstack.StackSize <= 0)
+                return;
+
+            if (!Items.ItemGuideTool.TryAddChalk(kitSlot, Items.ItemChalkingPowder.ChalkPerPowder)) return; // full
+
+            cursor.TakeOut(1);
+            cursor.MarkDirty();
+            fromPlayer.Entity.World.PlaySoundAt(new AssetLocation("game:sounds/player/build"),
+                fromPlayer.Entity, null, true, 16f, 0.6f);
         }
 
         private bool ChalkApplies(IServerPlayer player, out ItemSlot kitSlot)

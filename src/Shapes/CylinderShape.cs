@@ -93,6 +93,7 @@ namespace Layout.Shapes
 
         public List<VoxelPosition> GetVoxelPositions(int scale, bool filled = false)
         {
+            filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             var result = new List<VoxelPosition>();
             if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h)) return result;
             if (ScanTooBig(scale, r, h)) return result;
@@ -132,6 +133,7 @@ namespace Layout.Shapes
 
         public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter)
         {
+            filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h)) return 0;
             if (ScanTooBig(scale, r, h)) return GuideShapeVoxelCounting.Exceeded(stopAfter);
 

@@ -410,16 +410,22 @@ namespace Layout.UI
             bool freeShapePicked = editMode
                 ? selected != null && selected.ShapeType == GuideShapeType.FreeShape
                 : _tool.Shape == GuideShapeType.FreeShape;
-            bool fillInert = projFillInert || freeShapePicked;
+            // Fill also greys for every 3D VOLUME (0.2.17, human-directed): exposed-face meshing made a
+            // filled interior emit no geometry at all, so "filled" bought nothing visible at an enormous
+            // voxel cost — volumes are always their hollow shell now.
+            bool fillInert = projFillInert || freeShapePicked || volumePicked;
             string[] fillNames = !projFillInert && freeShapePicked
                 ? new[] { FillNames[0] + "\nFill is not available on a Free-Shape.",
                           FillNames[1] + "\nFill is not available on a Free-Shape." }
-                : FillNames;
+                : !projFillInert && volumePicked
+                    ? new[] { FillNames[0] + "\nA 3D shape is always a hollow shell.",
+                              FillNames[1] + "\nNot available on a 3D shape — its interior would be invisible anyway." }
+                    : FillNames;
             AddIconRowPair(c, projInert ? ghostFont : rowFont, ref y, labelW, pad, tile, tileGap, rowGap,
                 "Projection", ProjCodes, projNames, ProjIcons, volumePicked ? 0 : (surface ? 1 : 0),
                 editMode ? OnGuideProjectionTile : OnProjectionTile, "proj", projInert,
                 "Fill", fillInert ? ghostFont : rowFont, FillCodes, fillNames, FillIcons,
-                (editMode ? (selected?.IsFilled ?? false) : _tool.Filled) ? 1 : 0,
+                !volumePicked && (editMode ? (selected?.IsFilled ?? false) : _tool.Filled) ? 1 : 0,
                 editMode ? OnGuideFillTile : OnFillTile, "fill", fillInert);
 
             if (surface)
@@ -449,7 +455,7 @@ namespace Layout.UI
                 // no Divisions / Sides row for volumes
             }
             else if (sidesRow)
-                AddNumberPairControl(c, rowFont, font, ref y, labelW, pad, tile, rowGap,
+                AddNumberPairControl(c, rowFont, font, ref y, labelW, pad, tile, tileGap, rowGap,
                     "Divisions", divCurrent, 0, Shapes.DivisionMarks.MaxDivisions, "div", divChanged,
                     "Sides",
                     editMode ? (selected?.Sides ?? Shapes.PolygonShape.DefaultSides) : _tool.Sides,
@@ -457,7 +463,7 @@ namespace Layout.UI
                     editMode ? OnGuideSidesChanged : OnToolSidesChanged,
                     numberInert);
             else
-                AddNumberControl(c, rowFont, font, ref y, labelW, pad, tile, rowGap, "Divisions",
+                AddNumberControl(c, rowFont, font, ref y, labelW, pad, tile, tileGap, rowGap, "Divisions",
                     divCurrent, 0, Shapes.DivisionMarks.MaxDivisions, numberInert, "div", divChanged);
 
             // Visibility is Edit-only — a placed guide can be shown/hidden; the tool has no such state.
@@ -482,7 +488,7 @@ namespace Layout.UI
         // under the _suppress guard. In inert (Delete / no-selection) mode the row is ghost static text.
         private void AddNumberControl(
             GuiComposer c, CairoFont labelFont, CairoFont font, ref double y,
-            double labelW, double pad, double tile, double rowGap, string label,
+            double labelW, double pad, double tile, double tileGap, double rowGap, string label,
             int current, int min, int max, bool inert, string key, Action<int> onChanged)
         {
             ElementBounds labelBounds = ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20);
@@ -497,9 +503,11 @@ namespace Layout.UI
                 return;
             }
 
-            // 76 px matches the paired-with-Sides layout (AddNumberPairControl.field1W) so the standalone
-            // Divisions field is the same size in both layouts (v0.1.24, human-requested).
-            const double fieldH = 30, fieldW = 76;
+            // The field spans exactly the first TWO tile columns of the icon rows above (its up/down
+            // spinners render INSIDE these bounds at the right edge), so both its left edge and the
+            // arrows' right edge land on the tile grid (0.2.18, human-requested).
+            const double fieldH = 30;
+            double fieldW = 2 * tile + tileGap;
             ElementBounds fieldBounds = ElementBounds.Fixed(labelW + pad, y + (tile - fieldH) / 2, fieldW, fieldH);
             c.AddNumberInput(fieldBounds, text => OnNumberTyped(text, key + ":text", onChanged, min, max), font, key + ":text");
 
@@ -513,13 +521,19 @@ namespace Layout.UI
         // inputs, wheel plumbing, and clamp handling as the single-field row; the second label is compact.
         private void AddNumberPairControl(
             GuiComposer c, CairoFont labelFont, CairoFont font, ref double y,
-            double labelW, double pad, double tile, double rowGap,
+            double labelW, double pad, double tile, double tileGap, double rowGap,
             string label1, int current1, int min1, int max1, string key1, Action<int> onChanged1,
             string label2, int current2, int min2, int max2, string key2, Action<int> onChanged2,
             bool inert)
         {
-            // 0.1.18: fields narrowed (90 → 76) so the second label has room and never wraps.
-            const double fieldH = 30, field1W = 76, field2W = 76, label2W = 52;
+            // 0.2.18 (human-requested): everything sits on the icon rows' tile grid — the Divisions field
+            // spans tile columns 0–1, the Sides label takes column 2, and the Sides field spans columns
+            // 3–4, so every field edge (spinner arrows included — they render inside the field bounds)
+            // lines up with the tiles above.
+            const double fieldH = 30;
+            double fieldW = 2 * tile + tileGap;
+            double col2X = labelW + pad + 2 * (tile + tileGap);
+            double col3X = labelW + pad + 3 * (tile + tileGap);
 
             c.AddStaticText(label1, Centered(labelFont), ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20));
 
@@ -528,24 +542,22 @@ namespace Layout.UI
                 c.AddStaticText(current1 > 1 ? current1.ToString() : "Off", labelFont,
                     ElementBounds.Fixed(labelW + pad, y + (tile - 16) / 2, 60, 20));
                 c.AddStaticText(label2, labelFont,
-                    ElementBounds.Fixed(labelW + pad + 96, y + (tile - 16) / 2, label2W, 20));
+                    ElementBounds.Fixed(col2X, y + (tile - 16) / 2, tile, 20));
                 c.AddStaticText(current2.ToString(), labelFont,
-                    ElementBounds.Fixed(labelW + pad + 96 + label2W + pad, y + (tile - 16) / 2, 60, 20));
+                    ElementBounds.Fixed(col3X, y + (tile - 16) / 2, 60, 20));
                 y += tile + rowGap;
                 return;
             }
 
-            double x = labelW + pad;
-            c.AddNumberInput(ElementBounds.Fixed(x, y + (tile - fieldH) / 2, field1W, fieldH),
+            c.AddNumberInput(ElementBounds.Fixed(labelW + pad, y + (tile - fieldH) / 2, fieldW, fieldH),
                 text => OnNumberTyped(text, key1 + ":text", onChanged1, min1, max1), font, key1 + ":text");
             _pendingFieldText.Add((key1 + ":text", current1 > 0 ? current1.ToString() : min1.ToString()));
             _divWheelFields.Add((key1 + ":text", onChanged1, min1, max1));
             _numberFieldValues[key1 + ":text"] = current1;
-            x += field1W + 8;
 
-            c.AddStaticText(label2, labelFont, ElementBounds.Fixed(x, y + (tile - 16) / 2, label2W, 20));
-            x += label2W + pad;
-            c.AddNumberInput(ElementBounds.Fixed(x, y + (tile - fieldH) / 2, field2W, fieldH),
+            c.AddStaticText(label2, Centered(labelFont),
+                ElementBounds.Fixed(col2X, y + (tile - 16) / 2, tile, 20));
+            c.AddNumberInput(ElementBounds.Fixed(col3X, y + (tile - fieldH) / 2, fieldW, fieldH),
                 text => OnNumberTyped(text, key2 + ":text", onChanged2, min2, max2), font, key2 + ":text");
             _pendingFieldText.Add((key2 + ":text", current2 > 0 ? current2.ToString() : min2.ToString()));
             _divWheelFields.Add((key2 + ":text", onChanged2, min2, max2));

@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 4;
+        public const int ProtocolVersion = 5;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -266,17 +266,24 @@ namespace Layout.Network
         [ProtoMember(3)] public int TotalVoxelCap;
         [ProtoMember(4)] public int ProtocolVersion;
         [ProtoMember(5)] public bool AllowClientOnlyMode;
+        // F5 refill channels (protocol 5, additive): whether this server permits the hotbar / inventory
+        // convenience refills. Ground-storage refill needs no flag — it is always allowed.
+        [ProtoMember(6)] public bool AllowHotbarChalkRefill;
+        [ProtoMember(7)] public bool AllowInventoryChalkRefill;
 
         public GuideBulkSyncPacket() { }
 
         public GuideBulkSyncPacket(GuideDataDto[] guides, int perGuideVoxelCap, int totalVoxelCap,
-            bool allowClientOnlyMode = false)
+            bool allowClientOnlyMode = false,
+            bool allowHotbarChalkRefill = false, bool allowInventoryChalkRefill = false)
         {
             Guides = guides;
             PerGuideVoxelCap = perGuideVoxelCap;
             TotalVoxelCap = totalVoxelCap;
             ProtocolVersion = LayoutChannel.ProtocolVersion;
             AllowClientOnlyMode = allowClientOnlyMode;
+            AllowHotbarChalkRefill = allowHotbarChalkRefill;
+            AllowInventoryChalkRefill = allowInventoryChalkRefill;
         }
     }
 
@@ -836,6 +843,28 @@ namespace Layout.Network
         public ChalkChargePacket(int cost) { Cost = cost; }
     }
 
+    /// <summary>
+    /// Client → server (F5 inventory refill, protocol 5). The player right-clicked a held Chalking Powder
+    /// stack onto a Chalking Kit's inventory slot; the server re-validates everything — the channel is
+    /// permitted, the named slot really holds a kit, the player's cursor really holds powder — then
+    /// consumes one powder and adds its chalk. Sent only after the client's own pre-checks pass, so a
+    /// rejection here is a stale/hostile packet and is dropped silently.
+    /// </summary>
+    [ProtoContract]
+    public class ChalkInventoryRefillPacket
+    {
+        [ProtoMember(1)] public string InventoryId;
+        [ProtoMember(2)] public int SlotId;
+
+        public ChalkInventoryRefillPacket() { }
+
+        public ChalkInventoryRefillPacket(string inventoryId, int slotId)
+        {
+            InventoryId = inventoryId;
+            SlotId = slotId;
+        }
+    }
+
     // ----------------------------------------------------------------------------------------------
     //  Registration — the single source of truth for type order on BOTH sides
     // ----------------------------------------------------------------------------------------------
@@ -910,7 +939,9 @@ namespace Layout.Network
             typeof(ClientPlacementModeRequestPacket),
             typeof(ClientGuidePushPacket),
             // F5 chalk durability (protocol 4)
-            typeof(ChalkChargePacket)
+            typeof(ChalkChargePacket),
+            // F5 inventory refill (protocol 5)
+            typeof(ChalkInventoryRefillPacket)
         };
     }
 }

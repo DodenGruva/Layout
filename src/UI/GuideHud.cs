@@ -159,6 +159,13 @@ namespace Layout.UI
 
         public void SetExaminedGuide(Guid? guideId)
         {
+            // The controller feeds this EVERY tick (33 Hz). Bail when the target hasn't changed, or the
+            // measurement cache below is wiped each tick and a huge guide re-generates its whole voxel set
+            // 30+ times a second just from being hovered (invisible on small guides; found via the
+            // ~100-block sphere, 0.2.18). Server-side updates to the examined guide still invalidate via
+            // OnGuideAddedOrUpdated.
+            if (guideId == _examinedGuide) return;
+
             _examinedGuide = guideId;
             _measuredGuide = Guid.Empty; // force a re-measure for the new target
             RefreshText();

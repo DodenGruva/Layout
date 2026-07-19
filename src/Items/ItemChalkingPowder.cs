@@ -88,9 +88,16 @@ namespace Layout.Items
             if (kit == null)
             {
                 if (notifyFailure && api is ICoreClientAPI capi)
-                    capi.TriggerIngameError(this, "layout-nokit", kitExists
-                        ? "The Chalking Kit is already full."
-                        : "No Chalking Kit in your hotbar to refill.");
+                {
+                    if (!byEntity.Controls.ShiftKey && !HotbarRefillAllowed())
+                        capi.TriggerIngameError(this, "layout-refilloff",
+                            "Hotbar refill is off here. Set the kit down and Shift+right-click it with powder, "
+                            + "or ask the server to enable allowHotbarChalkRefill.");
+                    else
+                        capi.TriggerIngameError(this, "layout-nokit", kitExists
+                            ? "The Chalking Kit is already full."
+                            : "No Chalking Kit in your hotbar to refill.");
+                }
                 return false;
             }
 
@@ -168,8 +175,20 @@ namespace Layout.Items
                 return null;
             }
 
+            // Hotbar convenience path — server-gated (0.2.21). The ground-storage path above is always
+            // allowed; only this held-powder-refills-a-hotbar-kit shortcut is opt-in.
+            if (!HotbarRefillAllowed())
+            {
+                kitExists = false;
+                return null;
+            }
             return FindKitSlot(player, out kitExists);
         }
+
+        /// <summary>Server refill policy, resolved per side via the ModSystem (server config or the
+        /// value synced to the client). Ground-storage refill is not gated by this.</summary>
+        private bool HotbarRefillAllowed() =>
+            api.ModLoader.GetModSystem<Layout.LayoutModSystem>()?.HotbarChalkRefillAllowed ?? false;
 
         /// <summary>True when the aimed block (or the one above it — piles report the block under them)
         /// is a ground storage holding a Chalking Kit, full or not.</summary>

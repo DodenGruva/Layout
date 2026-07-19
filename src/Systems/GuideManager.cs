@@ -297,12 +297,13 @@ namespace Layout.Systems
             if (start == null || end == null) return GuideOperationResult.Invalid();
             if (!GuideData.IsValidVoxelScale(settings.Scale)) return GuideOperationResult.Invalid();
 
-            // 3D volumes are always Volumetric and carry no division marks (0.1.20 sphere, 0.1.21 family)
-            // — normalise defensively whatever a client sends (a lingering Surface/Divisions default).
+            // 3D volumes are always Volumetric, carry no division marks (0.1.20/0.1.21), and are always
+            // HOLLOW shells (0.2.17 — exposed-face meshing made filled interiors emit no geometry, so fill
+            // bought nothing visible at an R³ voxel cost) — normalise defensively whatever a client sends.
             if (GuideShapeTypes.IsVolume(shapeType)
-                && (settings.Mode == ProjectionMode.Surface || settings.Divisions != 0))
+                && (settings.Mode == ProjectionMode.Surface || settings.Divisions != 0 || settings.Filled))
                 settings = new GuideRenderSettings(settings.Scale, ProjectionMode.Volumetric,
-                    settings.Plane, settings.Filled, 0);
+                    settings.Plane, false, 0);
 
             // Guide-COUNT caps first — cheap, and nothing has been built yet (Guide is null in the result).
             if (_maxGuidesWorldWide > 0 && _guides.Count >= _maxGuidesWorldWide)
@@ -796,6 +797,9 @@ namespace Layout.Systems
         public GuideOperationResult SetFilled(Guid id, bool filled)
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
+            // Fill doesn't apply to 3D volumes (0.2.17 — always hollow shells); the GUI greys the tiles,
+            // this is the server-side gate against a stale packet.
+            if (GuideShapeTypes.IsVolume(g.ShapeType)) return GuideOperationResult.Invalid(g);
             var shape = _shapes[id];
 
             bool oldFilled = g.IsFilled;

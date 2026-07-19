@@ -92,8 +92,13 @@ namespace Layout.Guide
     {
         /// <summary>
         /// True for the 3D volumes (Sphere/Dome/Cylinder/Cone/Box): always Volumetric (Surface projection
-        /// is meaningless and gated out everywhere), and Divisions don't apply. Explicit switch — never
-        /// infer from enum ordering, since future 2D shapes may be appended after the volumes.
+        /// is meaningless and gated out everywhere), Divisions don't apply, and — since 0.2.17 — they are
+        /// always HOLLOW shells: exposed-face meshing makes a filled interior emit no geometry at all, so
+        /// "filled" bought nothing visible at an R³ voxel/lag cost (human-directed retirement). The gate is
+        /// three-deep — the GUI greys the Fill tiles, GuideManager rejects/normalises Fill on volumes, and
+        /// every volume shape coerces <c>filled = false</c> at voxel generation, which also lightens legacy
+        /// IsFilled=true guides in old saves automatically. Explicit switch — never infer from enum
+        /// ordering, since future 2D shapes may be appended after the volumes.
         /// </summary>
         public static bool IsVolume(GuideShapeType t) => t switch
         {

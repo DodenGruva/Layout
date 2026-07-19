@@ -63,6 +63,20 @@ namespace Layout
         public GuideToolGui ToolGui { get; private set; }
         public GuideHud Hud { get; private set; }
         public GuideToolController Controller { get; private set; }
+
+        /// <summary>
+        /// F5 refill-channel policy, resolved per side: the server reads its own config; the client reads
+        /// the value synced on join. Ground-storage refill is always allowed and not gated by these.
+        /// </summary>
+        public bool HotbarChalkRefillAllowed =>
+            _sapi != null ? (ServerConfig?.AllowHotbarChalkRefill ?? false)
+                          : (ClientNet?.HotbarChalkRefillAllowed ?? false);
+
+        /// <summary>Companion to <see cref="HotbarChalkRefillAllowed"/> for the inventory cursor-drop refill.</summary>
+        public bool InventoryChalkRefillAllowed =>
+            _sapi != null ? (ServerConfig?.AllowInventoryChalkRefill ?? false)
+                          : (ClientNet?.InventoryChalkRefillAllowed ?? false);
+
         private long _modeDetectionTickId;
         private float _modeDetectionElapsedSeconds;
         private const float ModeDetectionGraceSeconds = 3f;
@@ -113,7 +127,9 @@ namespace Layout
                 ServerConfig.RequiredPrivilege,
                 ServerConfig.AdminCanOverrideLocks,
                 ServerConfig.AllowClientOnlyMode,
-                ServerConfig.EnableChalkDurability);
+                ServerConfig.EnableChalkDurability,
+                ServerConfig.AllowHotbarChalkRefill,
+                ServerConfig.AllowInventoryChalkRefill);
 
             sapi.Logger.Notification(
                 "[Layout] Server started. Caps: {0} voxels/guide, {1} total, {2} guides/player, {3} world-wide (0 = unlimited); undo depth {4}; privilege '{5}'; admin lock-override {6}; client-only mode {7}.",

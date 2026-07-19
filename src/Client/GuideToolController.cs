@@ -136,6 +136,7 @@ namespace Layout.Client
             _net.GuideAddedOrUpdated += OnGuideAddedOrUpdated;
             _net.AuthorityModeChanged += OnAuthorityModeChanged;
             _capi.Input.InWorldAction += OnInWorldAction;
+            _capi.Event.MouseDown += OnMouseDown;      // F5 inventory refill (independent of the tool)
 
             _tickId = _capi.Event.RegisterGameTickListener(OnTick, TickIntervalMs);
         }
@@ -255,6 +256,32 @@ namespace Layout.Client
             return c != null && c.ShiftKey && c.CtrlKey;
         }
 
+        // F5 inventory refill (0.2.21): right-click a held Chalking Powder stack (on the mouse cursor) onto a
+        // Chalking Kit in an open inventory. Works regardless of whether the Layout tool is held, and only
+        // when the server permits it. The server re-validates and, if its own default swap somehow ran
+        // first, simply refuses — so the worst case is a harmless swap, never a corrupted inventory (see
+        // ServerNetworkHandler.OnInventoryChalkRefill). Setting Handled suppresses the default swap when we
+        // win the ordering race.
+        private void OnMouseDown(MouseEvent args)
+        {
+            if (args.Button != EnumMouseButton.Right || args.Handled) return;
+            if (!_net.InventoryChalkRefillAllowed) return;
+
+            var im = _capi.World?.Player?.InventoryManager;
+            ItemStack cursor = im?.MouseItemSlot?.Itemstack;
+            if (!(cursor?.Collectible is Items.ItemChalkingPowder) || cursor.StackSize <= 0) return;
+
+            ItemSlot hovered = im.CurrentHoveredSlot;
+            ItemStack kit = hovered?.Itemstack;
+            if (!(kit?.Collectible is Items.ItemGuideTool)) return;
+            if (Items.ItemGuideTool.GetChalk(kit) >= kit.Collectible.GetMaxDurability(kit)) return; // full: leave it
+
+            var inv = hovered.Inventory;
+            if (inv == null) return;
+            _net.SendInventoryChalkRefill(inv.InventoryID, inv.GetSlotId(hovered));
+            args.Handled = true;
+        }
+
         private void OnHeldChanged(bool held)
         {
             if (held)
@@ -335,6 +362,7 @@ namespace Layout.Client
                         // volumes (cylinder/cone/box) project the height onto their axis themselves, so
                         // SHIFT-centering doesn't apply to them.
                         if (ShiftHeld() && _draft.Shape == GuideShapeType.Triangle) aim = CenterApexOnBase(aim);
+                        aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
                         _hud.SetDraftAim(aim);
                         _renderer.SetDraftPreview(_draft.DraftStart, _draft.DraftSecond,
                             BuildSettings(blockSel, aim),
@@ -344,6 +372,7 @@ namespace Layout.Client
                     else
                     {
                         if (CtrlHeld()) aim = ConstrainToStart(aim);
+                        aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
                         _hud.SetDraftAim(aim);
                         _renderer.SetDraftPreview(_draft.DraftStart, aim, BuildSettings(blockSel, aim),
                             _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
@@ -521,6 +550,69 @@ namespace Layout.Client
 
             return GuideShapeVoxelCounting.CountUpTo(
                 shape, guide.VoxelScale, guide.IsFilled, cap) <= cap;
+        }
+
+        /// <summary>
+        /// Draft-ghost cap clamp (0.2.19): pulling a draft stops growing at the per-guide voxel cap.
+        /// It used to *appear* to do this only because over-budget ghosts were too heavy to rebuild;
+        /// Stage-A meshing made them cheap and the accidental stop vanished. This is the real mechanism,
+        /// mirroring <see cref="ClampDragTargetToPerGuideCap"/>: the aimed point (the second anchor — or
+        /// the apex/height of a three-click draft) binary-searches back toward its stationary reference to
+        /// the largest size that still fits, so the ghost never shows an un-placeable guide and the
+        /// completing click lands exactly on the cap. Chain drafts are excluded (corners are discrete
+        /// clicks; the completion pre-check covers them).
+        /// </summary>
+        private Vec3d ClampDraftAimToPerGuideCap(Vec3d aim)
+        {
+            if (aim == null || _draft.DraftStart == null || DraftManager.IsChainShape(_draft.Shape))
+                return aim;
+
+            int configuredCap = _net.PerGuideVoxelCap;
+            int cap = configuredCap > 0
+                ? Math.Min(configuredCap, GuideManager.HardVoxelCeiling)
+                : GuideManager.HardVoxelCeiling;
+
+            if (DraftCandidateFits(aim, cap)) return aim;
+
+            Vec3d anchorRef = _draft.AwaitingApex && _draft.DraftSecond != null
+                ? _draft.DraftSecond
+                : _draft.DraftStart;
+            Vec3d low = new Vec3d(anchorRef.X, anchorRef.Y, anchorRef.Z);
+            Vec3d high = aim;
+            if (!DraftCandidateFits(low, cap)) return low;   // even degenerate over cap: stop growing
+
+            for (int i = 0; i < CapClampIterations; i++)
+            {
+                var mid = new Vec3d(
+                    (low.X + high.X) * 0.5,
+                    (low.Y + high.Y) * 0.5,
+                    (low.Z + high.Z) * 0.5);
+                if (DraftCandidateFits(mid, cap)) low = mid;
+                else high = mid;
+            }
+            return low;
+        }
+
+        // Builds the candidate draft exactly as the HUD measure / completion pre-check do, and counts with
+        // the shared threshold counter — an accepted ghost size therefore also passes the server's check.
+        private bool DraftCandidateFits(Vec3d candidate, int cap)
+        {
+            try
+            {
+                Vec3d start = _draft.DraftStart;
+                Vec3d end = _draft.AwaitingApex ? _draft.DraftSecond : candidate;
+                IGuideShape shape = ShapeFactory.Create(
+                    _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis, start, end,
+                    sides: _draft.Sides);
+                if (_draft.AwaitingApex && shape.ControlPoints.Count > 2)
+                    shape.MoveControlPoint(2, candidate);
+
+                return GuideShapeVoxelCounting.CountUpTo(shape, _draft.Scale, _draft.Filled, cap) <= cap;
+            }
+            catch
+            {
+                return true;   // the clamp must never break drafting; the completion pre-check backstops
+            }
         }
 
         // ==========================================================================================
@@ -848,6 +940,11 @@ namespace Layout.Client
                     apex = CenterApexOnBase(apex);   // 0.1.15: SHIFT centres a triangle apex on the base
                 end = _draft.DraftSecond;            // the base was fixed by the second click
             }
+
+            // 0.2.19: the completing click lands on the same clamped (≤ per-guide cap) size the ghost
+            // showed — clicking while pulled past the cap places AT the cap instead of erroring out.
+            if (_draft.AwaitingApex) apex = ClampDraftAimToPerGuideCap(apex);
+            else end = ClampDraftAimToPerGuideCap(end);
 
             // SHIFT at the completing click bakes the inverted (upside-down) form — only meaningful for
             // the shapes that derive an "up" (arch family, equilateral triangle, Dome); apex-clicked
@@ -1678,6 +1775,7 @@ namespace Layout.Client
             _net.GuideAddedOrUpdated -= OnGuideAddedOrUpdated;
             _net.AuthorityModeChanged -= OnAuthorityModeChanged;
             _capi.Input.InWorldAction -= OnInWorldAction;
+            _capi.Event.MouseDown -= OnMouseDown;
 
             if (_tickId != 0)
             {

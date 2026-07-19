@@ -78,6 +78,17 @@ namespace Layout.Network
         /// <summary>The server's active total voxel cap (synced on join).</summary>
         public int TotalVoxelCap => AuthorityMode == ClientAuthorityMode.Local ? 0 : _totalVoxelCap;
 
+        /// <summary>Server policy (synced on join, default false): hotbar refills of the Chalking Kit
+        /// with held powder. Ground-storage refill is always allowed and needs no flag.</summary>
+        public bool HotbarChalkRefillAllowed => _hotbarChalkRefillAllowed;
+
+        /// <summary>Server policy (synced on join, default false): refilling by right-clicking a held
+        /// powder stack onto a kit's inventory slot.</summary>
+        public bool InventoryChalkRefillAllowed => _inventoryChalkRefillAllowed;
+
+        private bool _hotbarChalkRefillAllowed;
+        private bool _inventoryChalkRefillAllowed;
+
         public bool IsLocalGuide(Guid id) => _localGuideIds.Contains(id);
 
         // -- Events --------------------------------------------------------------------------------
@@ -295,6 +306,8 @@ namespace Layout.Network
 
             _perGuideVoxelCap = p.PerGuideVoxelCap;
             _totalVoxelCap = p.TotalVoxelCap;
+            _hotbarChalkRefillAllowed = p.AllowHotbarChalkRefill;
+            _inventoryChalkRefillAllowed = p.AllowInventoryChalkRefill;
 
             GuidesBulkSynced?.Invoke();
         }
@@ -575,6 +588,17 @@ namespace Layout.Network
                 (int)shapeType, (int)constraint, (int)shapePlaneAxis,
                 inverted, sides, apex == null ? null : Vec3Dto.From(apex),
                 chainDto, closed));
+        }
+
+        /// <summary>
+        /// F5 (protocol 5): ask the server to refill the kit in the named inventory slot from the powder on
+        /// the player's cursor. Only sent when the client's own checks pass (feature allowed, cursor is
+        /// powder, slot is a non-full kit); the server re-validates authoritatively.
+        /// </summary>
+        public void SendInventoryChalkRefill(string inventoryId, int slotId)
+        {
+            if (string.IsNullOrEmpty(inventoryId)) return;
+            _channel.SendPacket(new ChalkInventoryRefillPacket(inventoryId, slotId));
         }
 
         /// <summary>Broadcast the local draft start anchor to other players.</summary>

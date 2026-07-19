@@ -97,6 +97,16 @@ namespace Layout.Systems
         /// markers rather than its full body. The public/private palette and coplanarity cue are preserved.
         /// </summary>
         public bool Hidden = false;
+
+        /// <summary>
+        /// World-solidity probe for the z-fight clearances (0.2.16): given the CELL-space (1/16) coords of
+        /// the cell just beyond an exposed grid-coplanar face, returns whether a solid (non-air) world block
+        /// occupies it. Only such faces are pulled off the grid plane — a face bordering AIR has nothing to
+        /// z-fight and stays exactly on the grid, so stair-step faces at block lines never open slits (the
+        /// filled-volume seam finding). Null = treat every neighbour as solid (conservative: clearances
+        /// everywhere), which is also the deterministic default the mesh tests rely on.
+        /// </summary>
+        public Func<int, int, int, bool> IsNeighborSolid = null;
     }
 
     /// <summary>
@@ -216,8 +226,10 @@ namespace Layout.Systems
         // the human has accepted (0.2.11). The lowest layer's bottom face is additionally always lifted,
         // covering guides resting on non-grid tops (slabs, chiseled blocks). Tuned by playtest: 0.004 was
         // safe but seamy; 0.001 shimmered when moving toward/away from the guide (depth precision falls
-        // with distance); 0.002 is the settled value (0.2.13).
-        private const float BlockPlaneInset = 0.002f;
+        // with distance); 0.003 per the human's call (0.2.14). NOTE: since exposed-face meshing (0.2.14),
+        // faces BETWEEN adjacent guide voxels no longer exist at all — this inset now only ever separates
+        // a guide face from a world block face, so it produces no interior seams whatsoever.
+        private const float BlockPlaneInset = 0.003f;
 
         // Coplanarity tolerance, world blocks. Anchors placed by voxel/block targeting (and Shift-to-constrain)
         // land on exact grid coordinates, so an effectively-exact epsilon is right: a clean foot reads clean, a
@@ -288,7 +300,43 @@ namespace Layout.Systems
             for (int i = 0; i < voxels.Count; i++)
                 if (voxels[i].Y < minY) minY = voxels[i].Y;
 
-            MeshData mesh = NewMesh(voxels.Count);
+            // EXPOSED-FACE MESHING (Stage A of the SESSION_14 large-guide mesh plan, 0.2.14). The ordinary
+            // Volumetric cube path no longer emits six faces per voxel: a presence set of the RENDERED
+            // cells (hidden-filtered, so a hidden guide's anchor cubes stay complete) lets each voxel emit
+            // only the faces whose neighbouring cell is absent. Faces shared by adjacent voxels — the vast
+            // majority in filled bodies and shell laterals — are never generated at all: per-voxel role
+            // colours are preserved exactly (each face belongs to its own voxel), and the mesh is allocated
+            // EXACTLY from a face pre-count. The Surface tile and slab paths stay on the legacy
+            // whole-box/quad path per the staged plan.
+            bool cubePath = !surface && options.SurfaceSlabThickness <= 0f;
+            HashSet<(int, int, int)> present = null;
+            MeshData mesh;
+            if (cubePath)
+            {
+                present = new HashSet<(int, int, int)>(voxels.Count);
+                for (int i = 0; i < voxels.Count; i++)
+                {
+                    VoxelPosition p = voxels[i];
+                    if (options.Hidden && p.Type != VoxelRenderType.Anchor) continue;
+                    present.Add((p.X, p.Y, p.Z));
+                }
+
+                int faces = 0;
+                foreach ((int px, int py, int pz) in present)
+                {
+                    if (!present.Contains((px - scale, py, pz))) faces++;
+                    if (!present.Contains((px + scale, py, pz))) faces++;
+                    if (!present.Contains((px, py - scale, pz))) faces++;
+                    if (!present.Contains((px, py + scale, pz))) faces++;
+                    if (!present.Contains((px, py, pz - scale))) faces++;
+                    if (!present.Contains((px, py, pz + scale))) faces++;
+                }
+                mesh = NewMeshForFaces(faces);
+            }
+            else
+            {
+                mesh = NewMesh(voxels.Count);
+            }
 
             for (int vi = 0; vi < voxels.Count; vi++)
             {
@@ -362,20 +410,50 @@ namespace Layout.Systems
                     float ly = (float)(v.Y / 16.0 - oy) + iy;
                     float lz = (float)(v.Z / 16.0 - oz) + iz;
 
-                    // Z-fight clearance: inset every face sitting exactly on a block-grid plane, plus the
-                    // lowest layer's bottom face (see BlockPlaneInset). `& 15` == "multiple of 16", valid
-                    // for negatives too. Face coordinates: min face = v coord, max face = v coord + scale.
-                    float fx0 = (v.X & 15) == 0 ? BlockPlaneInset : 0f;
-                    float fx1 = ((v.X + scale) & 15) == 0 ? BlockPlaneInset : 0f;
-                    float fy0 = (v.Y & 15) == 0 || v.Y == minY ? BlockPlaneInset : 0f;
-                    float fy1 = ((v.Y + scale) & 15) == 0 ? BlockPlaneInset : 0f;
-                    float fz0 = (v.Z & 15) == 0 ? BlockPlaneInset : 0f;
-                    float fz1 = ((v.Z + scale) & 15) == 0 ? BlockPlaneInset : 0f;
+                    // Which faces are exposed (no neighbouring cell) — only those are emitted below.
+                    bool expXn = !present.Contains((v.X - scale, v.Y, v.Z));
+                    bool expXp = !present.Contains((v.X + scale, v.Y, v.Z));
+                    bool expYn = !present.Contains((v.X, v.Y - scale, v.Z));
+                    bool expYp = !present.Contains((v.X, v.Y + scale, v.Z));
+                    bool expZn = !present.Contains((v.X, v.Y, v.Z - scale));
+                    bool expZp = !present.Contains((v.X, v.Y, v.Z + scale));
 
-                    AddBox(mesh, lx + fx0, ly + fy0, lz + fz0,
-                        edge - 2f * ix - fx0 - fx1,
-                        edge - 2f * iy - fy0 - fy1,
-                        edge - 2f * iz - fz0 - fz1, color);
+                    // Z-fight clearance: inset a face sitting exactly on a block-grid plane (`& 15` ==
+                    // "multiple of 16", valid for negatives; min face = v coord, max face = v coord +
+                    // scale), plus the lowest layer's bottom face — but ONLY when that face is EXPOSED
+                    // and a SOLID world block sits across the plane. Where a neighbour cell is present,
+                    // the box must run flush or the surviving faces open a slit along every block line
+                    // (the 0.2.14 seam bug); where the neighbour is AIR there is nothing to z-fight, so
+                    // the face stays exactly on the grid and stair-steps never open slits either (the
+                    // 0.2.15 filled-volume seam finding).
+                    Func<int, int, int, bool> solid = options.IsNeighborSolid;
+                    float fx0 = expXn && (v.X & 15) == 0
+                        && (solid == null || solid(v.X - scale, v.Y, v.Z)) ? BlockPlaneInset : 0f;
+                    float fx1 = expXp && ((v.X + scale) & 15) == 0
+                        && (solid == null || solid(v.X + scale, v.Y, v.Z)) ? BlockPlaneInset : 0f;
+                    float fy0 = expYn && ((v.Y & 15) == 0 || v.Y == minY)
+                        && (solid == null || solid(v.X, v.Y - scale, v.Z)) ? BlockPlaneInset : 0f;
+                    float fy1 = expYp && ((v.Y + scale) & 15) == 0
+                        && (solid == null || solid(v.X, v.Y + scale, v.Z)) ? BlockPlaneInset : 0f;
+                    float fz0 = expZn && (v.Z & 15) == 0
+                        && (solid == null || solid(v.X, v.Y, v.Z - scale)) ? BlockPlaneInset : 0f;
+                    float fz1 = expZp && ((v.Z + scale) & 15) == 0
+                        && (solid == null || solid(v.X, v.Y, v.Z + scale)) ? BlockPlaneInset : 0f;
+
+                    // The inset box this voxel occupies.
+                    float x0 = lx + fx0, y0 = ly + fy0, z0 = lz + fz0;
+                    float x1 = lx + edge - 2f * ix - fx1;
+                    float y1 = ly + edge - 2f * iy - fy1;
+                    float z1 = lz + edge - 2f * iz - fz1;
+
+                    // Emit only the exposed faces, wound to match the outward (CCW) orientation the old
+                    // cube path used.
+                    if (expYn) AddQuad(mesh, x0, y0, z0, x0, y0, z1, x1, y0, z1, x1, y0, z0, color); // bottom −Y
+                    if (expYp) AddQuad(mesh, x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, color); // top +Y
+                    if (expZn) AddQuad(mesh, x0, y0, z0, x1, y0, z0, x1, y1, z0, x0, y1, z0, color); // front −Z
+                    if (expZp) AddQuad(mesh, x0, y0, z1, x0, y1, z1, x1, y1, z1, x1, y0, z1, color); // back +Z
+                    if (expXn) AddQuad(mesh, x0, y0, z0, x0, y1, z0, x0, y1, z1, x0, y0, z1, color); // left −X
+                    if (expXp) AddQuad(mesh, x1, y0, z0, x1, y0, z1, x1, y1, z1, x1, y1, z0, color); // right +X
                 }
             }
 
@@ -557,6 +635,15 @@ namespace Layout.Systems
         {
             int vCap = voxelCount > 0 ? voxelCount * 8 : 4;
             int iCap = voxelCount > 0 ? voxelCount * 36 : 6;
+            return new MeshData(vCap, iCap, false, true, true, false);
+        }
+
+        // Exact allocation for the exposed-face path (Stage A): 4 vertices + 6 indices per emitted face —
+        // the pre-count makes over-allocation and growth reallocations both impossible.
+        private static MeshData NewMeshForFaces(int faceCount)
+        {
+            int vCap = faceCount > 0 ? faceCount * 4 : 4;
+            int iCap = faceCount > 0 ? faceCount * 6 : 6;
             return new MeshData(vCap, iCap, false, true, true, false);
         }
 

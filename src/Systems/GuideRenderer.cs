@@ -405,7 +405,8 @@ namespace Layout.Systems
                 SurfaceSlabSide = slabSide,
                 GrabbedPoint = null,
                 PrivateAnchors = _network.ServerLayoutAvailable
-                    && _network.AuthorityMode == ClientAuthorityMode.Local
+                    && _network.AuthorityMode == ClientAuthorityMode.Local,
+                IsNeighborSolid = NeighborSolidProbe
             };
             AssignAnchors(shape.ControlPoints, options);
 
@@ -541,6 +542,19 @@ namespace Layout.Systems
         // Samples up to five voxels spread along the guide and counts solid world blocks at their
         // positions projected into the given layer. Air has block id 0; anything else counts as solid —
         // plants slightly over-count, but the vote is averaged over several probes.
+        // Cell-space (1/16) probe behind the mesh builder's z-fight clearances (0.2.16): is the world block
+        // containing the neighbouring cell non-air? Same solidity semantics as the Surface probe below.
+        // Unloaded chunks report solid (conservative — keep the clearance; the area is invisible anyway).
+        private bool NeighborSolidProbe(int x16, int y16, int z16)
+        {
+            IBlockAccessor accessor = _capi.World?.BlockAccessor;
+            if (accessor == null) return true;
+            var pos = new BlockPos(x16 >> 4, y16 >> 4, z16 >> 4);
+            if (accessor.GetChunkAtBlockPos(pos) == null) return true;
+            var block = accessor.GetBlock(pos);
+            return block != null && block.Id != 0;
+        }
+
         private int CountSolidProbes(List<VoxelPosition> voxels, PlaneAxis axis, int layer, int scale, ref bool reliable)
         {
             var accessor = _capi.World.BlockAccessor;
@@ -697,7 +711,8 @@ namespace Layout.Systems
                 SurfaceSlabSide = slabSide,
                 GrabbedPoint = ResolveGrabbedPoint(guide, points),
                 PrivateAnchors = _network.ServerLayoutAvailable
-                    && _network.IsLocalGuide(guide.Id)
+                    && _network.IsLocalGuide(guide.Id),
+                IsNeighborSolid = NeighborSolidProbe
             };
             AssignAnchors(points, options);
 

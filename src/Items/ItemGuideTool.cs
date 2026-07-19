@@ -23,23 +23,27 @@ namespace Layout.Items
     /// </remarks>
     public class ItemGuideTool : Item, IContainedMeshSource
     {
-        // --- Chalk-fill visuals: four models (empty / low / medium / full), each carrying its own
+        // --- Chalk-fill visuals: five models (empty / low / medium / high / full), each carrying its own
         // progressively-chalkier texture set, selected by remaining chalk. The itemtype's default shape IS
-        // the full model; the other three are tesselated lazily via ShapeTextureSource (which inserts
+        // the full model; the other four are tesselated lazily via ShapeTextureSource (which inserts
         // their textures into the BLOCK atlas — the same atlas BlockEntityDisplay hands to GenMesh, and a
         // valid source for held/GUI rendering since MultiTextureMeshRef carries per-mesh texture ids).
-        // Thresholds (human-confirmed, of 32): full ≥ 22, medium 11–21, low 1–10, empty 0.
-        private const int FillFullMin = 22;
+        // Thresholds (human-confirmed, of 32): FULL is reserved for a COMPLETELY full kit (0.2.20 — the
+        // pristine bag has to be earned; a refill that stops short shows High), high 22–31, medium 11–21,
+        // low 1–10, empty 0.
+        private const int FillHighMin = 22;
         private const int FillMediumMin = 11;
-        private static readonly string[] FillShapeNames = { "empty", "low", "medium", "full" };
+        private static readonly string[] FillShapeNames = { "empty", "low", "medium", "high", "full" };
+        private const int FillIndexFull = 4;
 
         private MultiTextureMeshRef[] _fillMeshRefs;   // client-only; index = fill state
 
-        /// <summary>The fill-state index (0 empty · 1 low · 2 medium · 3 full) for a kit stack.</summary>
+        /// <summary>The fill-state index (0 empty · 1 low · 2 medium · 3 high · 4 full) for a kit stack.</summary>
         public static int FillIndexFor(ItemStack stack)
         {
             int chalk = GetChalk(stack);
-            if (chalk >= FillFullMin) return 3;
+            if (stack != null && chalk >= stack.Collectible.GetMaxDurability(stack)) return FillIndexFull;
+            if (chalk >= FillHighMin) return 3;
             if (chalk >= FillMediumMin) return 2;
             return chalk >= 1 ? 1 : 0;
         }
@@ -51,7 +55,7 @@ namespace Layout.Items
             base.OnBeforeRender(capi, itemstack, target, ref renderinfo);
 
             int fill = FillIndexFor(itemstack);
-            if (fill == 3) return;                        // the itemtype's own shape is the full model
+            if (fill == FillIndexFull) return;            // the itemtype's own shape is the full model
 
             MultiTextureMeshRef mesh = GetFillMeshRef(capi, fill);
             if (mesh != null) renderinfo.ModelRef = mesh;
