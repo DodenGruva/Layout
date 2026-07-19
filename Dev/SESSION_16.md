@@ -122,11 +122,16 @@ to a harmless swap, never a corrupted inventory.
 
 ## 8. Open items / flags for the next session
 
-- **VERIFY the inventory refill in play.** Two things I could not confirm statically: (a) the `MouseDown`
-  vs GUI-swap ordering — if a right-click SWAPS powder↔kit instead of refilling, the hook lost the race and
-  needs a different hook; (b) the `InventoryID` round-trip (client `ItemSlot.Inventory.InventoryID` →
-  server `GetInventory(id)`) — if enabled inventory refill silently does nothing, the id format is the
-  suspect. Both fail safe (swap / no-op).
+- ~~**VERIFY the inventory refill in play.**~~ **RESOLVED — human-confirmed working.** Both statically
+  unconfirmable pieces hold in play: the `MouseDown` hook wins the ordering race against the default
+  slot-swap, and the `InventoryID` round-trip (client `ItemSlot.Inventory.InventoryID` → server
+  `GetInventory(id)`) resolves correctly. Hotbar refill confirmed too.
+- **Guide updates read well to other players in multiplayer — confirmed GOOD, and since AUDITED.** A guide
+  changing a few times per second reads correctly as "another player is moving that." Packet-rate audit
+  (`TODO.md` §A2) found nothing to fix: drafting sends ~2 packets total and no per-tick traffic, and the
+  continuous path (grab-and-reshape of a placed guide) is already capped at ≤10 Hz and skipped when the aim
+  hasn't moved. Note the observation was of that reshape path — a remote DRAFT renders only a static anchor
+  dot, never an evolving guide.
 - ~~`main` is at v0.2.13; v0.2.14–v0.2.21 are uncommitted~~ **— DONE: committed and pushed** (`6a48d2f`
   code, `b227d7d` docs).
 - **Large-guide mesh, Stage B is next** if Stage A's win isn't enough on the ~100-block sphere: per-guide

@@ -2,12 +2,12 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-19 against **v0.2.21**, committed and pushed on
-> `main` (`b227d7d`). Where this file and the code disagree, **the code wins** — treat this as a map, then
+> and the performance-relevant mechanics. Updated 2026-07-19 against **v0.2.23**, committed and pushed on
+> `main`. Where this file and the code disagree, **the code wins** — treat this as a map, then
 > read the `.cs` files it points at.
 >
-> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.3),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/16.md` (per-session
+> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.4),
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/17.md` (per-session
 > history), `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
 
@@ -15,30 +15,35 @@
 
 ## 1. TL;DR
 
-**Layout** is a mod for **Vintage Story 1.22.3** (C# / **.NET 10**). It is a CAD-like, voxel-resolution
+**Layout** is a mod for **Vintage Story 1.22.x** (C# / **.NET 10**). It is a CAD-like, voxel-resolution
 **construction-planning** tool: players place translucent geometric guide overlays in the world and build
 against them by hand. **The mod is visual-only — it never places, removes, or modifies blocks.** Public
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.2.21 on `main`, **playtested in multiplayer and vanilla-server fallback**.
+- **Status:** v0.2.23 on `main`, **playtested in multiplayer and vanilla-server fallback**.
   F4 (client-only / private guides) and F5 (**the Chalking Kit**: finite chalk
   durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
   **mesh pass Stage A (exposed-face meshing) has shipped** and **filled 3D volumes are retired** (always
   hollow shells now), so a ~100-block hollow Sphere draws only its outer skin.
 - **Size:** **68 source files** (`src/`), ~one asset tree, one `.csproj`.
 - **Data schema:** **DataVersion 8** (additive passive-lock-marker flag; pinned enums/default migration).
-- **Wire protocol:** **5** (append-only `ChalkInventoryRefillPacket` + two `GuideBulkSyncPacket` refill flags,
-  after the protocol-4 `ChalkChargePacket`).
+- **Wire protocol:** **6** (append-only `ChalkRefillPrefsPacket`, after the protocol-5
+  `ChalkInventoryRefillPacket` and protocol-4 `ChalkChargePacket`).
 - **Catalog:** **12 shape types**, shown as **18 picker tiles** — a full 2D family plus a **3D volume family**.
 - **The tool:** the **Chalking Kit** — 32-chalk durability (2D −1 / 3D −2, completed placements only; no
-  lockout at 0, the kit can never break), refilled with **Chalking Powder** (+4 each). Three refill channels:
-  ground-stored kit in place (always allowed) plus hotbar tap/hold and cursor-onto-inventory-slot, the latter
-  two **server-config opt-in** (v0.2.21). Private placements charge via a client-reported, server-validated
-  packet; creative exempt; `enableChalkDurability` server config. Five fill-state models (full=32 · high
-  22–31 · medium 11–21 · low 1–10 · empty 0) render in every context including ground storage.
-- **Active follow-up:** verify the v0.2.21 inventory refill in play (both failure modes fail safe); B-S9-1 is
-  substantially improved but repeated lock/drag/revert/unlock behavior still needs broader playtesting.
+  lockout at 0, the kit can never break). **32 is a HARD ceiling** (`ItemGuideTool.MaxChalk`, v0.2.23):
+  chalk is read straight off the stack attribute and clamped, and `GetMaxDurability`/`GetRemainingDurability`
+  are overridden *without calling base*, because base walks the collectible's BEHAVIORS — the hook other mods
+  (xskills) use to grant crafting-quality durability. Refilled with **Chalking Powder** (+4 each) via three
+  channels: ground-stored kit in place (always allowed) plus hotbar tap/hold and cursor-onto-inventory-slot,
+  the latter two **client-preference opt-in** (`layout-client.json`, v0.2.22 — a player setting, not server
+  policy). Private placements charge via a client-reported, server-validated packet; creative exempt;
+  `enableChalkDurability` server config. Five fill-state models (full=32 · high 22–31 · medium 11–21 ·
+  low 1–10 · empty 0) render in every context including ground storage.
+- **Active follow-up:** two verification debts — the 32-chalk ceiling has **not** been tested against xskills
+  itself, and 1.22.0 support is **declared, not tested** (built against 1.22.3). B-S9-1 is substantially
+  improved but repeated lock/drag/revert/unlock behavior still needs broader playtesting.
 - **Top performance task:** mesh **Stage A is done** — a ~100-block hollow Sphere now draws only its shell
   skin. Stage B (per-guide spatial chunks + culling) and Stage C (greedy face merging) remain, but only if
   the current win isn't enough. See §9 and `dev/SESSION_14.md` §6–§7 / `dev/SESSION_16.md`.
@@ -50,8 +55,10 @@ guides on servers without Layout and, when server policy permits, alongside publ
 ## 2. Build & run
 
 - **Build:** `dotnet build Layout.csproj` from the **repo root** (the folder containing `Layout.csproj`).
-- **Target:** `net10.0`, Vintage Story 1.22.3. References resolve via the `<VintagestoryDir>` csproj
-  property (default `C:\Users\Zech\AppData\Roaming\Vintagestory`) — change that one line for another install.
+- **Target:** `net10.0`, Vintage Story 1.22.x. References resolve via the `<VintagestoryDir>` csproj
+  property, which auto-detects the install: `-p:VintagestoryDir=…` → the `VINTAGE_STORY` env var → the
+  platform default (`%APPDATA%\Vintagestory` on Windows, `~/.local/share/vintagestory` otherwise). No edit is
+  needed for a normal install, and a wrong/missing path fails with one clear message naming the folder tried.
 - **Dependencies** (all ship with the game): `VintagestoryAPI.dll` (install root), `Newtonsoft.Json.dll`,
   `protobuf-net.dll`, `cairo-sharp.dll` (GUI icon glyphs) in `Lib\`, and `VSSurvivalMod.dll` (in the game's
   `Mods\`; `IContainedMeshSource` for ground-storage fill meshes). None are bundled into the mod zip.
@@ -75,7 +82,8 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── src/                        ← all 68 .cs files (see §6)
 └── dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
-    ├── SESSION_9.md … SESSION_14.md  SESSION_15.md  SESSION_16.md
+    ├── SESSION_9.md … SESSION_15.md  SESSION_16.md  SESSION_17.md
+    ├── CHANGELOG_ARCHITECTURE.md   ← ARCHITECTURE.md's per-revision deltas (archive)
     ├── PLAN_CLIENT_ONLY.md  PLAN_CHALKING_KIT.md  BUILD_INSTRUCTIONS.txt
 ```
 
@@ -90,8 +98,9 @@ in a versioned subfolder).
 - **The tool** is normally the held **Chalking Kit** item (custom deflating **5-state** model; recipe: 8×
   Chalking Powder + linen sack + flax twine + rope + copper nails; **32-chalk durability**, F5 — completed
   placements cost 2D −1 / 3D −2, refills via Chalking Powder [8× any powder/flour + 0.1 L yellow dye → 8],
-  no lockout at 0, never breaks; also **ground-storable**: CTRL+SHIFT+right-click sets it down, SHIFT+
-  right-click with powder refills it in place — and, where the server opts in, a hotbar tap/hold or a
+  no lockout at 0, never breaks, and 32 is a hard ceiling no crafting-quality mod can raise; also
+  **ground-storable**: CTRL+SHIFT+right-click sets it down, SHIFT+right-click with powder refills it in
+  place — and, where the PLAYER opts in via `layout-client.json`, a hotbar tap/hold or a
   cursor-onto-inventory-slot refill). On a server without Layout, the equivalent gate is
   **Flax Twine main-hand + any vanilla Hammer variant off-hand** (damage irrelevant; no chalk there — a
   custom item cannot exist on a vanilla server). Interaction is entirely **first-person clicks + crosshair
@@ -352,9 +361,14 @@ by raising `HardVoxelCeiling`.
 `MaxDivisions` 256 · Polygon `MinSides` 3 / `MaxSides` 24 · Free-Shape `MaxCorners` 64 ·
 `PreviewFullResVoxelCap` 8,000 (draft-ghost coarsening only) · valid voxel scales {1,2,4,8,16}.
 
-**Client `layout-client.json`** (`LayoutClientConfig`; never synced): `forceClientOnly` preference (subject
+**Client `layout-client.json`** (`LayoutClientConfig`): `forceClientOnly` preference (subject
 to server policy), last scale / projection / fill / shape+constraint / divisions / sides, six role
-opacities, and up to **four hard-kept pinned favorite shape codes**. Default scale 1.
+opacities, and up to **four hard-kept pinned favorite shape codes**. Default scale 1. Since v0.2.22 it also
+holds **`allowHotbarChalkRefill`** and **`allowInventoryChalkRefill`** (both default false; ground-storage
+refill is always allowed and ungated) — player convenience toggles, moved here from the server config.
+Mostly never synced, with one exception: the hotbar flag is **reported to the server on join** via
+`ChalkRefillPrefsPacket`, because `ItemChalkingPowder`'s held-interact runs on both sides and the server is
+what mutates the stacks — without it the toggle would be a no-op.
 
 **Private guide data** is separate from both config files and the world save:
 `Layout/ClientOnlyGuides/<world-key>-<player-key>.json`, with atomic `.tmp` replacement, one `.bak`, and
@@ -371,7 +385,7 @@ mixed-authority undo routing were playtested through the F4 arc and carried forw
 code-complete; deliberate corruption fault injection has not separately been reported. Threshold-aware 3D
 counting and the natural at-cap drag clamp are implemented and playtest-confirmed (the mid-draft cap clamp was
 re-implemented in v0.2.19). Hollow Sphere/Dome shell scanning is exact-equivalent to the legacy predicate; the
-full F5 chalk system and the Stage-A mesh pass are playtested through **v0.2.21**.
+full F5 chalk system and the Stage-A mesh pass are playtested through **v0.2.23**.
 
 **Active follow-up — B-S9-1 (lock-in-place):** ray-vs-rendered-voxel first-hit picking is now implemented,
 curve target caches use a full geometry fingerprint, cancel restores a complete pre-drag snapshot, and passive
@@ -381,8 +395,10 @@ iteration is better; repeated lock → drag → revert/cancel → unlock cycles 
 bug is declared closed.
 
 **Direction / roadmap (see `dev/TODO.md` for detail):**
-1. **Verify the v0.2.21 inventory refill in play** (MouseDown-hook ordering + `InventoryID` round-trip; both
-   fail safe). See `SESSION_16.md` §8.
+1. **Two verification debts from the (fully delivered) Session-16 backlog** — see `dev/SESSION_17.md` §8:
+   (a) the hard 32-chalk ceiling is verified by an offline harness but **never tested against xskills
+   itself**; (b) **1.22.x support is declared, not tested** — the code was built against 1.22.3, so nothing
+   confirms every API used exists in 1.22.0.
 2. **Mesh pass Stage B/C** (§9 / `SESSION_14.md`) — per-guide chunks/culling → greedy same-colour face
    merging — **only if Stage A's win isn't enough**. Preserve true settled-guide scale and rendering semantics.
 3. **Finish the B-S9-1 interaction regression** against the v0.1.52 marker lifecycle/order changes.
@@ -408,9 +424,10 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   `GuideShapeType` / `ShapeConstraint` / projection enums, which are pinned append-only).
 - **`UndoManager` folder ≠ namespace:** it lives in `src/Systems/` but is `Layout.Systems.UndoManager` —
   the one file where folder and namespace diverge.
-- **The Session docs are historical.** `SESSION_9`…`SESSION_16.md` are point-in-time narratives (SESSION_12
+- **The Session docs are historical.** `SESSION_9`…`SESSION_17.md` are point-in-time narratives (SESSION_12
   covers F4 through v0.1.45; SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 mesh handoff;
-  SESSION_15 is the v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc). For
+  SESSION_15 is the v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc;
+  SESSION_17 is the v0.2.22–v0.2.23 seven-item backlog). For
   current state, trust `HANDOFF.md` / `ARCHITECTURE.md` / the code, not a mid-session checklist inside a
   session record.
 - **`dev/BUILD_INSTRUCTIONS.txt`** is the original v0.1.0 first-build doc; its build/run steps are still

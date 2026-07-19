@@ -1,34 +1,108 @@
-# Layout — TODO / Outstanding Items (current: v0.2.21)
+# Layout — TODO / Outstanding Items (current: v0.2.23)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.2.21)
+## ⭐ Top of the list (v0.2.23 → next)
 
-1. **★ Verify the v0.2.21 inventory refill in play.** Right-clicking a cursor Chalking-Powder stack onto a
-   kit's inventory slot (when the server enables `allowInventoryChalkRefill`) goes through a client MouseDown
-   hook + a server-validated `ChalkInventoryRefillPacket`. Two things were not confirmable statically: the
-   hook-vs-GUI-swap ordering (a lost race degrades to a harmless swap) and the `InventoryID` round-trip (a bad
-   id string silently no-ops). Confirm both in play. See `SESSION_16.md` §8.
-2. **Large-guide mesh — Stage B/C, only if Stage A isn't enough.** Stage A (exposed-face Volumetric meshing)
+> **Session-16 playtest results (human-confirmed):** the v0.2.21 **inventory refill and hotbar refill both
+> work** — the MouseDown-hook ordering and the `InventoryID` round-trip both hold, closing `SESSION_16.md` §8.
+> **Guide updates in multiplayer read well:** watching a guide change a few times per second communicates
+> "someone is moving that" clearly. Keep it. **Audited in item A2 (closed):** that is the ≤10 Hz
+> grab-and-reshape path, not a draft — a remote DRAFT renders only a static anchor dot, and drafting sends no
+> per-tick traffic at all. Nothing is being bombarded.
+
+### A. Human backlog — queued at Session-16 end — ✅ ALL SEVEN DELIVERED (v0.2.22–v0.2.23)
+
+1. ~~**Move the chalk-refill config from the server to the client.**~~ **DONE (v0.2.22).** Both toggles now
+   live in `layout-client.json` (still default false — ground refill stays the intended ritual); removed from
+   `layout.json`, where stale keys are simply ignored. Server-side *policy* checks dropped; server-side
+   *integrity* validation (does the request name a real kit + real powder stack) deliberately KEPT — that is
+   what stops a lost mouse-hook race corrupting an inventory.
+   **⚠️ The non-obvious part, worth remembering:** a plain client-side gate would have silently made the
+   HOTBAR toggle a no-op. `ItemChalkingPowder`'s held-interact callbacks run on BOTH sides and the SERVER
+   mutates the stacks, so a permissive server refills for a player who switched the shortcut off. The server
+   therefore has to be *told* the preference: new `ChalkRefillPrefsPacket` (C→S, sent on join, stored
+   per-player, cleared on disconnect) — **protocol 5 → 6**. The two old `GuideBulkSyncPacket` flags are left
+   declared-but-dead as padding (registration is append-only — never renumber). The inventory channel needed
+   none of this; it was already client-initiated.
+2. ~~**Audit the mid-draft broadcast rate so the server isn't bombarded.**~~ **DONE — audited, no code
+   change needed.** Findings:
+   - **Drafting is duration-independent: ~2 packets total.** `SendDraftStart` is guarded by
+     `!_draft.HasActiveDraft` (`GuideToolController` ~line 889) so it fires ONCE at the first click; cancel /
+     complete sends one more. **There is no per-tick draft traffic at all** — the ghost is purely local.
+   - **The only continuous path is dragging a PLACED guide,** already capped at `GuideToolController` ~line
+     477: ≤10 Hz (`MoveSendIntervalMs = 100`) AND skipped when the aim hasn't actually moved. That is already
+     "a few updates per second".
+   - **It stays cheap at scale because the packet carries an EDIT ARRAY, not geometry.** Voxels are never
+     stored or sent (each client derives them), so dragging a 100-block sphere costs the same bandwidth as
+     dragging a 2-block line. Fan-out is ≈10×(players) small packets/sec while one person drags.
+   - **Correction to the original observation:** other players do NOT see an evolving draft. A remote draft
+     renders as a SINGLE STATIC ANCHOR DOT (`GuideRenderer._remoteAnchors` is one `Vec3d` per player). The
+     "guide updating a few times per second" that looked good in play was a **grab-and-reshape of an
+     already-placed guide** — the 10 Hz path above.
+   - **Known gap, deliberately not fixed:** the 10 Hz throttle is CLIENT-SIDE ONLY. `ServerNetworkHandler`
+     `OnUpdate` checks privilege, lock-holder and guide existence but has no rate limit, so a modified client
+     holding the lock could send at frame rate and be rebroadcast to everyone. The lock requirement bounds
+     this to one driver per guide. If it is ever worth hardening, set the server floor WELL ABOVE 10 Hz
+     (~20): the drag's final position arrives as an ordinary move packet just before release, so a tight
+     limiter could drop it and settle the guide slightly off.
+   - **Not built:** live broadcast of another player's evolving draft. That would be a new feature and the
+     first continuous draft-time traffic — the one case where a deliberate few-per-second cap would matter.
+3. ~~**Hard-cap chalk durability at 32.**~~ **DONE (v0.2.23).** `ItemGuideTool.MaxChalk = 32` is now the one
+   source of truth. `GetChalk` reads the stored `durability` attribute DIRECTLY and clamps to [0, 32]; a new
+   `IsChalkFull` replaced every "is it full?" test. All nine engine-durability call sites converted.
+   **Root cause (decompiled, worth knowing):** `CollectibleObject.GetMaxDurability` **walks the collectible's
+   BEHAVIORS** and lets any of them replace the value, and `GetRemainingDurability` does the same *and*
+   defaults to that inflated max for a stack with no stored value. That behavior walk is the hook xskills
+   uses — so a quality-crafted kit reported max 45 and refilled to 45. We therefore override BOTH
+   (`GetMaxDurability` → 32, `GetRemainingDurability` → `GetChalk`) **without calling `base`**, since base is
+   what walks the behaviors. An already-inflated kit self-heals: it reads 32 and the next placement writes
+   32 − cost. Defends against both routes (behavior override AND a direct attribute write at craft).
+   Verified by a throwaway harness against the Release DLL — **21/21**, covering 45→32, 9999→32, negative→0,
+   the no-attribute default (fresh craft → full), and every fill-state boundary (22/21, 11/10, 1/0).
+   ⚠️ Mechanism verified offline; **not yet tested against xskills itself** — craft a quality kit and confirm
+   it comes out 32/32.
+4. ~~**Remove the "hotbar refill is off here…" warning.**~~ **DONE (v0.2.22).** A disabled channel is now a
+   silent no-op; only genuine failures ("already full" / "no kit in hotbar") still report, and only when the
+   channel is switched on.
+5. ~~**Change all authorship to "Doden".**~~ **DONE (v0.2.22).** `modinfo.json` `authors` is `["Doden"]`;
+   swept — no other author/attribution string exists in source.
+6. ~~**Remove personal file paths from the project.**~~ **DONE.** `Layout.csproj`'s `<VintagestoryDir>` now
+   auto-resolves: `-p:VintagestoryDir=…` → `VINTAGE_STORY` env var → platform default
+   (`$(APPDATA)\Vintagestory` on Windows, `~/.local/share/vintagestory` otherwise). Verified via MSBuild that
+   it resolves to the SAME path this machine used before, so the local build was unaffected; a new
+   `VerifyVintagestoryDir` target fails with one clear message instead of five missing-reference errors
+   (negative-tested). **Publication sweep:** no tracked file contains an absolute `C:\Users` path any more;
+   `bin/`+`obj/` were already gitignored and untracked; the incidental username mentions in
+   `BUILD_INSTRUCTIONS.txt`, `SESSION_14.md` and `HANDOFF.md` were genericised. Build-time only — the
+   distributed zip ships no `.csproj`, and there is **no runtime path** anywhere, so players were never affected.
+7. ~~**Target Vintage Story 1.22.0–1.22.3.**~~ **DONE (v0.2.22)** — `dependencies.game` is `"1.22.0"`, which
+   VS reads as a MINIMUM, so all of 1.22.x is covered (there is no upper-bound syntax). ⚠️ **Declared, not
+   verified:** the code was developed against 1.22.3 and no one has confirmed every API used exists in
+   1.22.0. Smoke-test on a 1.22.0/1.22.1 install before relying on the range.
+
+### B. Carried forward
+
+1. **Large-guide mesh — Stage B/C, only if Stage A isn't enough.** Stage A (exposed-face Volumetric meshing)
    shipped in v0.2.14–v0.2.16 and filled 3D volumes were retired (v0.2.17), so a ~100-block hollow Sphere now
    draws only its outer skin. If that still lags, continue the staged plan in `SESSION_14.md` §6–§7:
    per-guide spatial chunk meshes + culling, then same-colour greedy face merging. Keep settled guides at true
    scale and the Surface/slab path on the legacy builder.
-3. **Finish B-S9-1 interaction regression.** v0.1.49–v0.1.52 implemented first-hit voxel picking, robust
+2. **Finish B-S9-1 interaction regression.** v0.1.49–v0.1.52 implemented first-hit voxel picking, robust
    curve-cache invalidation, complete drag snapshots, passive non-deforming Arch lock markers, stale-marker
    removal, and curve-relative insertion ordering. The human confirms that locks no longer shift and the
    latest behavior is better. Test repeated lock → drag → cancel/revert → unlock → relock cycles before
    declaring the bug closed. See OPEN BUGS and `SESSION_13.md`.
-4. **The final F4/public multiplayer regression pass.** Test vanilla-server fallback, server policy denial,
+3. **The final F4/public multiplayer regression pass.** Test vanilla-server fallback, server policy denial,
    mixed public/private overlays, reconnect persistence, publication, commands, and undo/redo around
    ownership changes — plus the chalk pass (public + private charging, all three refill channels: ground,
    hotbar, inventory). Still owed before any release-grade stamp.
-5. Remaining flagged decisions (11a–11r, 16a–16d in `SESSION_11.md`) are cosmetic — walk them
+4. Remaining flagged decisions (11a–11r, 16a–16d in `SESSION_11.md`) are cosmetic — walk them
    opportunistically.
-6. **Then, if asked:** **Roof / Tunnel** volumes; a concave-safe **Free-Shape fill**; broadcasting the whole
+5. **Then, if asked:** **Roof / Tunnel** volumes; a concave-safe **Free-Shape fill**; broadcasting the whole
    Free-Shape draft chain to other players (11q); the **F3 re-constrain op**.
 
 **Standing workflow rule (human-set — also in CLAUDE.md):** ship a NEW zip per code iteration into

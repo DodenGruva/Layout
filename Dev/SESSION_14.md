@@ -54,7 +54,7 @@ check. Release build: **0 warnings, 0 errors**.
 
 Packaged test build:
 
-- `C:\Users\Zech\Documents\ChatGPT\LayoutZips\Layout0.1.53.zip`
+- `Layout0.1.53.zip` (in the developer's local zip archive)
 - 7 correct root entries; packaged DLL matches the Release DLL.
 - Zip SHA-256: `92F94F140077C9F5581CB4AF59C8A9AB376BAF6C3BD8B7CD0D9A0615FD3421B5`
 

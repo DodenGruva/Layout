@@ -1,22 +1,24 @@
 # Layout — Project Status & Handoff
 
-**Checkpoint: Layout v0.2.21, pushed on `main`** (`b227d7d`; the `ClientOnlyFallback` branch merged via
+**Checkpoint: Layout v0.2.23, pushed on `main`** (the `ClientOnlyFallback` branch merged via
 PR #1). **F4** is
 implemented and playtested: automatic client-only authority on servers without Layout; opt-in private
 overlays on Layout servers; per-world/per-UID client persistence; placement/reshape/settings/undo parity;
 public/private commands and publication; ownership cues; mixed-authority undo routing; backup-recovery
 hardening. **F5 is implemented and playtested:** the tool is the **Chalking Kit** — custom deflating
 **5-state** model (full/high/medium/low/empty), 32-chalk durability (2D −1 / 3D −2, completed placements
-only, no lockout at 0, kit can never break), **Chalking Powder** refills (ground storage always; hotbar +
-inventory-slot channels are server-config opt-in as of v0.2.21), private placements charge via
-`ChalkChargePacket`, ground storage, whole-guide chalk-puff/snap feedback. **The large-guide mesh pass
-Stage A (exposed-face meshing) shipped (v0.2.14–v0.2.16) and filled 3D volumes were retired (v0.2.17).**
-**DataVersion 8; protocol 5; 68 source files.** Release zips: `..\Layout Zips\` (0.1.10–0.1.27 + 0.2.x;
-the 0.1.28–0.1.53 line lives in `Documents\ChatGPT\LayoutZips\`). **Top tasks: verify the v0.2.21 inventory
-refill in play, then mesh Stage B (chunks + culling) if needed, B-S9-1 soak testing, the F4/chalk
+only, no lockout at 0, kit can never break; **32 is a HARD ceiling as of v0.2.23** — immune to other mods'
+crafting-quality bonuses), **Chalking Powder** refills (ground storage always; hotbar + inventory-slot
+channels are **client-preference** opt-in as of v0.2.22), private placements charge via `ChalkChargePacket`,
+ground storage, whole-guide chalk-puff/snap feedback. **The large-guide mesh pass Stage A (exposed-face
+meshing) shipped (v0.2.14–v0.2.16) and filled 3D volumes were retired (v0.2.17).** Targets **all of VS
+1.22.x**; the repo is publication-clean (no personal paths/usernames tracked).
+**DataVersion 8; protocol 6; 68 source files.** Release zips: `..\Layout Zips\` (0.1.10–0.1.27 + 0.2.x).
+**Top tasks: two verification debts — the 32-chalk ceiling vs xskills, and 1.22.0 support (both declared,
+neither live-tested) — then mesh Stage B (chunks + culling) if needed, B-S9-1 soak testing, the F4/chalk
 multiplayer regression pass.** Standing rule: ship a zip per code iteration; update docs / commit ONLY on
-the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_16.md`**, `PLAN_CLIENT_ONLY.md`,
-`PLAN_CHALKING_KIT.md`, and `TODO.md`; the authoritative plan is **`ARCHITECTURE.md`** (v3.3).
+the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_17.md`**, `PLAN_CLIENT_ONLY.md`,
+`PLAN_CHALKING_KIT.md`, and `TODO.md`; the authoritative plan is **`ARCHITECTURE.md`** (v3.4).
 
 ---
 
@@ -24,7 +26,7 @@ the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_16.md`**, `PLAN
 
 The doc set (now a Claude Code repo):
 
-1. **`ARCHITECTURE.md`** — the authoritative plan (v3.3); Settled Decisions Register updated through v0.2.21.
+1. **`ARCHITECTURE.md`** — the authoritative plan (v3.4); Settled Decisions Register updated through v0.2.23.
 2. **The code** — `src/` (**68 files**: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
    RectangleShape, ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 Session-10 — LayoutToolIcons;
    + 4 Session-11 — PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 the 3D family
@@ -35,9 +37,10 @@ The doc set (now a Claude Code repo):
    all edits to existing ones plus the High fill-state asset),
    `assets/layout/`, `modinfo.json`, `modicon.png`, `Layout.csproj`, `BUILD_INSTRUCTIONS.txt`.
 3. **`TODO.md`** — the live punch-list (renamed from `OUTSTANDING_ITEMS.md`).
-4. **`SESSION_9.md`** … **`SESSION_16.md`** — standalone records (SESSION_12 runs through v0.1.45;
+4. **`SESSION_9.md`** … **`SESSION_17.md`** — standalone records (SESSION_12 runs through v0.1.45;
    SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 shell/mesh handoff; SESSION_15 is the
-   v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc).
+   v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc; SESSION_17 is the
+   v0.2.22–v0.2.23 seven-item backlog).
 5. **`HANDOFF.md`** (repo root) — the consolidated current-state brief for external AI analysis
    (scope / status / direction / performance characteristics).
 6. **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix.
@@ -182,11 +185,24 @@ The doc set (now a Claude Code repo):
     normalise + per-shape coercion; legacy filled saves auto-lighten).
   - **HUD/GUI (0.2.18):** hover no longer re-measures every tick; number fields aligned to the tile grid.
   - **Draft cap clamp restored (0.2.19);** **fifth High fill state (0.2.20);** **refill channels — config +
-    inventory-slot refill (0.2.21, protocol 4 → 5):** hotbar/inventory refill are server-config opt-in
+    inventory-slot refill (0.2.21, protocol 4 → 5):** hotbar/inventory refill were server-config opt-in
     (ground storage always allowed), synced to clients; inventory refill via a MouseDown hook + validated
-    `ChalkInventoryRefillPacket`.
-  - **Held / to verify:** the v0.2.21 inventory refill in live play (mouse-hook ordering + InventoryID
-    round-trip; both fail safe).
+    `ChalkInventoryRefillPacket`. *(The two flags became CLIENT preferences in v0.2.22 — see Session 17.)*
+  - **Verified in play (human-confirmed):** the v0.2.21 inventory and hotbar refills both work.
+- **Session 17 — the seven-item human backlog (v0.2.22–v0.2.23): DELIVERED. Detail in `SESSION_17.md`.**
+  - **Refill channels → CLIENT preference (0.2.22, protocol 5 → 6):** both flags moved to
+    `layout-client.json`. The server is *told* the player's choice via the new `ChalkRefillPrefsPacket`,
+    because `ItemChalkingPowder`'s held-interact runs on both sides and the SERVER mutates the stacks —
+    a permissive server would have made the hotbar toggle a silent no-op.
+  - **Hard 32-chalk ceiling (0.2.23):** `ItemGuideTool.MaxChalk`; chalk read straight off the attribute and
+    clamped; `GetMaxDurability`/`GetRemainingDurability` overridden *without* base, since base walks the
+    collectible BEHAVIORS that xskills uses to grant crafting-quality durability. 21/21 offline harness.
+  - **Hotbar refill-off warning removed (0.2.22);** **draft packet-rate AUDITED** — already ≤10 Hz and
+    movement-gated, drafting sends ~2 packets total, no change needed.
+  - **Publication readiness:** authorship → Doden; targets all VS 1.22.x; `Layout.csproj` auto-resolves the
+    install; zero tracked files carry a personal path or username.
+  - **⚠️ Verification debt:** the chalk ceiling is untested against xskills itself, and 1.22.0 support is
+    declared but never run.
 - **IN REAL PLAY:** save-compatibility matters — DataVersion **8** saves (v8: passive `IsLockMarker`; v7:
   IsClosed; v6: Sides + the
   never-wired spring-back snapshot); pinned-enum / additive-protobuf / default-migration rules remain in
@@ -291,7 +307,7 @@ the scale-icon/tile-proportion calls; Session-9 adds the regime split, triangle'
 no-break-gesture for Right/Isosceles/Square, rectangle corners as markers, magenta division color, the
 per-keystroke divisions field; Session-8's list still stands. Full list + rationale in `TODO.md`.
 
-**Open — real-play agenda:** verify the v0.2.21 inventory refill in play, carry the large-guide mesh pass
+**Open — real-play agenda:** work the Session-16 human backlog (`TODO.md` §A), carry the large-guide mesh pass
 to Stage B (chunks + culling) only if Stage A's win isn't enough, finish the focused v0.1.52
 lock/drag/unlock regression, then run one final F4/chalk multiplayer regression before a release-grade stamp.
 
@@ -303,8 +319,9 @@ lock/drag/unlock regression, then run one final F4/chalk multiplayer regression 
 multiplayer behavior is intentionally preserved. Read `SESSION_16.md` for the
 current mesh/polish state, `SESSION_14.md` for the staged mesh plan, and `SESSION_15.md` for the Chalking Kit.
 
-1. **Verify the v0.2.21 inventory refill in play.** Confirm the MouseDown-hook vs GUI-swap ordering and the
-   InventoryID round-trip; both fail safe, but neither was confirmable statically. See `SESSION_16.md` §8.
+1. **The Session-16 human backlog — 7 items, detailed in `TODO.md` §A.** Client-side refill config; the
+   mid-draft packet-rate audit; a hard 32 chalk ceiling that ignores crafting-quality modifiers; drop the
+   hotbar-refill-off warning; authorship → "Doden"; portable build paths; target all of VS 1.22.x.
 2. **Large-guide meshes — Stage B/C, only if Stage A isn't enough.** Stage A (exposed-face meshing) shipped
    and filled volumes are retired. Next is per-guide spatial chunk mesh ownership/disposal and culling, then
    same-colour/orientation greedy merging. Preserve the verified shader, true settled-guide scale, marker

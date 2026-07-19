@@ -8,6 +8,32 @@
 
 ---
 
+## Changelog — v3.3 → v3.4 (the seven-item backlog, v0.2.22 → v0.2.23; full record in `SESSION_17.md`)
+
+- **Chalk refill channels: SERVER config → CLIENT preference (0.2.22, protocol 5 → 6).** Both flags moved to
+  `layout-client.json` (still default false; ground-storage refill is never gated). **The subtlety:** a plain
+  client-side gate would have made the HOTBAR toggle a no-op, because `ItemChalkingPowder`'s held-interact
+  runs on BOTH sides and the SERVER mutates the stacks — a permissive server refills for a player who turned
+  it off. So the server is *told* the preference: new **`ChalkRefillPrefsPacket`** (C→S on join, stored
+  per-player, cleared on disconnect). The inventory channel needed none of this (already client-initiated).
+  Server-side *integrity* validation in `OnInventoryChalkRefill` deliberately KEPT — only the *policy* check
+  went. The two dead `GuideBulkSyncPacket` flags stay declared as append-only padding.
+- **Hard chalk ceiling (0.2.23):** `ItemGuideTool.MaxChalk = 32` is the one source of truth. `GetChalk` reads
+  the stored attribute directly and clamps; `IsChalkFull` replaced every fullness test. `GetMaxDurability`
+  and `GetRemainingDurability` are overridden **without calling base**, because base **walks the
+  collectible's BEHAVIORS** — the hook xskills uses to grant a crafting-quality durability bonus. Inflated
+  kits self-heal on next use. 21/21 offline harness.
+- **Hotbar refill-off warning removed (0.2.22):** a disabled convenience is a silent no-op, not an error.
+- **Mid-draft broadcast rate AUDITED (no change):** drafting sends ~2 packets total with no per-tick traffic;
+  the only continuous path (grab-and-reshape) is already ≤10 Hz and movement-gated; packets carry an edit
+  array, not geometry. A remote draft renders as a single static anchor dot, never an evolving guide.
+- **Publication readiness (0.2.22–0.2.23):** authorship → **Doden**; `dependencies.game` → **`"1.22.0"`**
+  (a MINIMUM, so all 1.22.x); `Layout.csproj` auto-resolves the install
+  (`-p:VintagestoryDir` → `VINTAGE_STORY` → platform default) with a `VerifyVintagestoryDir` guard; zero
+  tracked files retain a developer username or absolute path.
+
+---
+
 ## Changelog — v3.2 → v3.3 (mesh + polish, v0.2.10 → v0.2.21; full record in `SESSION_16.md`)
 
 - **Interaction/visual polish (0.2.10–0.2.13, committed `de830b1`):** whole-guide placement dust (2D along

@@ -1,6 +1,6 @@
-# Layout — Architecture Document (v3.3)
+# Layout — Architecture Document (v3.4)
 
-**Supersedes v3.2 — the mesh + polish delta (v0.2.10–v0.2.21).** v2.5 consolidated five
+**Supersedes v3.3 — the seven-item backlog delta (v0.2.22–v0.2.23).** v2.5 consolidated five
 revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
 catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
 surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
@@ -22,19 +22,25 @@ folds in the mesh + polish arc (v0.2.10–v0.2.21):** large-guide **exposed-face
 solidity-aware z-fight inset, the **retirement of filled 3D volumes** (always hollow shells now), the
 dome-faces-clicked-surface fix, the HUD hover re-measure fix, GUI number-field alignment, the restored
 draft-cap clamp, the fifth (**High**) fill state, and **server-config-gated hotbar/inventory refill
-channels** (protocol 5). The register, file tree, module map, persistence, and edge cases below are updated
-in place to the v0.2.21 / DataVersion 8 / protocol-5 / 68-file state; the per-revision deltas live in
-**`CHANGELOG_ARCHITECTURE.md`** (indexed just below).
+channels** (protocol 5). **v3.4 folds in the seven-item human backlog (v0.2.22–v0.2.23):** the chalk refill
+channels moved from server config to a **client preference** (protocol 6, via the new
+`ChalkRefillPrefsPacket`), a **hard 32-chalk ceiling** immune to other mods' crafting-quality bonuses, the
+removal of the hotbar refill-off warning, an audit of the multiplayer draft packet rate (no change needed),
+and publication readiness — authorship, **all-1.22.x** targeting, and portable build paths. The register,
+file tree, module map, persistence, and edge cases below are updated in place to the v0.2.23 / DataVersion 8
+/ protocol-6 / 68-file state; the per-revision deltas live in **`CHANGELOG_ARCHITECTURE.md`** (indexed below).
 
-**Where the project stands:** Layout **v0.2.21** is built, packaged, playtested, and **pushed on `main`**
-(`b227d7d`; the `ClientOnlyFallback` branch merged via PR #1).
+**Where the project stands:** Layout **v0.2.23** is built, packaged, playtested, and **pushed on `main`**
+(the `ClientOnlyFallback` branch merged via PR #1).
 All seven modules, the complete 2D/3D catalog, normal public multiplayer, vanilla-server local
-fallback, mixed public/private operation, and the full F5 chalk system run against VS 1.22.3 / .NET 10. The
-catalog is **12 shape types / 18 picker tiles**, **DataVersion 8**, **protocol 5**, and **68 source files**.
-F4 and F5 are feature-complete. The large-guide **mesh pass Stage A (exposed-face meshing) has shipped** and
-**filled 3D volumes are retired**, so a ~100-block hollow Sphere now draws only its shell skin. The immediate
-tasks are verifying the v0.2.21 inventory refill in play, then mesh Stage B (spatial chunks + culling) if
-needed; B-S9-1 and the broad F4/public regression follow. See `TODO.md` and `SESSION_16.md`.
+fallback, mixed public/private operation, and the full F5 chalk system run against **VS 1.22.x** / .NET 10.
+The catalog is **12 shape types / 18 picker tiles**, **DataVersion 8**, **protocol 6**, and **68 source
+files**. F4 and F5 are feature-complete. The large-guide **mesh pass Stage A (exposed-face meshing) has
+shipped** and **filled 3D volumes are retired**, so a ~100-block hollow Sphere now draws only its shell skin.
+The Session-16 backlog is fully delivered. Remaining: mesh Stage B (spatial chunks + culling) **only if Stage
+A proves insufficient**, B-S9-1 soak testing, and the broad F4/chalk multiplayer regression. Two items carry
+verification debt — the chalk ceiling has not been tested against xskills itself, and 1.22.0 support is
+declared but untested. See `TODO.md` and `SESSION_17.md`.
 
 > **▶ IMPLEMENTED — client-only / server-less fallback mode (F4, v0.1.28–v0.1.45).** On a server without
 > Layout, a three-second positive-proof detection window falls back to a client-side
@@ -45,15 +51,21 @@ needed; B-S9-1 and the broad F4/public regression follow. See `TODO.md` and `SES
 > routes undo/redo. Private guides persist per server/world + player UID. `PLAN_CLIENT_ONLY.md` is the final
 > behavior and implementation record; `SESSION_12.md` is the version history.
 
-> **▶ IMPLEMENTED — the Chalking Kit (F5, v0.2.0–v0.2.9; refill channels extended v0.2.21).** The tool is the
+> **▶ IMPLEMENTED — the Chalking Kit (F5, v0.2.0–v0.2.9; refill channels v0.2.21, moved client-side v0.2.22;
+> hard 32 ceiling v0.2.23).** The tool is the
 > **Chalking Kit** (custom deflating **5-state** model — full/high/medium/low/empty, FULL reserved for a
 > completely full kit; mod name stays Layout) with **32-chalk durability**: completed placements cost
 > 2D −1 / 3D −2 (flat, never size-scaled), nothing else costs anything, undo never refunds, and at 0 only
 > NEW placement is blocked — the kit can never break (custom clamp; vanilla `DamageItem` is never called).
+> **32 is a HARD ceiling** (`ItemGuideTool.MaxChalk`, v0.2.23): chalk is read straight off the stack
+> attribute and clamped, and `GetMaxDurability`/`GetRemainingDurability` are overridden **without calling
+> base**, because base walks the collectible's BEHAVIORS — the hook other mods (xskills) use to grant a
+> crafting-quality durability bonus. An inflated kit self-heals to 32 on next use.
 > **Chalking Powder** refills +4 per powder through three channels: **ground storage** (SHIFT+right-click a
 > set-down kit; always allowed, the bag re-inflates live), the **hotbar** tap/hold shortcut, and a
-> **cursor-onto-inventory-slot** click — the latter two are **server-config opt-in** (`allowHotbarChalkRefill`
-> / `allowInventoryChalkRefill`, both default false), synced to clients (protocol 5). **Private placements on a
+> **cursor-onto-inventory-slot** click — the latter two are **client-preference opt-in**
+> (`allowHotbarChalkRefill` / `allowInventoryChalkRefill` in `layout-client.json`, both default false; a
+> player setting, not server policy as of v0.2.22). **Private placements on a
 > Layout server charge too** via the client-reported, server-validated `ChalkChargePacket`; the only chalk-free
 > case is a server without Layout, where no custom item can exist. Creative exempt; `enableChalkDurability`
 > server config. Ground storage: CTRL+SHIFT+right-click set-down, idle-gated. Placement feedback: whole-guide
@@ -72,6 +84,7 @@ persistence / edge cases below, and each has a fuller narrative in its session r
 
 | Doc rev | Mod versions | Theme | Session record |
 |---|---|---|---|
+| v3.4 | v0.2.22 → v0.2.23 | Refill config → client (protocol 6), hard 32-chalk ceiling, publication readiness | `SESSION_17.md` |
 | v3.3 | v0.2.10 → v0.2.21 | Mesh Stage A (exposed-face), filled-volume retirement, refill channels, polish | `SESSION_16.md` |
 | v3.2 | v0.2.0 → v0.2.9 | The Chalking Kit (F5): durability, powder refills, ground storage | `SESSION_15.md` |
 | v3.1 | v0.1.53 | Hollow-shell scaling (`SphericalShellScan`); mesh frontier confirmed | `SESSION_14.md` |
@@ -319,11 +332,11 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 ### Configuration, assets, GUI
 - **Server `layout.json`:** perGuideVoxelCap 25,000 · totalVoxelCap 250,000 · maxGuidesPerPlayer 0 ·
   maxGuidesWorldWide 0 · undoHistoryDepth 50 · requiredPrivilege "" · adminCanOverrideLocks true ·
-  **allowClientOnlyMode false** · **enableChalkDurability true** (F5) · **allowHotbarChalkRefill false** ·
-  **allowInventoryChalkRefill false** (v0.2.21 — ground-storage refill is always allowed; these opt-in the
-  two convenience channels)
+  **allowClientOnlyMode false** · **enableChalkDurability true** (F5)
   (0/negative = unlimited; **construction-time injection — edits need a server restart**). Caps sync to
-  clients on join so the pre-check matches enforcement; the two refill flags sync alongside them (protocol 5). **The running total is a `long`** (v0.1.27) so a
+  clients on join so the pre-check matches enforcement.
+  **The two chalk refill-channel flags left this file in v0.2.22** — they are player preferences now, in
+  `layout-client.json`; stale keys in an existing `layout.json` are ignored. **The running total is a `long`** (v0.1.27) so a
   caps-off server can't overflow it negative. A **hard voxel ceiling** (`GuideManager.HardVoxelCeiling`,
   10M) rejects giant guides ALWAYS, even with caps disabled. Remaining guarded 3D scans return a huge sentinel
   for over-size filled/volume paths; hollow Sphere/Dome now count exactly beyond the old guard. Do not raise
@@ -698,7 +711,7 @@ ints, Guids as 16 bytes, positions as three doubles, full point lists verbatim (
 
 | Packet | Direction | Contents |
 |---|---|---|
-| `GuideBulkSyncPacket` | S→C | All guides + active caps + lock states + draft anchors + **the two refill-channel flags** (v0.2.21), on join |
+| `GuideBulkSyncPacket` | S→C | All guides + active caps + lock states + draft anchors, on join. (Fields 6–7 carried the server's refill-channel policy in 0.2.21; **dead since v0.2.22**, retained unwritten as append-only padding) |
 | `GuideCreateRequestPacket` | C→S | Two points + settings + **shape + constraint + plane axis** |
 | `GuideCreatePacket` | S→C | Full `GuideData` (also the generic full-state broadcast) |
 | `GuideUpdatePacket` | S→C, C→S | Guide ID + edit array (client sends its one; server broadcasts the composed batch incl. soft-flow edits) |
@@ -712,6 +725,7 @@ ints, Guids as 16 bytes, positions as three doubles, full point lists verbatim (
 | `ClientGuidePushRequestPacket` / `ClientGuidePushResultPacket` | C→S / S→C | Publish up to 100 private guides and confirm accepted local removals |
 | `ChalkChargePacket` (S15, protocol 4) | C→S | Self-report a completed PRIVATE placement so the server (which owns the inventory but cannot see private guides) applies the chalk charge; validated + clamped 1–2 |
 | `ChalkInventoryRefillPacket` (S16, protocol 5) | C→S | Inventory-slot refill request (`InventoryId` + `SlotId`); server re-validates cursor=powder + slot=non-full kit before consuming one powder — a lost mouse-hook race degrades to a harmless swap |
+| `ChalkRefillPrefsPacket` (S17, protocol 6) | C→S | The player's OWN refill-channel preferences, sent on join. Required because `ItemChalkingPowder`'s held-interact runs on both sides and the SERVER mutates the stacks — without it the hotbar toggle would be a no-op |
 
 **`ServerNetworkHandler.cs`** — validates, calls the managers, reads results, broadcasts (or corrective
 resync / cap warning). Owns: the create request (shape-aware), **auto-break** before constrained inserts and
