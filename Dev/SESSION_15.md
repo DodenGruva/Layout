@@ -56,7 +56,8 @@
 - `LocalGuideAuthority.Create` now returns success so rejected placements never charge; the out-of-chalk
   gate covers private drafts too.
 - **"Any powder" widened:** vanilla `powder-*` **plus all 7 `flour-*` grains**; dye containers: **bucket,
-  fired bowls, jugs** (every vanilla vessel that can carry dye into a grid). 6 recipe permutations.
+  fired bowls, fired jugs** (every vanilla vessel that can carry dye into a grid; the RAW clay variants
+  were excluded in v0.2.28 — they are plain `Block`s and cannot hold liquid). 6 recipe permutations.
 - **1-chalk-volume placement allowed** (costs 2, clamps to 0) — "any remaining chalk can mark" beats
   "you have chalk but can't use it"; human deferred to this recommendation.
 

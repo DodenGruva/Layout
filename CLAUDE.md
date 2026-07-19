@@ -11,6 +11,7 @@ server-authoritative/world-shared; the F4 client-only mode also supports private
 on servers without Layout and, when permitted, alongside public guides. The tool is the **Chalking Kit**
 (custom deflating 5-state model) with **finite, powder-refillable chalk durability** (F5). Large guides now
 render with **exposed-face meshing** (SESSION_16, Stage A) and 3D volumes are always hollow shells.
+The catalog is **13 shape types / 19 picker tiles** (SESSION_18 added the 4-click Tapered Cylinder).
 Status: **v0.2.x, in real play.**
 
 ## Build & run
@@ -29,8 +30,8 @@ Status: **v0.2.x, in real play.**
 - **Versioning rule (standing, human-set):** EVERY revision bumps `modinfo.json` and ships as a NEW
   `Layout<version>.zip` in **`..\Layout Zips\`** (the sibling folder of this repo — human-directed location;
   holds 0.1.10–0.1.27 + the 0.2.x line; the 0.1.28–0.1.53 zips live in `Documents\ChatGPT\LayoutZips\`) —
-  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.2.23.**
-- **Git:** `main` is the mainline, pushed to **github.com/DodenGruva/Layout** through **v0.2.23** (the
+  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.2.28.**
+- **Git:** `main` is the mainline, pushed to **github.com/DodenGruva/Layout** through **v0.2.28** (the
   `ClientOnlyFallback` branch was merged via PR #1). **The repo is published at release** — no personal
   paths, no personal usernames in tracked files. Commit/push ONLY when the human instructs.
 
@@ -45,17 +46,19 @@ Status: **v0.2.x, in real play.**
 - **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix (candidate for 0.2.0).
 - **`PLAN_CHALKING_KIT.md`** — the F5 chalking-kit design rationale, now marked ✅ implemented with its
   plan-vs-shipped deltas up top.
-- **`SESSION_9.md` … `SESSION_17.md`** — standalone per-session records; SESSION_12 covers **v0.1.28–v0.1.45
+- **`SESSION_9.md` … `SESSION_18.md`** — standalone per-session records; SESSION_12 covers **v0.1.28–v0.1.45
   ClientOnlyFallback**, SESSION_13 the **v0.1.46–v0.1.52 optimization and interaction pass**, SESSION_14 the
   **v0.1.53 hollow-shell + mesh optimization handoff** (read before continuing performance work), SESSION_15
   the **v0.2.0–v0.2.9 Chalking Kit arc**, SESSION_16 the **v0.2.10–v0.2.21 mesh + polish arc** (Stage-A
   exposed-face meshing, z-fight insets, filled-volume retirement, High fill state — read before continuing
   performance work), and SESSION_17 the **v0.2.22–v0.2.23 seven-item backlog** (refill config → client
-  preference at protocol 6, the hard 32-chalk ceiling, publication readiness).
+  preference at protocol 6, the hard 32-chalk ceiling, publication readiness), and SESSION_18 the
+  **v0.2.24–v0.2.28 Tapered Cylinder arc** (the 4-click frustum at protocol 7; the scan-guard and
+  cap-clamp performance fixes it exposed — read before touching either).
 
-## ✅ Docs verified & consolidated to v0.2.23 (2026-07-19)
-The authoritative prose docs are consistent with **v0.2.23, DataVersion 8, protocol 6, 68 source files,
-12 shape types / 18 tiles**. `ARCHITECTURE.md` is **v3.4**; `SESSION_17.md` is the latest record
+## ✅ Docs verified & consolidated to v0.2.28 (2026-07-19)
+The authoritative prose docs are consistent with **v0.2.28, DataVersion 8, protocol 7, 69 source files,
+13 shape types / 19 tiles**. `ARCHITECTURE.md` is **v3.5**; `SESSION_18.md` is the latest record
 (mesh: `SESSION_16.md`, F5: `SESSION_15.md`); `HANDOFF.md` is the consolidated brief. Prefer source for exact
 identifiers, but no from-scratch doc audit is needed before ordinary work.
 
@@ -107,5 +110,5 @@ are far lower now. The Session-16 backlog is **fully delivered**. Normal public 
 `Items/`, `Client/` (the tool controller), `Undo/Commands/`. Adding a new shape starts in
 `Shapes/ShapeFactory.cs`. Soft-point flow behavior lives in `Shapes/SoftPointFlow.cs`. Chalk durability
 lives in `Items/ItemGuideTool.cs` (helpers + fill-state rendering) + `Items/ItemChalkingPowder.cs` (refill)
-+ `Systems/ChalkEffects.cs` (puffs/snap). (Filenames verified against the tree on 2026-07-18 — 68 source
++ `Systems/ChalkEffects.cs` (puffs/snap). (Filenames verified against the tree on 2026-07-19 — 69 source
 files.)

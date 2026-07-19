@@ -82,7 +82,14 @@ namespace Layout.Guide
         /// gesture) then the height click; every side may differ. Stores the two base corners plus the
         /// lid point over the base centre. Hollow = all six faces as a one-voxel shell.
         /// </summary>
-        Box = 11
+        Box = 11,
+
+        /// <summary>
+        /// Tapered Cylinder / frustum (0.2.24 — the windmill/tower shape): FOUR clicks — base diameter,
+        /// the height click, then a TOP RADIUS click whose distance from the axis sets the lid's width.
+        /// Stores the two base anchors, the height point, and the rim point. The only 4-click shape.
+        /// </summary>
+        TaperedCylinder = 12
 
         // Reserved for future shapes — append only, never renumber: Roof, Tunnel ...
     }
@@ -91,7 +98,7 @@ namespace Layout.Guide
     public static class GuideShapeTypes
     {
         /// <summary>
-        /// True for the 3D volumes (Sphere/Dome/Cylinder/Cone/Box): always Volumetric (Surface projection
+        /// True for the 3D volumes (Sphere/Dome/Cylinder/TaperedCylinder/Cone/Box): always Volumetric (Surface projection
         /// is meaningless and gated out everywhere), Divisions don't apply, and — since 0.2.17 — they are
         /// always HOLLOW shells: exposed-face meshing makes a filled interior emit no geometry at all, so
         /// "filled" bought nothing visible at an R³ voxel/lag cost (human-directed retirement). The gate is
@@ -103,7 +110,7 @@ namespace Layout.Guide
         public static bool IsVolume(GuideShapeType t) => t switch
         {
             GuideShapeType.Sphere or GuideShapeType.Dome or GuideShapeType.Cylinder
-                or GuideShapeType.Cone or GuideShapeType.Box => true,
+                or GuideShapeType.TaperedCylinder or GuideShapeType.Cone or GuideShapeType.Box => true,
             _ => false
         };
     }

@@ -1,6 +1,6 @@
 # Layout — Project Status & Handoff
 
-**Checkpoint: Layout v0.2.23, pushed on `main`** (the `ClientOnlyFallback` branch merged via
+**Checkpoint: Layout v0.2.28, pushed on `main`** (the `ClientOnlyFallback` branch merged via
 PR #1). **F4** is
 implemented and playtested: automatic client-only authority on servers without Layout; opt-in private
 overlays on Layout servers; per-world/per-UID client persistence; placement/reshape/settings/undo parity;
@@ -13,11 +13,11 @@ channels are **client-preference** opt-in as of v0.2.22), private placements cha
 ground storage, whole-guide chalk-puff/snap feedback. **The large-guide mesh pass Stage A (exposed-face
 meshing) shipped (v0.2.14–v0.2.16) and filled 3D volumes were retired (v0.2.17).** Targets **all of VS
 1.22.x**; the repo is publication-clean (no personal paths/usernames tracked).
-**DataVersion 8; protocol 6; 68 source files.** Release zips: `..\Layout Zips\` (0.1.10–0.1.27 + 0.2.x).
+**DataVersion 8; protocol 7; 69 source files.** Release zips: `..\Layout Zips\` (0.1.10–0.1.27 + 0.2.x).
 **Top tasks: two verification debts — the 32-chalk ceiling vs xskills, and 1.22.0 support (both declared,
 neither live-tested) — then mesh Stage B (chunks + culling) if needed, B-S9-1 soak testing, the F4/chalk
 multiplayer regression pass.** Standing rule: ship a zip per code iteration; update docs / commit ONLY on
-the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_17.md`**, `PLAN_CLIENT_ONLY.md`,
+the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_18.md`**, `PLAN_CLIENT_ONLY.md`,
 `PLAN_CHALKING_KIT.md`, and `TODO.md`; the authoritative plan is **`ARCHITECTURE.md`** (v3.4).
 
 ---
@@ -26,7 +26,7 @@ the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_17.md`**, `PLAN
 
 The doc set (now a Claude Code repo):
 
-1. **`ARCHITECTURE.md`** — the authoritative plan (v3.4); Settled Decisions Register updated through v0.2.23.
+1. **`ARCHITECTURE.md`** — the authoritative plan (v3.5); Settled Decisions Register updated through v0.2.28.
 2. **The code** — `src/` (**68 files**: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
    RectangleShape, ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 Session-10 — LayoutToolIcons;
    + 4 Session-11 — PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 the 3D family
@@ -40,7 +40,7 @@ The doc set (now a Claude Code repo):
 4. **`SESSION_9.md`** … **`SESSION_17.md`** — standalone records (SESSION_12 runs through v0.1.45;
    SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 shell/mesh handoff; SESSION_15 is the
    v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc; SESSION_17 is the
-   v0.2.22–v0.2.23 seven-item backlog).
+   v0.2.22–v0.2.23 seven-item backlog; SESSION_18 is the v0.2.24–v0.2.28 Tapered Cylinder arc).
 5. **`HANDOFF.md`** (repo root) — the consolidated current-state brief for external AI analysis
    (scope / status / direction / performance characteristics).
 6. **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix.

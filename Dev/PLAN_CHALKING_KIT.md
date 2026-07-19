@@ -9,7 +9,7 @@
 >
 > **Where the implementation deliberately DIFFERS from this plan** (all human-directed during the build):
 > - The refill item is named **Chalking Powder** (not "Yellow Chalking Powder").
-> - **Recipe:** `8× any powder OR flour + 0.1 L yellow dye (bucket/bowl/jug) → 8 Chalking Powder` — batches
+> - **Recipe:** `8× any powder OR flour + 0.1 L yellow dye (bucket/fired bowl/fired jug) → 8 Chalking Powder` — batches
 >   of 8, not the stack+1L 1:1 conversion sketched below. Same spirit (dye amortized, ~no loss), finer grain.
 > - **Private placements on a Layout server DO spend chalk** — "private is private, not free" — via a
 >   client-reported, server-validated `ChalkChargePacket` (protocol 4). This supersedes the local-no-op

@@ -190,11 +190,12 @@ namespace Layout.Client
         /// placement effects both key off it, so a rejected (over-cap) placement costs and emits nothing.</summary>
         public GuideData Create(Vec3d start, Vec3d end, GuideRenderSettings settings,
             GuideShapeType shapeType, ShapeConstraint constraint, PlaneAxis shapePlaneAxis,
-            bool inverted, int sides, Vec3d apex, IReadOnlyList<Vec3d> chain, bool closed)
+            bool inverted, int sides, Vec3d apex, IReadOnlyList<Vec3d> chain, bool closed,
+            Vec3d rim = null)
         {
             GuideOperationResult result = _guides.CreateGuide(
                 start, end, settings, shapeType, constraint, shapePlaneAxis, PlayerUid,
-                apex, inverted, sides, chain, closed);
+                apex, inverted, sides, chain, closed, rim);
 
             if (result.IsSuccess)
             {

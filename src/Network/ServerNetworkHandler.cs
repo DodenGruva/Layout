@@ -502,7 +502,7 @@ namespace Layout.Network
 
             GuideOperationResult result = _guides.CreateGuide(
                 start, end, settings, shapeType, constraint, planeAxis, fromPlayer.PlayerUID,
-                p.Apex?.ToVec3d(), p.Inverted, p.Sides, chain, p.Closed);
+                p.Apex?.ToVec3d(), p.Inverted, p.Sides, chain, p.Closed, p.Rim?.ToVec3d());
             switch (result.Status)
             {
                 case GuideOpStatus.Success:

@@ -90,7 +90,7 @@ namespace Layout.Shapes
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             var result = new List<VoxelPosition>();
             if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h)) return result;
-            if (ScanTooBig(scale, r, h)) return result;
+            if (ScanTooBig(scale, c, n, r, h)) return result;
 
             double cell = scale / 16.0;
             double hd = cell * 0.866;
@@ -139,7 +139,7 @@ namespace Layout.Shapes
         {
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h)) return 0;
-            if (ScanTooBig(scale, r, h)) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+            if (ScanTooBig(scale, c, n, r, h)) return GuideShapeVoxelCounting.Exceeded(stopAfter);
 
             stopAfter = Math.Max(0, stopAfter);
             double cell = scale / 16.0;
@@ -177,11 +177,15 @@ namespace Layout.Shapes
             return count;
         }
 
-        private static bool ScanTooBig(int scale, double r, double h)
+        // Measured off the REAL scan box, like the cylinder's (v0.2.25) — see CylinderShape.ScanTooBig.
+        private static bool ScanTooBig(int scale, Vec3d c, Vec3d n, double r, double h)
         {
-            double span = 2.0 * r + Math.Abs(h);
-            long cellsPerAxis = (long)(span * 16.0 / scale) + 3;
-            return cellsPerAxis * cellsPerAxis * cellsPerAxis > MaxScanCells;
+            double cell = scale / 16.0;
+            double ex = c.X + n.X * h, ey = c.Y + n.Y * h, ez = c.Z + n.Z * h;
+            double pad = r + cell;
+            return CylinderShape.ScanCells(scale,
+                Math.Min(c.X, ex) - pad, Math.Min(c.Y, ey) - pad, Math.Min(c.Z, ez) - pad,
+                Math.Max(c.X, ex) + pad, Math.Max(c.Y, ey) + pad, Math.Max(c.Z, ez) + pad) > MaxScanCells;
         }
 
         private static int AlignDown(double world, int scale) =>

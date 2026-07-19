@@ -82,7 +82,7 @@ namespace Layout.Systems
     // authority will build — including the ownership palette and far-foot coplanarity shade while aiming.
         private MeshRef _draftPreviewMesh;
         private Vec3d _draftPreviewOrigin;
-        private Vec3d _previewStart, _previewEnd, _previewApex;
+        private Vec3d _previewStart, _previewEnd, _previewApex, _previewRim;
         private GuideRenderSettings _previewSettings;
         private GuideShapeType _previewShapeType = GuideShapeType.Arch;      // Session 8: shape is part of
         private ShapeConstraint _previewConstraint = ShapeConstraint.None;   //   the ghost's rebuild key
@@ -305,7 +305,7 @@ namespace Layout.Systems
             GuideShapeType shapeType = GuideShapeType.Arch,
             ShapeConstraint constraint = ShapeConstraint.None,
             PlaneAxis shapePlaneAxis = PlaneAxis.Y,
-            int sides = 0, bool inverted = false, Vec3d apex = null)
+            int sides = 0, bool inverted = false, Vec3d apex = null, Vec3d rim = null)
         {
             if (_disposed || start == null || end == null) return;
 
@@ -317,24 +317,24 @@ namespace Layout.Systems
                 && SamePos(_previewStart, start)
                 && SamePos(_previewEnd, end)
                 && (apex == null ? _previewApex == null
-                    : _previewApex != null && SamePos(_previewApex, apex))) return;
+                    : _previewApex != null && SamePos(_previewApex, apex))
+                && (rim == null ? _previewRim == null
+                    : _previewRim != null && SamePos(_previewRim, rim))) return;
 
             _previewShapeType = shapeType; _previewConstraint = constraint; _previewPlaneAxis = shapePlaneAxis;
             _previewSides = sides; _previewInverted = inverted;
             IGuideShape shape = ShapeFactory.Create(shapeType, constraint, shapePlaneAxis, start, end,
                 inverted, sides);
             // A three-click shape mid-draft (triangle apex, or cylinder/cone/box height — 0.1.21): the
-            // ghost's index-2 handle tracks the crosshair.
-            if (apex != null && DraftManager.NeedsApexClick(shapeType, constraint)
-                && shape.ControlPoints.Count > 2)
-            {
-                shape.MoveControlPoint(2, apex);
-            }
+            // ghost's index-2 handle tracks the crosshair. A four-click Tapered Cylinder on its LAST stage
+            // (0.2.24) also tracks the rim at index 3, so the taper opens and closes live.
+            DraftManager.ApplyPlacementPoints(shape, shapeType, constraint, apex, rim);
             if (!UploadPreviewMesh(shape, settings)) return;
 
             _previewStart = new Vec3d(start.X, start.Y, start.Z);
             _previewEnd = new Vec3d(end.X, end.Y, end.Z);
             _previewApex = apex == null ? null : new Vec3d(apex.X, apex.Y, apex.Z);
+            _previewRim = rim == null ? null : new Vec3d(rim.X, rim.Y, rim.Z);
             _previewSettings = settings;
             _hasPreviewKey = true;
         }
@@ -367,7 +367,7 @@ namespace Layout.Systems
             _previewShapeType = GuideShapeType.FreeShape;
             _previewConstraint = ShapeConstraint.None;
             _previewChainFp = fp;
-            _previewStart = _previewEnd = _previewApex = null;   // the chain fp is this ghost's whole key
+            _previewStart = _previewEnd = _previewApex = _previewRim = null;   // the chain fp is this ghost's whole key
 
             IGuideShape shape = new FreeShape(corners, closing);
             if (!UploadPreviewMesh(shape, settings)) return;

@@ -2,12 +2,12 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-19 against **v0.2.23**, committed and pushed on
+> and the performance-relevant mechanics. Updated 2026-07-19 against **v0.2.28**, committed and pushed on
 > `main`. Where this file and the code disagree, **the code wins** — treat this as a map, then
 > read the `.cs` files it points at.
 >
 > **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.4),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/17.md` (per-session
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/18.md` (per-session
 > history), `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
 
@@ -21,16 +21,17 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.2.23 on `main`, **playtested in multiplayer and vanilla-server fallback**.
+- **Status:** v0.2.28 on `main`, **playtested in multiplayer and vanilla-server fallback** (the
+  v0.2.27 rim fixes and the v0.2.28 recipe fix are verified numerically but not yet felt in-game).
   F4 (client-only / private guides) and F5 (**the Chalking Kit**: finite chalk
   durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
   **mesh pass Stage A (exposed-face meshing) has shipped** and **filled 3D volumes are retired** (always
   hollow shells now), so a ~100-block hollow Sphere draws only its outer skin.
-- **Size:** **68 source files** (`src/`), ~one asset tree, one `.csproj`.
+- **Size:** **69 source files** (`src/`), ~one asset tree, one `.csproj`.
 - **Data schema:** **DataVersion 8** (additive passive-lock-marker flag; pinned enums/default migration).
 - **Wire protocol:** **6** (append-only `ChalkRefillPrefsPacket`, after the protocol-5
   `ChalkInventoryRefillPacket` and protocol-4 `ChalkChargePacket`).
-- **Catalog:** **12 shape types**, shown as **18 picker tiles** — a full 2D family plus a **3D volume family**.
+- **Catalog:** **13 shape types**, shown as **19 picker tiles** — a full 2D family plus a **3D volume family**.
 - **The tool:** the **Chalking Kit** — 32-chalk durability (2D −1 / 3D −2, completed placements only; no
   lockout at 0, the kit can never break). **32 is a HARD ceiling** (`ItemGuideTool.MaxChalk`, v0.2.23):
   chalk is read straight off the stack attribute and clamped, and `GetMaxDurability`/`GetRemainingDurability`
@@ -110,7 +111,8 @@ in a versioned subfolder).
   reshape, insert, lock; right-click = cancel / lock-in-place). **Edit** is settings-only: left-click
   **selects** a guide and the GUI's setting rows then act on THAT guide (no reshaping). **Delete** dispels.
 - **Placement** is **two clicks for most shapes**, with deliberately-reopened exceptions: free/right/
-  isosceles triangles and the 3D cylinder/cone/box take **three clicks** (base + a height click); the
+  isosceles triangles and the 3D cylinder/tapered cylinder/cone/box take **three clicks** (base + a height
+  click) — the Tapered Cylinder taking a **fourth** for its top radius; the
   Free-Shape takes **unbounded chained clicks** (≤64). Right-click steps a multi-click draft back one click.
 - **Reshaping (2D):** grab a point to move it; click the body to insert-and-grab (arch + Free-Shape
   families) or grab the nearest handle (every other parametric shape); lock points as constraints. Two
@@ -132,7 +134,7 @@ in a versioned subfolder).
 
 ---
 
-## 5. The shape catalog (12 types / 18 tiles)
+## 5. The shape catalog (13 types / 19 tiles)
 
 Built on a **primitives + constraint-modifiers** model — constrained variants are **not** separate types,
 and fill is **not** a type. `enum GuideShapeType { Arch=0, Ellipse=1, Line=2, Triangle=3, Rectangle=4,
@@ -143,7 +145,7 @@ Polygon=5, FreeShape=6, Sphere=7, Dome=8, Cylinder=9, Cone=10, Box=11 }`.
 Triangle · Right · Equilateral · Isosceles (Triangle + constraint) · Rectangle · Square (Rectangle+Square) ·
 Polygon (regular N-gon, 3–24 sides, count in `GuideData.Sides`) · Free-Shape (irregular polyline, `IsClosed`).
 
-**3D volume section (5 tiles):** Sphere · Dome · Cylinder · Cone · Box. **Volumes are always a one-cell
+**3D volume section (6 tiles):** Sphere · Dome · Cylinder · Tapered Cylinder · Cone · Box. **Volumes are always a one-cell
 hollow shell — Filled is retired for the 3D family (v0.2.17):** post-exposed-face-meshing a filled interior
 draws nothing, so it was pure invisible voxel cost; every volume shape now coerces `filled=false`, which also
 auto-lightens legacy filled saves. **Always Volumetric** (Surface + Divisions gated off, server-side and in
@@ -166,7 +168,7 @@ Pure, dependency-light layers under a server-authoritative core. Namespaces matc
 |---|---|---|
 | `src/` | `Layout` | `LayoutModSystem` — composition root (registers systems, item, channels, keybinds, HUD). |
 | `Guide/` | `Layout.Guide` | Pure data: `GuideData`, `ControlPoint`, `VoxelPosition`, the pinned enums, projection/render settings. Depends only on `Vec3d`. |
-| `Shapes/` | `Layout.Shapes` | Pure geometry math (no engine deps beyond `Vec3d`). `IGuideShape` seam; `ShapeFactory`; the 12 shape classes; `CatmullRomSpline`; `VoxelMarch` (the one cell-quantise convention); `ShapeGeometry`; `SoftPointFlow`; `DivisionMarks`. |
+| `Shapes/` | `Layout.Shapes` | Pure geometry math (no engine deps beyond `Vec3d`). `IGuideShape` seam; `ShapeFactory`; the 13 shape classes; `CatmullRomSpline`; `VoxelMarch` (the one cell-quantise convention); `ShapeGeometry`; `SoftPointFlow`; `DivisionMarks`. |
 | `Systems/` | `Layout.Systems` | Side-neutral `GuideManager` (authority + JSON persistence + cap validation), persistence/block-probe seams, `GuideLockManager`, `DraftManager`, `UndoManager`, `GuideRenderer`, `GuideMeshBuilder`. |
 | `Network/` | `Layout.Network` | `PacketTypes` (protobuf DTOs, fixed append-only registration), `ServerNetworkHandler`, `ClientNetworkHandler`. |
 | `UI/` | `Layout.UI` | `GuideToolGui` (the F-menu icon-tile GUI), `LayoutToolIcons` (Cairo glyphs), `GuideHud`. |

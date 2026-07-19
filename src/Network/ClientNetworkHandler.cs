@@ -544,14 +544,14 @@ namespace Layout.Network
             ShapeConstraint constraint = ShapeConstraint.None,
             PlaneAxis shapePlaneAxis = PlaneAxis.Y,
             bool inverted = false, int sides = 0, Vec3d apex = null,
-            IReadOnlyList<Vec3d> chain = null, bool closed = false)
+            IReadOnlyList<Vec3d> chain = null, bool closed = false, Vec3d rim = null)
         {
             bool localMutation = AuthorityMode == ClientAuthorityMode.Local && _local != null;
             _lastMutationWasLocal = localMutation;
             if (localMutation)
             {
                 GuideData created = _local.Create(start, end, settings, shapeType, constraint,
-                    shapePlaneAxis, inverted, sides, apex, chain, closed);
+                    shapePlaneAxis, inverted, sides, apex, chain, closed, rim);
 
                 // F5: PRIVATE placement on a Layout server still spends chalk — private is private, not
                 // free. The server owns the inventory but cannot see private guides, so the honest client
@@ -580,7 +580,7 @@ namespace Layout.Network
                 Vec3Dto.From(start), Vec3Dto.From(end), RenderSettingsDto.From(settings),
                 (int)shapeType, (int)constraint, (int)shapePlaneAxis,
                 inverted, sides, apex == null ? null : Vec3Dto.From(apex),
-                chainDto, closed));
+                chainDto, closed, rim == null ? null : Vec3Dto.From(rim)));
         }
 
         /// <summary>

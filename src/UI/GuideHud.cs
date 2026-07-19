@@ -320,7 +320,8 @@ namespace Layout.UI
             // Shape changes fold into the scale key slot cheaply: shifting the key by shape/constraint/
             // fill/sides/draft-stage/chain-length forces a re-measure whenever any changes mid-draft.
             int shapeKey = scale + 1000 * ((int)_tool.Shape + 4 * (int)_tool.Constraint + 16 * (_tool.Filled ? 1 : 0)
-                + 32 * _tool.Sides + 1024 * (_tool.AwaitingApex ? 1 : 0) + 2048 * _tool.ChainCount);
+                + 32 * _tool.Sides + 1024 * (_tool.AwaitingApex ? 1 : 0) + 2048 * _tool.ChainCount
+                + 65536 * (_tool.AwaitingRim ? 1 : 0));
             if (qx == _draftKeyX && qy == _draftKeyY && qz == _draftKeyZ && shapeKey == _draftKeyScale) return;
             _draftKeyX = qx; _draftKeyY = qy; _draftKeyZ = qz; _draftKeyScale = shapeKey;
 
@@ -337,13 +338,15 @@ namespace Layout.UI
                 else
                 {
                     // A three-click triangle whose base is down measures with the aim as its APEX (the
-                    // base is fixed); every other draft measures start → aim, as ever (Session 11).
+                    // base is fixed); a four-click Tapered Cylinder on its last stage measures with the
+                    // aim as its RIM (0.2.24); every other draft measures start → aim (Session 11).
                     Vec3d end = _tool.AwaitingApex ? _tool.DraftSecond : aim;
                     shape = ShapeFactory.Create(
                         _tool.Shape, _tool.Constraint, _tool.DraftPlaneAxis, start, end,
                         sides: _tool.Sides);
-                    if (_tool.AwaitingApex && shape.ControlPoints.Count > 2)
-                        shape.MoveControlPoint(2, aim);
+                    DraftManager.ApplyPlacementPoints(shape, _tool.Shape, _tool.Constraint,
+                        _tool.AwaitingRim ? _tool.DraftThird : _tool.AwaitingApex ? aim : null,
+                        _tool.AwaitingRim ? aim : null);
                 }
                 var voxels = shape.GetVoxelPositions(scale, _tool.Filled);
                 _draftVoxelCount = voxels.Count;

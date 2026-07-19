@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 6;
+        public const int ProtocolVersion = 7;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -457,13 +457,16 @@ namespace Layout.Network
         // first/last corners for the legacy fields) and whether it closed back onto corner 0.
         [ProtoMember(10)] public Vec3Dto[] Chain;
         [ProtoMember(11)] public bool Closed;
+        // 0.2.24 additive (protocol 7): the FOURTH click of a Tapered Cylinder — the rim point whose
+        // distance from the axis sets the lid's radius. Null for every other shape (they derive one).
+        [ProtoMember(12)] public Vec3Dto Rim;
 
         public GuideCreateRequestPacket() { }
 
         public GuideCreateRequestPacket(Vec3Dto start, Vec3Dto end, RenderSettingsDto settings,
             int shapeType = 0, int constraint = 0, int shapePlaneAxis = 0,
             bool inverted = false, int sides = 0, Vec3Dto apex = null,
-            Vec3Dto[] chain = null, bool closed = false)
+            Vec3Dto[] chain = null, bool closed = false, Vec3Dto rim = null)
         {
             Start = start;
             End = end;
@@ -476,6 +479,7 @@ namespace Layout.Network
             Apex = apex;
             Chain = chain;
             Closed = closed;
+            Rim = rim;
         }
     }
 

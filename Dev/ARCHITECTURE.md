@@ -1,6 +1,6 @@
-# Layout — Architecture Document (v3.4)
+# Layout — Architecture Document (v3.5)
 
-**Supersedes v3.3 — the seven-item backlog delta (v0.2.22–v0.2.23).** v2.5 consolidated five
+**Supersedes v3.4 — the Tapered Cylinder delta (v0.2.24–v0.2.28).** v2.5 consolidated five
 revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
 catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
 surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
@@ -27,14 +27,14 @@ channels moved from server config to a **client preference** (protocol 6, via th
 `ChalkRefillPrefsPacket`), a **hard 32-chalk ceiling** immune to other mods' crafting-quality bonuses, the
 removal of the hotbar refill-off warning, an audit of the multiplayer draft packet rate (no change needed),
 and publication readiness — authorship, **all-1.22.x** targeting, and portable build paths. The register,
-file tree, module map, persistence, and edge cases below are updated in place to the v0.2.23 / DataVersion 8
-/ protocol-6 / 68-file state; the per-revision deltas live in **`CHANGELOG_ARCHITECTURE.md`** (indexed below).
+file tree, module map, persistence, and edge cases below are updated in place to the v0.2.28 / DataVersion 8
+/ protocol-7 / 69-file state; the per-revision deltas live in **`CHANGELOG_ARCHITECTURE.md`** (indexed below).
 
-**Where the project stands:** Layout **v0.2.23** is built, packaged, playtested, and **pushed on `main`**
+**Where the project stands:** Layout **v0.2.28** is built, packaged, playtested, and **pushed on `main`**
 (the `ClientOnlyFallback` branch merged via PR #1).
 All seven modules, the complete 2D/3D catalog, normal public multiplayer, vanilla-server local
 fallback, mixed public/private operation, and the full F5 chalk system run against **VS 1.22.x** / .NET 10.
-The catalog is **12 shape types / 18 picker tiles**, **DataVersion 8**, **protocol 6**, and **68 source
+The catalog is **13 shape types / 19 picker tiles**, **DataVersion 8**, **protocol 7**, and **69 source
 files**. F4 and F5 are feature-complete. The large-guide **mesh pass Stage A (exposed-face meshing) has
 shipped** and **filled 3D volumes are retired**, so a ~100-block hollow Sphere now draws only its shell skin.
 The Session-16 backlog is fully delivered. Remaining: mesh Stage B (spatial chunks + culling) **only if Stage
@@ -84,6 +84,7 @@ persistence / edge cases below, and each has a fuller narrative in its session r
 
 | Doc rev | Mod versions | Theme | Session record |
 |---|---|---|---|
+| v3.5 | v0.2.24 → v0.2.28 | Tapered Cylinder (4-click frustum, protocol 7); scan-guard and cap-clamp fixes; raw-vessel recipe fix | `SESSION_18.md` |
 | v3.4 | v0.2.22 → v0.2.23 | Refill config → client (protocol 6), hard 32-chalk ceiling, publication readiness | `SESSION_17.md` |
 | v3.3 | v0.2.10 → v0.2.21 | Mesh Stage A (exposed-face), filled-volume retirement, refill channels, polish | `SESSION_16.md` |
 | v3.2 | v0.2.0 → v0.2.9 | The Chalking Kit (F5): durability, powder refills, ground storage | `SESSION_15.md` |
@@ -110,14 +111,16 @@ blocks underneath.
 The tool is a held item with an F-key **tile menu** (Create/Edit/Delete mode, the shape picker, voxel scale
 1×1×1–16×16×16 defaulting to the finest to match chisel resolution, projection, plane, fill); all interaction
 uses first-person clicks and crosshair targeting rather than transform gizmos. The **shape catalog** is
-**12 shape types shown as 18 picker tiles**, split into a **2D section** — arch · half-circle · circle ·
+**13 shape types shown as 19 picker tiles**, split into a **2D section** — arch · half-circle · circle ·
 ellipse · line · triangle (+ right/equilateral/isosceles) · rectangle (+ square) · polygon (regular N-gon) ·
-Free-Shape (irregular polyline) — and a **3D VOLUME section** — sphere · dome · cylinder · cone · box. It is
+Free-Shape (irregular polyline) — and a **3D VOLUME section** — sphere · dome · cylinder · tapered
+cylinder · cone · box. It is
 built on the **primitives+constraints** model (a half-circle is an arch under a SemiCircle constraint, a
 circle is an ellipse under a Circle constraint, a square is a rectangle under a Square constraint, and the
 triangle constraints derive the apex); constrained variants are **not** separate types. **Most shapes place
 with a two-click gesture**, with the deliberately reopened exceptions: the free/right/isosceles triangles and
-the 3D cylinder/cone/box take **three clicks** (base, then a height click), and the Free-Shape takes
+the 3D cylinder/cone/box take **three clicks** (base, then a height click), the Tapered Cylinder takes
+**four** (base, height, then a rim click setting the top radius — the only 4-click shape), and the Free-Shape takes
 **unbounded chained clicks** (≤64). Players reshape 2D guides by grabbing points (clicking the body
 inserts-and-grabs in one motion on the arch and Free-Shape families, or grabs the nearest handle on every
 other parametric shape), locking points as constraints, and relying on two standing contracts:
@@ -220,7 +223,7 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 - **The catalog (v0.1.23 state):** arch, half-circle, circle, ellipse, **line, triangle
   (+ right / equilateral / isosceles), rectangle (+ square), polygon (regular N-gon, side count = per-guide
   data, 3–24), Free-Shape (irregular polyline)**, and the **3D VOLUME family (v0.1.20–0.1.21): sphere, dome,
-  cylinder, cone, box** (see the dedicated bullet below). **Placement is two clicks for every shape EXCEPT the
+  cylinder, tapered cylinder, cone, box** (see the dedicated bullet below). **Placement is two clicks for every shape EXCEPT the
   free/right/isosceles triangles (THREE: anchor · anchor · height — SHIFT on the third click centres the
   apex on the base) and the Free-Shape (UNBOUNDED chained clicks, ≤64: click the LAST placed corner to
   finish open, the FIRST corner (≥3) to close the loop; the aim snaps onto those targets)** — the human
@@ -484,7 +487,7 @@ Layout/
             └── BreakConstraintCommand.cs
 ```
 
-**68 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
+**69 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
 ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 in Session 10: LayoutToolIcons; + 4 in Session 11:
 PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 for the 3D family (v0.1.20–0.1.21):
 SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape; + 5 for F4: ClientAuthorityMode,
@@ -922,7 +925,7 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
 This v3.2 document is the authoritative architecture, consolidated to current state: **Layout v0.2.9 on
 `main`, built and playtested**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
 (+ right/equilateral/isosceles), rectangles (+ square), polygons, and Free-Shapes — plus the **3D volume
-family** (spheres, domes, cylinders, cones, boxes) place, preview, reshape, fill, lock/unlock, divide, and
+family** (spheres, domes, cylinders, tapered cylinders, cones, boxes) place, preview, reshape, fill, lock/unlock, divide, and
 project onto surfaces under server or local authority against VS 1.22.3 / .NET 10, drawn with the
 **Chalking Kit**'s finite, powder-refillable chalk. Status, flagged decisions, and the
 punch-list live in `PROJECT_STATUS.md` and `TODO.md`; the current-state brief for external analysis lives in

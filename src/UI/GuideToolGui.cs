@@ -90,13 +90,13 @@ namespace Layout.UI
             "line", "triangle", "righttri", "equilateral",
             "isosceles", "rectangle", "square", "polygon",
             "freeshape",
-            "sphere", "dome", "cylinder", "cone", "box" };
+            "sphere", "dome", "cylinder", "taperedcylinder", "cone", "box" };
         private static readonly string[] ShapeNames = {
             "Arch", "Half-circle", "Circle", "Ellipse",
             "Line", "Triangle", "Right triangle", "Equilateral",
             "Isosceles", "Rectangle", "Square", "Polygon",
             "Free-Shape",
-            "Sphere", "Dome", "Cylinder", "Cone", "Box" };
+            "Sphere", "Dome", "Cylinder", "Tapered Cylinder", "Cone", "Box" };
 
         // Voxel-edge scale, ascending: the NxN icon IS the voxel count (1x1 smallest ... 16x16 = full block),
         // exactly like the game's native scale icons. Names are voxel counts, not fractions (human-requested).
@@ -126,7 +126,7 @@ namespace Layout.UI
             LayoutToolIcons.Isosceles, LayoutToolIcons.Rectangle, LayoutToolIcons.Square, LayoutToolIcons.Polygon,
             LayoutToolIcons.FreeShapeIcon,
             LayoutToolIcons.Sphere, LayoutToolIcons.Dome, LayoutToolIcons.Cylinder,
-            LayoutToolIcons.Cone, LayoutToolIcons.Box };
+            LayoutToolIcons.TaperedCylinder, LayoutToolIcons.Cone, LayoutToolIcons.Box };
         private static readonly string[] ModeIcons = { LayoutToolIcons.ModeCreate, LayoutToolIcons.ModeEdit, LayoutToolIcons.ModeDelete };
         private static readonly string[] ProjIcons = { LayoutToolIcons.ProjVolumetric, LayoutToolIcons.ProjSurface };
         private static readonly string[] FillIcons = { LayoutToolIcons.FillHollow, LayoutToolIcons.FillFilled };
@@ -1336,6 +1336,7 @@ namespace Layout.UI
             "sphere"      => (GuideShapeType.Sphere,    ShapeConstraint.None),
             "dome"        => (GuideShapeType.Dome,      ShapeConstraint.None),
             "cylinder"    => (GuideShapeType.Cylinder,  ShapeConstraint.None),
+            "taperedcylinder" => (GuideShapeType.TaperedCylinder, ShapeConstraint.None),
             "cone"        => (GuideShapeType.Cone,      ShapeConstraint.None),
             "box"         => (GuideShapeType.Box,       ShapeConstraint.None),
             _             => (GuideShapeType.Arch,      ShapeConstraint.None)
@@ -1360,8 +1361,9 @@ namespace Layout.UI
             GuideShapeType.Sphere    => 13,
             GuideShapeType.Dome      => 14,
             GuideShapeType.Cylinder  => 15,
-            GuideShapeType.Cone      => 16,
-            GuideShapeType.Box       => 17,
+            GuideShapeType.TaperedCylinder => 16,
+            GuideShapeType.Cone      => 17,
+            GuideShapeType.Box       => 18,
             _ => constraint == ShapeConstraint.SemiCircle ? 1 : 0
         };
 

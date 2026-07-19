@@ -6,24 +6,34 @@ using Layout.Guide;
 namespace Layout.Shapes
 {
     /// <summary>
-    /// The cylinder (0.1.21): THREE clicks — the base diameter (two anchors, the circle gesture), then a
-    /// height click, projected onto the base's axis and stored as the third point (Primary — the "lid
-    /// handle", grabbable to re-height after placement). The axis is the clicked plane's normal, so a
-    /// ground cylinder stands upright and a wall cylinder pokes out of the wall. Hollow = the open TUBE
-    /// (the lateral surface — its ends read as rings); Filled = the solid, flat-capped cylinder.
+    /// The tapered cylinder / frustum (0.2.24): FOUR clicks — the base diameter (two anchors, the circle
+    /// gesture), a height click projected onto the base's axis (Primary — the lid handle), then a TOP
+    /// RADIUS click whose distance from the axis sets how wide the lid is (Primary — the rim handle).
+    /// The windmill/tower shape: a cylinder that narrows (or flares) toward the top. Top radius 0 degenerates
+    /// to a cone, top radius = base radius to a plain cylinder. Always a hollow shell (every 3D volume is).
     /// </summary>
     /// <remarks>
-    /// VOXELISATION is centre-banded rather than exact (the axis can be arbitrary after 3D drags): a cell
-    /// joins the shell when its centre lies within half a cell-diagonal of the lateral surface, inside the
-    /// axial span. Watertight by construction; walls may run two cells thick at diagonal orientations —
-    /// the accepted v1 trade. Solid is the matching fattened disc column, a strict superset of the shell.
-    /// Same scan guard scheme as the sphere.
+    /// Geometrically this is the cylinder and the cone generalised: identical centre-banded voxelisation,
+    /// scan guard, and lid-handle mechanics (see <see cref="CylinderShape"/> for the reasoning), with the
+    /// band compared against the LOCAL radius, which interpolates linearly from the base radius at a=0 to
+    /// the top radius at a=h — exactly the cone's rule with a non-zero endpoint.
+    ///
+    /// The rim handle stores only a DISTANCE: it is always re-seated on the +û side of the top ring, so
+    /// dragging it anywhere resolves to "how far from the axis", never "which way round". Moving a BASE
+    /// anchor preserves the taper RATIO (top/base), not the absolute top radius — resizing the base of a
+    /// windmill tower should scale the whole silhouette, not just its foot. (Decide-and-flag.)
     /// </remarks>
-    public sealed class CylinderShape : IGuideShape, IThresholdVoxelCounter
+    public sealed class TaperedCylinderShape : IGuideShape, IThresholdVoxelCounter
     {
         private const double MinRadius = 0.05;
         private const double MinHeight = 0.05;
         private const long MaxScanCells = 4_000_000;
+
+        /// <summary>The born taper before the fourth click lands: a lid 60% of the base's width.</summary>
+        public const double DefaultTopRatio = 0.6;
+
+        /// <summary>The rim handle's reach, as a multiple of the base radius — a flare stop, not a wall.</summary>
+        private const double MaxTopRatio = 4.0;
 
         private readonly List<ControlPoint> _controlPoints;
         private readonly PlaneAxis _preferredAxis;
@@ -32,34 +42,34 @@ namespace Layout.Shapes
 
         public ShapeConstraint Constraint => ShapeConstraint.None;
 
-        /// <summary>Creates a fresh cylinder from the base clicks; the born height is one diameter
-        /// (a square profile) until the third click sets it.</summary>
-        public CylinderShape(Vec3d a, Vec3d b, PlaneAxis planeAxis, bool inverted = false)
+        /// <summary>Creates a fresh tapered cylinder from the base clicks; the born height is one diameter
+        /// and the born lid <see cref="DefaultTopRatio"/> of the base, until clicks 3 and 4 set them.</summary>
+        public TaperedCylinderShape(Vec3d a, Vec3d b, PlaneAxis planeAxis, bool inverted = false)
         {
             _preferredAxis = planeAxis;
             _controlPoints = new List<ControlPoint>
             {
                 new ControlPoint(new Vec3d(a.X, a.Y, a.Z), isAnchor: true),
                 new ControlPoint(new Vec3d(b.X, b.Y, b.Z), isAnchor: true),
-                new ControlPoint(new Vec3d(a.X, a.Y, a.Z), isPrimary: true)
+                new ControlPoint(new Vec3d(a.X, a.Y, a.Z), isPrimary: true),   // lid handle (height)
+                new ControlPoint(new Vec3d(a.X, a.Y, a.Z), isPrimary: true)    // rim handle (top radius)
             };
-            if (TryGetBaseFrame(out Vec3d c, out double r, out _, out _, out Vec3d n0))
+            if (TryGetBaseFrame(out Vec3d c, out double r, out Vec3d u, out _, out Vec3d n0))
             {
                 double h = Math.Max(MinHeight, 2.0 * r) * (inverted ? -1.0 : 1.0);
-                _controlPoints[2].SetPosition(c.X + n0.X * h, c.Y + n0.Y * h, c.Z + n0.Z * h);
+                SeatHandles(c, u, n0, h, r * DefaultTopRatio);
             }
         }
 
         /// <summary>Adopts an existing list (load/wire path). Shared by reference, never copied.</summary>
-        public CylinderShape(List<ControlPoint> controlPoints, PlaneAxis planeAxis)
+        public TaperedCylinderShape(List<ControlPoint> controlPoints, PlaneAxis planeAxis)
         {
             _controlPoints = controlPoints ?? throw new ArgumentNullException(nameof(controlPoints));
             _preferredAxis = planeAxis;
         }
 
-        // --- frame ------------------------------------------------------------------------------
+        // --- frame (the cylinder recipe, plus the top radius) ---------------------------------------
 
-        // The UNSIGNED base frame (n̂ = positive-biased base normal). The signed height rides h below.
         private bool TryGetBaseFrame(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n)
         {
             c = u = m = n = null; r = 0;
@@ -69,25 +79,46 @@ namespace Layout.Shapes
                 return false;
             c = new Vec3d((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, (a.Z + b.Z) * 0.5);
             r = baseLen * 0.5;
-            // Deterministic axis (0.1.23): +up regardless of base-anchor order, so dragging the second
-            // base point to the other side no longer inverts the cylinder into the floor.
+            // Deterministic axis (0.1.23): +up regardless of base-anchor order (see CylinderShape).
             n = ShapeGeometry.BaseNormal(u, _preferredAxis);
             return n != null && r >= MinRadius;
         }
 
-        private bool TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n, out double h)
+        private bool TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n,
+            out double h, out double rTop)
         {
-            h = 0;
+            h = 0; rTop = 0;
             if (!TryGetBaseFrame(out c, out r, out u, out m, out n) || _controlPoints.Count < 3) return false;
             Vec3d p = _controlPoints[2].WorldPosition;
             h = (p.X - c.X) * n.X + (p.Y - c.Y) * n.Y + (p.Z - c.Z) * n.Z;
             if (Math.Abs(h) < MinHeight) h = h < 0 ? -MinHeight : MinHeight;
+            rTop = _controlPoints.Count >= 4
+                ? RadialDistance(_controlPoints[3].WorldPosition, c, n)
+                : r * DefaultTopRatio;
+            if (rTop > r * MaxTopRatio) rTop = r * MaxTopRatio;
+            if (rTop < 0) rTop = 0;
             return true;
         }
 
-        // Re-seats the lid handle exactly on the axis at signed height h (after any move).
-        private void SeatHandle(Vec3d c, Vec3d n, double h) =>
-            _controlPoints[2].SetPosition(c.X + n.X * h, c.Y + n.Y * h, c.Z + n.Z * h);
+        // How far a world point sits from the axis (its height along the axis is irrelevant — the rim
+        // handle carries a distance, and the shape re-seats it at the lid).
+        private static double RadialDistance(Vec3d p, Vec3d c, Vec3d n)
+        {
+            double px = p.X - c.X, py = p.Y - c.Y, pz = p.Z - c.Z;
+            double a = px * n.X + py * n.Y + pz * n.Z;
+            double rx = px - n.X * a, ry = py - n.Y * a, rz = pz - n.Z * a;
+            return Math.Sqrt(rx * rx + ry * ry + rz * rz);
+        }
+
+        // Re-seats the lid handle on the axis at signed height h, and the rim handle on the +û side of
+        // that lid at radius rTop (after any move).
+        private void SeatHandles(Vec3d c, Vec3d u, Vec3d n, double h, double rTop)
+        {
+            double lx = c.X + n.X * h, ly = c.Y + n.Y * h, lz = c.Z + n.Z * h;
+            if (_controlPoints.Count > 2) _controlPoints[2].SetPosition(lx, ly, lz);
+            if (_controlPoints.Count > 3)
+                _controlPoints[3].SetPosition(lx + u.X * rTop, ly + u.Y * rTop, lz + u.Z * rTop);
+        }
 
         // --- IGuideShape: voxels ---------------------------------------------------------------------
 
@@ -95,14 +126,15 @@ namespace Layout.Shapes
         {
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             var result = new List<VoxelPosition>();
-            if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h)) return result;
-            if (ScanTooBig(scale, c, n, r, h)) return result;
+            if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h, out double rTop))
+                return result;
+            if (ScanTooBig(scale, c, n, r, rTop, h)) return result;
 
             double cell = scale / 16.0;
-            double hd = cell * 0.866;                            // half the cell diagonal — the band width
+            double hd = cell * 0.866;
             double lo = Math.Min(0, h), hi = Math.Max(0, h);
 
-            GetAabb(c, n, r, h, cell, out double ax0, out double ay0, out double az0,
+            GetAabb(c, n, r, rTop, h, cell, out double ax0, out double ay0, out double az0,
                 out double ax1, out double ay1, out double az1);
 
             for (int ix = AlignDown(ax0, scale); ix <= AlignDown(ax1, scale); ix += scale)
@@ -114,11 +146,12 @@ namespace Layout.Shapes
                     for (int iz = AlignDown(az0, scale); iz <= AlignDown(az1, scale); iz += scale)
                     {
                         double pz = iz / 16.0 + cell * 0.5 - c.Z;
-                        double a = px * n.X + py * n.Y + pz * n.Z;          // axial coordinate
+                        double a = px * n.X + py * n.Y + pz * n.Z;
                         if (a < lo || a > hi) continue;
+                        double localR = r + (rTop - r) * (a / h);   // base radius → top radius, linearly
                         double rx = px - n.X * a, ry = py - n.Y * a, rz = pz - n.Z * a;
                         double rho = Math.Sqrt(rx * rx + ry * ry + rz * rz);
-                        bool keep = filled ? rho <= r + hd : Math.Abs(rho - r) <= hd;
+                        bool keep = filled ? rho <= localR + hd : Math.Abs(rho - localR) <= hd;
                         if (keep) result.Add(new VoxelPosition(ix, iy, iz, VoxelRenderType.Normal));
                     }
                 }
@@ -134,8 +167,9 @@ namespace Layout.Shapes
         public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter)
         {
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
-            if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h)) return 0;
-            if (ScanTooBig(scale, c, n, r, h)) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+            if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h, out double rTop))
+                return 0;
+            if (ScanTooBig(scale, c, n, r, rTop, h)) return GuideShapeVoxelCounting.Exceeded(stopAfter);
 
             stopAfter = Math.Max(0, stopAfter);
             double cell = scale / 16.0;
@@ -143,7 +177,7 @@ namespace Layout.Shapes
             double lo = Math.Min(0, h), hi = Math.Max(0, h);
             int count = 0;
 
-            GetAabb(c, n, r, h, cell, out double ax0, out double ay0, out double az0,
+            GetAabb(c, n, r, rTop, h, cell, out double ax0, out double ay0, out double az0,
                 out double ax1, out double ay1, out double az1);
 
             for (int ix = AlignDown(ax0, scale); ix <= AlignDown(ax1, scale); ix += scale)
@@ -157,9 +191,10 @@ namespace Layout.Shapes
                         double pz = iz / 16.0 + cell * 0.5 - c.Z;
                         double a = px * n.X + py * n.Y + pz * n.Z;
                         if (a < lo || a > hi) continue;
+                        double localR = r + (rTop - r) * (a / h);
                         double rx = px - n.X * a, ry = py - n.Y * a, rz = pz - n.Z * a;
                         double rho = Math.Sqrt(rx * rx + ry * ry + rz * rz);
-                        bool keep = filled ? rho <= r + hd : Math.Abs(rho - r) <= hd;
+                        bool keep = filled ? rho <= localR + hd : Math.Abs(rho - localR) <= hd;
                         if (!keep) continue;
                         count++;
                         if (count > stopAfter) return GuideShapeVoxelCounting.Exceeded(stopAfter);
@@ -169,35 +204,20 @@ namespace Layout.Shapes
             return count;
         }
 
-        // v0.2.25: measured off the REAL scan box (the same AABB the loops walk) instead of cubing the
-        // summed span 2r+|h|. That old bound treated an upright cylinder as though its bounding box were a
-        // cube of side (diameter + height) — for a born-height cylinder it over-counted the lattice by
-        // ~7x, so the guard fired at a ~4.5-block diameter and the placement drag stopped dead at barely
-        // half the voxel cap while the HUD still read ~56%. The box is cheap and exact; the guard now
-        // bounds actual scan COST, and the voxel cap is what limits size, as the HUD claims.
-        private static bool ScanTooBig(int scale, Vec3d c, Vec3d n, double r, double h)
+        // Measured off the REAL scan box, like the cylinder's (v0.2.25) — see CylinderShape.ScanTooBig.
+        private static bool ScanTooBig(int scale, Vec3d c, Vec3d n, double r, double rTop, double h)
         {
             double cell = scale / 16.0;
-            GetAabb(c, n, r, h, cell, out double x0, out double y0, out double z0,
+            GetAabb(c, n, r, rTop, h, cell, out double x0, out double y0, out double z0,
                 out double x1, out double y1, out double z1);
-            return ScanCells(scale, x0, y0, z0, x1, y1, z1) > MaxScanCells;
+            return CylinderShape.ScanCells(scale, x0, y0, z0, x1, y1, z1) > MaxScanCells;
         }
 
-        /// <summary>Cells the axis-aligned scan box walks — shared by the cylinder-family scan guards.</summary>
-        internal static long ScanCells(int scale, double x0, double y0, double z0,
-            double x1, double y1, double z1)
-        {
-            long nx = (long)((x1 - x0) * 16.0 / scale) + 3;
-            long ny = (long)((y1 - y0) * 16.0 / scale) + 3;
-            long nz = (long)((z1 - z0) * 16.0 / scale) + 3;
-            return nx * ny * nz;
-        }
-
-        private static void GetAabb(Vec3d c, Vec3d n, double r, double h, double cell,
+        private static void GetAabb(Vec3d c, Vec3d n, double r, double rTop, double h, double cell,
             out double x0, out double y0, out double z0, out double x1, out double y1, out double z1)
         {
             double ex = c.X + n.X * h, ey = c.Y + n.Y * h, ez = c.Z + n.Z * h;
-            double pad = r + cell;
+            double pad = Math.Max(r, rTop) + cell;
             x0 = Math.Min(c.X, ex) - pad; x1 = Math.Max(c.X, ex) + pad;
             y0 = Math.Min(c.Y, ey) - pad; y1 = Math.Max(c.Y, ey) + pad;
             z0 = Math.Min(c.Z, ez) - pad; z1 = Math.Max(c.Z, ez) + pad;
@@ -205,7 +225,7 @@ namespace Layout.Shapes
 
         private void ClaimHandleMarkers(List<VoxelPosition> cells, int scale)
         {
-            for (int i = 0; i < 3 && i < _controlPoints.Count; i++)
+            for (int i = 0; i < 4 && i < _controlPoints.Count; i++)
             {
                 ControlPoint cp = _controlPoints[i];
                 VoxelRenderType t = cp.IsLocked ? VoxelRenderType.Locked
@@ -219,25 +239,25 @@ namespace Layout.Shapes
 
         // --- IGuideShape: curve queries (targeting wireframe) ----------------------------------------
 
-        // Base loop from A → lateral A→A′ → top loop from A′ → top half back to B′ → lateral B′→B.
+        // Base loop from A → slant A→A′ → top loop from A′ → top half back to B′ → slant B′→B.
         private List<Vec3d> Wireframe(int samplesPerLoop)
         {
             var pts = new List<Vec3d>();
-            if (!TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n, out double h))
-                return pts;
+            if (!TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n,
+                out double h, out double rTop)) return pts;
             int nn = Math.Max(24, samplesPerLoop);
 
-            Vec3d Ring(double axial, double ang) => new Vec3d(
-                c.X + n.X * axial + (u.X * Math.Cos(ang) + m.X * Math.Sin(ang)) * r,
-                c.Y + n.Y * axial + (u.Y * Math.Cos(ang) + m.Y * Math.Sin(ang)) * r,
-                c.Z + n.Z * axial + (u.Z * Math.Cos(ang) + m.Z * Math.Sin(ang)) * r);
+            Vec3d Ring(double axial, double rad, double ang) => new Vec3d(
+                c.X + n.X * axial + (u.X * Math.Cos(ang) + m.X * Math.Sin(ang)) * rad,
+                c.Y + n.Y * axial + (u.Y * Math.Cos(ang) + m.Y * Math.Sin(ang)) * rad,
+                c.Z + n.Z * axial + (u.Z * Math.Cos(ang) + m.Z * Math.Sin(ang)) * rad);
 
-            for (int i = 0; i <= nn; i++) pts.Add(Ring(0, Math.PI + 2.0 * Math.PI * i / nn));   // base, from A
-            pts.Add(Ring(h, Math.PI));                                                          // lateral A→A′
-            for (int i = 0; i <= nn; i++) pts.Add(Ring(h, Math.PI + 2.0 * Math.PI * i / nn));   // top, from A′
+            for (int i = 0; i <= nn; i++) pts.Add(Ring(0, r, Math.PI + 2.0 * Math.PI * i / nn));
+            pts.Add(Ring(h, rTop, Math.PI));                                               // slant A→A′
+            for (int i = 0; i <= nn; i++) pts.Add(Ring(h, rTop, Math.PI + 2.0 * Math.PI * i / nn));
             int half = Math.Max(8, nn / 2);
-            for (int i = 0; i <= half; i++) pts.Add(Ring(h, Math.PI - Math.PI * i / half));     // A′→B′
-            pts.Add(Ring(0, 0));                                                                // lateral B′→B
+            for (int i = 0; i <= half; i++) pts.Add(Ring(h, rTop, Math.PI - Math.PI * i / half));
+            pts.Add(Ring(0, r, 0));                                                        // slant B′→B
             return pts;
         }
 
@@ -287,24 +307,40 @@ namespace Layout.Shapes
         {
             if (index < 0 || index >= _controlPoints.Count) return;
 
-            if (index == 2)
+            if (index == 3)
             {
-                // The lid handle slides along the AXIS: the drag projects onto it (signed — dragging
-                // through the base flips which way the cylinder grows).
-                if (!TryGetBaseFrame(out Vec3d c0, out _, out _, out _, out Vec3d n0)) return;
-                double h = (newPosition.X - c0.X) * n0.X + (newPosition.Y - c0.Y) * n0.Y
-                    + (newPosition.Z - c0.Z) * n0.Z;
-                if (Math.Abs(h) < MinHeight) h = h < 0 ? -MinHeight : MinHeight;
-                SeatHandle(c0, n0, h);
+                // The rim handle carries the TOP RADIUS only: the drag's distance from the axis, re-seated
+                // on the lid. Dragging it to the axis makes a cone; out to the base's width, a cylinder.
+                if (!TryGetFull(out Vec3d c3, out double r3, out Vec3d u3, out _, out Vec3d n3,
+                    out double h3, out _)) return;
+                double rTop = RadialDistance(newPosition, c3, n3);
+                if (rTop > r3 * MaxTopRatio) rTop = r3 * MaxTopRatio;
+                SeatHandles(c3, u3, n3, h3, rTop);
                 return;
             }
 
-            // A base move absorbs as recentre/resize; the lid keeps its signed height on the new axis.
-            double hOld = 0;
-            bool hadFull = TryGetFull(out _, out _, out _, out _, out _, out hOld);
+            if (index == 2)
+            {
+                // The lid handle slides along the AXIS (signed — dragging through the base flips the
+                // taper end-over-end); the rim rides along with it, keeping its radius.
+                if (!TryGetFull(out Vec3d c2, out _, out Vec3d u2, out _, out Vec3d n2, out _, out double rTop2))
+                    return;
+                double h = (newPosition.X - c2.X) * n2.X + (newPosition.Y - c2.Y) * n2.Y
+                    + (newPosition.Z - c2.Z) * n2.Z;
+                if (Math.Abs(h) < MinHeight) h = h < 0 ? -MinHeight : MinHeight;
+                SeatHandles(c2, u2, n2, h, rTop2);
+                return;
+            }
+
+            // A base move absorbs as recentre/resize: the lid keeps its signed height on the new axis and
+            // the lid keeps its taper RATIO, so the whole silhouette scales with the base.
+            double ratio = DefaultTopRatio, hOld = 0;
+            if (TryGetFull(out _, out double rOld, out _, out _, out _, out hOld, out double rTopOld)
+                && rOld > MinRadius)
+                ratio = rTopOld / rOld;
             _controlPoints[index].SetPosition(newPosition.X, newPosition.Y, newPosition.Z);
-            if (hadFull && TryGetBaseFrame(out Vec3d c1, out _, out _, out _, out Vec3d n1))
-                SeatHandle(c1, n1, hOld);
+            if (TryGetBaseFrame(out Vec3d c1, out double r1, out Vec3d u1, out _, out Vec3d n1))
+                SeatHandles(c1, u1, n1, Math.Abs(hOld) < MinHeight ? 2.0 * r1 : hOld, r1 * ratio);
         }
 
         public void RecalculatePhantomPoints() { /* no phantoms */ }

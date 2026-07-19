@@ -39,7 +39,7 @@
     "ingredientPattern": "PPP,PLP,PPP",
     "ingredients": {
       "P": { "type": "item", "code": "game:powder-*" },
-      "L": { "type": "block", "code": "game:jug-*" }
+      "L": { "type": "block", "code": "game:jug-*-fired" }
     },
     "width": 3,
     "height": 3,
@@ -93,7 +93,7 @@
     "ingredientPattern": "PPP,PLP,PPP",
     "ingredients": {
       "P": { "type": "item", "code": "game:flour-*" },
-      "L": { "type": "block", "code": "game:jug-*" }
+      "L": { "type": "block", "code": "game:jug-*-fired" }
     },
     "width": 3,
     "height": 3,

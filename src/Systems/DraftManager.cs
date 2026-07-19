@@ -48,16 +48,19 @@ namespace Layout.Systems
         public Vec3d Start { get; }
         public Vec3d End { get; }
         public Vec3d Apex { get; }
+        /// <summary>0.2.24: the fourth click of a Tapered Cylinder (the rim/top-radius point), else null.</summary>
+        public Vec3d Rim { get; }
         public int VoxelCount { get; }
         public int CapLimit { get; }
 
         public DraftCompletion(DraftCompletionStatus status, Vec3d start, Vec3d end, int voxelCount, int capLimit,
-            Vec3d apex = null)
+            Vec3d apex = null, Vec3d rim = null)
         {
             Status = status;
             Start = start;
             End = end;
             Apex = apex;
+            Rim = rim;
             VoxelCount = voxelCount;
             CapLimit = capLimit;
         }
@@ -115,6 +118,7 @@ namespace Layout.Systems
         private bool _hasDraft;
         private Vec3d _draftStart;                      // deep-copied; owned
         private Vec3d _draftSecond;                     // Session 11: the placed BASE end of a 3-click draft
+        private Vec3d _draftThird;                      // 0.2.24: the placed HEIGHT point of a 4-click draft
         private PlaneAxis _draftPlaneAxis = PlaneAxis.Y; // intrinsic plane for the ellipse family, from click 1's face
 
         // Session 11 (0.1.15): the Free-Shape's growing corner chain. Seeded with the start point on
@@ -203,11 +207,12 @@ namespace Layout.Systems
                     or GuideShapeType.Rectangle or GuideShapeType.Polygon
                     or GuideShapeType.FreeShape
                     or GuideShapeType.Sphere or GuideShapeType.Dome or GuideShapeType.Cylinder
-                    or GuideShapeType.Cone or GuideShapeType.Box => shape,
+                    or GuideShapeType.TaperedCylinder or GuideShapeType.Cone or GuideShapeType.Box => shape,
                 _ => GuideShapeType.Arch
             };
             _constraint = IsValidPair(_shape, constraint) ? constraint : ShapeConstraint.None;
             if (!NeedsApexClick(_shape, _constraint)) _draftSecond = null;
+            if (!NeedsRimClick(_shape)) _draftThird = null;
             // Switching away from the Free-Shape mid-draft drops any chained corners beyond the first
             // (the draft steps back to "one anchor placed", same as the 3-click base rule above).
             if (_shape != GuideShapeType.FreeShape && _draftChain.Count > 1)
@@ -232,8 +237,15 @@ namespace Layout.Systems
         public static bool NeedsApexClick(GuideShapeType shape, ShapeConstraint constraint) =>
             (shape == GuideShapeType.Triangle && constraint != ShapeConstraint.Equilateral)
             || shape == GuideShapeType.Cylinder
+            || shape == GuideShapeType.TaperedCylinder
             || shape == GuideShapeType.Cone
             || shape == GuideShapeType.Box;
+
+        /// <summary>
+        /// True when this shape places with a FOURTH click after the height one (0.2.24): only the
+        /// Tapered Cylinder, whose last click sets the lid's radius by its distance from the axis.
+        /// </summary>
+        public static bool NeedsRimClick(GuideShapeType shape) => shape == GuideShapeType.TaperedCylinder;
 
         /// <summary>True for the chained-click Free-Shape (Session 11, 0.1.15).</summary>
         public static bool IsChainShape(GuideShapeType shape) => shape == GuideShapeType.FreeShape;
@@ -280,6 +292,16 @@ namespace Layout.Systems
 
         /// <summary>True when the active draft has its base down and is now aiming the apex (click 3 of 3).</summary>
         public bool AwaitingApex => _hasDraft && _draftSecond != null;
+
+        /// <summary>
+        /// The placed HEIGHT point of a four-click draft (the third click), as a deep copy — or null while
+        /// the draft is still aiming its height (or the shape is not a four-click one).
+        /// </summary>
+        public Vec3d DraftThird => _hasDraft && _draftThird != null
+            ? new Vec3d(_draftThird.X, _draftThird.Y, _draftThird.Z) : null;
+
+        /// <summary>True when the active draft has its height down and is now aiming the RIM (click 4 of 4).</summary>
+        public bool AwaitingRim => _hasDraft && _draftThird != null;
 
         // --- Free-Shape corner chain (Session 11, 0.1.15) ----------------------------------------
 
@@ -354,6 +376,7 @@ namespace Layout.Systems
             if (startPoint == null) throw new ArgumentNullException(nameof(startPoint));
             _draftStart = new Vec3d(startPoint.X, startPoint.Y, startPoint.Z);
             _draftSecond = null;
+            _draftThird = null;
             _draftChain.Clear();
             _draftChain.Add(new Vec3d(startPoint.X, startPoint.Y, startPoint.Z));
             _draftPlaneAxis = shapePlaneAxis;
@@ -372,6 +395,16 @@ namespace Layout.Systems
         }
 
         /// <summary>
+        /// Stores the third click of a FOUR-click draft (the height point); the draft then awaits its rim
+        /// click. Only meaningful when <see cref="NeedsRimClick"/> is true for the current shape (0.2.24).
+        /// </summary>
+        public void PlaceThirdPoint(Vec3d thirdPoint)
+        {
+            if (!_hasDraft || thirdPoint == null) return;
+            _draftThird = new Vec3d(thirdPoint.X, thirdPoint.Y, thirdPoint.Z);
+        }
+
+        /// <summary>
         /// Steps a draft back one click (the right-click cancel, generalised for multi-click drafts):
         /// a Free-Shape chain retracts its last placed corner, an awaited apex reverts to "base end not
         /// placed"; with only the first anchor left, the whole draft is discarded.
@@ -383,6 +416,11 @@ namespace Layout.Systems
             if (IsChainShape(_shape) && _draftChain.Count > 1)
             {
                 _draftChain.RemoveAt(_draftChain.Count - 1);
+                return true;
+            }
+            if (_draftThird != null)
+            {
+                _draftThird = null;      // 0.2.24: a rim stage steps back to "aiming the height"
                 return true;
             }
             if (_draftSecond != null)
@@ -403,7 +441,8 @@ namespace Layout.Systems
         /// complete. This is a pure check — it does NOT clear the draft; the caller clears it after a
         /// successful send, assembling the render settings via <see cref="BuildRenderSettings"/> then.
         /// </summary>
-        public DraftCompletion TryCompleteDraft(Vec3d endPoint, Vec3d apexPoint = null, bool inverted = false)
+        public DraftCompletion TryCompleteDraft(Vec3d endPoint, Vec3d apexPoint = null, bool inverted = false,
+            Vec3d rimPoint = null)
         {
             if (!_hasDraft || endPoint == null)
                 return new DraftCompletion(DraftCompletionStatus.NoActiveDraft, null, null, 0, 0);
@@ -411,11 +450,11 @@ namespace Layout.Systems
             var start = new Vec3d(_draftStart.X, _draftStart.Y, _draftStart.Z);
             var end = new Vec3d(endPoint.X, endPoint.Y, endPoint.Z);
             Vec3d apex = apexPoint == null ? null : new Vec3d(apexPoint.X, apexPoint.Y, apexPoint.Z);
+            Vec3d rim = rimPoint == null ? null : new Vec3d(rimPoint.X, rimPoint.Y, rimPoint.Z);
 
             IGuideShape preview = ShapeFactory.Create(_shape, _constraint, _draftPlaneAxis, start, end,
                 inverted, _sides);
-            if (apex != null && NeedsApexClick(_shape, _constraint) && preview.ControlPoints.Count > 2)
-                preview.MoveControlPoint(2, apex);
+            ApplyPlacementPoints(preview, _shape, _constraint, apex, rim);
             int count = _perGuideVoxelCap > 0
                 ? GuideShapeVoxelCounting.CountUpTo(preview, _scale, _filled, _perGuideVoxelCap)
                 : preview.GetVoxelCount(_scale, _filled);
@@ -425,7 +464,23 @@ namespace Layout.Systems
                 ? DraftCompletionStatus.RejectedOverCap
                 : DraftCompletionStatus.Ready;
 
-            return new DraftCompletion(status, start, end, count, _perGuideVoxelCap, apex);
+            return new DraftCompletion(status, start, end, count, _perGuideVoxelCap, apex, rim);
+        }
+
+        /// <summary>
+        /// Applies the later placement clicks onto a freshly built shape: the third click (apex/height) at
+        /// control point 2, and — for the four-click Tapered Cylinder — the fourth (rim/top radius) at
+        /// control point 3. The one place that mapping lives; the ghost preview, the HUD measure, the cap
+        /// pre-check, and the server's create path all route through it so they cannot drift apart.
+        /// </summary>
+        public static void ApplyPlacementPoints(IGuideShape shape, GuideShapeType type,
+            ShapeConstraint constraint, Vec3d apex, Vec3d rim)
+        {
+            if (shape == null) return;
+            if (apex != null && NeedsApexClick(type, constraint) && shape.ControlPoints.Count > 2)
+                shape.MoveControlPoint(2, apex);
+            if (rim != null && NeedsRimClick(type) && shape.ControlPoints.Count > 3)
+                shape.MoveControlPoint(3, rim);
         }
 
         /// <summary>Discards the active draft (on a successful send, an explicit cancel, logout, or tool-away).</summary>
@@ -434,6 +489,7 @@ namespace Layout.Systems
             _hasDraft = false;
             _draftStart = null;
             _draftSecond = null;
+            _draftThird = null;
             _draftChain.Clear();
         }
     }

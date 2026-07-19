@@ -42,6 +42,7 @@ namespace Layout.UI
         public const string Sphere = "layout-sphere";
         public const string Dome = "layout-dome";
         public const string Cylinder = "layout-cylinder";
+        public const string TaperedCylinder = "layout-taperedcylinder";
         public const string Cone = "layout-cone";
         public const string Box = "layout-box";
 
@@ -120,6 +121,7 @@ namespace Layout.UI
             reg[Sphere] = DrawSphere;
             reg[Dome] = DrawDome;
             reg[Cylinder] = DrawCylinder;
+            reg[TaperedCylinder] = DrawTaperedCylinder;
             reg[Cone] = DrawCone;
             reg[Box] = DrawBox;
             reg[ExpandDown] = (ctx, x, y, w, h, rgba) => DrawExpandChevron(ctx, x, y, w, h, rgba, down: true);
@@ -130,7 +132,8 @@ namespace Layout.UI
             foreach (string shapeName in new[]
             {
                 Arch, HalfCircle, Circle, Ellipse, Line, Triangle, RightTri, Equilateral,
-                Isosceles, Rectangle, Square, Polygon, FreeShapeIcon, Sphere, Dome, Cylinder, Cone, Box
+                Isosceles, Rectangle, Square, Polygon, FreeShapeIcon, Sphere, Dome, Cylinder,
+                TaperedCylinder, Cone, Box
             })
             {
                 var baseDrawer = reg[shapeName];
@@ -451,6 +454,23 @@ namespace Layout.UI
             void Ell(double yc) { ctx.Save(); ctx.Translate(cx, yc); ctx.Scale(rx, ry); ctx.Arc(0, 0, 1, 0, 2 * Math.PI); ctx.Restore(); ctx.Stroke(); }
             Ell(botY);
             Ell(topY);
+        }
+
+        // The tapered cylinder (0.2.24): the cylinder with a NARROWER top ellipse — the windmill silhouette.
+        private static void DrawTaperedCylinder(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 76);
+            Pen(ctx, rgba, c.L(2.4));
+            double cx = c.X(38), rxBot = c.L(21), rxTop = c.L(12);
+            double ryBot = c.L(7), ryTop = c.L(4);
+            double topY = c.Y(20), botY = c.Y(56);
+            // slanted sides
+            ctx.MoveTo(cx - rxBot, botY); ctx.LineTo(cx - rxTop, topY); ctx.Stroke();
+            ctx.MoveTo(cx + rxBot, botY); ctx.LineTo(cx + rxTop, topY); ctx.Stroke();
+            void Ell(double yc, double rx, double ry)
+            { ctx.Save(); ctx.Translate(cx, yc); ctx.Scale(rx, ry); ctx.Arc(0, 0, 1, 0, 2 * Math.PI); ctx.Restore(); ctx.Stroke(); }
+            Ell(botY, rxBot, ryBot);
+            Ell(topY, rxTop, ryTop);
         }
 
         // The cone (0.1.21): an elliptical base rising to a tip.

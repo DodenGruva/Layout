@@ -52,7 +52,9 @@ namespace Layout.Client
         private const int MoveSendIntervalMs = 100;     // ~10 Hz throttled move packets (the M4 figure)
         private const double MaxReach = 12.0;           // furthest a guide can be targeted, in blocks
         private const int PendingInsertTimeoutMs = 2000;
-        private const int CapClampIterations = 12;      // sub-voxel precision across the maximum grab reach
+        // Cap-clamp trackers (v0.2.25): one for the placement ghost, one for dragging a placed point.
+        private readonly CapClampTracker _draftClamp = new CapClampTracker();
+        private readonly CapClampTracker _dragClamp = new CapClampTracker();
 
         private readonly ICoreClientAPI _capi;
         private readonly DraftManager _draft;
@@ -342,7 +344,7 @@ namespace Layout.Client
                 // none the height handle follows the view ray. Every other stage still needs a block.
                 if (blockSel != null || AwaitingVolumeHeight)
                 {
-                    Vec3d aim = blockSel != null ? ResolveAnchorPoint(blockSel) : FreeAirHeightAim();
+                    Vec3d aim = blockSel != null ? ResolveAnchorPoint(blockSel) : FreeAirAim();
                     if (DraftManager.IsChainShape(_draft.Shape))
                     {
                         // Free-Shape (0.1.15): the ghost is the placed chain + a live segment to the
@@ -356,6 +358,17 @@ namespace Layout.Client
                         _hud.SetDraftAim(aim);
                         _renderer.SetDraftChainPreview(_draft.DraftChain, closing ? null : aim, closing,
                             BuildSettings(blockSel, aim));
+                    }
+                    else if (_draft.AwaitingRim)
+                    {
+                        // 0.2.24, the Tapered Cylinder's LAST stage: the base and height are down and the
+                        // crosshair now sets the lid's radius — the ghost's taper opens and closes live.
+                        aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
+                        _hud.SetDraftAim(aim);
+                        _renderer.SetDraftPreview(_draft.DraftStart, _draft.DraftSecond,
+                            BuildSettings(blockSel, aim),
+                            _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
+                            sides: _draft.Sides, apex: _draft.DraftThird, rim: aim);
                     }
                     else if (_draft.AwaitingApex)
                     {
@@ -483,6 +496,83 @@ namespace Layout.Client
             }
         }
 
+        /// <summary>
+        /// The cap clamp's search, spread ACROSS FRAMES instead of restarted every tick (v0.2.25).
+        /// </summary>
+        /// <remarks>
+        /// The 0.2.19 clamp bisected from scratch on every tick: 14 full voxel counts per frame, each one
+        /// walking the whole candidate lattice. Below the cap that cost nothing (the first check passes and
+        /// returns), but the moment the aim crossed the cap it became ~14x — measured at 42-55 ms per tick
+        /// for a 6-block cylinder at 1/16 scale, i.e. the game locking up exactly when the player pushes
+        /// past the limit and stays there. Chasing a target that moves a few pixels per frame does not need
+        /// a fresh 12-step bisection each time; it needs to remember where the boundary was.
+        ///
+        /// So this keeps ONE number — the reach (distance from the stationary reference) that last fitted —
+        /// and each tick spends at most TWO fit-checks nudging it: reach a little further when there is
+        /// headroom, pull in when there is not. It converges within a few frames, which at tick rate is
+        /// imperceptible, and an unmoved aim costs ZERO checks. Shrinking back under the cap stays instant
+        /// (the aim itself is tried first and wins outright). The reach is direction-agnostic on purpose:
+        /// these shapes cost about the same in any direction, so swinging the view re-uses the same reach
+        /// and simply re-verifies it.
+        ///
+        /// The unverified third step can leave the ghost a hair over cap for one frame. That is deliberate:
+        /// the ghost is transient, Stage-A meshing makes drawing it cheap, and the next tick corrects it.
+        /// The COMPLETING CLICK never relies on this — it re-checks through TryCompleteDraft / the server.
+        /// </remarks>
+        private sealed class CapClampTracker
+        {
+            private const int StepsPerTick = 2;             // fit-checks a single tick may spend
+            private const double Tolerance = 1.0 / 32.0;    // sub-voxel: tighter than this is not visible
+
+            private long _key = long.MinValue;
+            private double _lo;                             // largest reach known to FIT (0 = degenerate)
+            private double _hi = double.MaxValue;           // smallest reach known to FAIL
+
+            /// <summary>
+            /// The largest point along reference→aim that passes <paramref name="fits"/>, spending at most
+            /// <see cref="StepsPerTick"/> checks. <paramref name="key"/> identifies the search context
+            /// (shape, scale, stage, anchor); when it changes the learned bracket is discarded.
+            /// </summary>
+            public Vec3d Clamp(long key, Vec3d reference, Vec3d aim, System.Func<Vec3d, bool> fits)
+            {
+                if (key != _key) { _key = key; _lo = 0; _hi = double.MaxValue; }
+
+                double full = Dist(reference, aim);
+                if (full < 1e-6) return Copy(aim);
+
+                // Inside the reach already proven to fit: a smaller shape cannot cost more, so the ghost
+                // follows the cursor exactly, for free. This is the whole sub-cap path — zero checks.
+                if (full <= _lo) return Copy(aim);
+
+                double dx = (aim.X - reference.X) / full;
+                double dy = (aim.Y - reference.Y) / full;
+                double dz = (aim.Z - reference.Z) / full;
+                Vec3d At(double d) => new Vec3d(reference.X + dx * d, reference.Y + dy * d, reference.Z + dz * d);
+
+                // Narrow the standing bracket a couple of steps. _lo only rises and _hi only falls, so the
+                // answer converges monotonically instead of hunting — once the bracket is tighter than a
+                // sub-voxel the loop stops running and further cursor travel costs nothing at all.
+                double hi = Math.Min(_hi, full);
+                for (int i = 0; i < StepsPerTick && hi - _lo > Tolerance; i++)
+                {
+                    double mid = (_lo + hi) * 0.5;
+                    if (fits(At(mid))) _lo = mid;
+                    else { _hi = mid; hi = mid; }
+                }
+
+                return _lo >= full - 1e-6 ? Copy(aim) : Copy(At(_lo));
+            }
+
+            public void Reset() { _key = long.MinValue; _lo = 0; _hi = double.MaxValue; }
+
+            private static Vec3d Copy(Vec3d v) => new Vec3d(v.X, v.Y, v.Z);
+        }
+
+        // Quantized position contribution to a clamp key — a moved anchor/reference restarts the search.
+        private static long ClampKeyOf(Vec3d p) => p == null ? 0L
+            : ((long)Math.Floor(p.X * 4) * 73856093) ^ ((long)Math.Floor(p.Y * 4) * 19349663)
+              ^ ((long)Math.Floor(p.Z * 4) * 83492791);
+
         private Vec3d ClampDragTargetToPerGuideCap(GuideData guide, Vec3d requested)
         {
             int configuredCap = _net.PerGuideVoxelCap;
@@ -490,29 +580,12 @@ namespace Layout.Client
                 ? Math.Min(configuredCap, GuideManager.HardVoxelCeiling)
                 : GuideManager.HardVoxelCeiling;
 
-            if (PreviewFitsPerGuideCap(guide, requested, cap)) return requested;
-
             Vec3d current = guide.ControlPoints[_grab.PointIndex].WorldPosition;
-            Vec3d low = new Vec3d(current.X, current.Y, current.Z);
-            Vec3d high = requested;
-
-            // Current should always be authoritative or a previously validated preview. If an unusual
-            // packet ordering leaves it over-cap, do not search from a false premise; v0.1.47's release
-            // reconciliation will restore the authority's copy.
-            if (!PreviewFitsPerGuideCap(guide, low, cap)) return low;
-
-            for (int i = 0; i < CapClampIterations; i++)
-            {
-                var mid = new Vec3d(
-                    (low.X + high.X) * 0.5,
-                    (low.Y + high.Y) * 0.5,
-                    (low.Z + high.Z) * 0.5);
-
-                if (PreviewFitsPerGuideCap(guide, mid, cap)) low = mid;
-                else high = mid;
-            }
-
-            return low;
+            long key = ClampKeyOf(current) ^ (_grab.PointIndex * 6291469L)
+                ^ (guide.VoxelScale * 2654435761L) ^ guide.Id.GetHashCode()
+                ^ (guide.Divisions * 22801763L) ^ (guide.IsFilled ? 3298534883L : 0L)
+                ^ (cap * 51539607551L);
+            return _dragClamp.Clamp(key, current, requested, c => PreviewFitsPerGuideCap(guide, c, cap));
         }
 
         // Evaluates a drag candidate on an isolated control-point copy. This deliberately follows the
@@ -558,10 +631,11 @@ namespace Layout.Client
         /// It used to *appear* to do this only because over-budget ghosts were too heavy to rebuild;
         /// Stage-A meshing made them cheap and the accidental stop vanished. This is the real mechanism,
         /// mirroring <see cref="ClampDragTargetToPerGuideCap"/>: the aimed point (the second anchor — or
-        /// the apex/height of a three-click draft) binary-searches back toward its stationary reference to
+        /// the apex/height/rim of a later-click draft) is pulled back toward its stationary reference to
         /// the largest size that still fits, so the ghost never shows an un-placeable guide and the
         /// completing click lands exactly on the cap. Chain drafts are excluded (corners are discrete
-        /// clicks; the completion pre-check covers them).
+        /// clicks; the completion pre-check covers them). The search itself lives in
+        /// <see cref="CapClampTracker"/>, which converges across frames — see its remarks for why.
         /// </summary>
         private Vec3d ClampDraftAimToPerGuideCap(Vec3d aim)
         {
@@ -573,25 +647,28 @@ namespace Layout.Client
                 ? Math.Min(configuredCap, GuideManager.HardVoxelCeiling)
                 : GuideManager.HardVoxelCeiling;
 
-            if (DraftCandidateFits(aim, cap)) return aim;
-
-            Vec3d anchorRef = _draft.AwaitingApex && _draft.DraftSecond != null
-                ? _draft.DraftSecond
+            // Shrinking pulls the aim back toward a stationary reference chosen so that reference == the
+            // SMALLEST form of the shape. For a rim stage that is the lid's centre ON THE AXIS, where the
+            // taper collapses to a cone — emphatically NOT the raw height click, which generally sits off
+            // to one side. Using the raw click (the v0.2.24/25 bug) made the reference itself a wide lid:
+            // the minimum reachable top radius became the height click's own distance from the axis, so a
+            // height clicked a few blocks to the side left the top flared open, unshrinkable, and stuck
+            // over the cap with no way to finish the placement.
+            Vec3d anchorRef =
+                _draft.AwaitingRim && TryGetDraftLid(out Vec3d lidCentre, out _) ? lidCentre
+                : _draft.AwaitingApex && _draft.DraftSecond != null ? _draft.DraftSecond
                 : _draft.DraftStart;
-            Vec3d low = new Vec3d(anchorRef.X, anchorRef.Y, anchorRef.Z);
-            Vec3d high = aim;
-            if (!DraftCandidateFits(low, cap)) return low;   // even degenerate over cap: stop growing
 
-            for (int i = 0; i < CapClampIterations; i++)
-            {
-                var mid = new Vec3d(
-                    (low.X + high.X) * 0.5,
-                    (low.Y + high.Y) * 0.5,
-                    (low.Z + high.Z) * 0.5);
-                if (DraftCandidateFits(mid, cap)) low = mid;
-                else high = mid;
-            }
-            return low;
+            // The stage is part of the key: advancing base → height → rim restarts the search, since the
+            // reach learned for one stage means nothing for the next.
+            long key = ClampKeyOf(anchorRef)
+                ^ ((long)_draft.Shape * 1000003L) ^ ((long)_draft.Constraint * 1000033L)
+                ^ (_draft.Scale * 2654435761L) ^ (_draft.Sides * 40503L)
+                ^ (_draft.Divisions * 22801763L) ^ (_draft.Filled ? 3298534883L : 0L)
+                ^ (_draft.AwaitingApex ? 5915587277L : 0L) ^ (_draft.AwaitingRim ? 1500450271L : 0L)
+                ^ (cap * 51539607551L);
+
+            return _draftClamp.Clamp(key, anchorRef, aim, c => DraftCandidateFits(c, cap));
         }
 
         // Builds the candidate draft exactly as the HUD measure / completion pre-check do, and counts with
@@ -605,8 +682,10 @@ namespace Layout.Client
                 IGuideShape shape = ShapeFactory.Create(
                     _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis, start, end,
                     sides: _draft.Sides);
-                if (_draft.AwaitingApex && shape.ControlPoints.Count > 2)
-                    shape.MoveControlPoint(2, candidate);
+                Vec3d apex = _draft.AwaitingRim ? _draft.DraftThird
+                    : _draft.AwaitingApex ? candidate : null;
+                Vec3d rim = _draft.AwaitingRim ? candidate : null;
+                DraftManager.ApplyPlacementPoints(shape, _draft.Shape, _draft.Constraint, apex, rim);
 
                 return GuideShapeVoxelCounting.CountUpTo(shape, _draft.Scale, _draft.Filled, cap) <= cap;
             }
@@ -866,7 +945,7 @@ namespace Layout.Client
             // it may complete in free air (0.1.23), the view ray standing in for the click point.
             if (blockSel == null && !AwaitingVolumeHeight) return;
 
-            Vec3d anchor = blockSel != null ? ResolveAnchorPoint(blockSel) : FreeAirHeightAim();
+            Vec3d anchor = blockSel != null ? ResolveAnchorPoint(blockSel) : FreeAirAim();
             // The cardinal snap rides CTRL now (Session 11); it applies to the BASE clicks, not the apex.
             if (_draft.HasActiveDraft && !_draft.AwaitingApex && CtrlHeld()) anchor = ConstrainToStart(anchor);
 
@@ -887,6 +966,7 @@ namespace Layout.Client
                 // the ground → a flat ring (normal Y); click a wall → a ring on the wall (normal X/Z). The
                 // arch family carries it unused.
                 _draft.StartDraft(anchor, AxisFromFace(blockSel), FaceIsNegative(blockSel));
+                _draftClamp.Reset();
                 _net.SendDraftStart(anchor, BuildSettings(blockSel, anchor));
                 return;
             }
@@ -932,9 +1012,25 @@ namespace Layout.Client
                 return;
             }
 
+            // FOUR-CLICK TAPERED CYLINDER (0.2.24): the third click stores the HEIGHT and the draft moves
+            // on to its rim stage, where the crosshair sets how wide the lid is. Every other 3-click shape
+            // finishes here instead.
+            if (_draft.AwaitingApex && !_draft.AwaitingRim && DraftManager.NeedsRimClick(_draft.Shape))
+            {
+                _draft.PlaceThirdPoint(ClampDraftAimToPerGuideCap(anchor));
+                return;
+            }
+
             Vec3d apex = null;
+            Vec3d rim = null;
             Vec3d end = anchor;
-            if (_draft.AwaitingApex)
+            if (_draft.AwaitingRim)
+            {
+                rim = anchor;                        // the fourth click IS the lid's radius
+                apex = _draft.DraftThird;            // the height was fixed by the third click
+                end = _draft.DraftSecond;            // the base by the second
+            }
+            else if (_draft.AwaitingApex)
             {
                 apex = anchor;                       // the third click IS the apex / height
                 if (ShiftHeld() && _draft.Shape == GuideShapeType.Triangle)
@@ -944,7 +1040,8 @@ namespace Layout.Client
 
             // 0.2.19: the completing click lands on the same clamped (≤ per-guide cap) size the ghost
             // showed — clicking while pulled past the cap places AT the cap instead of erroring out.
-            if (_draft.AwaitingApex) apex = ClampDraftAimToPerGuideCap(apex);
+            if (_draft.AwaitingRim) rim = ClampDraftAimToPerGuideCap(rim);
+            else if (_draft.AwaitingApex) apex = ClampDraftAimToPerGuideCap(apex);
             else end = ClampDraftAimToPerGuideCap(end);
 
             // SHIFT at the completing click bakes the inverted (upside-down) form — only meaningful for
@@ -953,12 +1050,12 @@ namespace Layout.Client
             // folded in first, so it defaults away from the surface it was placed on (see EffectiveInverted).
             bool inverted = apex == null && EffectiveInverted();
 
-            DraftCompletion completion = _draft.TryCompleteDraft(end, apex, inverted);
+            DraftCompletion completion = _draft.TryCompleteDraft(end, apex, inverted, rim);
             if (completion.IsReady)
             {
                 _net.SendCreateRequest(completion.Start, completion.End, BuildSettings(blockSel, anchor),
                     _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
-                    inverted, _draft.Sides, completion.Apex);
+                    inverted, _draft.Sides, completion.Apex, rim: completion.Rim);
                 _draft.ClearDraft();
                 _hud.ClearDraftAim();
                 _renderer.ClearDraftPreview();       // now: the real guide arrives via broadcast
@@ -1142,6 +1239,7 @@ namespace Layout.Client
         {
             _renderer.ClearGrabbedPoint();
             _grab = null;
+            _dragClamp.Reset();     // the learned reach belonged to that point on that guide
         }
 
         // ==========================================================================================
@@ -1573,9 +1671,14 @@ namespace Layout.Client
             return new Vec3d(x, y, z);
         }
 
-        // True when the active draft is on the HEIGHT stage of a 3D volume (cylinder/cone/box, base placed).
+        // True when the active draft is on a free-air-capable stage of a 3D volume: the HEIGHT stage
+        // (cylinder/cone/box, base placed) or — 0.2.24 — the Tapered Cylinder's RIM stage after it.
         private bool AwaitingVolumeHeight =>
             _draft.AwaitingApex && GuideShapeTypes.IsVolume(_draft.Shape);
+
+        // The free-air aim for whichever stage the draft is on: the rim stage reads the lid plane, every
+        // other free-air-capable stage reads the height ray.
+        private Vec3d FreeAirAim() => _draft.AwaitingRim ? FreeAirRimAim() : FreeAirHeightAim();
 
         // The free-air height aim (0.1.23): with no block under the crosshair, the volume's height handle
         // follows the view ray at the base's distance — looking up/down grows/shrinks the height (the
@@ -1587,6 +1690,47 @@ namespace Layout.Client
                 : new Vec3d((start.X + second.X) * 0.5, (start.Y + second.Y) * 0.5, (start.Z + second.Z) * 0.5);
             Vec3d eye = EyePos(), dir = ViewDir();
             double depth = Math.Max(1.0, Dist(eye, baseCentre));
+            return new Vec3d(eye.X + dir.X * depth, eye.Y + dir.Y * depth, eye.Z + dir.Z * depth);
+        }
+
+        /// <summary>
+        /// The active draft's LID CENTRE — the height click projected onto the base's axis — plus that
+        /// axis. The rim stage measures and shrinks against this, never against the raw height click,
+        /// which is a world click and so generally sits off to one side of the axis.
+        /// </summary>
+        private bool TryGetDraftLid(out Vec3d lid, out Vec3d axis)
+        {
+            lid = axis = null;
+            Vec3d a = _draft.DraftStart, b = _draft.DraftSecond, third = _draft.DraftThird;
+            if (a == null || b == null || third == null) return false;
+            if (!ShapeGeometry.TryGetFrame(a, b, _draft.DraftPlaneAxis, out Vec3d u, out _, out _))
+                return false;
+            axis = ShapeGeometry.BaseNormal(u, _draft.DraftPlaneAxis);
+            if (axis == null) return false;
+
+            var centre = new Vec3d((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, (a.Z + b.Z) * 0.5);
+            double h = (third.X - centre.X) * axis.X + (third.Y - centre.Y) * axis.Y
+                + (third.Z - centre.Z) * axis.Z;
+            lid = new Vec3d(centre.X + axis.X * h, centre.Y + axis.Y * h, centre.Z + axis.Z * h);
+            return true;
+        }
+
+        // The free-air RIM aim (0.2.26): on the Tapered Cylinder's last stage, with no block under the
+        // crosshair, the view ray is sampled at the LID's distance — so sweeping the crosshair across the
+        // lid sweeps the top radius smoothly, and the shape's own axis projection turns that point into a
+        // width. The generic free-air height aim samples at the BASE's distance instead, which for a tall
+        // tower barely moves the taper at all: the original "it needs a block" symptom.
+        //
+        // v0.2.25 tried intersecting the ray with the lid's PLANE. That reads well from above but is
+        // violently unstable from the ground: looking near-parallel to the lid sends the intersection off
+        // toward the horizon, so a pixel of view movement swung the radius by blocks and pinned it at the
+        // flare limit — the "finicky, flares out immensely" report. Sampling at a fixed depth cannot blow
+        // up at any viewing angle, which matters more here than pointing exactly at the rim.
+        private Vec3d FreeAirRimAim()
+        {
+            if (!TryGetDraftLid(out Vec3d lid, out _)) return FreeAirHeightAim();
+            Vec3d eye = EyePos(), dir = ViewDir();
+            double depth = Math.Max(1.0, Dist(eye, lid));
             return new Vec3d(eye.X + dir.X * depth, eye.Y + dir.Y * depth, eye.Z + dir.Z * depth);
         }
 

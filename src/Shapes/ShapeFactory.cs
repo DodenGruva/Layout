@@ -46,6 +46,8 @@ namespace Layout.Shapes
                     return new DomeShape(start, end, shapePlaneAxis, inverted);
                 case GuideShapeType.Cylinder:
                     return new CylinderShape(start, end, shapePlaneAxis, inverted);
+                case GuideShapeType.TaperedCylinder:
+                    return new TaperedCylinderShape(start, end, shapePlaneAxis, inverted);
                 case GuideShapeType.Cone:
                     return new ConeShape(start, end, shapePlaneAxis, inverted);
                 case GuideShapeType.Box:
@@ -81,6 +83,8 @@ namespace Layout.Shapes
                     return new DomeShape(g.ControlPoints, g.ShapePlaneAxis);
                 case GuideShapeType.Cylinder:
                     return new CylinderShape(g.ControlPoints, g.ShapePlaneAxis);
+                case GuideShapeType.TaperedCylinder:
+                    return new TaperedCylinderShape(g.ControlPoints, g.ShapePlaneAxis);
                 case GuideShapeType.Cone:
                     return new ConeShape(g.ControlPoints, g.ShapePlaneAxis);
                 case GuideShapeType.Box:
@@ -115,6 +119,8 @@ namespace Layout.Shapes
                     return new DomeShape(points, shapePlaneAxis);
                 case GuideShapeType.Cylinder:
                     return new CylinderShape(points, shapePlaneAxis);
+                case GuideShapeType.TaperedCylinder:
+                    return new TaperedCylinderShape(points, shapePlaneAxis);
                 case GuideShapeType.Cone:
                     return new ConeShape(points, shapePlaneAxis);
                 case GuideShapeType.Box:

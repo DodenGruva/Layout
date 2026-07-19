@@ -1,11 +1,11 @@
-# Layout — TODO / Outstanding Items (current: v0.2.23)
+# Layout — TODO / Outstanding Items (current: v0.2.28)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.2.23 → next)
+## ⭐ Top of the list (v0.2.28 → next)
 
 > **Session-16 playtest results (human-confirmed):** the v0.2.21 **inventory refill and hotbar refill both
 > work** — the MouseDown-hook ordering and the `InventoryID` round-trip both hold, closing `SESSION_16.md` §8.
@@ -13,6 +13,32 @@
 > "someone is moving that" clearly. Keep it. **Audited in item A2 (closed):** that is the ≤10 Hz
 > grab-and-reshape path, not a draft — a remote DRAFT renders only a static anchor dot, and drafting sends no
 > per-tick traffic at all. Nothing is being bombarded.
+
+### A0. Session-18 delivery — the Tapered Cylinder arc (v0.2.24–v0.2.28) — full detail in `SESSION_18.md`
+
+1. ~~**New shape: Tapered Cylinder (frustum).**~~ **DONE (v0.2.24).** `GuideShapeType.TaperedCylinder = 12`,
+   the windmill/tower silhouette. **Four clicks** (base · base · height · rim) — the only 4-click shape.
+   `rTop = 0` reproduces the cone exactly, `rTop = r` the cylinder exactly (verified to the voxel).
+   **Protocol 6 → 7** (`GuideCreateRequestPacket.Rim`); DataVersion unchanged at 8.
+2. ~~**Cylinder-family scan guard was the real size limit.**~~ **FIXED (v0.2.25).** The guard cubed
+   `(2r + |h|)`, over-counting an upright cylinder's box ~7×, so the drag froze at **56% of cap** while the
+   HUD honestly read 56%. It now measures the true AABB; the cap binds instead, as the HUD claims.
+3. ~~**Cap clamp re-solved every tick (major lag past the cap).**~~ **FIXED (v0.2.26).** 14 full voxel counts
+   per frame → **42–55 ms/tick** the moment the aim crossed the cap. Replaced with `CapClampTracker`, a
+   persistent narrowing bracket: ≤2 checks/tick, **0 ms** once settled. Covers the drag path too.
+4. ~~**Rim stage flared open and could not be adjusted or finished.**~~ **FIXED (v0.2.27).** Self-inflicted
+   in v0.2.24: the clamp shrank toward the RAW height click, so its off-axis distance became the minimum
+   top radius. Now shrinks toward the lid centre **on the axis**. Free-air rim aiming also stabilised
+   (view ray sampled at the lid's distance — the v0.2.25 lid-plane intersection blew up at shallow angles).
+5. ~~**Chalking Powder recipe accepted raw clay jugs.**~~ **FIXED (v0.2.28).** `game:jug-*` matched
+   `jug-*-raw`, a plain `Block` that cannot hold the 0.1 L of dye. Now `game:jug-*-fired`. The bowl was
+   already correctly `-fired`; `woodbucket` has no raw variant. Still 6 permutations.
+
+> **Owed playtest (v0.2.27–v0.2.28):** the rim fixes and the recipe fix landed after the human's last
+> session. Both are verified numerically/against the game's own blocktypes, neither has been felt in-game.
+> Worth confirming: the Tapered Cylinder's decide-and-flag calls (born 0.6 ratio; base resize keeps the
+> taper RATIO not the absolute width; flare allowed to 4× the base) and that crafting with a fired jug
+> still works while a raw one no longer shows the recipe.
 
 ### A. Human backlog — queued at Session-16 end — ✅ ALL SEVEN DELIVERED (v0.2.22–v0.2.23)
 
@@ -143,7 +169,7 @@ hotbar or SHIFT+right-click a ground-stored kit in place), **private placements 
 Layout), **four deflating fill-state models** with progressively chalkier textures (full ≥22 · medium 11–21 ·
 low 1–10 · empty 0) rendering in every context including ground storage, **ground storage** of the kit
 (CTRL+SHIFT+right-click, idle-gated), chalk-puff particles on refill + placement, and the **chalk-line snap**
-(bow-release twang) on placement. Recipes: `8× powder/flour + 0.1 L yellow dye (bucket/bowl/jug) → 8 powder`;
+(bow-release twang) on placement. Recipes: `8× powder/flour + 0.1 L yellow dye (bucket/fired bowl/fired jug) → 8 powder`;
 the kit = 8 powder + linen sack + flax twine + rope + copper nails. Config: `enableChalkDurability`
 (default true); creative never consumes. Plan-vs-shipped deltas listed atop `PLAN_CHALKING_KIT.md`.
 

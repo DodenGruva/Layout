@@ -292,7 +292,8 @@ namespace Layout.Systems
             bool inverted = false,
             int sides = 0,
             IReadOnlyList<Vec3d> chain = null,
-            bool closed = false)
+            bool closed = false,
+            Vec3d fourthPoint = null)
         {
             if (start == null || end == null) return GuideOperationResult.Invalid();
             if (!GuideData.IsValidVoxelScale(settings.Scale)) return GuideOperationResult.Invalid();
@@ -315,13 +316,10 @@ namespace Layout.Systems
                 inverted, sides, chain, closed);
 
             // Three-click shapes (Session 11 triangle; 0.1.21 cylinder/cone/box): the third click sets the
-            // apex/height, stored at control point index 2. Applied before the record is built so the
-            // as-placed snapshot captures the true placed form. Two-click shapes send no third point.
-            if (thirdPoint != null && DraftManager.NeedsApexClick(shapeType, shape.Constraint)
-                && shape.ControlPoints.Count > 2)
-            {
-                shape.MoveControlPoint(2, thirdPoint);
-            }
+            // apex/height, stored at control point index 2 — and the four-click Tapered Cylinder's fourth
+            // click sets the top radius at index 3 (0.2.24). Applied before the record is built so the
+            // as-placed snapshot captures the true placed form. Shorter gestures send no later points.
+            DraftManager.ApplyPlacementPoints(shape, shapeType, shape.Constraint, thirdPoint, fourthPoint);
 
             var data = GuideData.Create(
                 shapeType,
