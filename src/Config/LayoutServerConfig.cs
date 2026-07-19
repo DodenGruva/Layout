@@ -73,22 +73,10 @@ namespace Layout.Config
         [JsonProperty("enableChalkDurability")]
         public bool EnableChalkDurability { get; set; } = true;
 
-        /// <summary>
-        /// F5 refill channels (0.2.21, human-directed): the CANONICAL refill is the ground-storage ritual —
-        /// set the kit down, SHIFT+right-click it with Chalking Powder — and that always works. This flag
-        /// additionally allows the convenience path of right-clicking held powder to refill a kit anywhere
-        /// in the hotbar. Default FALSE: ground-storage only.
-        /// </summary>
-        [JsonProperty("allowHotbarChalkRefill")]
-        public bool AllowHotbarChalkRefill { get; set; } = false;
-
-        /// <summary>
-        /// Companion to <see cref="AllowHotbarChalkRefill"/>: allows refilling by right-clicking a held
-        /// Chalking Powder stack onto a kit in an open inventory (cursor-stack onto the kit's slot).
-        /// Default FALSE: ground-storage only. Both flags sync to clients on join.
-        /// </summary>
-        [JsonProperty("allowInventoryChalkRefill")]
-        public bool AllowInventoryChalkRefill { get; set; } = false;
+        // NOTE (v0.2.22): the two chalk REFILL-CHANNEL flags that lived here in 0.2.21
+        // (allowHotbarChalkRefill / allowInventoryChalkRefill) moved to the CLIENT config — they are player
+        // convenience toggles, not server policy (a refill costs the same powder wherever it happens).
+        // Stale keys left in an existing layout.json are simply ignored by the deserializer.
 
         /// <summary>Folds out-of-range values to their canonical forms. Call once after loading.</summary>
         public void Normalize()

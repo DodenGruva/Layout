@@ -2,12 +2,12 @@
   "type": "code",
   "modid": "layout",
   "name": "Layout",
-  "version": "0.2.21",
+  "version": "0.2.23",
   "requiredOnClient": true,
   "requiredOnServer": false,
-  "authors": [ "Zech" ],
+  "authors": [ "Doden" ],
   "description": "Voxel-resolution construction planning — place translucent, world-shared guides to lay out builds before you place a single block.",
   "dependencies": {
-    "game": ""
+    "game": "1.22.0"
   }
 }

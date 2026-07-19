@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 5;
+        public const int ProtocolVersion = 6;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -266,24 +266,49 @@ namespace Layout.Network
         [ProtoMember(3)] public int TotalVoxelCap;
         [ProtoMember(4)] public int ProtocolVersion;
         [ProtoMember(5)] public bool AllowClientOnlyMode;
-        // F5 refill channels (protocol 5, additive): whether this server permits the hotbar / inventory
-        // convenience refills. Ground-storage refill needs no flag — it is always allowed.
+        // DEAD as of protocol 6 / v0.2.22: these carried the SERVER's refill-channel policy in 0.2.21.
+        // The channels are now a CLIENT preference (layout-client.json) reported upward by
+        // ChalkRefillPrefsPacket, so these are never written or read. Retained (never renumbered) because
+        // packet fields are append-only; a 0.2.21 client reading them simply sees false.
         [ProtoMember(6)] public bool AllowHotbarChalkRefill;
         [ProtoMember(7)] public bool AllowInventoryChalkRefill;
 
         public GuideBulkSyncPacket() { }
 
         public GuideBulkSyncPacket(GuideDataDto[] guides, int perGuideVoxelCap, int totalVoxelCap,
-            bool allowClientOnlyMode = false,
-            bool allowHotbarChalkRefill = false, bool allowInventoryChalkRefill = false)
+            bool allowClientOnlyMode = false)
         {
             Guides = guides;
             PerGuideVoxelCap = perGuideVoxelCap;
             TotalVoxelCap = totalVoxelCap;
             ProtocolVersion = LayoutChannel.ProtocolVersion;
             AllowClientOnlyMode = allowClientOnlyMode;
-            AllowHotbarChalkRefill = allowHotbarChalkRefill;
-            AllowInventoryChalkRefill = allowInventoryChalkRefill;
+        }
+    }
+
+    /// <summary>
+    /// C→S (protocol 6). The player's own chalk refill-channel preferences, reported on join.
+    /// </summary>
+    /// <remarks>
+    /// These are CONVENIENCE toggles the player owns, not server policy — but the server has to be told,
+    /// because <c>ItemChalkingPowder</c>'s held-interact callbacks run on BOTH sides and it is the SERVER
+    /// that actually mutates the stacks. Without this the server would happily refill a hotbar kit for a
+    /// player who had switched the shortcut off, making the setting a no-op. Only the hotbar channel needs
+    /// it (the inventory channel is already client-initiated via <see cref="ChalkInventoryRefillPacket"/>);
+    /// the inventory flag rides along so the server can log/reason about intent.
+    /// </remarks>
+    [ProtoContract]
+    public class ChalkRefillPrefsPacket
+    {
+        [ProtoMember(1)] public bool AllowHotbarRefill;
+        [ProtoMember(2)] public bool AllowInventoryRefill;
+
+        public ChalkRefillPrefsPacket() { }
+
+        public ChalkRefillPrefsPacket(bool allowHotbarRefill, bool allowInventoryRefill)
+        {
+            AllowHotbarRefill = allowHotbarRefill;
+            AllowInventoryRefill = allowInventoryRefill;
         }
     }
 
@@ -941,7 +966,9 @@ namespace Layout.Network
             // F5 chalk durability (protocol 4)
             typeof(ChalkChargePacket),
             // F5 inventory refill (protocol 5)
-            typeof(ChalkInventoryRefillPacket)
+            typeof(ChalkInventoryRefillPacket),
+            // F5 refill channels became a client preference (protocol 6)
+            typeof(ChalkRefillPrefsPacket)
         };
     }
 }

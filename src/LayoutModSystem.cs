@@ -65,17 +65,27 @@ namespace Layout
         public GuideToolController Controller { get; private set; }
 
         /// <summary>
-        /// F5 refill-channel policy, resolved per side: the server reads its own config; the client reads
-        /// the value synced on join. Ground-storage refill is always allowed and not gated by these.
+        /// F5 hotbar refill-channel preference (v0.2.22: a CLIENT setting, was server config in 0.2.21).
+        /// Ground-storage refill is always allowed and is not gated by this.
         /// </summary>
-        public bool HotbarChalkRefillAllowed =>
-            _sapi != null ? (ServerConfig?.AllowHotbarChalkRefill ?? false)
-                          : (ClientNet?.HotbarChalkRefillAllowed ?? false);
+        /// <remarks>
+        /// The PLAYER owns this setting, but both sides must agree on it: <c>ItemChalkingPowder</c>'s
+        /// held-interact callbacks run on the client AND the server, and it is the server that mutates the
+        /// stacks. So the client reads <c>layout-client.json</c> directly, while the server reads the
+        /// preference that client reported on join (<c>ChalkRefillPrefsPacket</c>). Answering permissively
+        /// on the server instead would refill for a player who had switched the shortcut off — hence the
+        /// per-player argument rather than a plain flag.
+        /// </remarks>
+        public bool HotbarChalkRefillAllowedFor(string playerUid) =>
+            _sapi != null ? (ServerNet?.HotbarRefillOptIn(playerUid) ?? false)
+                          : (ClientConfig?.AllowHotbarChalkRefill ?? false);
 
-        /// <summary>Companion to <see cref="HotbarChalkRefillAllowed"/> for the inventory cursor-drop refill.</summary>
+        /// <summary>
+        /// Companion for the inventory cursor-drop refill. Client-only by nature — that channel is
+        /// initiated by an explicit client packet, so the server never needs to consult it.
+        /// </summary>
         public bool InventoryChalkRefillAllowed =>
-            _sapi != null ? (ServerConfig?.AllowInventoryChalkRefill ?? false)
-                          : (ClientNet?.InventoryChalkRefillAllowed ?? false);
+            _sapi == null && (ClientConfig?.AllowInventoryChalkRefill ?? false);
 
         private long _modeDetectionTickId;
         private float _modeDetectionElapsedSeconds;
@@ -127,9 +137,7 @@ namespace Layout
                 ServerConfig.RequiredPrivilege,
                 ServerConfig.AdminCanOverrideLocks,
                 ServerConfig.AllowClientOnlyMode,
-                ServerConfig.EnableChalkDurability,
-                ServerConfig.AllowHotbarChalkRefill,
-                ServerConfig.AllowInventoryChalkRefill);
+                ServerConfig.EnableChalkDurability);
 
             sapi.Logger.Notification(
                 "[Layout] Server started. Caps: {0} voxels/guide, {1} total, {2} guides/player, {3} world-wide (0 = unlimited); undo depth {4}; privilege '{5}'; admin lock-override {6}; client-only mode {7}.",
@@ -340,6 +348,13 @@ namespace Layout
         private void OnGuidesBulkSynced()
         {
             Draft.SetPerGuideVoxelCap(ClientNet.PerGuideVoxelCap);
+
+            // v0.2.22: tell the server this player's refill-channel preferences. The server needs them
+            // because ItemChalkingPowder's held-interact runs on both sides and the SERVER mutates the
+            // stacks — without this the hotbar shortcut would fire for players who had switched it off.
+            ClientNet.SendChalkRefillPrefs(
+                ClientConfig?.AllowHotbarChalkRefill ?? false,
+                ClientConfig?.AllowInventoryChalkRefill ?? false);
         }
 
         private static LayoutClientConfig LoadClientConfig(ICoreClientAPI capi)

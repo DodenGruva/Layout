@@ -87,17 +87,13 @@ namespace Layout.Items
                 out bool kitExists, out BlockEntityGroundStorage groundStorage);
             if (kit == null)
             {
-                if (notifyFailure && api is ICoreClientAPI capi)
-                {
-                    if (!byEntity.Controls.ShiftKey && !HotbarRefillAllowed())
-                        capi.TriggerIngameError(this, "layout-refilloff",
-                            "Hotbar refill is off here. Set the kit down and Shift+right-click it with powder, "
-                            + "or ask the server to enable allowHotbarChalkRefill.");
-                    else
-                        capi.TriggerIngameError(this, "layout-nokit", kitExists
-                            ? "The Chalking Kit is already full."
-                            : "No Chalking Kit in your hotbar to refill.");
-                }
+                // v0.2.22: when the hotbar channel is simply switched off there is NO message at all — the
+                // click is a silent no-op, because a disabled convenience is not an error worth narrating.
+                // Only a genuine "you tried to refill and couldn't" still reports.
+                if (notifyFailure && api is ICoreClientAPI capi && HotbarRefillAllowed(player))
+                    capi.TriggerIngameError(this, "layout-nokit", kitExists
+                        ? "The Chalking Kit is already full."
+                        : "No Chalking Kit in your hotbar to refill.");
                 return false;
             }
 
@@ -116,8 +112,7 @@ namespace Layout.Items
                 else
                 {
                     // Client prediction only: is there still room to pour into?
-                    int max = kit.Itemstack.Collectible.GetMaxDurability(kit.Itemstack);
-                    if (ItemGuideTool.GetChalk(kit.Itemstack) >= max) break;
+                    if (ItemGuideTool.IsChalkFull(kit.Itemstack)) break;
                     applied = true;
                     break;                                     // one predicted step per call is enough
                 }
@@ -166,7 +161,7 @@ namespace Layout.Items
                     ItemStack stack = s?.Itemstack;
                     if (!(stack?.Collectible is ItemGuideTool)) continue;
                     kitExists = true;
-                    if (ItemGuideTool.GetChalk(stack) < stack.Collectible.GetMaxDurability(stack))
+                    if (!ItemGuideTool.IsChalkFull(stack))
                     {
                         groundStorage = begs;
                         return s;
@@ -175,9 +170,9 @@ namespace Layout.Items
                 return null;
             }
 
-            // Hotbar convenience path — server-gated (0.2.21). The ground-storage path above is always
-            // allowed; only this held-powder-refills-a-hotbar-kit shortcut is opt-in.
-            if (!HotbarRefillAllowed())
+            // Hotbar convenience path — player opt-in (v0.2.22; was server-gated in 0.2.21). The
+            // ground-storage path above is always allowed; only this shortcut is opt-in.
+            if (!HotbarRefillAllowed(player))
             {
                 kitExists = false;
                 return null;
@@ -185,10 +180,14 @@ namespace Layout.Items
             return FindKitSlot(player, out kitExists);
         }
 
-        /// <summary>Server refill policy, resolved per side via the ModSystem (server config or the
-        /// value synced to the client). Ground-storage refill is not gated by this.</summary>
-        private bool HotbarRefillAllowed() =>
-            api.ModLoader.GetModSystem<Layout.LayoutModSystem>()?.HotbarChalkRefillAllowed ?? false;
+        /// <summary>
+        /// Whether this player opted into the hotbar refill shortcut (v0.2.22: a client preference, was
+        /// server config). The client reads its own `layout-client.json`; the server reads the preference
+        /// that player's client reported on join. Ground-storage refill is never gated by this.
+        /// </summary>
+        private bool HotbarRefillAllowed(IPlayer player) =>
+            api.ModLoader.GetModSystem<Layout.LayoutModSystem>()
+               ?.HotbarChalkRefillAllowedFor(player?.PlayerUID) ?? false;
 
         /// <summary>True when the aimed block (or the one above it — piles report the block under them)
         /// is a ground storage holding a Chalking Kit, full or not.</summary>
@@ -224,7 +223,7 @@ namespace Layout.Items
                 ItemStack stack = slot?.Itemstack;
                 if (!(stack?.Collectible is ItemGuideTool)) continue;
                 kitExists = true;
-                if (ItemGuideTool.GetChalk(stack) < stack.Collectible.GetMaxDurability(stack)) return slot;
+                if (!ItemGuideTool.IsChalkFull(stack)) return slot;
             }
             return null;
         }

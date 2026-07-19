@@ -78,16 +78,10 @@ namespace Layout.Network
         /// <summary>The server's active total voxel cap (synced on join).</summary>
         public int TotalVoxelCap => AuthorityMode == ClientAuthorityMode.Local ? 0 : _totalVoxelCap;
 
-        /// <summary>Server policy (synced on join, default false): hotbar refills of the Chalking Kit
-        /// with held powder. Ground-storage refill is always allowed and needs no flag.</summary>
-        public bool HotbarChalkRefillAllowed => _hotbarChalkRefillAllowed;
-
-        /// <summary>Server policy (synced on join, default false): refilling by right-clicking a held
-        /// powder stack onto a kit's inventory slot.</summary>
-        public bool InventoryChalkRefillAllowed => _inventoryChalkRefillAllowed;
-
-        private bool _hotbarChalkRefillAllowed;
-        private bool _inventoryChalkRefillAllowed;
+        // v0.2.22: the chalk refill channels moved from server policy to a CLIENT preference, so the two
+        // synced flags that used to be mirrored here are gone. Read
+        // LayoutModSystem.{Hotbar,Inventory}ChalkRefillAllowed instead — it reads layout-client.json.
+        // The matching packet fields remain declared (append-only) but are no longer populated or read.
 
         public bool IsLocalGuide(Guid id) => _localGuideIds.Contains(id);
 
@@ -306,8 +300,7 @@ namespace Layout.Network
 
             _perGuideVoxelCap = p.PerGuideVoxelCap;
             _totalVoxelCap = p.TotalVoxelCap;
-            _hotbarChalkRefillAllowed = p.AllowHotbarChalkRefill;
-            _inventoryChalkRefillAllowed = p.AllowInventoryChalkRefill;
+            // p.AllowHotbarChalkRefill / p.AllowInventoryChalkRefill are deliberately ignored (v0.2.22).
 
             GuidesBulkSynced?.Invoke();
         }
@@ -599,6 +592,17 @@ namespace Layout.Network
         {
             if (string.IsNullOrEmpty(inventoryId)) return;
             _channel.SendPacket(new ChalkInventoryRefillPacket(inventoryId, slotId));
+        }
+
+        /// <summary>
+        /// v0.2.22: report this player's own refill-channel preferences so the server's half of the
+        /// held-interact honours them. Sent once the join sync lands; harmless on a vanilla server (no
+        /// channel) because the local-authority guard below short-circuits.
+        /// </summary>
+        public void SendChalkRefillPrefs(bool allowHotbar, bool allowInventory)
+        {
+            if (AuthorityMode == ClientAuthorityMode.Local) return;
+            _channel.SendPacket(new ChalkRefillPrefsPacket(allowHotbar, allowInventory));
         }
 
         /// <summary>Broadcast the local draft start anchor to other players.</summary>

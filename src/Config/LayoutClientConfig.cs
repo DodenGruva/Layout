@@ -24,6 +24,31 @@ namespace Layout.Config
         public string ForceClientOnlyNote { get; set; } =
             "Only applies on Layout-enabled servers when allowClientOnlyMode is enabled by the server owner.";
 
+        // ------------------------------------------------------------------------------------------
+        //  Chalk refill channels (v0.2.22 — moved here from the SERVER config, human-directed). These are
+        //  player CONVENIENCE toggles, not server policy: refilling always costs the same powder wherever
+        //  it happens, so there is nothing for a server to protect. Ground-storage refill (Shift+right-click
+        //  a set-down kit) is the intended ritual and is always available — only these two shortcuts are
+        //  opt-in. Because the gate is now client-side, the SERVER never checks them (see LayoutModSystem);
+        //  it still validates that a refill request targets a real kit with a real powder stack, which is
+        //  inventory-corruption safety, not policy.
+        // ------------------------------------------------------------------------------------------
+
+        /// <summary>Allows refilling a hotbar kit by right-clicking with powder in hand. Default false.</summary>
+        [JsonProperty("allowHotbarChalkRefill")]
+        public bool AllowHotbarChalkRefill { get; set; } = false;
+
+        /// <summary>
+        /// Allows refilling by right-clicking a held powder stack onto a kit's inventory slot. Default false.
+        /// </summary>
+        [JsonProperty("allowInventoryChalkRefill")]
+        public bool AllowInventoryChalkRefill { get; set; } = false;
+
+        [JsonProperty("_chalkRefillNote")]
+        public string ChalkRefillNote { get; set; } =
+            "Convenience only. Setting a kit on the ground and Shift+right-clicking it with powder always "
+            + "works regardless of these two settings.";
+
         /// <summary>Voxel scale the tool starts with (one of 1/2/4/8/16). Default 1 — chisel resolution.</summary>
         [JsonProperty("defaultScale")]
         public int DefaultScale { get; set; } = 1;

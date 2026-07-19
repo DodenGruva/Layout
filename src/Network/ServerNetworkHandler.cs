@@ -76,9 +76,13 @@ namespace Layout.Network
         private readonly bool _adminCanOverrideLocks;
         private readonly bool _allowClientOnlyMode;
         private readonly bool _chalkDurabilityEnabled;
-        private readonly bool _allowHotbarChalkRefill;
-        private readonly bool _allowInventoryChalkRefill;
         private readonly HashSet<string> _clientOnlyPlayers = new HashSet<string>();
+
+        // v0.2.22: per-player chalk refill-channel PREFERENCES (the player's own setting, reported on join),
+        // not server policy. Needed because ItemChalkingPowder's held-interact runs on both sides and the
+        // SERVER performs the mutation — without knowing the preference it would refill for a player who
+        // had turned the hotbar shortcut off. Absent entry = not opted in (matches the client default).
+        private readonly HashSet<string> _hotbarRefillOptIn = new HashSet<string>();
         private const int MaxGuidesPerPush = 100;
 
         // Per-player in-progress drag: the guide being edited and each moved point's pre-drag origin.
@@ -121,9 +125,7 @@ namespace Layout.Network
             string requiredPrivilege = null,
             bool adminCanOverrideLocks = true,
             bool allowClientOnlyMode = false,
-            bool chalkDurabilityEnabled = true,
-            bool allowHotbarChalkRefill = false,
-            bool allowInventoryChalkRefill = false)
+            bool chalkDurabilityEnabled = true)
         {
             _sapi = sapi ?? throw new ArgumentNullException(nameof(sapi));
             _guides = guideManager ?? throw new ArgumentNullException(nameof(guideManager));
@@ -133,8 +135,6 @@ namespace Layout.Network
             _adminCanOverrideLocks = adminCanOverrideLocks;
             _allowClientOnlyMode = allowClientOnlyMode;
             _chalkDurabilityEnabled = chalkDurabilityEnabled;
-            _allowHotbarChalkRefill = allowHotbarChalkRefill;
-            _allowInventoryChalkRefill = allowInventoryChalkRefill;
 
             _channel = _sapi.Network.RegisterChannel(LayoutChannel.Name);
             LayoutPackets.RegisterMessageTypes(_channel);
@@ -143,6 +143,7 @@ namespace Layout.Network
                 .SetMessageHandler<GuideCreateRequestPacket>(OnCreateRequest)
                 .SetMessageHandler<ChalkChargePacket>(OnChalkCharge)
                 .SetMessageHandler<ChalkInventoryRefillPacket>(OnInventoryChalkRefill)
+                .SetMessageHandler<ChalkRefillPrefsPacket>(OnChalkRefillPrefs)
                 .SetMessageHandler<GuideGrabPacket>(OnGrab)
                 .SetMessageHandler<GuideReleasePacket>(OnRelease)
                 .SetMessageHandler<GuideCancelGrabPacket>(OnCancelGrab)
@@ -320,9 +321,11 @@ namespace Layout.Network
             // 1) Bulk sync: every guide + the caps the server actually enforces.
             var all = new List<GuideDataDto>(_guides.AllGuides.Count);
             foreach (var g in _guides.AllGuides.Values) all.Add(GuideDataDto.From(g));
+            // The two trailing refill flags are DEAD as of v0.2.22 (the channel became a client preference);
+            // they are still sent as false because packet fields are append-only and must not be renumbered.
             _channel.SendPacket(
                 new GuideBulkSyncPacket(all.ToArray(), _guides.PerGuideVoxelCap, _guides.TotalVoxelCap,
-                    _allowClientOnlyMode, _allowHotbarChalkRefill, _allowInventoryChalkRefill),
+                    _allowClientOnlyMode),
                 player);
 
             // 2) Current lock state of any locked guide, so the joiner sees what is being edited.
@@ -349,6 +352,7 @@ namespace Layout.Network
             _undo.ClearPlayer(uid);
             _drags.Remove(uid);
             _clientOnlyPlayers.Remove(uid);
+            _hotbarRefillOptIn.Remove(uid);
 
             if (_draftAnchors.Remove(uid))
                 _channel.BroadcastPacket(new DraftAnchorRemovePacket(uid));
@@ -576,16 +580,41 @@ namespace Layout.Network
         }
 
         /// <summary>
-        /// F5 (protocol 5): refill the kit in a named inventory slot from the powder on the player's cursor.
-        /// Re-validates everything the client claimed — the channel is permitted, the slot really holds a
-        /// non-full kit, the cursor really holds powder — before consuming one powder and adding its chalk.
-        /// If the client's default slot-swap actually ran first (mouse hook ordering), the cursor will hold
-        /// the KIT here, this validation fails, and nothing happens: the worst case degrades to a harmless
-        /// swap, never a corrupt inventory.
+        /// v0.2.22. Records a player's own refill-channel preferences, reported by their client on join.
+        /// A preference, not a permission — the server mirrors the player's choice so that the server-side
+        /// half of the held-interact does not refill for someone who switched the shortcut off.
         /// </summary>
+        private void OnChalkRefillPrefs(IServerPlayer fromPlayer, ChalkRefillPrefsPacket p)
+        {
+            if (fromPlayer == null || p == null) return;
+            if (p.AllowHotbarRefill) _hotbarRefillOptIn.Add(fromPlayer.PlayerUID);
+            else _hotbarRefillOptIn.Remove(fromPlayer.PlayerUID);
+        }
+
+        /// <summary>
+        /// Whether this player opted into the hotbar refill shortcut. Consulted by
+        /// <c>ItemChalkingPowder</c> on the server side only; the client reads its own config directly.
+        /// </summary>
+        public bool HotbarRefillOptIn(string playerUid) =>
+            playerUid != null && _hotbarRefillOptIn.Contains(playerUid);
+
+        /// <summary>
+        /// F5: refill the kit in a named inventory slot from the powder on the player's cursor.
+        /// Re-validates everything the client claimed — the slot really holds a non-full kit, the cursor
+        /// really holds powder — before consuming one powder and adding its chalk. If the client's default
+        /// slot-swap actually ran first (mouse hook ordering), the cursor will hold the KIT here, this
+        /// validation fails, and nothing happens: the worst case degrades to a harmless swap, never a
+        /// corrupt inventory.
+        /// </summary>
+        /// <remarks>
+        /// v0.2.22: the refill channel is now a CLIENT preference, so there is deliberately no permission
+        /// check here — gating server-side would refuse the refill the player's own client just authorised.
+        /// Everything below is INTEGRITY validation (does this request name a real kit and a real powder
+        /// stack), which must stay: it is what keeps a lost mouse-hook race from corrupting an inventory.
+        /// </remarks>
         private void OnInventoryChalkRefill(IServerPlayer fromPlayer, ChalkInventoryRefillPacket p)
         {
-            if (p == null || !_allowInventoryChalkRefill || string.IsNullOrEmpty(p.InventoryId)) return;
+            if (p == null || string.IsNullOrEmpty(p.InventoryId)) return;
 
             IInventory inv = fromPlayer.InventoryManager?.GetInventory(p.InventoryId);
             if (inv == null || p.SlotId < 0 || p.SlotId >= inv.Count) return;

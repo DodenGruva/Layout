@@ -258,14 +258,15 @@ namespace Layout.Client
 
         // F5 inventory refill (0.2.21): right-click a held Chalking Powder stack (on the mouse cursor) onto a
         // Chalking Kit in an open inventory. Works regardless of whether the Layout tool is held, and only
-        // when the server permits it. The server re-validates and, if its own default swap somehow ran
-        // first, simply refuses — so the worst case is a harmless swap, never a corrupted inventory (see
-        // ServerNetworkHandler.OnInventoryChalkRefill). Setting Handled suppresses the default swap when we
-        // win the ordering race.
+        // when the PLAYER has opted in (v0.2.22: a client preference in layout-client.json, formerly server
+        // policy). The server re-validates that the request names a real kit and a real powder stack and, if
+        // its own default swap somehow ran first, simply refuses — so the worst case is a harmless swap,
+        // never a corrupted inventory (see ServerNetworkHandler.OnInventoryChalkRefill). Setting Handled
+        // suppresses the default swap when we win the ordering race.
         private void OnMouseDown(MouseEvent args)
         {
             if (args.Button != EnumMouseButton.Right || args.Handled) return;
-            if (!_net.InventoryChalkRefillAllowed) return;
+            if (!(_capi.ModLoader.GetModSystem<LayoutModSystem>()?.InventoryChalkRefillAllowed ?? false)) return;
 
             var im = _capi.World?.Player?.InventoryManager;
             ItemStack cursor = im?.MouseItemSlot?.Itemstack;
@@ -274,7 +275,7 @@ namespace Layout.Client
             ItemSlot hovered = im.CurrentHoveredSlot;
             ItemStack kit = hovered?.Itemstack;
             if (!(kit?.Collectible is Items.ItemGuideTool)) return;
-            if (Items.ItemGuideTool.GetChalk(kit) >= kit.Collectible.GetMaxDurability(kit)) return; // full: leave it
+            if (Items.ItemGuideTool.IsChalkFull(kit)) return;                          // full: leave it
 
             var inv = hovered.Inventory;
             if (inv == null) return;
