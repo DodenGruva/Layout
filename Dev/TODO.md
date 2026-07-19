@@ -1,36 +1,62 @@
-# Layout — TODO / Outstanding Items (current: v0.2.9)
+# Layout — TODO / Outstanding Items (current: v0.2.21)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.2.9)
+## ⭐ Top of the list (v0.2.21)
 
-1. **★ Large-guide mesh implementation — ACTIVE, human-confirmed need.** v0.1.53 removed the hollow
-   Sphere/Dome cubic scan bottleneck. The human placed a roughly 100-block hollow Sphere and finally observed
-   lag. Current rendering emits 8 vertices + 36 indices for every voxel, including shared faces, in one
-   monolithic mesh per guide. Implement the staged plan in `SESSION_14.md`: exposed-face Volumetric meshing,
-   then spatial chunks/culling, then same-colour greedy face merging. Keep settled guides at true scale and
-   retain the old Surface/slab path initially.
-2. **Finish B-S9-1 interaction regression.** v0.1.49–v0.1.52 implemented first-hit voxel picking, robust
+1. **★ Verify the v0.2.21 inventory refill in play.** Right-clicking a cursor Chalking-Powder stack onto a
+   kit's inventory slot (when the server enables `allowInventoryChalkRefill`) goes through a client MouseDown
+   hook + a server-validated `ChalkInventoryRefillPacket`. Two things were not confirmable statically: the
+   hook-vs-GUI-swap ordering (a lost race degrades to a harmless swap) and the `InventoryID` round-trip (a bad
+   id string silently no-ops). Confirm both in play. See `SESSION_16.md` §8.
+2. **Large-guide mesh — Stage B/C, only if Stage A isn't enough.** Stage A (exposed-face Volumetric meshing)
+   shipped in v0.2.14–v0.2.16 and filled 3D volumes were retired (v0.2.17), so a ~100-block hollow Sphere now
+   draws only its outer skin. If that still lags, continue the staged plan in `SESSION_14.md` §6–§7:
+   per-guide spatial chunk meshes + culling, then same-colour greedy face merging. Keep settled guides at true
+   scale and the Surface/slab path on the legacy builder.
+3. **Finish B-S9-1 interaction regression.** v0.1.49–v0.1.52 implemented first-hit voxel picking, robust
    curve-cache invalidation, complete drag snapshots, passive non-deforming Arch lock markers, stale-marker
    removal, and curve-relative insertion ordering. The human confirms that locks no longer shift and the
    latest behavior is better. Test repeated lock → drag → cancel/revert → unlock → relock cycles before
    declaring the bug closed. See OPEN BUGS and `SESSION_13.md`.
-3. **The final F4/public multiplayer regression pass.** Test vanilla-server fallback, server policy denial,
+4. **The final F4/public multiplayer regression pass.** Test vanilla-server fallback, server policy denial,
    mixed public/private overlays, reconnect persistence, publication, commands, and undo/redo around
-   ownership changes — still owed before any release-grade stamp (the 0.2.x version line was promoted at the
-   human's direction for the Chalking Kit; this regression debt carries forward).
-4. **F5 held decision:** cursor-stack inventory refill (right-click powder onto the kit icon) — the human may
-   instead REQUIRE refills on the ground; decision pending ground-refill playtesting. Effects tuning (puff
-   density/size, snap volume 0.55) by feel.
+   ownership changes — plus the chalk pass (public + private charging, all three refill channels: ground,
+   hotbar, inventory). Still owed before any release-grade stamp.
 5. Remaining flagged decisions (11a–11r, 16a–16d in `SESSION_11.md`) are cosmetic — walk them
    opportunistically.
+6. **Then, if asked:** **Roof / Tunnel** volumes; a concave-safe **Free-Shape fill**; broadcasting the whole
+   Free-Shape draft chain to other players (11q); the **F3 re-constrain op**.
 
 **Standing workflow rule (human-set — also in CLAUDE.md):** ship a NEW zip per code iteration into
 `..\Layout Zips\`, but update docs / commit ONLY when the human says so. Warn before any context trim if
 the docs are stale.
+
+---
+
+## Implemented in Session 16 (v0.2.10 → v0.2.21) — full detail in `SESSION_16.md`
+
+**Mesh + polish arc.** `main` is committed through **v0.2.13** (`de830b1`); **v0.2.14–v0.2.21 are built +
+playtested but UNCOMMITTED**.
+
+- **Large-guide mesh Stage A — exposed-face meshing (0.2.14–0.2.16):** the Volumetric cube path now emits
+  ONLY faces with no neighbour (per-voxel role colours preserved), cutting a hollow-shell guide to its skin.
+  The z-fight inset was made exposed-only, then **solidity-aware** (`GuideMeshOptions.IsNeighborSolid`) so it
+  never opens a seam between two guide voxels — only clears a guide face from a solid world block. A
+  deterministic mesh-count harness locks the counts + flush/inset invariants (15/15).
+- **Filled 3D volumes RETIRED (0.2.17):** volumes are always hollow shells now (GUI grey + server normalise +
+  per-shape `filled=false` coercion; legacy filled saves auto-lighten, no data-version change). 2D fills intact.
+- **Dome faces the clicked surface (0.2.11);** **whole-guide placement dust + pencil-icon fix (0.2.10);**
+  ground **z-fight inset** tuned to `0.003` (0.2.10–0.2.13).
+- **HUD hover no longer re-measures every tick (0.2.18);** **Divisions/Sides number fields aligned to the
+  tile grid (0.2.18);** **draft cap-clamp restored (0.2.19);** **fifth High fill state (0.2.20)** — full=32 ·
+  high 22–31 · medium 11–21 · low 1–10 · empty 0.
+- **Refill channels — config + inventory-slot refill (0.2.21, protocol 4 → 5):** `allowHotbarChalkRefill` /
+  `allowInventoryChalkRefill` server config (both default false; ground storage always allowed), synced to
+  clients; inventory refill via a client MouseDown hook + the server-validated `ChalkInventoryRefillPacket`.
 
 ---
 
@@ -371,28 +397,19 @@ Shipped as designed with human-directed refinements during the build: 32 chalk, 
 placements only, no refunds, NO lockout at 0 (the kit can never break); **Chalking Powder** refills (tap +4 /
 hold-to-pour, hotbar or ground-stored kit in place); **private placements charge chalk too** (the plan's
 local-no-op survives only where unenforceable — servers without Layout); recipes `8× powder/flour + 0.1 L
-yellow dye → 8` and the 8-powder kit craft; four deflating fill-state models; placement/refill effects.
-Plan-vs-shipped deltas atop `PLAN_CHALKING_KIT.md`; full record in `SESSION_15.md`. **Held open:**
-cursor-stack inventory refill (or ground-refill-only) — see Top of the list.
+yellow dye → 8` and the 8-powder kit craft; four deflating fill-state models (a fifth **High** state added in
+v0.2.20); placement/refill effects. Plan-vs-shipped deltas atop `PLAN_CHALKING_KIT.md`; full record in
+`SESSION_15.md`. **Held items now RESOLVED in Session 16:** the fifth High fill state (v0.2.20) and the
+cursor-stack inventory refill (v0.2.21, server-config opt-in) both shipped — only the in-play verification of
+the inventory refill remains (Top of the list).
 
 ---
 
 ## Next session — start here
 
-**F4 and F5 are both feature-complete and playtested through v0.2.9 on `main`.** The agenda:
-
-1. **Resolve the F5 held decision** if the human has playtested ground refills: cursor-stack inventory
-   refill, or ground-refill-only (delete the hotbar branch). Tune puff/snap by feel.
-2. **Implement the large-guide mesh pass from `SESSION_14.md`.** Start with exact exposed-face Volumetric
-   meshing, then chunk ownership/disposal and culling, then same-colour greedy merging. Validate ordinary
-   guides before testing the 20/40/~100-block Sphere/Dome progression.
-3. **Finish B-S9-1 interaction testing.** Focus on repeat lock/drag/cancel-or-revert/unlock cycles and
-   curve-relative targeting around multiple markers. The latest iteration is improved, not yet declared final.
-4. **The final F4/public multiplayer regression pass.** Cover vanilla-server fallback, policy denial, mixed
-   public/private placement and editing, reconnect persistence, publication, commands, and undo/redo around
-   ownership boundaries — plus a chalk pass (public + private charging, refills) in multiplayer.
-5. Then, if asked: **Roof / Tunnel** volumes; a concave-safe **Free-Shape fill**; broadcasting the whole
-   Free-Shape draft chain to other players (11q); **F3 re-constrain op**.
+**The agenda is "⭐ Top of the list" at the top of this file** — it is not repeated here. Current state:
+F4 and F5 are both feature-complete and playtested through **v0.2.21** (`main` is at v0.2.13; v0.2.14–v0.2.21
+are uncommitted).
 
 **Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;
 docs are updated ONLY when the human says so; commits/pushes only when the human instructs. `main` is the

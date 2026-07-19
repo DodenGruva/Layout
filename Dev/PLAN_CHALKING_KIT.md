@@ -1,9 +1,11 @@
 # Chalking Kit — Durability & Refill Design
 
-> **Status: ✅ IMPLEMENTED AND PLAYTESTED — v0.2.0–v0.2.9 (F5 delivered).** The reskin shipped in v0.2.0,
-> ground storage in 0.2.1–0.2.4, the durability/refill system in 0.2.5–0.2.6, the fill-state models in
-> 0.2.7, and ground refill + feedback effects in 0.2.8. **Full implementation record: `SESSION_15.md`.**
-> The body below is the original design discussion, kept as the rationale record.
+> **Status: ✅ IMPLEMENTED AND PLAYTESTED — v0.2.0–v0.2.9 (F5 delivered); refill channels extended v0.2.21.**
+> The reskin shipped in v0.2.0, ground storage in 0.2.1–0.2.4, the durability/refill system in 0.2.5–0.2.6,
+> the fill-state models in 0.2.7, and ground refill + feedback effects in 0.2.8. A fifth **High** fill state
+> (v0.2.20) and the two opt-in refill channels (v0.2.21) followed. **Full implementation record:
+> `SESSION_15.md` + `SESSION_16.md`.** The body below is the original design discussion, kept as the rationale
+> record.
 >
 > **Where the implementation deliberately DIFFERS from this plan** (all human-directed during the build):
 > - The refill item is named **Chalking Powder** (not "Yellow Chalking Powder").
@@ -16,10 +18,15 @@
 > - The kit's own recipe costs **8 Chalking Powder** (+ linen sack, flax twine, rope, copper nails) — its
 >   craft cost equals the 32 chalk it ships full with.
 > - Refill = tap +4 / hold-to-pour, targeting the hotbar **or a ground-stored kit in place** (SHIFT+
->   right-click; the bag re-inflates live). Four **fill-state models** (full ≥22 · medium 11–21 · low 1–10 ·
->   empty 0) with progressively chalkier textures render in every context, ground storage included.
-> - **Held open:** cursor-stack refill in the inventory UI — the human may instead require ground refills;
->   decision pending playtest.
+>   right-click; the bag re-inflates live). **Fill-state models** now number **five** (full=32 · high 22–31 ·
+>   medium 11–21 · low 1–10 · empty 0, v0.2.20 — FULL reserved for a completely full kit) with progressively
+>   chalkier textures rendering in every context, ground storage included.
+> - **Formerly held open, now RESOLVED (v0.2.21):** cursor-stack refill in the inventory UI shipped, but
+>   behind a server-config gate — **ground-storage refill is the only always-on channel**; the hotbar
+>   shortcut (`allowHotbarChalkRefill`) and the inventory-slot click (`allowInventoryChalkRefill`) are both
+>   opt-in, default false. Inventory refill uses a client MouseDown hook + a server-validated
+>   `ChalkInventoryRefillPacket` (protocol 5), NOT the VS slot-merge path (which would misroute powder into
+>   kits). Still owed: in-play verification of the hook ordering + InventoryID round-trip (both fail safe).
 
 ## Concept
 The guide tool gets a new **3D model** and a **chalking-kit** theme: guides read as **yellow chalk lines**

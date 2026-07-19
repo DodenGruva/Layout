@@ -2,11 +2,12 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-18 against **v0.2.9** on `main`. Where this file and
-> the code disagree, **the code wins** — treat this as a map, then read the `.cs` files it points at.
+> and the performance-relevant mechanics. Updated 2026-07-19 against **v0.2.21** (`main` is at v0.2.13;
+> v0.2.14–v0.2.21 are built + playtested but uncommitted). Where this file and the code disagree, **the code
+> wins** — treat this as a map, then read the `.cs` files it points at.
 >
-> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/15.md` (per-session
+> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.3),
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/16.md` (per-session
 > history), `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
 
@@ -20,24 +21,27 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.2.9 on `main`, **playtested in multiplayer and vanilla-server fallback**. F4 (client-only /
-  private guides) and F5 (**the Chalking Kit**: finite chalk durability + powder refills + deflating
-  4-state models) are both feature-complete; hollow Sphere/Dome shell generation scales beyond the old
-  10-block boundary.
+- **Status:** v0.2.21, **playtested in multiplayer and vanilla-server fallback** (`main` at v0.2.13;
+  v0.2.14–v0.2.21 uncommitted). F4 (client-only / private guides) and F5 (**the Chalking Kit**: finite chalk
+  durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
+  **mesh pass Stage A (exposed-face meshing) has shipped** and **filled 3D volumes are retired** (always
+  hollow shells now), so a ~100-block hollow Sphere draws only its outer skin.
 - **Size:** **68 source files** (`src/`), ~one asset tree, one `.csproj`.
 - **Data schema:** **DataVersion 8** (additive passive-lock-marker flag; pinned enums/default migration).
-- **Wire protocol:** **4** (append-only `ChalkChargePacket` after the protocol-3 lock-marker field).
+- **Wire protocol:** **5** (append-only `ChalkInventoryRefillPacket` + two `GuideBulkSyncPacket` refill flags,
+  after the protocol-4 `ChalkChargePacket`).
 - **Catalog:** **12 shape types**, shown as **18 picker tiles** — a full 2D family plus a **3D volume family**.
 - **The tool:** the **Chalking Kit** — 32-chalk durability (2D −1 / 3D −2, completed placements only; no
-  lockout at 0, the kit can never break), refilled with **Chalking Powder** (tap +4 / hold-to-pour; hotbar
-  or a ground-stored kit in place); private placements charge via a client-reported, server-validated
-  packet; creative exempt; `enableChalkDurability` server config. Four fill-state models (full ≥22 · medium
-  11–21 · low 1–10 · empty 0) render in every context including ground storage.
-- **Active follow-up:** B-S9-1 is substantially improved; lock placement no longer deforms the guide, but
-  repeated lock/drag/revert/unlock behavior still needs broader playtesting before closure.
-- **Top performance task:** a roughly 100-block hollow Sphere was successfully placed and caused visible lag.
-  The confirmed bottleneck is now the one-full-cube-per-voxel, one-buffer-per-guide mesh path. See §9 and
-  `dev/SESSION_14.md`.
+  lockout at 0, the kit can never break), refilled with **Chalking Powder** (+4 each). Three refill channels:
+  ground-stored kit in place (always allowed) plus hotbar tap/hold and cursor-onto-inventory-slot, the latter
+  two **server-config opt-in** (v0.2.21). Private placements charge via a client-reported, server-validated
+  packet; creative exempt; `enableChalkDurability` server config. Five fill-state models (full=32 · high
+  22–31 · medium 11–21 · low 1–10 · empty 0) render in every context including ground storage.
+- **Active follow-up:** verify the v0.2.21 inventory refill in play (both failure modes fail safe); B-S9-1 is
+  substantially improved but repeated lock/drag/revert/unlock behavior still needs broader playtesting.
+- **Top performance task:** mesh **Stage A is done** — a ~100-block hollow Sphere now draws only its shell
+  skin. Stage B (per-guide spatial chunks + culling) and Stage C (greedy face merging) remain, but only if
+  the current win isn't enough. See §9 and `dev/SESSION_14.md` §6–§7 / `dev/SESSION_16.md`.
 - **Design philosophy (standing rule): correctness over performance** unless told otherwise. Several
   deliberate un-optimized paths exist by choice; see §9.
 
@@ -68,11 +72,11 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── HANDOFF.md                  ← THIS FILE
 ├── Layout.csproj  modinfo.json  modicon.png
 ├── assets/layout/              ← itemtypes, textures, lang
-├── src/                        ← all 66 .cs files (see §6)
+├── src/                        ← all 68 .cs files (see §6)
 └── dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
-    ├── SESSION_9.md  SESSION_10.md  SESSION_11.md  SESSION_12.md  SESSION_13.md  SESSION_14.md
-    ├── PLAN_CLIENT_ONLY.md  BUILD_INSTRUCTIONS.txt
+    ├── SESSION_9.md … SESSION_14.md  SESSION_15.md  SESSION_16.md
+    ├── PLAN_CLIENT_ONLY.md  PLAN_CHALKING_KIT.md  BUILD_INSTRUCTIONS.txt
 ```
 
 **Gotcha for tooling:** the docs are in `dev/`; the code is one level up in `src/`. A glob rooted at `dev/`
@@ -83,11 +87,12 @@ in a versioned subfolder).
 
 ## 4. What the mod does (mechanics & scope)
 
-- **The tool** is normally the held **Chalking Kit** item (custom deflating 4-state model; recipe: 8×
+- **The tool** is normally the held **Chalking Kit** item (custom deflating **5-state** model; recipe: 8×
   Chalking Powder + linen sack + flax twine + rope + copper nails; **32-chalk durability**, F5 — completed
   placements cost 2D −1 / 3D −2, refills via Chalking Powder [8× any powder/flour + 0.1 L yellow dye → 8],
   no lockout at 0, never breaks; also **ground-storable**: CTRL+SHIFT+right-click sets it down, SHIFT+
-  right-click with powder refills it in place). On a server without Layout, the equivalent gate is
+  right-click with powder refills it in place — and, where the server opts in, a hotbar tap/hold or a
+  cursor-onto-inventory-slot refill). On a server without Layout, the equivalent gate is
   **Flax Twine main-hand + any vanilla Hammer variant off-hand** (damage irrelevant; no chalk there — a
   custom item cannot exist on a vanilla server). Interaction is entirely **first-person clicks + crosshair
   raycast** — no transform gizmos. Guides are **visible but untargetable when the tool is not held** (pure mesh draws, no
@@ -129,12 +134,15 @@ Polygon=5, FreeShape=6, Sphere=7, Dome=8, Cylinder=9, Cone=10, Box=11 }`.
 Triangle · Right · Equilateral · Isosceles (Triangle + constraint) · Rectangle · Square (Rectangle+Square) ·
 Polygon (regular N-gon, 3–24 sides, count in `GuideData.Sides`) · Free-Shape (irregular polyline, `IsClosed`).
 
-**3D volume section (5 tiles):** Sphere · Dome · Cylinder · Cone · Box. Hollow = a one-cell shell, Filled =
-the solid. **Always Volumetric** (Surface + Divisions gated off, server-side and in the GUI). Box and filled
-volumes use cell-lattice scans; hollow Sphere/Dome use the exact surface-area-oriented
-`SphericalShellScan`; Cylinder/Cone remain centre-banded. Deterministic up-axis
-(`ShapeGeometry.BaseNormal`); SHIFT inverts (e.g. dome→bowl).
-Targeting is a **wireframe** — the anchors and the height handle are the reliable grab points.
+**3D volume section (5 tiles):** Sphere · Dome · Cylinder · Cone · Box. **Volumes are always a one-cell
+hollow shell — Filled is retired for the 3D family (v0.2.17):** post-exposed-face-meshing a filled interior
+draws nothing, so it was pure invisible voxel cost; every volume shape now coerces `filled=false`, which also
+auto-lightens legacy filled saves. **Always Volumetric** (Surface + Divisions gated off, server-side and in
+the GUI). Box uses a cell-lattice scan; hollow Sphere/Dome use the exact surface-area-oriented
+`SphericalShellScan`; Cylinder/Cone remain centre-banded. Deterministic up-axis (`ShapeGeometry.BaseNormal`);
+the first click's face direction orients a Dome (floor→up, ceiling→down, wall→toward you) and SHIFT inverts
+(e.g. dome→bowl). Targeting is a **wireframe** — the anchors and the height handle are the reliable grab
+points. A cylinder cap / dome floor is recovered cheaply with a filled 2D circle at the base.
 
 Adding a shape starts in `Shapes/ShapeFactory.cs` (the single construction point) + a new `IGuideShape`.
 
@@ -199,41 +207,56 @@ path.
 
 ---
 
-## 8. Rendering pipeline — current bottleneck
+## 8. Rendering pipeline — Stage A shipped
 
 - **One compiled mesh per guide, rebuilt only on change** (`GuideRenderer` listens for mirror-apply change
   events). `GuideMeshBuilder` is a stateless `List<VoxelPosition>` → `MeshData` converter.
 - **The verified draw recipe** (each element was a real playtest bug): Opaque stage + **manual blend** (not
   OIT); `PreparedStandardShader` forced full-bright; a **real white 2×2 texture** (texture id 0 samples
   garbage); the full **pos + uv + rgba** vertex layout with uv (0,0); color carried purely by packed vertex
-  RGBA. Cube path = 8 verts / 36 indices per voxel; Surface path = one quad or a paper-thin slab per voxel.
-- **Anti-z-fight:** volumetric meshes get a per-frame 0.003-block camera-relative nudge; Surface guides
-  render as **0.0025-block slabs** hugging the **air-side** cell face (world-solidity probe, majority
-  fallback) with a plane-axis-only inset. The air-side probe tolerates the world-load race (a re-probe tick
-  rebuilds once unloaded chunks arrive — fix for B-S10-1).
+  RGBA.
+- **Exposed-face meshing (Stage A, v0.2.14–v0.2.16):** the Volumetric cube path builds a presence set of
+  rendered cells, pre-counts the faces with no neighbour, allocates exactly, and emits **only those faces**
+  (4 verts / 6 indices each) — per-voxel role colours preserved. Interior and shared faces vanish, so a
+  hollow shell draws only its skin. The Surface tile/slab path stays on the legacy whole-box builder.
+- **Anti-z-fight is a per-face geometry inset** (`BlockPlaneInset = 0.003`), not a camera nudge: a voxel
+  face is pulled off a block-grid plane ONLY when it is **exposed** *and* a **solid world block** sits across
+  the plane (`GuideMeshOptions.IsNeighborSolid`, a `GuideRenderer` world probe). Faces flush against a
+  neighbour voxel, or bordering air, stay exactly on grid — so the inset never opens a seam between two guide
+  voxels, only clears a guide face from a real block face. Surface guides additionally render as thin slabs
+  hugging the **air-side** cell face (world-solidity probe, majority fallback); the probe tolerates the
+  world-load race (a re-probe tick rebuilds once unloaded chunks arrive — fix for B-S10-1). A deterministic
+  mesh-count harness locks the face counts and flush/inset invariants (15/15).
 - **Marker voxels** are single-voxel nearest-claim (precedence Locked > Primary > Anchor > Division); the
   apex and off-cell division boundaries claim 2 voxels on even spans so they read centered.
-- **No spatial partition/culling:** each guide owns one `{MeshRef, Origin}` and the render loop draws every
-  loaded guide mesh. Replacing a guide deletes and uploads that entire mesh.
+- **No spatial partition/culling yet:** each guide owns one `{MeshRef, Origin}` and the render loop draws
+  every loaded guide mesh; replacing a guide deletes and uploads that entire mesh. Per-guide chunking +
+  culling is the Stage B target.
 
 ---
 
 ## 9. Performance characteristics & deliberate trade-offs
 
-**This is now the active optimization target.** Standing rule: **correctness over performance**, but the
-human has confirmed visible lag from a roughly 100-block hollow Sphere in v0.1.53. Shell generation is no
-longer the blocker; the mesh representation is.
+**Stage A of the mesh pass has shipped and moved the needle.** Standing rule: **correctness over
+performance**. The human confirmed visible lag from a ~100-block hollow Sphere in v0.1.53; **exposed-face
+meshing (v0.2.14–v0.2.16) + the retirement of filled 3D volumes (v0.2.17)** cut that guide to its outer skin.
+Stage B/C remain available (§ "Active mesh plan") but are gated on whether the current win is enough.
 
 **Hot paths & large-quantity structures**
 - **Voxel generation per guide** — up to the configured cap or unconditional 10M ceiling. Regenerated whenever
-  the guide changes. Hollow Sphere/Dome now use the surface-area-oriented `SphericalShellScan`.
-- **Mesh rebuild** — a full `MeshData` rebuild for a guide on every change event (8 verts + 36 indices per
-  voxel on the cube path). Settled guides mesh at **true scale, never coarsened** (see below).
+  the guide changes. Hollow Sphere/Dome use the surface-area-oriented `SphericalShellScan`.
+- **Mesh rebuild** — a full `MeshData` rebuild for a guide on every change event. The cube path now emits
+  **only exposed faces** (4 verts / 6 indices each, no interior/shared faces), pre-counted and exactly
+  allocated. Settled guides mesh at **true scale, never coarsened** (see below).
 - **Hollow Sphere/Dome generation (v0.1.53)** — scans X/Y columns and only the analytically bounded Z shell
   bands, then applies the legacy exact predicate. A 20-block hollow dome produced 242,500 voxels in ~5 ms in
-  isolated validation; a roughly 100-block Sphere placed successfully in-game.
-- **Remaining 3D scans** — filled Sphere/Dome and the other volumes still retain bounding-lattice guards.
-  Filled paths remain separate future work; do not undo the new hollow-only specialization.
+  isolated validation; a roughly 100-block Sphere places and now draws only its shell.
+- **3D volumes are hollow-only (v0.2.17).** Filled interiors are retired for the volume family, so the old
+  filled-Sphere/Dome cubic-scan lag path is gone; Box retains its lattice scan (shell). Do not reintroduce
+  filled volumes.
+- **HUD hover measurement is cached (v0.2.18).** `GuideHud.SetExaminedGuide` no longer re-derives a guide's
+  voxel set when the hovered target is unchanged — hovering a huge guide previously re-ran the full measure
+  ~33×/s.
 - **Targeting** samples each guide's curve (`IGuideShape.SampleCurve`) into a polyline **cached behind a full
   per-coordinate geometry fingerprint** — resampled only on actual geometry change, not per tick.
 - **Division recolor** — `DivisionMarks.Apply` runs on **every mesh rebuild** (draft ghost + placed),
@@ -243,8 +266,9 @@ longer the blocker; the mesh representation is.
   authoritative batch (grabbed edit + its soft-flow reflow), cap-checks once, broadcasts once.
 
 **Deliberate, documented trade-offs (do not "fix" without checking intent)**
-- **Filled guides recount voxels exactly per drag update** (cells generated each move packet) — no per-drag
-  count cache. If large filled discs drag sluggishly, a count cache is the sanctioned fix.
+- **Filled 2D guides recount voxels exactly per drag update** (cells generated each move packet) — no
+  per-drag count cache. If large filled discs drag sluggishly, a count cache is the sanctioned fix. (3D
+  volumes are hollow-only now, so this is a 2D-fill concern.)
 - **Settled guides always mesh at full resolution.** `ChooseRenderScale` coarsening (an 8,000-voxel courtesy,
   `PreviewFullResVoxelCap`) is **draft-ghost-only** — it once leaked into placed guides and permanently
   degraded them, so it is deliberately confined. Huge settled guides pay their real rebuild cost.
@@ -261,19 +285,20 @@ longer the blocker; the mesh representation is.
 - The **running world-voxel total is a `long`** (v0.1.27) so a caps-off server can't overflow it negative
   (which would read as "under budget" and disable cap checks).
 
-**Active mesh plan (full staged handoff in `dev/SESSION_14.md`):**
+**Mesh plan (full staged handoff in `dev/SESSION_14.md` §6–§7; Stage-A record in `dev/SESSION_16.md` §2):**
 
-1. Add an optimized **Volumetric exposed-face** builder: neighbour lookup, omit shared faces, preserve role
-   colours and private/public anchor shades. Leave Surface/slab rendering on the legacy path initially.
-2. Partition each guide into **16- or 32-block trial chunks** with independent mesh refs/origins. Border
-   neighbour checks must cross chunk boundaries. Dispose all refs on replace/delete/bulk sync/shutdown.
-3. Add distance/frustum culling when dependable, then same-colour/orientation **greedy face merging** inside
-   chunks.
+1. ~~Add an optimized **Volumetric exposed-face** builder~~ **— DONE (Stage A, v0.2.14–v0.2.16):** neighbour
+   lookup, omit shared/interior faces, preserve role colours and private/public anchor shades; Surface/slab
+   stays on the legacy path. Solidity-aware z-fight inset; deterministic mesh-count harness (15/15).
+2. **Stage B — partition each guide into 16- or 32-block trial chunks** with independent mesh refs/origins.
+   Border neighbour checks must cross chunk boundaries. Dispose all refs on replace/delete/bulk sync/shutdown.
+3. **Stage C — distance/frustum culling** when dependable, then same-colour/orientation **greedy face
+   merging** inside chunks.
 4. Only if still needed, consider temporary coarse interaction previews or async CPU builds. Never permanently
    coarsen settled guides without explicit human approval.
 
-Do not begin by raising `HardVoxelCeiling`; v0.1.53 already demonstrates that a near-ceiling one-buffer mesh
-can lag a high-end machine.
+Stages B–C are gated on whether Stage A's win is enough on the ~100-block sphere in real play. Do not begin
+by raising `HardVoxelCeiling`.
 
 ---
 
@@ -320,6 +345,8 @@ can lag a high-end machine.
 | `adminCanOverrideLocks` | true |
 | `allowClientOnlyMode` | false |
 | `enableChalkDurability` | true |
+| `allowHotbarChalkRefill` | false (ground-storage refill is always allowed; this opts in the hotbar shortcut) |
+| `allowInventoryChalkRefill` | false (opts in cursor-onto-inventory-slot refill) |
 
 **Hard-coded limits (in code, not config):** `HardVoxelCeiling` 10M · `MaxScanCells` 4M (per 3D shape) ·
 `MaxDivisions` 256 · Polygon `MinSides` 3 / `MaxSides` 24 · Free-Shape `MaxCorners` 64 ·
@@ -337,13 +364,14 @@ opacities, and up to **four hard-kept pinned favorite shape codes**. Default sca
 
 ## 12. Status, open bug, and direction
 
-**Confirmed & shipping on `ClientOnlyFallback`:** the full 2D/3D catalog plus F4 place, preview, reshape,
-fill, lock/unlock, divide, project, persist, and undo in public and private authority modes. Vanilla-server
-fallback, reconnect, mixed public/private overlays, commands, push, ownership HUD/palettes, and
-mixed-authority undo routing were playtested through **v0.1.53**. Backup recovery is code-complete; deliberate
-corruption fault injection has not separately been reported. Threshold-aware 3D counting and the natural
-at-cap drag clamp are implemented and playtest-confirmed. Hollow Sphere/Dome shell scanning is exact-equivalent
-to the legacy predicate; the human placed a roughly 100-block Sphere successfully.
+**Confirmed & shipping (merged to `main` via PR #1):** the full 2D/3D catalog plus F4 place, preview,
+reshape, fill, lock/unlock, divide, project, persist, and undo in public and private authority modes.
+Vanilla-server fallback, reconnect, mixed public/private overlays, commands, push, ownership HUD/palettes, and
+mixed-authority undo routing were playtested through the F4 arc and carried forward. Backup recovery is
+code-complete; deliberate corruption fault injection has not separately been reported. Threshold-aware 3D
+counting and the natural at-cap drag clamp are implemented and playtest-confirmed (the mid-draft cap clamp was
+re-implemented in v0.2.19). Hollow Sphere/Dome shell scanning is exact-equivalent to the legacy predicate; the
+full F5 chalk system and the Stage-A mesh pass are playtested through **v0.2.21**.
 
 **Active follow-up — B-S9-1 (lock-in-place):** ray-vs-rendered-voxel first-hit picking is now implemented,
 curve target caches use a full geometry fingerprint, cancel restores a complete pre-drag snapshot, and passive
@@ -353,14 +381,14 @@ iteration is better; repeated lock → drag → revert/cancel → unlock cycles 
 bug is declared closed.
 
 **Direction / roadmap (see `dev/TODO.md` for detail):**
-1. **Implement the mesh pass described in §9 / `SESSION_14.md`:** exposed faces → chunks/culling → greedy
-   same-colour face merging. Preserve true settled-guide scale and established rendering semantics.
-2. **Finish the B-S9-1 interaction regression** against the v0.1.52 marker lifecycle/order changes.
-3. **The final F4/public multiplayer regression pass.** Test vanilla fallback, policy denial, permitted
+1. **Verify the v0.2.21 inventory refill in play** (MouseDown-hook ordering + `InventoryID` round-trip; both
+   fail safe). See `SESSION_16.md` §8.
+2. **Mesh pass Stage B/C** (§9 / `SESSION_14.md`) — per-guide chunks/culling → greedy same-colour face
+   merging — **only if Stage A's win isn't enough**. Preserve true settled-guide scale and rendering semantics.
+3. **Finish the B-S9-1 interaction regression** against the v0.1.52 marker lifecycle/order changes.
+4. **The final F4/public multiplayer regression pass.** Test vanilla fallback, policy denial, permitted
    mixed mode, push/reconnect, ordinary public multiplayer, and chalk in multiplayer (public + private
-   charging, refills). Owed before any release-grade stamp.
-4. **F5 held decision:** cursor-stack inventory refill vs. requiring ground refills — pending the human's
-   ground-refill playtesting. Effects tuning (puff, snap volume) by feel.
+   charging, all three refill channels). Owed before any release-grade stamp.
 5. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill (fill is currently inert on Free-Shapes);
    an F3 re-constrain op; broadcasting the whole Free-Shape draft chain to other players.
 
@@ -380,9 +408,10 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   `GuideShapeType` / `ShapeConstraint` / projection enums, which are pinned append-only).
 - **`UndoManager` folder ≠ namespace:** it lives in `src/Systems/` but is `Layout.Systems.UndoManager` —
   the one file where folder and namespace diverge.
-- **The Session docs are historical.** `SESSION_9/10/11/12/13/14.md` are point-in-time narratives (SESSION_12
-  covers F4 through v0.1.45; SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 mesh handoff). For current state, trust
-  `HANDOFF.md` / `ARCHITECTURE.md` / the code, not a mid-session
-  checklist inside a session record.
+- **The Session docs are historical.** `SESSION_9`…`SESSION_16.md` are point-in-time narratives (SESSION_12
+  covers F4 through v0.1.45; SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 mesh handoff;
+  SESSION_15 is the v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc). For
+  current state, trust `HANDOFF.md` / `ARCHITECTURE.md` / the code, not a mid-session checklist inside a
+  session record.
 - **`dev/BUILD_INSTRUCTIONS.txt`** is the original v0.1.0 first-build doc; its build/run steps are still
   valid but its file count (35) and version are historical — it now carries a header note saying so.

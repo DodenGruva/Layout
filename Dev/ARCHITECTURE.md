@@ -1,6 +1,6 @@
-# Layout — Architecture Document (v3.2)
+# Layout — Architecture Document (v3.3)
 
-**Supersedes v3.1 — the Chalking Kit delta (F5, v0.2.0–v0.2.9).** v2.5 consolidated five
+**Supersedes v3.2 — the mesh + polish delta (v0.2.10–v0.2.21).** v2.5 consolidated five
 revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
 catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
 surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
@@ -15,20 +15,26 @@ client persistence, mixed ownership/undo routing, private publication, and owner
 folds in the cap-performance and interaction pass:** threshold-aware 3D counting, natural at-cap drag
 clamping, rendered-voxel first-hit picking, complete drag snapshots, robust curve-cache invalidation, and
 passive non-deforming Arch lock markers. **v3.1 added the exact surface-area-oriented hollow Sphere/Dome
-scanner and recorded the now-playtest-confirmed mesh frontier. v3.2 folds in F5 — the Chalking Kit:** the
+scanner and recorded the now-playtest-confirmed mesh frontier. v3.2 folded in F5 — the Chalking Kit: the
 custom deflating 4-state model, 32-chalk durability with powder refills, ground storage + in-place ground
-refill, the private-placement charge packet (protocol 4), and the placement/refill feedback effects. The
-register, file tree, module map, persistence, and edge cases below are updated in place to the
-v0.2.9 / DataVersion 8 / protocol-4 / 68-file state; the changelogs under this header are the quick deltas.
+refill, the private-placement charge packet (protocol 4), and the placement/refill feedback effects. **v3.3
+folds in the mesh + polish arc (v0.2.10–v0.2.21):** large-guide **exposed-face meshing (Stage A)** with a
+solidity-aware z-fight inset, the **retirement of filled 3D volumes** (always hollow shells now), the
+dome-faces-clicked-surface fix, the HUD hover re-measure fix, GUI number-field alignment, the restored
+draft-cap clamp, the fifth (**High**) fill state, and **server-config-gated hotbar/inventory refill
+channels** (protocol 5). The register, file tree, module map, persistence, and edge cases below are updated
+in place to the v0.2.21 / DataVersion 8 / protocol-5 / 68-file state; the per-revision deltas live in
+**`CHANGELOG_ARCHITECTURE.md`** (indexed just below).
 
-**Where the project stands:** Layout **v0.2.9** is built, packaged, playtested, and pushed on **`main`**
-(the `ClientOnlyFallback` branch merged via PR #1). All seven modules, the complete
-2D/3D catalog, normal public multiplayer, vanilla-server local fallback, mixed public/private operation, and
-the full F5 chalk system run against VS 1.22.3 / .NET 10. The catalog is **12 shape types / 18 picker
-tiles**, **DataVersion 8**, **protocol 4**, and **68 source files**. F4 and F5 are feature-complete. A
-roughly 100-block hollow Sphere places successfully and exposes visible lag in the monolithic full-cube mesh
-path. The immediate tasks are the staged mesh pass in `SESSION_14.md` and the F5 held refill decision;
-B-S9-1 and the broad F4/public regression follow. See `TODO.md`.
+**Where the project stands:** Layout **v0.2.21** is built, packaged, and playtested; **`main` is pushed
+through v0.2.13** (`de830b1`; the `ClientOnlyFallback` branch merged via PR #1) and **v0.2.14–v0.2.21 are
+uncommitted**. All seven modules, the complete 2D/3D catalog, normal public multiplayer, vanilla-server local
+fallback, mixed public/private operation, and the full F5 chalk system run against VS 1.22.3 / .NET 10. The
+catalog is **12 shape types / 18 picker tiles**, **DataVersion 8**, **protocol 5**, and **68 source files**.
+F4 and F5 are feature-complete. The large-guide **mesh pass Stage A (exposed-face meshing) has shipped** and
+**filled 3D volumes are retired**, so a ~100-block hollow Sphere now draws only its shell skin. The immediate
+tasks are verifying the v0.2.21 inventory refill in play, then mesh Stage B (spatial chunks + culling) if
+needed; B-S9-1 and the broad F4/public regression follow. See `TODO.md` and `SESSION_16.md`.
 
 > **▶ IMPLEMENTED — client-only / server-less fallback mode (F4, v0.1.28–v0.1.45).** On a server without
 > Layout, a three-second positive-proof detection window falls back to a client-side
@@ -39,205 +45,41 @@ B-S9-1 and the broad F4/public regression follow. See `TODO.md`.
 > routes undo/redo. Private guides persist per server/world + player UID. `PLAN_CLIENT_ONLY.md` is the final
 > behavior and implementation record; `SESSION_12.md` is the version history.
 
-> **▶ IMPLEMENTED — the Chalking Kit (F5, v0.2.0–v0.2.9).** The tool is the **Chalking Kit** (custom
-> deflating 4-state model; mod name stays Layout) with **32-chalk durability**: completed placements cost
+> **▶ IMPLEMENTED — the Chalking Kit (F5, v0.2.0–v0.2.9; refill channels extended v0.2.21).** The tool is the
+> **Chalking Kit** (custom deflating **5-state** model — full/high/medium/low/empty, FULL reserved for a
+> completely full kit; mod name stays Layout) with **32-chalk durability**: completed placements cost
 > 2D −1 / 3D −2 (flat, never size-scaled), nothing else costs anything, undo never refunds, and at 0 only
 > NEW placement is blocked — the kit can never break (custom clamp; vanilla `DamageItem` is never called).
-> **Chalking Powder** refills +4 per powder (tap/hold; hotbar, or SHIFT+right-click a ground-stored kit in
-> place — the bag re-inflates live). **Private placements on a Layout server charge too** via the
-> client-reported, server-validated `ChalkChargePacket` (protocol 4); the only chalk-free case is a server
-> without Layout, where no custom item can exist. Creative exempt; `enableChalkDurability` server config.
-> Ground storage: CTRL+SHIFT+right-click set-down, idle-gated. Placement feedback: chalk-puff at each
-> anchor + the bow-release chalk-line snap. `PLAN_CHALKING_KIT.md` carries the design rationale and
-> plan-vs-shipped deltas; `SESSION_15.md` is the version history.
+> **Chalking Powder** refills +4 per powder through three channels: **ground storage** (SHIFT+right-click a
+> set-down kit; always allowed, the bag re-inflates live), the **hotbar** tap/hold shortcut, and a
+> **cursor-onto-inventory-slot** click — the latter two are **server-config opt-in** (`allowHotbarChalkRefill`
+> / `allowInventoryChalkRefill`, both default false), synced to clients (protocol 5). **Private placements on a
+> Layout server charge too** via the client-reported, server-validated `ChalkChargePacket`; the only chalk-free
+> case is a server without Layout, where no custom item can exist. Creative exempt; `enableChalkDurability`
+> server config. Ground storage: CTRL+SHIFT+right-click set-down, idle-gated. Placement feedback: whole-guide
+> chalk-puff (2D along the curve, 3D around the base ring) + the bow-release chalk-line snap.
+> `PLAN_CHALKING_KIT.md` carries the design rationale and plan-vs-shipped deltas; `SESSION_15.md` +
+> `SESSION_16.md` are the version history.
 
 ---
 
-## Changelog — v3.1 → v3.2 (the Chalking Kit, F5, v0.2.0 → v0.2.9; full record in `SESSION_15.md`)
+## Document changelog — index
 
-- **Reskin + ground storage (0.2.0–0.2.4):** custom model + rename; vanilla `GroundStorable`
-  (`SingleCenter`) set-down behind an idle-gated CTRL+SHIFT gesture. Architectural note: the F4 input-layer
-  right-click hook had made `ItemGuideTool`'s held-interact hooks unreachable in BOTH authority modes — the
-  controller now steps aside for the set-down gesture (`IsGroundStoreSetDownGesture`, reading the same
-  `Controls` modifiers the vanilla behavior checks).
-- **Durability core (0.2.5):** `durability: 32` on the itemtype; all chalk mutation via
-  `ItemGuideTool.ConsumeChalk`/`TryAddChalk` (clamped [0, max], never vanilla `DamageItem` → never breaks);
-  client pre-check at the first draft click + authoritative server gate/charge in `OnCreateRequest`;
-  `ItemChalkingPowder` (tap/hold refill, server-side consumption, per-entity repeat counter);
-  `enableChalkDurability` config; recipes (powder + 0.1 L yellow dye → 8; the 8-powder kit craft).
-- **Private-mode charge (0.2.6):** "private is private, not free" — `ChalkChargePacket` (**protocol 3 → 4**),
-  client-reported on successful private creates (`LocalGuideAuthority.Create` now returns success),
-  server-validated and clamped. Recipe breadth: `flour-*` joins `powder-*`; dye containers bucket/bowl/jug.
-- **Fill-state rendering (0.2.7):** four shapes (`chalkbag-{full,medium,low,empty}`) each carrying its own
-  texture set; thresholds full ≥22 · medium 11–21 · low 1–10 · empty 0; `OnBeforeRender` swaps the
-  `MultiTextureMeshRef` per stack (lazy `ShapeTextureSource` tesselation, disposed on unload);
-  `IContainedMeshSource` covers ground storage/display rendering — new **`VSSurvivalMod.dll`** reference.
-- **Ground refill + effects (0.2.8):** SHIFT+right-click a stored kit pours into it in place (per-pour
-  `MarkDirty(true)` re-inflates the bag live); `ChalkEffects` (side-agnostic): chalk-puff on refill and at
-  both anchors on placement + the `bow-release` snap at the guide midpoint (server-broadcast for public,
-  client-local for private — matching guide visibility). Fixed in passing: powder pile placement (vanilla
-  GroundStorable) had been unreachable since 0.2.5; sneak-clicks not aimed at a stored kit now fall through.
-- **Process:** versions 0.2.0–0.2.9 each shipped as zips in `..\Layout Zips\`; no save-format change
-  (DataVersion 8; kits and saves from older versions load with full chalk).
+Per-revision deltas for THIS document (v2.5 → v3.3) now live in **`CHANGELOG_ARCHITECTURE.md`**. They are
+not repeated here: every delta is already folded in place into the register / file tree / module map /
+persistence / edge cases below, and each has a fuller narrative in its session record. Use this table to find
+*when* something changed; read the body below for *what is true now*.
 
----
-
-## Changelog — v3.0 → v3.1 (hollow shell scaling, v0.1.53; full handoff in `SESSION_14.md`)
-
-- **Exact shell-focused scan:** `SphericalShellScan` walks X/Y columns, analytically narrows each to the two Z
-  surface bands, and applies the prior nearest/farthest predicate. Hollow Sphere/Dome preserve exact voxel
-  output while work scales approximately with shell area rather than bounding-cube volume.
-- **Filled paths unchanged:** filled Sphere/Dome retain the 4M candidate-cell guard and cubic scan. No save or
-  wire change; DataVersion 8 / protocol 3 remain current.
-- **Validation:** cell-for-cell parity across every scale, off-grid placement, inversion, wall orientations,
-  and threshold counts. A 20-block hollow Dome generated 242,500 voxels in ~5 ms in isolation.
-- **Human playtest:** a roughly 100-block hollow Sphere placed successfully and caused visible lag. This
-  confirms the next bottleneck is `GuideMeshBuilder`'s 8-vertex/36-index full cube per voxel, one monolithic
-  uploaded mesh per guide, full rebuild on every change, and no spatial culling.
-- **Next architecture:** exposed-face Volumetric meshing → per-guide spatial chunk meshes with reliable
-  ownership/disposal and culling → same-colour/orientation greedy merging. Keep Surface/slabs on the legacy
-  path initially and never permanently coarsen settled guides without explicit human approval.
-
----
-
-## Changelog — v2.9 → v3.0 (optimization + interaction correctness, v0.1.46 → v0.1.52; full record in `SESSION_13.md`)
-
-- **Threshold-aware counts:** `IGuideShape` supports cap-limited counting. Box, Cone, Cylinder, Dome, and
-  Sphere stop once rejection is certain, avoiding full voxel materialization for ordinary cap checks.
-- **Natural cap clamp:** rejected over-cap releases reconcile safely, while the client binary-searches a drag
-  segment to the largest acceptable size. The live shape stops at the cap instead of flickering between an
-  oversized preview and server state.
-- **Precise targeting and cancellation:** lock picking uses the first rendered voxel box intersected by the
-  ray. Curve target caches use a complete geometry fingerprint, and both authority paths retain full pre-drag
-  snapshots for exact right-click cancellation.
-- **Passive lock markers:** `ControlPoint.IsLockMarker` lets an Arch display and target a lock without adding
-  a shape-defining Catmull-Rom knot. Deliberate dragging promotes the marker. This additive field advances the
-  save schema to DataVersion 8 and the wire protocol to 3.
-- **Marker lifecycle/order:** v0.1.52 removes passive markers on unlock, cleans obsolete markers during
-  restoration, ignores inactive markers during target/adoption, and inserts later points by curve position.
-  Lock placement is playtest-confirmed non-deforming; the wider interaction regression remains open.
-
----
-
-## Changelog — v2.8 → v2.9 (ClientOnlyFallback, v0.1.28 → v0.1.45; full record in `SESSION_12.md`)
-
-- **Authority seam:** `GuideManager` no longer assumes a server. `IGuidePersistence`,
-  `IRecoverableGuidePersistence`, a block-solidity probe, and injected logging let
-  `LocalGuideAuthority` run the same validation, reshape, lock/constraint, cap, and undo machinery on the
-  client. Local caps are unlimited except for the shared 10M hard safety ceiling.
-- **Detection and activation:** `ClientAuthorityMode` is Detecting, Networked, or Local. A received bulk
-  sync is positive proof of a Layout server; otherwise a three-second grace resolves to Local. Local fallback
-  requires any vanilla Hammer variant/durability offhand + Flax Twine main hand. Networked public/private
-  modes both require the registered Layout tool.
-- **Mixed authority:** `ClientNetworkHandler` presents one mirror while tracking server/local guide IDs.
-  Ownership, not the current placement mode, routes operations on existing guides. Placement mode controls
-  only new guides. The last successful mutation authority routes Ctrl+Z/Y, so selection or mode changes do
-  not redirect history.
-- **Policy, commands, and publication:** server `allowClientOnlyMode` defaults false; client
-  `forceClientOnly` is only honored when policy allows it. `/layout private` and `/layout public` choose
-  placement authority; `.layout client dispel all|<chunk radius>` affects local guides; existing
-  `/layout dispel` remains server/admin; `/layout client push all` transfers at most 100 private guides after
-  server privilege/cap checks. Accepted guides get new server IDs and creator UID, then are removed locally;
-  publication is committed and deliberately absent from server undo history.
-- **Persistence and presentation:** local JSON is keyed by server/world + player UID under
-  `Layout/ClientOnlyGuides`, written by atomic temporary replace with one `.bak` and corrupt-file quarantine.
-  Vanilla-server fallback uses the normal blue/indigo anchors. Only mixed Layout servers render private
-  anchors orange/burnt-orange; the compact HUD says `Client-Only Guides`, and targeted local guides say
-  `Private guide`. The main GUI remains unchanged.
-- **Compatibility:** public save format remains DataVersion 7. Protocol 2 adds append-only policy, mode, and
-  push packets. `requiredOnServer=false` remains essential for vanilla-server fallback.
-
----
-
-## Changelog — v2.7 → v2.8 (Session 11 + the 3D family, v0.1.14 → v0.1.27; full record in `SESSION_11.md`)
-
-- **Three-click triangle (0.1.14):** free/right/isosceles triangles place anchor · anchor · height (the
-  equilateral stays two-click, fully derived). `DraftManager` gained a second stored point + `NeedsApexClick`;
-  draft right-click now **steps back one click** instead of discarding. This reopened the settled
-  "every shape is two clicks" rule at the human's request.
-- **CTRL/SHIFT remap + default-up (0.1.14):** **CTRL** is the cardinal/level snap (was SHIFT). **SHIFT**
-  now (a) inverts the ghost while drafting and (b) **springs a placed guide back to its as-placed form**
-  (`SpringBackCommand`; restores points + constraint from a creation snapshot — `OriginalControlPoints` /
-  `OriginalConstraint`, persisted, never wired). Prerequisite shipped with it: **every shape defaults "up"**
-  regardless of click order (`ShapeGeometry` frame perpendicular sign-normalised world-up).
-- **Polygon (0.1.14) + Free-Shape (0.1.15):** `PolygonShape` (regular N-gon, 3–24 sides, per-guide `Sides`);
-  `FreeShape` (irregular polyline, unbounded chained clicks ≤64 — click the last corner to finish open, the
-  first to close the loop; `IsClosed`). Fill deferred on the Free-Shape.
-- **Favorites redesign (0.1.15) + GUI polish (0.1.16–0.1.19):** the shape row is **four hard-kept pinned
-  slots + a ▾ catalog fold-out** (right-click pins/unpins, never evicts); the **Current Shape chip** (F-menu
-  and HUD); combined Projection+Fill and Divisions+Sides rows; Delete-mode "-ghost" tile greying; Free-Shape
-  SHIFT-vertical; Fill greyed on Free-Shapes.
-- **The 3D VOLUME family (0.1.20–0.1.23):** Sphere/Dome/Cylinder/Cone/Box, gated by
-  `GuideShapeTypes.IsVolume`. Hollow = one-cell shell, Filled = solid, voxelised by a **cell-lattice scan**
-  (not curve-marching) with a `MaxScanCells` (4M) **scan guard**. Sphere/Dome = two clicks; Cylinder/Cone/Box
-  = three (reusing the triangle's apex machinery). Always Volumetric (Surface + Divisions gated off);
-  deterministic up-axis `ShapeGeometry.BaseNormal`; wireframe targeting; free-air height. The
-  "planar-only, 3D LATER" decision was reopened and delivered. **No new persisted/wire fields**; enum values
-  appended; **DataVersion stays 7**.
-- **Client-lifecycle + admin + safety (0.1.24–0.1.27):** GUI icons re-register per client start; pinned
-  favorites persist (`ObjectCreationHandling.Replace`); **`/layout dispel all`** and **`/layout dispel
-  <chunk radius>`** (controlserver); a **hard voxel ceiling** (`GuideManager.HardVoxelCeiling` = 10M) that
-  rejects un-renderable giants regardless of caps; clear in-game create-rejection errors; the running voxel
-  total widened **`int → long`**.
-- **Process:** every revision bumps `modinfo.json` and ships a new `Layout<version>.zip` in the sibling
-  **`..\Layout Zips\`** folder (0.1.14 → 0.1.27 this arc); older zips are never overwritten. Committed to
-  `main` and pushed to GitHub through v0.1.27. Client-only mode (F4) now has a full implementation plan in
-  `PLAN_CLIENT_ONLY.md` (target 0.2.0).
-
----
-
-## Changelog — v2.6 → v2.7 (Session 10; full record in `SESSION_10.md`)
-
-- **Icon-tile GUI:** every option row is now compact SQUARE icon tiles (42 px) — new
-  **`UI/LayoutToolIcons.cs`** draws Cairo glyphs registered in `capi.Gui.Icons.CustomIcons`; stock
-  `GuiElementToggleButton`s render them, so the exclusive-toggle plumbing is unchanged. Hover shows the
-  option name. Delete-mode greying = native `Enabled=false`. New reference: `Lib\cairo-sharp.dll`.
-- **Scale icons copy the game's native scheme:** an N×N grid of squares where **N is the voxel count**
-  (1×1 smallest … 16×16 = a full block, drawn as ONE solid square filling the button); 4×4+ run
-  edge-to-edge. Names are voxel counts, not fractions.
-- **B-S10-1 FIXED (playtest-confirmed):** surface guides no longer shift behind block faces on reload —
-  the air-side probe detects unloaded chunks and a 500 ms re-probe tick rebuilds once the area loads
-  (see the Rendering register entry).
-- **Divisions scroll-wheel (deferred Session-9 TODO) DONE (playtest-confirmed):** dropdown removed; the
-  field is the native `GuiElementNumberInput` (built-in wheel + spinner buttons, `IntMode`, ±1/notch). The
-  first attempt — a plain-text-field + dialog wheel override — failed (text inputs have no native wheel
-  handler). **0.1.13** floors it at 0: the number input has no min, so `OnDivisionsTyped` snaps the display
-  back on clamp (never shows negative or over-`MaxDivisions`).
-- **Third tool mode — Edit (0.1.13):** `ToolMode` is now `Create · Edit · Delete`. In Edit the main setting
-  rows act on the SELECTED guide (network senders) instead of the tool defaults, so per-guide editing no
-  longer expands the panel with a separate section. Edit clicks **select only** (no reshaping); geometry
-  editing stays in Create. See the Interaction-model register entry.
-- **Division markers pair on off-cell boundaries (0.1.13):** `ShapeGeometry.ClaimMarkerPaired` claims the two
-  near-tied cells when a boundary lands between voxels — the arch apex's even-span treatment, generalised.
-- **Process:** every revision bumps `modinfo.json` and ships as a new `Layout<version>.zip` (0.1.10 → 0.1.11
-  → 0.1.12 → 0.1.13 this session); older zips are never overwritten.
-
----
-
-## Changelog — v2.5 → v2.6 (Session 9)
-
-- **Shape catalog extended (F1 first wave):** **Line** (two anchors, no fill), **Triangle** (two base
-  anchors + a born, draggable apex; free = scalene) with **Right / Equilateral / Isosceles** apex-derivation
-  constraints, and **Rectangle** (two diagonal corners stored, other two derived) with the **Square**
-  constraint. `GuideShapeType` and `ShapeConstraint` extended (pinned, append-only). New shared
-  **`ShapeGeometry`** helper (planar frame + marker-claim). **DataVersion 4 → 5.** *(identifiers verified.)*
-- **Body-click policy generalized:** only the **arch (free spline) family** takes body inserts; every other
-  parametric shape (ellipse, line, triangle, rectangle) maps a body click to the **nearest handle**
-  (left = grab, right = lock-toggle).
-- **Divisions (new feature):** a per-guide, purely visual equal-parts overlay — recolors voxels at N
-  arc-length boundaries (**magenta**, `VoxelRenderType.Division`), computed **renderer-side**
-  (`DivisionMarks.Apply`) as a pure recolor that never touches geometry, counts, or caps.
-  `GuideData.Divisions`; additive DTO fields; `GuideSetDivisionsPacket`; `SetDivisionsCommand`;
-  `GuideManager.SetDivisions` (clamp + persist, no cap check); `MaxDivisions = 256`. *(identifiers verified.)*
-- **Soft-point flow → slave-regime (supersedes the v2.5 proportional-only model):** an **interior grab**
-  (held point unlocked, non-anchor) slaves every other unlocked point **onto the defining curve at its
-  station with zero offset** — the apex genuinely contributes no pull; a **structural grab** (anchor or
-  locked point) keeps the shape-preserving proportional flow. Plus a **chord-invariant phantom drop**
-  (arch end-tangent phantoms derive from the anchor chord at 0.4×chord, not the neighbor knot's height), so
-  interior inserts/locks no longer re-tilt the whole curve.
-- **Deferred:** divisions scroll-wheel (drop the dropdown, keep the type-in field, wheel-adjusts-while-focused)
-  — specced, not built. **Active follow-up:** B-S9-1 is substantially improved by first-hit picking, complete
-  drag snapshots, and passive lock markers; final repeated-interaction playtesting remains.
+| Doc rev | Mod versions | Theme | Session record |
+|---|---|---|---|
+| v3.3 | v0.2.10 → v0.2.21 | Mesh Stage A (exposed-face), filled-volume retirement, refill channels, polish | `SESSION_16.md` |
+| v3.2 | v0.2.0 → v0.2.9 | The Chalking Kit (F5): durability, powder refills, ground storage | `SESSION_15.md` |
+| v3.1 | v0.1.53 | Hollow-shell scaling (`SphericalShellScan`); mesh frontier confirmed | `SESSION_14.md` |
+| v3.0 | v0.1.46 → v0.1.52 | Cap performance + interaction correctness; passive lock markers | `SESSION_13.md` |
+| v2.9 | v0.1.28 → v0.1.45 | ClientOnlyFallback (F4): local authority, private overlays | `SESSION_12.md` |
+| v2.8 | v0.1.14 → v0.1.27 | Session 11 + the 3D volume family; CTRL/SHIFT remap; voxel ceiling | `SESSION_11.md` |
+| v2.7 | — | Session 10: icon-tile GUI, Edit mode, divisions input | `SESSION_10.md` |
+| v2.6 | — | Session 9: extended shape catalog, divisions overlay, slave regime | `SESSION_9.md` |
 
 ---
 
@@ -396,10 +238,12 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 - **3D VOLUMES — DELIVERED (v0.1.20–0.1.23; the "planar-only, 3D LATER" decision was reopened by the human
   and shipped).** `GuideShapeTypes.IsVolume` gates the family. **Sphere / Dome** = two clicks (a diameter /
   a base diameter); **Cylinder / Cone / Box** = three clicks (base, then a height click — reusing the
-  triangle's apex machinery, `NeedsApexClick`). Box is a true box (independent side lengths). **Hollow = a
-  one-cell shell, Filled = the solid**. v0.1.53 routes hollow Sphere/Dome through the exact
-  surface-area-oriented `SphericalShellScan`; Box and filled volumes retain lattice scans, while
-  Cylinder/Cone remain centre-banded. The remaining cubic paths keep `MaxScanCells` guards. Volumes are **always
+  triangle's apex machinery, `NeedsApexClick`). Box is a true box (independent side lengths). **Volumes are
+  always a one-cell hollow shell (v0.2.17) — Filled is retired for the 3D family** (post-Stage-A a filled
+  interior draws nothing, so it was pure invisible voxel cost; every volume shape now coerces `filled=false`,
+  which also auto-lightens legacy filled saves). v0.1.53 routes hollow Sphere/Dome through the exact
+  surface-area-oriented `SphericalShellScan`; Box retains a lattice scan, while Cylinder/Cone remain
+  centre-banded. A cylinder cap / dome floor is recovered cheaply with a filled 2D circle at the base. The remaining cubic paths keep `MaxScanCells` guards. Volumes are **always
   Volumetric** (Surface + Divisions gated off server-side and greyed/hidden in the GUI). The base plane / axis
   comes from the clicked face; the axis is the **deterministic `ShapeGeometry.BaseNormal`** (+up regardless of
   anchor order — SHIFT is the only invert, e.g. dome → bowl). **Targeting is a wireframe** (equator/meridians,
@@ -407,7 +251,8 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   grab points. Height may be set in **free air** (no block → the handle follows the view ray; a targeted
   block wins). No new persisted/wire fields — volumes reuse `ControlPoints` + `ShapePlaneAxis`; enum values
   appended, **DataVersion stays 7**. Natural next volumes: **Roof, Tunnel**.
-- **Fill is a guide property (`IsFilled`), constraints are modifiers — neither is a shape type.**
+- **Fill is a guide property (`IsFilled`), constraints are modifiers — neither is a shape type.** Fill applies
+  to **2D shapes only**; the 3D volume family is locked hollow (v0.2.17, above).
 
 ### Rendering
 - **The verified draw recipe:** Opaque stage + manual blend (not OIT); `PreparedStandardShader` overridden to
@@ -419,19 +264,26 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   boundary landing between two voxels claims both, so the equal parts read even; boundaries on a cell centre
   stay single.
 - **Surface guides render as paper-thin slabs (0.01)** hugging the wall face on the **air side** (world
-  solidity probe; majority fallback) with a **plane-axis-only** inset; volumetric anti-z-fight via a
-  whole-mesh 0.003-block camera nudge per frame. **The air-side probe tolerates the world-load race
+  solidity probe; majority fallback) with a **plane-axis-only** inset. **Volumetric anti-z-fight is a
+  per-face geometry inset** (`BlockPlaneInset = 0.003`, v0.2.10–0.2.16), not a camera nudge: a voxel face is
+  pulled off a block-grid plane ONLY when it is EXPOSED **and** a solid world block sits across that plane
+  (`GuideMeshOptions.IsNeighborSolid`). Faces flush against a neighbour voxel, or bordering air, stay exactly
+  on grid — so the inset never opens a seam between two guide voxels, only clears a guide face from a real
+  block face. **The air-side probe tolerates the world-load race
   (Session 10):** if a probed cell's chunk isn't loaded yet, the guide's side is *provisional* and a
   low-frequency re-probe tick rebuilds it once the neighbourhood loads — otherwise a guide meshed before its
   blocks arrived sank behind the face on reload (B-S10-1).
 - **Settled guides always render at their true scale**; `ChooseRenderScale` coarsening (8,000-voxel cap) is
   a **draft-ghost-only** courtesy — it once leaked into placed guides and permanently degraded them.
-- **Current large-guide bottleneck (v0.1.53, human-confirmed):** `GuideMeshBuilder` emits an independent full
-  cube for every voxel (8 vertices / 36 indices, shared faces included), stores one uploaded mesh per guide,
-  and `GuideRenderer` rebuilds/reuploads the whole guide on any change while drawing all loaded guide meshes.
-  A roughly 100-block hollow Sphere caused visible lag. The approved next seam is exposed-face Volumetric
-  meshing → spatial chunk meshes/culling → same-colour greedy merging. Preserve the verified draw recipe and
-  keep Surface/slabs on the legacy builder initially; full invariants in `SESSION_14.md`.
+- **Large-guide meshing — Stage A shipped (v0.2.14–v0.2.16, `SESSION_16.md`):** `GuideMeshBuilder`'s
+  Volumetric cube path now does **exposed-face meshing** — it builds a presence set of rendered cells,
+  pre-counts the faces with no neighbour, allocates exactly, and emits ONLY those faces (per-voxel role
+  colours preserved). Interior/shared faces vanish, so a ~100-block hollow Sphere draws only its outer skin
+  (and, with filled volumes retired in v0.2.17, worst-case counts dropped further). Still one uploaded mesh
+  per guide, rebuilt on change; `GuideRenderer` draws all loaded meshes. **The remaining seams for very large
+  guides are Stage B/C:** per-guide spatial chunk meshes + culling, then same-colour greedy face merging.
+  Surface tile/slab paths stay on the legacy whole-box builder; preserve the verified draw recipe. Full
+  invariants + the mesh-count harness are in `SESSION_14.md` §6–§7 and `SESSION_16.md` §2.
 - **Leaving Surface bakes the flattened positions into the control points** (undoable, full-state
   broadcast): Surface-mode edits are made against the view, so the view is what leaving it keeps. Returning
   to Surface restores the stored plane; only never-Surface guides get the floor-at-anchor seed.
@@ -467,9 +319,11 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 ### Configuration, assets, GUI
 - **Server `layout.json`:** perGuideVoxelCap 25,000 · totalVoxelCap 250,000 · maxGuidesPerPlayer 0 ·
   maxGuidesWorldWide 0 · undoHistoryDepth 50 · requiredPrivilege "" · adminCanOverrideLocks true ·
-  **allowClientOnlyMode false** · **enableChalkDurability true** (F5)
+  **allowClientOnlyMode false** · **enableChalkDurability true** (F5) · **allowHotbarChalkRefill false** ·
+  **allowInventoryChalkRefill false** (v0.2.21 — ground-storage refill is always allowed; these opt-in the
+  two convenience channels)
   (0/negative = unlimited; **construction-time injection — edits need a server restart**). Caps sync to
-  clients on join so the pre-check matches enforcement. **The running total is a `long`** (v0.1.27) so a
+  clients on join so the pre-check matches enforcement; the two refill flags sync alongside them (protocol 5). **The running total is a `long`** (v0.1.27) so a
   caps-off server can't overflow it negative. A **hard voxel ceiling** (`GuideManager.HardVoxelCeiling`,
   10M) rejects giant guides ALWAYS, even with caps disabled. Remaining guarded 3D scans return a huge sentinel
   for over-size filled/volume paths; hollow Sphere/Dome now count exactly beyond the old guard. Do not raise
@@ -512,7 +366,8 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   guide tool is required in public and private placement modes. On servers without Layout, any vanilla
   Hammer variant/durability in the offhand + Flax Twine in the main hand substitutes for it; F opens the
   unchanged GUI and the HUD appears immediately. The real tool is the **Chalking Kit** (custom deflating
-  4-state model, Session 15): recipe **8× Chalking Powder + linen sack + flax twine + rope + copper nails**;
+  **5-state** model — full/high/medium/low/empty, Sessions 15–16): recipe **8× Chalking Powder + linen sack
+  + flax twine + rope + copper nails**;
   **32-chalk durability** (F5 — see the ▶ IMPLEMENTED callout up top for the full contract). The vanilla
   Hammer + Flax Twine fallback gate cannot carry custom durability, so a server WITHOUT Layout is the one
   chalk-free mode — physically unenforceable there, by accepted design.
@@ -843,7 +698,7 @@ ints, Guids as 16 bytes, positions as three doubles, full point lists verbatim (
 
 | Packet | Direction | Contents |
 |---|---|---|
-| `GuideBulkSyncPacket` | S→C | All guides + active caps + lock states + draft anchors, on join |
+| `GuideBulkSyncPacket` | S→C | All guides + active caps + lock states + draft anchors + **the two refill-channel flags** (v0.2.21), on join |
 | `GuideCreateRequestPacket` | C→S | Two points + settings + **shape + constraint + plane axis** |
 | `GuideCreatePacket` | S→C | Full `GuideData` (also the generic full-state broadcast) |
 | `GuideUpdatePacket` | S→C, C→S | Guide ID + edit array (client sends its one; server broadcasts the composed batch incl. soft-flow edits) |
@@ -856,6 +711,7 @@ ints, Guids as 16 bytes, positions as three doubles, full point lists verbatim (
 | `ClientOnlyPolicyPacket` / `ClientOnlyModeRequestPacket` / `ClientOnlyModeResultPacket` | mixed | Server permission and private/public placement negotiation |
 | `ClientGuidePushRequestPacket` / `ClientGuidePushResultPacket` | C→S / S→C | Publish up to 100 private guides and confirm accepted local removals |
 | `ChalkChargePacket` (S15, protocol 4) | C→S | Self-report a completed PRIVATE placement so the server (which owns the inventory but cannot see private guides) applies the chalk charge; validated + clamped 1–2 |
+| `ChalkInventoryRefillPacket` (S16, protocol 5) | C→S | Inventory-slot refill request (`InventoryId` + `SlotId`); server re-validates cursor=powder + slot=non-full kit before consuming one powder — a lost mouse-hook race degrades to a harmless swap |
 
 **`ServerNetworkHandler.cs`** — validates, calls the managers, reads results, broadcasts (or corrective
 resync / cap warning). Owns: the create request (shape-aware), **auto-break** before constrained inserts and

@@ -1,19 +1,22 @@
 # Layout — Project Status & Handoff
 
-**Checkpoint: Layout v0.2.9 on `main`** (the `ClientOnlyFallback` branch merged via PR #1). **F4** is
+**Checkpoint: Layout v0.2.21** — `main` is pushed through **v0.2.13** (`de830b1`; the `ClientOnlyFallback`
+branch merged via PR #1) and **v0.2.14–v0.2.21 are built + playtested but UNCOMMITTED**. **F4** is
 implemented and playtested: automatic client-only authority on servers without Layout; opt-in private
 overlays on Layout servers; per-world/per-UID client persistence; placement/reshape/settings/undo parity;
 public/private commands and publication; ownership cues; mixed-authority undo routing; backup-recovery
-hardening. **F5 (Session 15) is implemented and playtested:** the tool is the **Chalking Kit** — custom
-deflating 4-state model, 32-chalk durability (2D −1 / 3D −2, completed placements only, no lockout at 0,
-kit can never break), **Chalking Powder** refills (tap/hold; hotbar or ground-stored kit in place), private
-placements charge via `ChalkChargePacket`, ground storage, chalk-puff/snap feedback. **DataVersion 8;
-protocol 4; 68 source files.** Release zips: `..\Layout Zips\` (0.1.10–0.1.27 + 0.2.x;
-the 0.1.28–0.1.53 line lives in `Documents\ChatGPT\LayoutZips\`). **Top tasks: the chunked
-exposed-face/greedy mesh implementation (SESSION_14), the F5 cursor-vs-ground-refill decision, B-S9-1 soak
-testing, the F4 multiplayer regression pass.** Standing rule: ship a zip per code iteration; update docs /
-commit ONLY on the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_15.md`**,
-`PLAN_CLIENT_ONLY.md`, `PLAN_CHALKING_KIT.md`, and `TODO.md`; the authoritative plan is **`ARCHITECTURE.md`**.
+hardening. **F5 is implemented and playtested:** the tool is the **Chalking Kit** — custom deflating
+**5-state** model (full/high/medium/low/empty), 32-chalk durability (2D −1 / 3D −2, completed placements
+only, no lockout at 0, kit can never break), **Chalking Powder** refills (ground storage always; hotbar +
+inventory-slot channels are server-config opt-in as of v0.2.21), private placements charge via
+`ChalkChargePacket`, ground storage, whole-guide chalk-puff/snap feedback. **The large-guide mesh pass
+Stage A (exposed-face meshing) shipped (v0.2.14–v0.2.16) and filled 3D volumes were retired (v0.2.17).**
+**DataVersion 8; protocol 5; 68 source files.** Release zips: `..\Layout Zips\` (0.1.10–0.1.27 + 0.2.x;
+the 0.1.28–0.1.53 line lives in `Documents\ChatGPT\LayoutZips\`). **Top tasks: verify the v0.2.21 inventory
+refill in play, then mesh Stage B (chunks + culling) if needed, B-S9-1 soak testing, the F4/chalk
+multiplayer regression pass.** Standing rule: ship a zip per code iteration; update docs / commit ONLY on
+the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_16.md`**, `PLAN_CLIENT_ONLY.md`,
+`PLAN_CHALKING_KIT.md`, and `TODO.md`; the authoritative plan is **`ARCHITECTURE.md`** (v3.3).
 
 ---
 
@@ -21,19 +24,20 @@ commit ONLY on the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_
 
 The doc set (now a Claude Code repo):
 
-1. **`ARCHITECTURE.md`** — the authoritative plan (v3.2); Settled Decisions Register updated through v0.2.9.
+1. **`ARCHITECTURE.md`** — the authoritative plan (v3.3); Settled Decisions Register updated through v0.2.21.
 2. **The code** — `src/` (**68 files**: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
    RectangleShape, ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 Session-10 — LayoutToolIcons;
    + 4 Session-11 — PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 the 3D family
    (v0.1.20–0.1.21) — SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape; + 5 F4 —
    ClientAuthorityMode, ClientToolGate, ClientWorldGuidePersistence, LocalGuideAuthority,
    GuideManagerDependencies; + 1 Session-13 — RemoveLockMarkerCommand; + 1 Session-14 —
-   SphericalShellScan; + 2 Session-15 — ItemChalkingPowder, ChalkEffects),
+   SphericalShellScan; + 2 Session-15 — ItemChalkingPowder, ChalkEffects; Session-16 added no new files —
+   all edits to existing ones plus the High fill-state asset),
    `assets/layout/`, `modinfo.json`, `modicon.png`, `Layout.csproj`, `BUILD_INSTRUCTIONS.txt`.
 3. **`TODO.md`** — the live punch-list (renamed from `OUTSTANDING_ITEMS.md`).
-4. **`SESSION_9.md`** … **`SESSION_15.md`** — standalone records (SESSION_12 runs through v0.1.45;
+4. **`SESSION_9.md`** … **`SESSION_16.md`** — standalone records (SESSION_12 runs through v0.1.45;
    SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 shell/mesh handoff; SESSION_15 is the
-   v0.2.0–v0.2.9 Chalking Kit arc).
+   v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc).
 5. **`HANDOFF.md`** (repo root) — the consolidated current-state brief for external AI analysis
    (scope / status / direction / performance characteristics).
 6. **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix.
@@ -164,12 +168,25 @@ The doc set (now a Claude Code repo):
     `enableChalkDurability` config; **private placements charge** via client-reported `ChalkChargePacket`
     (**protocol 3 → 4**); Chalking Powder + recipes (8× powder/flour + 0.1 L yellow dye → 8; kit = 8 powder
     + sack/twine/rope/nails).
-  - **Fill-state models (0.2.7):** four human-made deflating models with progressively chalkier textures
-    (full ≥22 · medium 11–21 · low 1–10 · empty 0), rendered everywhere via `OnBeforeRender` +
-    `IContainedMeshSource` (new `VSSurvivalMod.dll` reference).
+  - **Fill-state models (0.2.7, extended to five in 0.2.20):** human-made deflating models with progressively
+    chalkier textures (full=32 · high 22–31 · medium 11–21 · low 1–10 · empty 0), rendered everywhere via
+    `OnBeforeRender` + `IContainedMeshSource` (new `VSSurvivalMod.dll` reference).
   - **Ground refill + feedback (0.2.8):** SHIFT+right-click a stored kit refills in place (bag re-inflates
     live); chalk-puff particles on refill/placement; the bow-release chalk-line snap on placement.
-  - **Held:** cursor-stack inventory refill vs. ground-refill-only — human decision pending playtest.
+- **Session 16 — the mesh + polish arc (v0.2.10–v0.2.21): playtest-CONFIRMED. Detail in `SESSION_16.md`.**
+  - **Interaction/visual (0.2.10–0.2.13, committed `de830b1`):** whole-guide placement dust, pencil-icon fix,
+    **Dome faces the clicked surface**, and the tuned ground **z-fight inset** (`0.003`).
+  - **Large-guide mesh Stage A (0.2.14–0.2.16):** exposed-face meshing (emit only faces with no neighbour),
+    made exposed-only then solidity-aware so it never seams between voxels; deterministic mesh-count harness.
+  - **Filled 3D volumes RETIRED (0.2.17):** volumes are always hollow shells now (GUI grey + server
+    normalise + per-shape coercion; legacy filled saves auto-lighten).
+  - **HUD/GUI (0.2.18):** hover no longer re-measures every tick; number fields aligned to the tile grid.
+  - **Draft cap clamp restored (0.2.19);** **fifth High fill state (0.2.20);** **refill channels — config +
+    inventory-slot refill (0.2.21, protocol 4 → 5):** hotbar/inventory refill are server-config opt-in
+    (ground storage always allowed), synced to clients; inventory refill via a MouseDown hook + validated
+    `ChalkInventoryRefillPacket`.
+  - **Held / to verify:** the v0.2.21 inventory refill in live play (mouse-hook ordering + InventoryID
+    round-trip; both fail safe).
 - **IN REAL PLAY:** save-compatibility matters — DataVersion **8** saves (v8: passive `IsLockMarker`; v7:
   IsClosed; v6: Sides + the
   never-wired spring-back snapshot); pinned-enum / additive-protobuf / default-migration rules remain in
@@ -274,23 +291,24 @@ the scale-icon/tile-proportion calls; Session-9 adds the regime split, triangle'
 no-break-gesture for Right/Isosceles/Square, rectangle corners as markers, magenta division color, the
 per-keystroke divisions field; Session-8's list still stands. Full list + rationale in `TODO.md`.
 
-**Open — real-play agenda:** implement the v0.1.53-confirmed large-guide mesh pass, finish the focused
-v0.1.52 lock/drag/unlock regression, then run one final F4/public multiplayer regression before promoting the
-feature branch to a v0.2.0 candidate.
+**Open — real-play agenda:** verify the v0.2.21 inventory refill in play, carry the large-guide mesh pass
+to Stage B (chunks + culling) only if Stage A's win isn't enough, finish the focused v0.1.52
+lock/drag/unlock regression, then run one final F4/chalk multiplayer regression before a release-grade stamp.
 
 ---
 
 ## 7. Next session — start here
 
-**F4 and F5 are both feature-complete and playtested through v0.2.9 on `main`.** Normal public multiplayer
-behavior is intentionally preserved. Read `SESSION_14.md` first for performance work (the mesh handoff) and
-`SESSION_15.md` for the Chalking Kit state.
+**F4 and F5 are both feature-complete and playtested through v0.2.21** (`main` is at v0.2.13; v0.2.14–v0.2.21
+are uncommitted). Normal public multiplayer behavior is intentionally preserved. Read `SESSION_16.md` for the
+current mesh/polish state, `SESSION_14.md` for the staged mesh plan, and `SESSION_15.md` for the Chalking Kit.
 
-1. **Resolve the F5 held decision** once the human has playtested ground refills: add cursor-stack inventory
-   refill, or make ground refill the only path (delete the hotbar branch). Tune puff/snap by feel.
-2. **Implement large-guide meshes.** Add an exposed-face Volumetric path, then per-guide spatial chunk mesh
-   ownership/disposal and culling, then same-colour/orientation greedy merging. Preserve the verified shader,
-   true settled-guide scale, marker palettes, and legacy Surface/slab path. See `SESSION_14.md`.
+1. **Verify the v0.2.21 inventory refill in play.** Confirm the MouseDown-hook vs GUI-swap ordering and the
+   InventoryID round-trip; both fail safe, but neither was confirmable statically. See `SESSION_16.md` §8.
+2. **Large-guide meshes — Stage B/C, only if Stage A isn't enough.** Stage A (exposed-face meshing) shipped
+   and filled volumes are retired. Next is per-guide spatial chunk mesh ownership/disposal and culling, then
+   same-colour/orientation greedy merging. Preserve the verified shader, true settled-guide scale, marker
+   palettes, and the legacy Surface/slab path. See `SESSION_14.md` §6–§7.
 3. **Finish B-S9-1 interaction testing.** Exercise adjacent locks and repeated lock → drag → cancel/revert →
    unlock → relock cycles, especially on both sides of an Arch and around existing markers. Fix only any
    reproducible residual behavior; do not reopen the confirmed non-deforming design.
