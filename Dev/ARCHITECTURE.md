@@ -26,9 +26,9 @@ channels** (protocol 5). The register, file tree, module map, persistence, and e
 in place to the v0.2.21 / DataVersion 8 / protocol-5 / 68-file state; the per-revision deltas live in
 **`CHANGELOG_ARCHITECTURE.md`** (indexed just below).
 
-**Where the project stands:** Layout **v0.2.21** is built, packaged, and playtested; **`main` is pushed
-through v0.2.13** (`de830b1`; the `ClientOnlyFallback` branch merged via PR #1) and **v0.2.14–v0.2.21 are
-uncommitted**. All seven modules, the complete 2D/3D catalog, normal public multiplayer, vanilla-server local
+**Where the project stands:** Layout **v0.2.21** is built, packaged, playtested, and **pushed on `main`**
+(`b227d7d`; the `ClientOnlyFallback` branch merged via PR #1).
+All seven modules, the complete 2D/3D catalog, normal public multiplayer, vanilla-server local
 fallback, mixed public/private operation, and the full F5 chalk system run against VS 1.22.3 / .NET 10. The
 catalog is **12 shape types / 18 picker tiles**, **DataVersion 8**, **protocol 5**, and **68 source files**.
 F4 and F5 are feature-complete. The large-guide **mesh pass Stage A (exposed-face meshing) has shipped** and

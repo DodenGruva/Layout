@@ -1,7 +1,7 @@
 # Layout — Project Status & Handoff
 
-**Checkpoint: Layout v0.2.21** — `main` is pushed through **v0.2.13** (`de830b1`; the `ClientOnlyFallback`
-branch merged via PR #1) and **v0.2.14–v0.2.21 are built + playtested but UNCOMMITTED**. **F4** is
+**Checkpoint: Layout v0.2.21, pushed on `main`** (`b227d7d`; the `ClientOnlyFallback` branch merged via
+PR #1). **F4** is
 implemented and playtested: automatic client-only authority on servers without Layout; opt-in private
 overlays on Layout servers; per-world/per-UID client persistence; placement/reshape/settings/undo parity;
 public/private commands and publication; ownership cues; mixed-authority undo routing; backup-recovery
@@ -299,8 +299,8 @@ lock/drag/unlock regression, then run one final F4/chalk multiplayer regression 
 
 ## 7. Next session — start here
 
-**F4 and F5 are both feature-complete and playtested through v0.2.21** (`main` is at v0.2.13; v0.2.14–v0.2.21
-are uncommitted). Normal public multiplayer behavior is intentionally preserved. Read `SESSION_16.md` for the
+**F4 and F5 are both feature-complete and playtested through v0.2.21, pushed on `main`.** Normal public
+multiplayer behavior is intentionally preserved. Read `SESSION_16.md` for the
 current mesh/polish state, `SESSION_14.md` for the staged mesh plan, and `SESSION_15.md` for the Chalking Kit.
 
 1. **Verify the v0.2.21 inventory refill in play.** Confirm the MouseDown-hook vs GUI-swap ordering and the

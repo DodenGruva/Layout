@@ -2,8 +2,8 @@
 
 > The performance arc the previous sessions kept pointing at, plus a run of playtest-driven polish. Current
 > build: **v0.2.21**, **DataVersion 8**, **protocol 5**, **68 C# source files** (no new files — all edits to
-> existing ones + the High fill-state asset). **v0.2.10–v0.2.13 are committed** (`de830b1`); **v0.2.14–v0.2.21
-> are built, playtested, and UNCOMMITTED** at the time of writing. All on `main`.
+> existing ones + the High fill-state asset). **All of it is committed and pushed on `main`:** v0.2.10–v0.2.13
+> in `de830b1`, v0.2.14–v0.2.21 in `6a48d2f`, and this session's doc pass in `b227d7d`.
 
 ---
 
@@ -127,7 +127,8 @@ to a harmless swap, never a corrupted inventory.
   needs a different hook; (b) the `InventoryID` round-trip (client `ItemSlot.Inventory.InventoryID` →
   server `GetInventory(id)`) — if enabled inventory refill silently does nothing, the id format is the
   suspect. Both fail safe (swap / no-op).
-- **`main` is at v0.2.13; v0.2.14–v0.2.21 are uncommitted** — commit when the human says so.
+- ~~`main` is at v0.2.13; v0.2.14–v0.2.21 are uncommitted~~ **— DONE: committed and pushed** (`6a48d2f`
+  code, `b227d7d` docs).
 - **Large-guide mesh, Stage B is next** if Stage A's win isn't enough on the ~100-block sphere: per-guide
   spatial chunk meshes with reliable ownership/disposal + culling, then Stage C greedy same-colour face
   merging. Invariants and the staged plan are in `SESSION_14.md` §6–§7 (still current). Filled volumes are

@@ -2,9 +2,9 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-19 against **v0.2.21** (`main` is at v0.2.13;
-> v0.2.14–v0.2.21 are built + playtested but uncommitted). Where this file and the code disagree, **the code
-> wins** — treat this as a map, then read the `.cs` files it points at.
+> and the performance-relevant mechanics. Updated 2026-07-19 against **v0.2.21**, committed and pushed on
+> `main` (`b227d7d`). Where this file and the code disagree, **the code wins** — treat this as a map, then
+> read the `.cs` files it points at.
 >
 > **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.3),
 > `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/16.md` (per-session
@@ -21,8 +21,8 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.2.21, **playtested in multiplayer and vanilla-server fallback** (`main` at v0.2.13;
-  v0.2.14–v0.2.21 uncommitted). F4 (client-only / private guides) and F5 (**the Chalking Kit**: finite chalk
+- **Status:** v0.2.21 on `main`, **playtested in multiplayer and vanilla-server fallback**.
+  F4 (client-only / private guides) and F5 (**the Chalking Kit**: finite chalk
   durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
   **mesh pass Stage A (exposed-face meshing) has shipped** and **filled 3D volumes are retired** (always
   hollow shells now), so a ~100-block hollow Sphere draws only its outer skin.

@@ -39,8 +39,7 @@ the docs are stale.
 
 ## Implemented in Session 16 (v0.2.10 → v0.2.21) — full detail in `SESSION_16.md`
 
-**Mesh + polish arc.** `main` is committed through **v0.2.13** (`de830b1`); **v0.2.14–v0.2.21 are built +
-playtested but UNCOMMITTED**.
+**Mesh + polish arc.** All of it is committed and pushed on `main` (`6a48d2f` code, `b227d7d` docs).
 
 - **Large-guide mesh Stage A — exposed-face meshing (0.2.14–0.2.16):** the Volumetric cube path now emits
   ONLY faces with no neighbour (per-voxel role colours preserved), cutting a hollow-shell guide to its skin.
@@ -408,8 +407,7 @@ the inventory refill remains (Top of the list).
 ## Next session — start here
 
 **The agenda is "⭐ Top of the list" at the top of this file** — it is not repeated here. Current state:
-F4 and F5 are both feature-complete and playtested through **v0.2.21** (`main` is at v0.2.13; v0.2.14–v0.2.21
-are uncommitted).
+F4 and F5 are both feature-complete and playtested through **v0.2.21**, committed and pushed on `main`.
 
 **Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;
 docs are updated ONLY when the human says so; commits/pushes only when the human instructs. `main` is the

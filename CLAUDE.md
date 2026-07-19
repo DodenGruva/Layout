@@ -28,9 +28,8 @@ Status: **v0.2.x, in real play.**
   `Layout<version>.zip` in **`..\Layout Zips\`** (the sibling folder of this repo — human-directed location;
   holds 0.1.10–0.1.27 + the 0.2.x line; the 0.1.28–0.1.53 zips live in `Documents\ChatGPT\LayoutZips\`) —
   never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.2.21.**
-- **Git:** `main` is the mainline, pushed to **github.com/DodenGruva/Layout** through **v0.2.13** (`de830b1`;
-  the `ClientOnlyFallback` branch was merged via PR #1). **v0.2.14–v0.2.21 are built + playtested but
-  UNCOMMITTED** — commit/push ONLY when the human instructs.
+- **Git:** `main` is the mainline, pushed to **github.com/DodenGruva/Layout** through **v0.2.21** (`b227d7d`;
+  the `ClientOnlyFallback` branch was merged via PR #1). Commit/push ONLY when the human instructs.
 
 ## The documents (read these before large work)
 - **`HANDOFF.md`** (repo root) — the consolidated current-state brief (scope · status · direction ·
