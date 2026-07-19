@@ -50,11 +50,16 @@ WHAT YOU NEED
       Newtonsoft.Json.dll   (Lib\ subfolder)
       protobuf-net.dll      (Lib\ subfolder)   <-- added for Module 4 networking
 
-THE ONE THING TO CHECK FIRST
-  Open Layout.csproj and look at the <VintagestoryDir> line. It is set to
-      C:\Users\Zech\AppData\Roaming\Vintagestory
-  the default Windows install location. If your game is installed elsewhere,
-  change that one line to point at the folder that contains VintagestoryAPI.dll.
+WHERE THE GAME DLLs COME FROM
+  Nothing to edit for a normal install. Layout.csproj finds the game itself, in
+  this order:
+      1. -p:VintagestoryDir=...          (command line)
+      2. the VINTAGE_STORY env variable
+      3. the platform default            (%APPDATA%\Vintagestory on Windows,
+                                          ~/.local/share/vintagestory otherwise)
+  If the game is somewhere non-standard, set VINTAGE_STORY or pass the property
+  -- do NOT hard-code a path into the .csproj, which is published. The build
+  fails with a single clear message naming the folder it looked in.
 
 HOW TO BUILD
   1. Open a terminal.

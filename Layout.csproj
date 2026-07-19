@@ -11,21 +11,34 @@
   </PropertyGroup>
 
   <!-- =============================================================== -->
-  <!--  Path to YOUR Vintage Story INSTALL folder - the folder that   -->
-  <!--  contains VintagestoryAPI.dll (and a Lib\ subfolder).          -->
+  <!--  Path to the Vintage Story INSTALL folder - the folder that     -->
+  <!--  contains VintagestoryAPI.dll (and a Lib\ subfolder).           -->
   <!--                                                                 -->
-  <!--  On Windows the game installs here by default, so this is       -->
-  <!--  already filled in with your username:                         -->
-  <!--    C:\Users\Zech\AppData\Roaming\Vintagestory                   -->
+  <!--  Resolved automatically, in this order:                         -->
+  <!--    1. -p:VintagestoryDir=... passed on the command line         -->
+  <!--    2. the VINTAGE_STORY environment variable                    -->
+  <!--    3. the platform's default install location                   -->
+  <!--                                                                 -->
+  <!--  So an ordinary install needs NO edit on any platform. If the   -->
+  <!--  game lives somewhere non-standard, set VINTAGE_STORY or pass   -->
+  <!--  the property - do not hard-code a path here, since this file   -->
+  <!--  is published.                                                  -->
   <!--                                                                 -->
   <!--  NOTE: this is the INSTALL folder (game .exe + .dll files),     -->
   <!--  NOT the data folder (which is ...\VintagestoryData and holds   -->
-  <!--  your saves/mods). If your game is installed somewhere else,    -->
-  <!--  change the one line below to point at it.                      -->
+  <!--  saves/mods).                                                   -->
   <!-- =============================================================== -->
   <PropertyGroup>
-    <VintagestoryDir>C:\Users\Zech\AppData\Roaming\Vintagestory</VintagestoryDir>
+    <VintagestoryDir Condition="'$(VintagestoryDir)' == '' AND '$(VINTAGE_STORY)' != ''">$(VINTAGE_STORY)</VintagestoryDir>
+    <VintagestoryDir Condition="'$(VintagestoryDir)' == '' AND '$(OS)' == 'Windows_NT'">$(APPDATA)\Vintagestory</VintagestoryDir>
+    <VintagestoryDir Condition="'$(VintagestoryDir)' == ''">$(HOME)/.local/share/vintagestory</VintagestoryDir>
   </PropertyGroup>
+
+  <!-- A clear failure beats five confusing "missing reference" errors. -->
+  <Target Name="VerifyVintagestoryDir" BeforeTargets="BeforeBuild">
+    <Error Condition="!Exists('$(VintagestoryDir)\VintagestoryAPI.dll')"
+           Text="Could not find VintagestoryAPI.dll under '$(VintagestoryDir)'. Set the VINTAGE_STORY environment variable to your Vintage Story install folder, or build with -p:VintagestoryDir=&quot;path\to\Vintagestory&quot;." />
+  </Target>
 
   <ItemGroup>
     <!-- The Vintage Story API: MathTools (Vec3d), Server (ICoreServerAPI), etc. -->
