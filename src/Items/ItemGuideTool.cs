@@ -42,7 +42,7 @@ namespace Layout.Items
         public static int FillIndexFor(ItemStack stack)
         {
             int chalk = GetChalk(stack);
-            if (stack != null && chalk >= stack.Collectible.GetMaxDurability(stack)) return FillIndexFull;
+            if (stack != null && chalk >= MaxChalk) return FillIndexFull;
             if (chalk >= FillHighMin) return 3;
             if (chalk >= FillMediumMin) return 2;
             return chalk >= 1 ? 1 : 0;
@@ -114,36 +114,71 @@ namespace Layout.Items
         /// <summary>Chalk consumed by a completed 3D volume placement.</summary>
         public const int ChalkCostVolume = 2;
 
-        /// <summary>Remaining chalk in the kit stack (defaults to full on stacks that predate durability).</summary>
-        public static int GetChalk(ItemStack stack) =>
-            stack == null ? 0 : stack.Collectible.GetRemainingDurability(stack);
+        /// <summary>
+        /// The kit's ABSOLUTE chalk ceiling — the single source of truth, and deliberately a hard constant
+        /// (v0.2.22). Must stay in step with <c>durability</c> in <c>itemtypes/guidetool.json</c>, which
+        /// only seeds the vanilla value.
+        /// </summary>
+        /// <remarks>
+        /// **Why we do not ask the engine for this.** `CollectibleObject.GetMaxDurability` walks the
+        /// collectible's BEHAVIORS and lets any of them replace the value, and `GetRemainingDurability` does
+        /// the same *and* defaults to that (possibly inflated) max for a stack with no stored value. That is
+        /// exactly the hook other mods use — **xskills** attaches a crafting-quality behavior that raises
+        /// durability on a well-crafted item — so a kit could report a max of, say, 45 and then refill to 45.
+        /// The chalk economy is balanced around 32 (8 powder = one full kit), so the ceiling is ours to
+        /// define, not a craft roll's. Every read below goes through <see cref="GetChalk"/>, which reads the
+        /// stored attribute DIRECTLY and clamps here; the two overrides further down make the engine agree.
+        /// </remarks>
+        public const int MaxChalk = 32;
+
+        /// <summary>
+        /// Remaining chalk, clamped to [0, <see cref="MaxChalk"/>]. Defaults to full for a stack that has no
+        /// stored value (a fresh craft, or one predating durability). Reads the raw attribute rather than
+        /// <c>GetRemainingDurability</c> so no third-party behavior can inflate it.
+        /// </summary>
+        public static int GetChalk(ItemStack stack)
+        {
+            if (stack == null) return 0;
+            int stored = (int)stack.Attributes.GetDecimal("durability", MaxChalk);
+            return stored < 0 ? 0 : (stored > MaxChalk ? MaxChalk : stored);
+        }
 
         /// <summary>Spends chalk, clamping at 0 — the kit is never destroyed and never goes negative.</summary>
         public static void ConsumeChalk(ItemSlot slot, int cost)
         {
             ItemStack stack = slot?.Itemstack;
             if (stack == null) return;
-            int max = stack.Collectible.GetMaxDurability(stack);
-            int cur = Math.Min(max, stack.Collectible.GetRemainingDurability(stack));
-            stack.Attributes.SetInt("durability", Math.Max(0, cur - cost));
+            stack.Attributes.SetInt("durability", Math.Max(0, GetChalk(stack) - cost));
             slot.MarkDirty();
         }
 
         /// <summary>
-        /// Adds chalk (a powder refill), capped at max. Returns false when the kit is already full — the
-        /// caller then leaves the powder unconsumed.
+        /// Adds chalk (a powder refill), capped at <see cref="MaxChalk"/>. Returns false when the kit is
+        /// already full — the caller then leaves the powder unconsumed.
         /// </summary>
         public static bool TryAddChalk(ItemSlot kitSlot, int amount)
         {
             ItemStack stack = kitSlot?.Itemstack;
             if (stack == null) return false;
-            int max = stack.Collectible.GetMaxDurability(stack);
-            int cur = stack.Collectible.GetRemainingDurability(stack);
-            if (cur >= max) return false;
-            stack.Attributes.SetInt("durability", Math.Min(max, cur + amount));
+            int cur = GetChalk(stack);
+            if (cur >= MaxChalk) return false;
+            stack.Attributes.SetInt("durability", Math.Min(MaxChalk, cur + amount));
             kitSlot.MarkDirty();
             return true;
         }
+
+        /// <summary>True when the kit cannot take any more chalk. The one "is it full?" test.</summary>
+        public static bool IsChalkFull(ItemStack stack) => GetChalk(stack) >= MaxChalk;
+
+        // The two overrides below make the ENGINE agree with MaxChalk — the durability bar, tooltips, and any
+        // other mod reading through the normal API all see 32/32. Both deliberately skip base.*: the base
+        // implementations are what walk the behaviors we are overriding in the first place.
+
+        /// <inheritdoc/>
+        public override int GetMaxDurability(ItemStack itemstack) => MaxChalk;
+
+        /// <inheritdoc/>
+        public override int GetRemainingDurability(ItemStack itemstack) => GetChalk(itemstack);
 
         private GuideToolController Controller =>
             api?.ModLoader?.GetModSystem<LayoutModSystem>()?.Controller;
