@@ -2,12 +2,12 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-19 against **v0.2.28**, committed and pushed on
+> and the performance-relevant mechanics. Updated 2026-07-19 against **v0.2.35**, committed and pushed on
 > `main`. Where this file and the code disagree, **the code wins** — treat this as a map, then
 > read the `.cs` files it points at.
 >
-> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.4),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/18.md` (per-session
+> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.6),
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/19.md` (per-session
 > history), `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
 
@@ -21,16 +21,17 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.2.28 on `main`, **playtested in multiplayer and vanilla-server fallback** (the
-  v0.2.27 rim fixes and the v0.2.28 recipe fix are verified numerically but not yet felt in-game).
+- **Status:** v0.2.35 on `main`, **playtested successfully in public/private multiplayer**. The
+  tapered-cylinder placement flow and dust pass are playtest-confirmed; fired-jug crafting still works and
+  raw jugs correctly do not.
   F4 (client-only / private guides) and F5 (**the Chalking Kit**: finite chalk
   durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
   **mesh pass Stage A (exposed-face meshing) has shipped** and **filled 3D volumes are retired** (always
   hollow shells now), so a ~100-block hollow Sphere draws only its outer skin.
 - **Size:** **69 source files** (`src/`), ~one asset tree, one `.csproj`.
 - **Data schema:** **DataVersion 8** (additive passive-lock-marker flag; pinned enums/default migration).
-- **Wire protocol:** **6** (append-only `ChalkRefillPrefsPacket`, after the protocol-5
-  `ChalkInventoryRefillPacket` and protocol-4 `ChalkChargePacket`).
+- **Wire protocol:** **7** (`GuideCreateRequestPacket.Rim`, after protocol-6 `ChalkRefillPrefsPacket`,
+  protocol-5 `ChalkInventoryRefillPacket`, and protocol-4 `ChalkChargePacket`).
 - **Catalog:** **13 shape types**, shown as **19 picker tiles** — a full 2D family plus a **3D volume family**.
 - **The tool:** the **Chalking Kit** — 32-chalk durability (2D −1 / 3D −2, completed placements only; no
   lockout at 0, the kit can never break). **32 is a HARD ceiling** (`ItemGuideTool.MaxChalk`, v0.2.23):
@@ -42,9 +43,9 @@ guides on servers without Layout and, when server policy permits, alongside publ
   policy). Private placements charge via a client-reported, server-validated packet; creative exempt;
   `enableChalkDurability` server config. Five fill-state models (full=32 · high 22–31 · medium 11–21 ·
   low 1–10 · empty 0) render in every context including ground storage.
-- **Active follow-up:** two verification debts — the 32-chalk ceiling has **not** been tested against xskills
-  itself, and 1.22.0 support is **declared, not tested** (built against 1.22.3). B-S9-1 is substantially
-  improved but repeated lock/drag/revert/unlock behavior still needs broader playtesting.
+- **Active follow-up:** B-S9-1 is narrowed: the lock → unlock → relock cycle is much better, but locking a
+  voxel immediately beside one that was previously locked can still snap to that old voxel. Two unrelated
+  verification debts remain: xskills itself and a VS 1.22.0/1.22.1 smoke test.
 - **Top performance task:** mesh **Stage A is done** — a ~100-block hollow Sphere now draws only its shell
   skin. Stage B (per-guide spatial chunks + culling) and Stage C (greedy face merging) remain, but only if
   the current win isn't enough. See §9 and `dev/SESSION_14.md` §6–§7 / `dev/SESSION_16.md`.
@@ -80,10 +81,10 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── HANDOFF.md                  ← THIS FILE
 ├── Layout.csproj  modinfo.json  modicon.png
 ├── assets/layout/              ← itemtypes, textures, lang
-├── src/                        ← all 68 .cs files (see §6)
+├── src/                        ← all 69 .cs files (see §6)
 └── dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
-    ├── SESSION_9.md … SESSION_15.md  SESSION_16.md  SESSION_17.md
+    ├── SESSION_9.md … SESSION_17.md  SESSION_18.md  SESSION_19.md
     ├── CHANGELOG_ARCHITECTURE.md   ← ARCHITECTURE.md's per-revision deltas (archive)
     ├── PLAN_CLIENT_ONLY.md  PLAN_CHALKING_KIT.md  BUILD_INSTRUCTIONS.txt
 ```
@@ -359,7 +360,8 @@ by raising `HardVoxelCeiling`.
 | `allowHotbarChalkRefill` | false (ground-storage refill is always allowed; this opts in the hotbar shortcut) |
 | `allowInventoryChalkRefill` | false (opts in cursor-onto-inventory-slot refill) |
 
-**Hard-coded limits (in code, not config):** `HardVoxelCeiling` 10M · `MaxScanCells` 4M (per 3D shape) ·
+**Hard-coded limits (in code, not config):** `HardVoxelCeiling` 10M · `MaxScanCells` 4M on the remaining
+cubic scan paths (**not** Tapered Cylinder, whose scan follows the configured/unlimited server cap) ·
 `MaxDivisions` 256 · Polygon `MinSides` 3 / `MaxSides` 24 · Free-Shape `MaxCorners` 64 ·
 `PreviewFullResVoxelCap` 8,000 (draft-ghost coarsening only) · valid voxel scales {1,2,4,8,16}.
 
@@ -392,9 +394,9 @@ full F5 chalk system and the Stage-A mesh pass are playtested through **v0.2.23*
 **Active follow-up — B-S9-1 (lock-in-place):** ray-vs-rendered-voxel first-hit picking is now implemented,
 curve target caches use a full geometry fingerprint, cancel restores a complete pre-drag snapshot, and passive
 lock markers no longer deform an Arch when placed. v0.1.52 also removes stale unlocked markers and orders new
-lock/grab points along the curve. The human confirms that lock placement no longer shifts and that the latest
-iteration is better; repeated lock → drag → revert/cancel → unlock cycles still need wider testing before the
-bug is declared closed.
+lock/grab points along the curve. The broad lock → unlock → relock cycle is much better; the remaining exact
+reproduction is attempting to lock the voxel immediately beside a formerly locked voxel, which can select
+the former voxel instead.
 
 **Direction / roadmap (see `dev/TODO.md` for detail):**
 1. **Two verification debts from the (fully delivered) Session-16 backlog** — see `dev/SESSION_17.md` §8:
@@ -403,10 +405,9 @@ bug is declared closed.
    confirms every API used exists in 1.22.0.
 2. **Mesh pass Stage B/C** (§9 / `SESSION_14.md`) — per-guide chunks/culling → greedy same-colour face
    merging — **only if Stage A's win isn't enough**. Preserve true settled-guide scale and rendering semantics.
-3. **Finish the B-S9-1 interaction regression** against the v0.1.52 marker lifecycle/order changes.
-4. **The final F4/public multiplayer regression pass.** Test vanilla fallback, policy denial, permitted
-   mixed mode, push/reconnect, ordinary public multiplayer, and chalk in multiplayer (public + private
-   charging, all three refill channels). Owed before any release-grade stamp.
+3. **Fix the adjacent-voxel B-S9-1 targeting residual** without reopening the confirmed passive-marker design.
+4. **Release v0.2.35 and collect field reports.** The requested public/private multiplayer pass succeeded;
+   keep the broader matrix as future regression coverage rather than a release blocker.
 5. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill (fill is currently inert on Free-Shapes);
    an F3 re-constrain op; broadcasting the whole Free-Shape draft chain to other players.
 

@@ -18,6 +18,12 @@ namespace Layout.Shapes
     /// band compared against the LOCAL radius, which interpolates linearly from the base radius at a=0 to
     /// the top radius at a=h — exactly the cone's rule with a non-zero endpoint.
     ///
+    /// Unlike the older cylinder-family implementation, this shape deliberately has no fixed scan-box
+    /// cutoff. A frustum can have a large mostly-empty box while its hollow shell remains within the
+    /// server's configured voxel budget; the shared threshold counter and GuideManager's absolute rendered-
+    /// voxel ceiling are the authoritative limits. A fixed scan cutoff made raised and unlimited server
+    /// caps ineffective, especially while widening the base or top rim.
+    ///
     /// The rim handle stores only a DISTANCE: it is always re-seated on the +û side of the top ring, so
     /// dragging it anywhere resolves to "how far from the axis", never "which way round". Moving a BASE
     /// anchor preserves the taper RATIO (top/base), not the absolute top radius — resizing the base of a
@@ -27,7 +33,6 @@ namespace Layout.Shapes
     {
         private const double MinRadius = 0.05;
         private const double MinHeight = 0.05;
-        private const long MaxScanCells = 4_000_000;
 
         /// <summary>The born taper before the fourth click lands: a lid 60% of the base's width.</summary>
         public const double DefaultTopRatio = 0.6;
@@ -128,7 +133,6 @@ namespace Layout.Shapes
             var result = new List<VoxelPosition>();
             if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h, out double rTop))
                 return result;
-            if (ScanTooBig(scale, c, n, r, rTop, h)) return result;
 
             double cell = scale / 16.0;
             double hd = cell * 0.866;
@@ -169,7 +173,6 @@ namespace Layout.Shapes
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h, out double rTop))
                 return 0;
-            if (ScanTooBig(scale, c, n, r, rTop, h)) return GuideShapeVoxelCounting.Exceeded(stopAfter);
 
             stopAfter = Math.Max(0, stopAfter);
             double cell = scale / 16.0;
@@ -202,15 +205,6 @@ namespace Layout.Shapes
                 }
             }
             return count;
-        }
-
-        // Measured off the REAL scan box, like the cylinder's (v0.2.25) — see CylinderShape.ScanTooBig.
-        private static bool ScanTooBig(int scale, Vec3d c, Vec3d n, double r, double rTop, double h)
-        {
-            double cell = scale / 16.0;
-            GetAabb(c, n, r, rTop, h, cell, out double x0, out double y0, out double z0,
-                out double x1, out double y1, out double z1);
-            return CylinderShape.ScanCells(scale, x0, y0, z0, x1, y1, z1) > MaxScanCells;
         }
 
         private static void GetAabb(Vec3d c, Vec3d n, double r, double rTop, double h, double cell,

@@ -78,6 +78,10 @@ namespace Layout.UI
         private int _draftKeyScale = int.MinValue;
         private GuideExtent _draftExtent = GuideExtent.Empty;
         private int _draftVoxelCount;
+        private long _lastDraftMeasureMs;
+
+        /// <summary>Last completed full-resolution draft count; used to budget preview work.</summary>
+        public int DraftVoxelCount => _draftVoxelCount;
 
         // Examine: coarse cache, invalidated whenever the examined guide changes or the
         // server reports an update to it (GuideAddedOrUpdated).
@@ -154,6 +158,10 @@ namespace Layout.UI
         public void ClearDraftAim()
         {
             _draftAim = null;
+            _draftKeyX = _draftKeyY = _draftKeyZ = long.MinValue;
+            _draftKeyScale = int.MinValue;
+            _draftVoxelCount = 0;
+            _lastDraftMeasureMs = 0;
             RefreshText();
         }
 
@@ -323,6 +331,17 @@ namespace Layout.UI
                 + 32 * _tool.Sides + 1024 * (_tool.AwaitingApex ? 1 : 0) + 2048 * _tool.ChainCount
                 + 65536 * (_tool.AwaitingRim ? 1 : 0));
             if (qx == _draftKeyX && qy == _draftKeyY && qz == _draftKeyZ && shapeKey == _draftKeyScale) return;
+
+            long now = capi.World.ElapsedMilliseconds;
+            int interval = _draftVoxelCount switch
+            {
+                <= 8_000 => 30,
+                <= 50_000 => 100,
+                <= 200_000 => 200,
+                _ => 500
+            };
+            if (_lastDraftMeasureMs != 0 && now - _lastDraftMeasureMs < interval) return;
+            _lastDraftMeasureMs = now;
             _draftKeyX = qx; _draftKeyY = qy; _draftKeyZ = qz; _draftKeyScale = shapeKey;
 
             try

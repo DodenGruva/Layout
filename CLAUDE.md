@@ -30,8 +30,8 @@ Status: **v0.2.x, in real play.**
 - **Versioning rule (standing, human-set):** EVERY revision bumps `modinfo.json` and ships as a NEW
   `Layout<version>.zip` in **`..\Layout Zips\`** (the sibling folder of this repo — human-directed location;
   holds 0.1.10–0.1.27 + the 0.2.x line; the 0.1.28–0.1.53 zips live in `Documents\ChatGPT\LayoutZips\`) —
-  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.2.28.**
-- **Git:** `main` is the mainline, pushed to **github.com/DodenGruva/Layout** through **v0.2.28** (the
+  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.2.35.**
+- **Git:** `main` is the mainline, pushed to **github.com/DodenGruva/Layout** through **v0.2.35** (the
   `ClientOnlyFallback` branch was merged via PR #1). **The repo is published at release** — no personal
   paths, no personal usernames in tracked files. Commit/push ONLY when the human instructs.
 
@@ -46,7 +46,7 @@ Status: **v0.2.x, in real play.**
 - **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix (candidate for 0.2.0).
 - **`PLAN_CHALKING_KIT.md`** — the F5 chalking-kit design rationale, now marked ✅ implemented with its
   plan-vs-shipped deltas up top.
-- **`SESSION_9.md` … `SESSION_18.md`** — standalone per-session records; SESSION_12 covers **v0.1.28–v0.1.45
+- **`SESSION_9.md` … `SESSION_19.md`** — standalone per-session records; SESSION_12 covers **v0.1.28–v0.1.45
   ClientOnlyFallback**, SESSION_13 the **v0.1.46–v0.1.52 optimization and interaction pass**, SESSION_14 the
   **v0.1.53 hollow-shell + mesh optimization handoff** (read before continuing performance work), SESSION_15
   the **v0.2.0–v0.2.9 Chalking Kit arc**, SESSION_16 the **v0.2.10–v0.2.21 mesh + polish arc** (Stage-A
@@ -54,11 +54,12 @@ Status: **v0.2.x, in real play.**
   performance work), and SESSION_17 the **v0.2.22–v0.2.23 seven-item backlog** (refill config → client
   preference at protocol 6, the hard 32-chalk ceiling, publication readiness), and SESSION_18 the
   **v0.2.24–v0.2.28 Tapered Cylinder arc** (the 4-click frustum at protocol 7; the scan-guard and
-  cap-clamp performance fixes it exposed — read before touching either).
+  cap-clamp performance fixes it exposed), and SESSION_19 the **v0.2.29–v0.2.35 stabilization/effects arc**
+  (unlimited-cap semantics, safe rim capture, adaptive draft throttling, and whole-shape dust).
 
-## ✅ Docs verified & consolidated to v0.2.28 (2026-07-19)
-The authoritative prose docs are consistent with **v0.2.28, DataVersion 8, protocol 7, 69 source files,
-13 shape types / 19 tiles**. `ARCHITECTURE.md` is **v3.5**; `SESSION_18.md` is the latest record
+## ✅ Docs verified & consolidated to v0.2.35 (2026-07-19)
+The authoritative prose docs are consistent with **v0.2.35, DataVersion 8, protocol 7, 69 source files,
+13 shape types / 19 tiles**. `ARCHITECTURE.md` is **v3.6**; `SESSION_19.md` is the latest record
 (mesh: `SESSION_16.md`, F5: `SESSION_15.md`); `HANDOFF.md` is the consolidated brief. Prefer source for exact
 identifiers, but no from-scratch doc audit is needed before ordinary work.
 
@@ -85,10 +86,11 @@ settings-only: left-click **selects** a guide and the GUI's setting rows then ac
 reshaping — geometry stays in Create); this replaced the old panel-expanding "selected-guide section".
 **Delete** dispels. `ToolMode` is client-only (never wired), so it's safe to reorder.
 
-## Current priorities (detail in TODO.md; mesh plan in SESSION_14.md §6–§7, latest record in SESSION_17.md)
-F4 (client-only/private guides) and F5 (Chalking Kit durability) are both feature-complete and playtested
-through **v0.2.23**. Mesh **Stage A** shipped and filled 3D volumes were retired, so worst-case voxel counts
-are far lower now. The Session-16 backlog is **fully delivered**. Normal public multiplayer behavior remains.
+## Current priorities (detail in TODO.md; mesh plan in SESSION_14.md §6–§7, latest record in SESSION_19.md)
+F4 (client-only/private guides) and F5 (Chalking Kit durability) are both feature-complete. Public/private
+multiplayer was release-tested successfully at **v0.2.35**, and the fired-jug/raw-jug recipe behavior is
+playtest-confirmed. Mesh **Stage A** shipped and filled 3D volumes were retired. Normal public multiplayer
+behavior remains.
 1. **Two verification debts from the backlog** — (a) the hard 32-chalk ceiling is verified offline but
    **never tested against xskills itself**; craft a quality-bonus kit and confirm it comes out 32/32.
    (b) **1.22.x support is declared, not tested** — the code was built against 1.22.3; smoke-test a
@@ -96,11 +98,10 @@ are far lower now. The Session-16 backlog is **fully delivered**. Normal public 
 2. **Large-guide mesh Stage B** (per-guide spatial chunk meshes + culling), then **Stage C** (greedy
    same-colour face merging) — only if Stage A's win isn't enough on the ~100-block sphere. Staged plan +
    invariants in `SESSION_14.md`.
-3. **Finish the B-S9-1 interaction regression.** Lock placement no longer shifts the guide (v0.1.51/52), but
-   repeated lock/drag/revert/unlock cycles need more playtesting before the bug is closed.
-4. **The final F4/public multiplayer regression pass** (vanilla-server fallback, policy denial, mixed
-   public/private, push, reconnect, public-only regression — now also the chalk pass: public + private
-   charging, all three refill channels) — still owed before any release-grade stamp.
+3. **Fix the narrowed B-S9-1 residual.** The lock → unlock → relock cycle is much better, but attempting to
+   lock immediately beside a previously locked voxel can still snap back to the old voxel.
+4. **Performance follow-up only when requested.** Adaptive draft throttling now scales expensive work from
+   ~33 Hz down to ~2 Hz as guide size grows; mesh Stage B/C remains optional if large settled guides lag.
 5. If asked: **Roof / Tunnel** volumes; concave-safe Free-Shape fill; F3 re-constrain op. Remaining
    flagged decisions are cosmetic.
 

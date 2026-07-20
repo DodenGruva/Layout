@@ -1,11 +1,11 @@
-# Layout — TODO / Outstanding Items (current: v0.2.28)
+# Layout — TODO / Outstanding Items (current: v0.2.35)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.2.28 → next)
+## ⭐ Top of the list (v0.2.35 → next)
 
 > **Session-16 playtest results (human-confirmed):** the v0.2.21 **inventory refill and hotbar refill both
 > work** — the MouseDown-hook ordering and the `InventoryID` round-trip both hold, closing `SESSION_16.md` §8.
@@ -34,11 +34,25 @@
    `jug-*-raw`, a plain `Block` that cannot hold the 0.1 L of dye. Now `game:jug-*-fired`. The bowl was
    already correctly `-fired`; `woodbucket` has no raw variant. Still 6 permutations.
 
-> **Owed playtest (v0.2.27–v0.2.28):** the rim fixes and the recipe fix landed after the human's last
-> session. Both are verified numerically/against the game's own blocktypes, neither has been felt in-game.
-> Worth confirming: the Tapered Cylinder's decide-and-flag calls (born 0.6 ratio; base resize keeps the
-> taper RATIO not the absolute width; flare allowed to 4× the base) and that crafting with a fired jug
-> still works while a raw one no longer shows the recipe.
+> **Playtest closed (v0.2.35):** the revised tapered-cylinder flow feels good; crafting with a fired jug
+> still works and a raw jug correctly does not. Public/private multiplayer also passed the human's release
+> test. Release now and collect bug reports rather than holding for a larger test matrix.
+
+### A1. Session-19 stabilization and placement effects (v0.2.29–v0.2.35) — full detail in `SESSION_19.md`
+
+1. ~~**Unlimited/high server cap still hit a hidden tapered-cylinder size ceiling.**~~ **FIXED (v0.2.29).**
+   Removed the shape-local 4M scan cutoff; the configured per-guide cap, or the 10M hard render ceiling when
+   unlimited, now governs the shape.
+2. ~~**Height click could immediately throw the rim to the old cursor target.**~~ **FIXED (v0.2.30–v0.2.32).**
+   The rim begins at 60%, ignores the carried height click, requires a real release, and captures only after
+   entering its annular handle band. The final release seam uses the engine's actual mouse-up event.
+3. ~~**Large drafts could lag badly enough for input and preview work to pile up.**~~ **MITIGATED (v0.2.31).**
+   Input still samples at ~33 Hz, while expensive guide generation/HUD/cap work scales from ~33 Hz down to
+   ~2 Hz based on the last voxel count. Unlimited public servers skip pointless live cap-clamp recounts.
+   Further large-guide optimization is deliberately deferred.
+4. ~~**Placement feedback needed complementary drifting dust.**~~ **DONE (v0.2.33–v0.2.35).** The original
+   falling flecks remain; capped dust sites now cover 2D curves and full 3D shells without voxel generation.
+   Dust has zero gravity. Flat shapes scatter broadly sideways; 3D dust drifts outward/upward.
 
 ### A. Human backlog — queued at Session-16 end — ✅ ALL SEVEN DELIVERED (v0.2.22–v0.2.23)
 
@@ -117,15 +131,13 @@
    draws only its outer skin. If that still lags, continue the staged plan in `SESSION_14.md` §6–§7:
    per-guide spatial chunk meshes + culling, then same-colour greedy face merging. Keep settled guides at true
    scale and the Surface/slab path on the legacy builder.
-2. **Finish B-S9-1 interaction regression.** v0.1.49–v0.1.52 implemented first-hit voxel picking, robust
+2. **Fix the narrowed B-S9-1 adjacent-lock targeting residual.** v0.1.49–v0.1.52 implemented first-hit voxel picking, robust
    curve-cache invalidation, complete drag snapshots, passive non-deforming Arch lock markers, stale-marker
    removal, and curve-relative insertion ordering. The human confirms that locks no longer shift and the
-   latest behavior is better. Test repeated lock → drag → cancel/revert → unlock → relock cycles before
-   declaring the bug closed. See OPEN BUGS and `SESSION_13.md`.
-3. **The final F4/public multiplayer regression pass.** Test vanilla-server fallback, server policy denial,
-   mixed public/private overlays, reconnect persistence, publication, commands, and undo/redo around
-   ownership changes — plus the chalk pass (public + private charging, all three refill channels: ground,
-   hotbar, inventory). Still owed before any release-grade stamp.
+   broad lock → unlock → relock behavior is much better. Exact residual: after unlocking a voxel, attempting
+   to lock its immediate neighbor can snap to the formerly locked voxel. See OPEN BUGS and `SESSION_13.md`.
+3. ~~**The final F4/public multiplayer release check.**~~ **PASSED for v0.2.35.** Public/private multiplayer
+   worked in the human's test. Release and wait for field reports; retain the full matrix as regression scope.
 4. Remaining flagged decisions (11a–11r, 16a–16d in `SESSION_11.md`) are cosmetic — walk them
    opportunistically.
 5. **Then, if asked:** **Roof / Tunnel** volumes; a concave-safe **Free-Shape fill**; broadcasting the whole
@@ -296,9 +308,9 @@ was placed. The following fixes are now implemented:
   markers are not adopted or targeted; later inserts are ordered by curve position so right-side grabs do not
   jump toward the apex.
 
-The human reports v0.1.52 is better but wants more testing. Before closing B-S9-1, exercise repeated
-lock → drag → cancel/revert → unlock → relock cycles at several scales and on both sides of an Arch. Record a
-precise reproduction for any residual jump rather than replacing the confirmed passive-marker design.
+The broad lock → unlock → relock cycle is now much better. The remaining reproduction is precise: lock a
+voxel, unlock it, then try to lock the immediately adjacent voxel; targeting can snap back to the formerly
+locked voxel. Fix that selection bias without replacing the confirmed passive-marker design.
 
 ~~**B-S10-2 — Surface→Volumetric bake grows the WRONG way (into the block).**~~ **FIXED in 0.1.14 and
 PLAYTEST-CONFIRMED ("This was fixed" — human, same session).** The bake runs exactly the fix this entry

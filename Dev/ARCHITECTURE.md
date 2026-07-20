@@ -1,6 +1,7 @@
-# Layout — Architecture Document (v3.5)
+# Layout — Architecture Document (v3.6)
 
-**Supersedes v3.4 — the Tapered Cylinder delta (v0.2.24–v0.2.28).** v2.5 consolidated five
+**Supersedes v3.5 — tapered-cylinder stabilization, adaptive draft work, and placement dust
+(v0.2.29–v0.2.35).** v2.5 consolidated five
 revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
 catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
 surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
@@ -26,19 +27,24 @@ channels** (protocol 5). **v3.4 folds in the seven-item human backlog (v0.2.22�
 channels moved from server config to a **client preference** (protocol 6, via the new
 `ChalkRefillPrefsPacket`), a **hard 32-chalk ceiling** immune to other mods' crafting-quality bonuses, the
 removal of the hotbar refill-off warning, an audit of the multiplayer draft packet rate (no change needed),
-and publication readiness — authorship, **all-1.22.x** targeting, and portable build paths. The register,
-file tree, module map, persistence, and edge cases below are updated in place to the v0.2.28 / DataVersion 8
-/ protocol-7 / 69-file state; the per-revision deltas live in **`CHANGELOG_ARCHITECTURE.md`** (indexed below).
+and publication readiness — authorship, **all-1.22.x** targeting, and portable build paths. **v3.5 folded in
+the Tapered Cylinder delta (v0.2.24–v0.2.28); v3.6 removes its fixed scan ceiling when server caps are
+raised/unlimited, stabilizes the height→rim transition with release-and-annulus capture, adds voxel-count-aware
+throttling for expensive draft work, and expands placement feedback with capped zero-gravity dust across 2D
+curves and full 3D shells.** The register, file tree, module map, persistence, and edge cases below are
+updated in place to the v0.2.35 / DataVersion 8 / protocol-7 / 69-file state; the per-revision deltas live
+in **`CHANGELOG_ARCHITECTURE.md`** (indexed below).
 
-**Where the project stands:** Layout **v0.2.28** is built, packaged, playtested, and **pushed on `main`**
+**Where the project stands:** Layout **v0.2.35** is built, packaged, playtested, and pushed on `main`
 (the `ClientOnlyFallback` branch merged via PR #1).
 All seven modules, the complete 2D/3D catalog, normal public multiplayer, vanilla-server local
 fallback, mixed public/private operation, and the full F5 chalk system run against **VS 1.22.x** / .NET 10.
 The catalog is **13 shape types / 19 picker tiles**, **DataVersion 8**, **protocol 7**, and **69 source
 files**. F4 and F5 are feature-complete. The large-guide **mesh pass Stage A (exposed-face meshing) has
 shipped** and **filled 3D volumes are retired**, so a ~100-block hollow Sphere now draws only its shell skin.
-The Session-16 backlog is fully delivered. Remaining: mesh Stage B (spatial chunks + culling) **only if Stage
-A proves insufficient**, B-S9-1 soak testing, and the broad F4/chalk multiplayer regression. Two items carry
+The Session-16 backlog is fully delivered. Public/private multiplayer passed the v0.2.35 release test, and
+fired-jug/raw-jug crafting is confirmed. Remaining: mesh Stage B (spatial chunks + culling) **only if Stage
+A proves insufficient**, and the narrowed B-S9-1 adjacent-lock targeting residual. Two items carry
 verification debt — the chalk ceiling has not been tested against xskills itself, and 1.22.0 support is
 declared but untested. See `TODO.md` and `SESSION_17.md`.
 
@@ -68,8 +74,9 @@ declared but untested. See `TODO.md` and `SESSION_17.md`.
 > player setting, not server policy as of v0.2.22). **Private placements on a
 > Layout server charge too** via the client-reported, server-validated `ChalkChargePacket`; the only chalk-free
 > case is a server without Layout, where no custom item can exist. Creative exempt; `enableChalkDurability`
-> server config. Ground storage: CTRL+SHIFT+right-click set-down, idle-gated. Placement feedback: whole-guide
-> chalk-puff (2D along the curve, 3D around the base ring) + the bow-release chalk-line snap.
+> server config. Ground storage: CTRL+SHIFT+right-click set-down, idle-gated. Placement feedback keeps the
+> falling whole-guide chalk flecks and bow-release snap, plus capped zero-gravity dust: broad sideways scatter
+> along 2D curves and outward/upward drift distributed across full 3D shells.
 > `PLAN_CHALKING_KIT.md` carries the design rationale and plan-vs-shipped deltas; `SESSION_15.md` +
 > `SESSION_16.md` are the version history.
 
@@ -84,6 +91,7 @@ persistence / edge cases below, and each has a fuller narrative in its session r
 
 | Doc rev | Mod versions | Theme | Session record |
 |---|---|---|---|
+| v3.6 | v0.2.29 → v0.2.35 | Unlimited-cap tapered-cylinder semantics; safe rim capture; adaptive draft work; full-shape dust | `SESSION_19.md` |
 | v3.5 | v0.2.24 → v0.2.28 | Tapered Cylinder (4-click frustum, protocol 7); scan-guard and cap-clamp fixes; raw-vessel recipe fix | `SESSION_18.md` |
 | v3.4 | v0.2.22 → v0.2.23 | Refill config → client (protocol 6), hard 32-chalk ceiling, publication readiness | `SESSION_17.md` |
 | v3.3 | v0.2.10 → v0.2.21 | Mesh Stage A (exposed-face), filled-volume retirement, refill channels, polish | `SESSION_16.md` |
@@ -259,7 +267,9 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   interior draws nothing, so it was pure invisible voxel cost; every volume shape now coerces `filled=false`,
   which also auto-lightens legacy filled saves). v0.1.53 routes hollow Sphere/Dome through the exact
   surface-area-oriented `SphericalShellScan`; Box retains a lattice scan, while Cylinder/Cone remain
-  centre-banded. A cylinder cap / dome floor is recovered cheaply with a filled 2D circle at the base. The remaining cubic paths keep `MaxScanCells` guards. Volumes are **always
+  centre-banded. A cylinder cap / dome floor is recovered cheaply with a filled 2D circle at the base. The
+  remaining cubic paths keep `MaxScanCells` guards; Tapered Cylinder deliberately does not, so a raised or
+  unlimited server cap is governed by the configured cap / 10M hard render ceiling instead. Volumes are **always
   Volumetric** (Surface + Divisions gated off server-side and greyed/hidden in the GUI). The base plane / axis
   comes from the clicked face; the axis is the **deterministic `ShapeGeometry.BaseNormal`** (+up regardless of
   anchor order — SHIFT is the only invert, e.g. dome → bowl). **Targeting is a wireframe** (equator/meridians,

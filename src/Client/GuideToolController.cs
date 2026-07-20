@@ -55,6 +55,10 @@ namespace Layout.Client
         // Cap-clamp trackers (v0.2.25): one for the placement ghost, one for dragging a placed point.
         private readonly CapClampTracker _draftClamp = new CapClampTracker();
         private readonly CapClampTracker _dragClamp = new CapClampTracker();
+        private bool _rimAimArmed;
+        private bool _rimAwaitingRelease;
+        private long _lastDraftPreviewMs;
+        private long _lastDraftClampCheckMs;
 
         private readonly ICoreClientAPI _capi;
         private readonly DraftManager _draft;
@@ -139,6 +143,7 @@ namespace Layout.Client
             _net.AuthorityModeChanged += OnAuthorityModeChanged;
             _capi.Input.InWorldAction += OnInWorldAction;
             _capi.Event.MouseDown += OnMouseDown;      // F5 inventory refill (independent of the tool)
+            _capi.Event.MouseUp += OnMouseUp;          // release-to-rearm between height and rim clicks
 
             _tickId = _capi.Event.RegisterGameTickListener(OnTick, TickIntervalMs);
         }
@@ -285,6 +290,13 @@ namespace Layout.Client
             args.Handled = true;
         }
 
+        // MouseUp is the API's reliable physical-release seam; InWorldAction only delivered the press in
+        // play, which left the first release-latch attempt permanently closed at the rim stage.
+        private void OnMouseUp(MouseEvent args)
+        {
+            if (args.Button == EnumMouseButton.Left) _rimAwaitingRelease = false;
+        }
+
         private void OnHeldChanged(bool held)
         {
             if (held)
@@ -356,19 +368,24 @@ namespace Layout.Client
                             && Dist(aim, _draft.ChainFirst) <= ChainSnapRadius();
                         if (closing) aim = _draft.ChainFirst;
                         _hud.SetDraftAim(aim);
-                        _renderer.SetDraftChainPreview(_draft.DraftChain, closing ? null : aim, closing,
-                            BuildSettings(blockSel, aim));
+                        if (DraftPreviewDue())
+                            _renderer.SetDraftChainPreview(_draft.DraftChain, closing ? null : aim, closing,
+                                BuildSettings(blockSel, aim));
                     }
                     else if (_draft.AwaitingRim)
                     {
                         // 0.2.24, the Tapered Cylinder's LAST stage: the base and height are down and the
                         // crosshair now sets the lid's radius — the ghost's taper opens and closes live.
+                        // The one-way capture gate prevents the just-clicked, usually distant HEIGHT block
+                        // from becoming a giant rim before the player has aimed back toward the lid.
+                        aim = StabilizeDraftRimAim(aim);
                         aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
                         _hud.SetDraftAim(aim);
-                        _renderer.SetDraftPreview(_draft.DraftStart, _draft.DraftSecond,
-                            BuildSettings(blockSel, aim),
-                            _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
-                            sides: _draft.Sides, apex: _draft.DraftThird, rim: aim);
+                        if (DraftPreviewDue())
+                            _renderer.SetDraftPreview(_draft.DraftStart, _draft.DraftSecond,
+                                BuildSettings(blockSel, aim),
+                                _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
+                                sides: _draft.Sides, apex: _draft.DraftThird, rim: aim);
                     }
                     else if (_draft.AwaitingApex)
                     {
@@ -378,19 +395,21 @@ namespace Layout.Client
                         if (ShiftHeld() && _draft.Shape == GuideShapeType.Triangle) aim = CenterApexOnBase(aim);
                         aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
                         _hud.SetDraftAim(aim);
-                        _renderer.SetDraftPreview(_draft.DraftStart, _draft.DraftSecond,
-                            BuildSettings(blockSel, aim),
-                            _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
-                            sides: _draft.Sides, apex: aim);
+                        if (DraftPreviewDue())
+                            _renderer.SetDraftPreview(_draft.DraftStart, _draft.DraftSecond,
+                                BuildSettings(blockSel, aim),
+                                _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
+                                sides: _draft.Sides, apex: aim);
                     }
                     else
                     {
                         if (CtrlHeld()) aim = ConstrainToStart(aim);
                         aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
                         _hud.SetDraftAim(aim);
-                        _renderer.SetDraftPreview(_draft.DraftStart, aim, BuildSettings(blockSel, aim),
-                            _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
-                            sides: _draft.Sides, inverted: EffectiveInverted());
+                        if (DraftPreviewDue())
+                            _renderer.SetDraftPreview(_draft.DraftStart, aim, BuildSettings(blockSel, aim),
+                                _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
+                                sides: _draft.Sides, inverted: EffectiveInverted());
                     }
                 }
                 else
@@ -533,7 +552,8 @@ namespace Layout.Client
             /// <see cref="StepsPerTick"/> checks. <paramref name="key"/> identifies the search context
             /// (shape, scale, stage, anchor); when it changes the learned bracket is discarded.
             /// </summary>
-            public Vec3d Clamp(long key, Vec3d reference, Vec3d aim, System.Func<Vec3d, bool> fits)
+            public Vec3d Clamp(long key, Vec3d reference, Vec3d aim, System.Func<Vec3d, bool> fits,
+                int maxSteps = StepsPerTick)
             {
                 if (key != _key) { _key = key; _lo = 0; _hi = double.MaxValue; }
 
@@ -549,11 +569,25 @@ namespace Layout.Client
                 double dz = (aim.Z - reference.Z) / full;
                 Vec3d At(double d) => new Vec3d(reference.X + dx * d, reference.Y + dy * d, reference.Z + dz * d);
 
+                maxSteps = Math.Max(0, Math.Min(StepsPerTick, maxSteps));
+                // A throttled, brand-new context has no verified reach yet. Keep the current ghost for the
+                // short interval until its scheduled check rather than collapsing it to the reference.
+                if (maxSteps == 0 && _lo <= 0 && _hi == double.MaxValue) return Copy(aim);
+
+                // With no known failure boundary, try the requested point first. In-cap movement therefore
+                // costs one count and follows immediately; only an actual failure opens a bisection bracket.
+                if (maxSteps > 0 && _hi == double.MaxValue)
+                {
+                    if (fits(aim)) { _lo = full; return Copy(aim); }
+                    _hi = full;
+                    maxSteps--;
+                }
+
                 // Narrow the standing bracket a couple of steps. _lo only rises and _hi only falls, so the
                 // answer converges monotonically instead of hunting — once the bracket is tighter than a
                 // sub-voxel the loop stops running and further cursor travel costs nothing at all.
                 double hi = Math.Min(_hi, full);
-                for (int i = 0; i < StepsPerTick && hi - _lo > Tolerance; i++)
+                for (int i = 0; i < maxSteps && hi - _lo > Tolerance; i++)
                 {
                     double mid = (_lo + hi) * 0.5;
                     if (fits(At(mid))) _lo = mid;
@@ -641,11 +675,16 @@ namespace Layout.Client
         {
             if (aim == null || _draft.DraftStart == null || DraftManager.IsChainShape(_draft.Shape))
                 return aim;
+            // The held 60% rim is the same geometry that already passed the height-stage clamp. Avoid
+            // recounting it while the player is releasing/reacquiring the rim.
+            if (_draft.AwaitingRim && !_rimAimArmed) return aim;
 
             int configuredCap = _net.PerGuideVoxelCap;
-            int cap = configuredCap > 0
-                ? Math.Min(configuredCap, GuideManager.HardVoxelCeiling)
-                : GuideManager.HardVoxelCeiling;
+            // An unlimited public server has no configured boundary for the live ghost to chase. Avoid
+            // repeatedly counting toward the much higher emergency render ceiling while aiming; the exact
+            // completion/server checks still enforce that absolute safeguard once.
+            if (configuredCap <= 0) return aim;
+            int cap = Math.Min(configuredCap, GuideManager.HardVoxelCeiling);
 
             // Shrinking pulls the aim back toward a stationary reference chosen so that reference == the
             // SMALLEST form of the shape. For a rim stage that is the lid's centre ON THE AXIS, where the
@@ -668,7 +707,38 @@ namespace Layout.Client
                 ^ (_draft.AwaitingApex ? 5915587277L : 0L) ^ (_draft.AwaitingRim ? 1500450271L : 0L)
                 ^ (cap * 51539607551L);
 
-            return _draftClamp.Clamp(key, anchorRef, aim, c => DraftCandidateFits(c, cap));
+            return _draftClamp.Clamp(key, anchorRef, aim, c => DraftCandidateFits(c, cap),
+                DraftClampStepBudget());
+        }
+
+        // Keep input at 33 Hz, but budget expensive draft work from the last completed full-resolution
+        // HUD count. The final click still performs an exact check through DraftManager/server authority.
+        private static int DraftWorkIntervalMs(int voxelCount) => voxelCount switch
+        {
+            <= 8_000 => 30,
+            <= 50_000 => 100,
+            <= 200_000 => 200,
+            _ => 500
+        };
+
+        private bool DraftPreviewDue()
+        {
+            long now = _capi.World.ElapsedMilliseconds;
+            int interval = DraftWorkIntervalMs(_hud.DraftVoxelCount);
+            if (_lastDraftPreviewMs != 0 && now - _lastDraftPreviewMs < interval) return false;
+            _lastDraftPreviewMs = now;
+            return true;
+        }
+
+        private int DraftClampStepBudget()
+        {
+            int count = _hud.DraftVoxelCount;
+            if (count <= 8_000) return 2;
+            long now = _capi.World.ElapsedMilliseconds;
+            int interval = DraftWorkIntervalMs(count);
+            if (_lastDraftClampCheckMs != 0 && now - _lastDraftClampCheckMs < interval) return 0;
+            _lastDraftClampCheckMs = now;
+            return 2;
         }
 
         // Builds the candidate draft exactly as the HUD measure / completion pre-check do, and counts with
@@ -825,6 +895,8 @@ namespace Layout.Client
             if (_draft.HasActiveDraft)
             {
                 bool draftSurvives = _draft.StepBackDraft();
+                _rimAimArmed = false;
+                _rimAwaitingRelease = false;
                 if (!draftSurvives)
                 {
                     _net.SendDraftCancel();
@@ -941,6 +1013,10 @@ namespace Layout.Client
 
         private void HandleCreateClick(BlockSelection blockSel)
         {
+            // The height press cannot also become the fourth click, even if a long sampling stall causes
+            // its event to be delivered again after the draft advances to the rim stage.
+            if (_draft.AwaitingRim && _rimAwaitingRelease) return;
+
             // Base/anchor clicks REQUIRE a block target (§5); the volume HEIGHT stage is the exception —
             // it may complete in free air (0.1.23), the view ray standing in for the click point.
             if (blockSel == null && !AwaitingVolumeHeight) return;
@@ -966,6 +1042,10 @@ namespace Layout.Client
                 // the ground → a flat ring (normal Y); click a wall → a ring on the wall (normal X/Z). The
                 // arch family carries it unused.
                 _draft.StartDraft(anchor, AxisFromFace(blockSel), FaceIsNegative(blockSel));
+                _rimAimArmed = false;
+                _rimAwaitingRelease = false;
+                _lastDraftPreviewMs = 0;
+                _lastDraftClampCheckMs = 0;
                 _draftClamp.Reset();
                 _net.SendDraftStart(anchor, BuildSettings(blockSel, anchor));
                 return;
@@ -1018,6 +1098,9 @@ namespace Layout.Client
             if (_draft.AwaitingApex && !_draft.AwaitingRim && DraftManager.NeedsRimClick(_draft.Shape))
             {
                 _draft.PlaceThirdPoint(ClampDraftAimToPerGuideCap(anchor));
+                _rimAimArmed = false;
+                _rimAwaitingRelease = true;
+                _draftClamp.Reset();
                 return;
             }
 
@@ -1026,7 +1109,7 @@ namespace Layout.Client
             Vec3d end = anchor;
             if (_draft.AwaitingRim)
             {
-                rim = anchor;                        // the fourth click IS the lid's radius
+                rim = StabilizeDraftRimAim(anchor);  // held at 60% until the lid area captures the aim
                 apex = _draft.DraftThird;            // the height was fixed by the third click
                 end = _draft.DraftSecond;            // the base by the second
             }
@@ -1057,6 +1140,10 @@ namespace Layout.Client
                     _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
                     inverted, _draft.Sides, completion.Apex, rim: completion.Rim);
                 _draft.ClearDraft();
+                _rimAimArmed = false;
+                _rimAwaitingRelease = false;
+                _lastDraftPreviewMs = 0;
+                _lastDraftClampCheckMs = 0;
                 _hud.ClearDraftAim();
                 _renderer.ClearDraftPreview();       // now: the real guide arrives via broadcast
             }
@@ -1259,6 +1346,10 @@ namespace Layout.Client
             if (mode == ClientAuthorityMode.Detecting) return;
             if (_grab != null) DropGrabLocally();
             if (_draft.HasActiveDraft) _draft.ClearDraft();
+            _rimAimArmed = false;
+            _rimAwaitingRelease = false;
+            _lastDraftPreviewMs = 0;
+            _lastDraftClampCheckMs = 0;
             _hasPendingInsert = false;
             _pendingInsertOriginPoints = null;
             _hud.ClearDraftAim();
@@ -1693,26 +1784,74 @@ namespace Layout.Client
             return new Vec3d(eye.X + dir.X * depth, eye.Y + dir.Y * depth, eye.Z + dir.Z * depth);
         }
 
-        /// <summary>
-        /// The active draft's LID CENTRE — the height click projected onto the base's axis — plus that
-        /// axis. The rim stage measures and shrinks against this, never against the raw height click,
-        /// which is a world click and so generally sits off to one side of the axis.
-        /// </summary>
-        private bool TryGetDraftLid(out Vec3d lid, out Vec3d axis)
+        // Full frame needed by the rim capture gate: lid centre, axis, stable radial direction, base radius.
+        private bool TryGetDraftRimFrame(out Vec3d lid, out Vec3d axis, out Vec3d radial,
+            out double baseRadius)
         {
-            lid = axis = null;
+            lid = axis = radial = null;
+            baseRadius = 0;
             Vec3d a = _draft.DraftStart, b = _draft.DraftSecond, third = _draft.DraftThird;
             if (a == null || b == null || third == null) return false;
-            if (!ShapeGeometry.TryGetFrame(a, b, _draft.DraftPlaneAxis, out Vec3d u, out _, out _))
+            if (!ShapeGeometry.TryGetFrame(a, b, _draft.DraftPlaneAxis,
+                out radial, out _, out double baseLength))
                 return false;
-            axis = ShapeGeometry.BaseNormal(u, _draft.DraftPlaneAxis);
+            axis = ShapeGeometry.BaseNormal(radial, _draft.DraftPlaneAxis);
             if (axis == null) return false;
+            baseRadius = baseLength * 0.5;
 
             var centre = new Vec3d((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, (a.Z + b.Z) * 0.5);
             double h = (third.X - centre.X) * axis.X + (third.Y - centre.Y) * axis.Y
                 + (third.Z - centre.Z) * axis.Z;
             lid = new Vec3d(centre.X + axis.X * h, centre.Y + axis.Y * h, centre.Z + axis.Z * h);
             return true;
+        }
+
+        /// <summary>
+        /// The active draft's LID CENTRE — the height click projected onto the base's axis — plus that
+        /// axis. The rim stage measures and shrinks against this, never against the raw height click,
+        /// which is a world click and so generally sits off to one side of the axis.
+        /// </summary>
+        private bool TryGetDraftLid(out Vec3d lid, out Vec3d axis) =>
+            TryGetDraftRimFrame(out lid, out axis, out _, out _);
+
+        // One-way rim capture (0.2.31): first wait for the height press to be released, then acquire the
+        // existing 60% top ring through a modest annular band. Unlike the old 125%-of-base disk, this does
+        // not become an enormous automatic-capture zone on a large guide. Once acquired, normal absolute
+        // control stays armed so the player can move inward to a cone or outward to a deliberate flare.
+        private Vec3d StabilizeDraftRimAim(Vec3d requested)
+        {
+            if (requested == null || !TryGetDraftRimFrame(
+                out Vec3d lid, out Vec3d axis, out Vec3d radial, out double baseRadius))
+                return requested;
+
+            double heldRadius = baseRadius * TaperedCylinderShape.DefaultTopRatio;
+            Vec3d HeldAim() => new Vec3d(lid.X + radial.X * heldRadius,
+                lid.Y + radial.Y * heldRadius, lid.Z + radial.Z * heldRadius);
+
+            if (_rimAwaitingRelease) return HeldAim();
+
+            if (!_rimAimArmed)
+            {
+                double px = requested.X - lid.X, py = requested.Y - lid.Y, pz = requested.Z - lid.Z;
+                double axial = px * axis.X + py * axis.Y + pz * axis.Z;
+                double rx = px - axis.X * axial, ry = py - axis.Y * axial, rz = pz - axis.Z * axial;
+                double requestedRadius = Math.Sqrt(rx * rx + ry * ry + rz * rz);
+
+                double cell = _draft.Scale / 16.0;
+                double captureBand = Math.Max(0.25,
+                    Math.Max(cell * 1.5, Math.Min(1.0, baseRadius * 0.1)));
+                if (Math.Abs(requestedRadius - heldRadius) <= captureBand)
+                {
+                    _rimAimArmed = true;
+                    _draftClamp.Reset();
+                }
+                else
+                {
+                    return HeldAim();
+                }
+            }
+
+            return requested;
         }
 
         // The free-air RIM aim (0.2.26): on the Tapered Cylinder's last stage, with no block under the
@@ -1921,6 +2060,7 @@ namespace Layout.Client
             _net.AuthorityModeChanged -= OnAuthorityModeChanged;
             _capi.Input.InWorldAction -= OnInWorldAction;
             _capi.Event.MouseDown -= OnMouseDown;
+            _capi.Event.MouseUp -= OnMouseUp;
 
             if (_tickId != 0)
             {

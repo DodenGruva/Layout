@@ -8,38 +8,45 @@ using Layout.Shapes;
 namespace Layout.Systems
 {
     /// <summary>
-    /// The chalk feedback effects (F5 polish): yellow chalk-dust puffs and the chalk-line "snap" heard when
-    /// a guide is placed. Pure fire-and-forget helpers — callable from either side (a server world
-    /// broadcasts the particles/sound to every client in range; a client world plays them locally, which is
-    /// exactly right for PRIVATE placements only that player can see).
+    /// Placement and refill feedback: the chalk-line snap, short falling flecks, and a softer floating
+    /// dust complement. Public effects broadcast from the server; private effects play only locally.
     /// </summary>
     /// <remarks>
-    /// EMISSION SHAPE. 2D guides puff along their WHOLE sampled curve (a dust point roughly every half
-    /// block, capped — see <see cref="MaxLineEmitPoints"/> — so giant guides cannot flood the particle
-    /// system). 3D volumes deliberately do NOT puff over their entire shell (a 100-block sphere would emit
-    /// an absurd cloud); they puff around the BASE RING on the plane they were set on — the ring through
-    /// their two base anchors. For a Box that ring is an approximation of the base outline; accepted, it is
-    /// a dust cloud, not geometry. Effects are non-critical: any sampling surprise is swallowed and at
-    /// worst the placement stays silent.
+    /// The original falling flecks remain along the whole 2D curve or around a volume's base ring. The
+    /// lighter layer drifts away from 2D curves and mathematically sampled points across every 3D shell.
+    /// Shell sampling is parametric and hard-capped; it never voxelises the guide, so its cost is independent
+    /// of guide resolution and bounded even for enormous volumes.
     /// </remarks>
     public static class ChalkEffects
     {
-        // Chalk-dust yellow, matching the guide body's colour language.
         private static readonly int ChalkColor = ColorUtil.ToRgba(180, 235, 205, 90);
+        private static readonly int FloatingDustColor = ColorUtil.ToRgba(105, 245, 225, 150);
 
-        // Whole-curve emission: one dust point about every half block, hard-capped so large guides stay sane.
         private const double LineEmitSpacing = 0.5;
         private const int MaxLineEmitPoints = 40;
         private const int MaxRingEmitPoints = 24;
+        private const int MaxLineDustPoints = 32;
+        private const int MaxSurfaceEmitPoints = 56;
+        private const double GoldenAngle = Math.PI * (3.0 - 2.2360679774997896964); // pi * (3 - sqrt(5))
+
+        private readonly struct SurfaceEmitPoint
+        {
+            public readonly Vec3d Position;
+            public readonly Vec3d Normal;
+
+            public SurfaceEmitPoint(Vec3d position, Vec3d normal)
+            {
+                Position = position;
+                Normal = normal;
+            }
+        }
 
         /// <summary>A full-strength puff of yellow chalk dust centred on <paramref name="pos"/> (refills).</summary>
         public static void SpawnChalkPuff(IWorldAccessor world, Vec3d pos) => Puff(world, pos, 8f, 16f);
 
         /// <summary>
-        /// The completed-placement feedback: the taut-string snap of a real chalk line (the vanilla
-        /// bow-release twang, slightly quiet) plus dust along the guide itself — the whole curve for 2D
-        /// shapes, the base ring for 3D volumes. Deliberately independent of the chalk-durability system —
-        /// it is placement feedback, so it also plays for creative players and durability-disabled servers.
+        /// Completed-placement feedback. The existing falling run/base-ring burst remains, then a capped
+        /// floating complement is added along 2D curves or across the full shell of a 3D volume.
         /// </summary>
         public static void PlacementEffects(IWorldAccessor world, GuideData guide)
         {
@@ -47,22 +54,40 @@ namespace Layout.Systems
 
             try
             {
-                List<Vec3d> points = GuideShapeTypes.IsVolume(guide.ShapeType)
-                    ? BaseRingPoints(guide)
-                    : CurveEmitPoints(guide);
+                bool volume = GuideShapeTypes.IsVolume(guide.ShapeType);
+                List<Vec3d> points = volume ? BaseRingPoints(guide) : CurveEmitPoints(guide);
                 if (points == null || points.Count == 0) return;
 
-                // The snap plays once, at the emission centroid (≈ the guide's middle).
                 double cx = 0, cy = 0, cz = 0;
                 foreach (Vec3d p in points) { cx += p.X; cy += p.Y; cz += p.Z; }
                 int n = points.Count;
                 world.PlaySoundAt(new AssetLocation("sounds/bow-release"),
                     cx / n, cy / n, cz / n, null, true, 32f, 0.55f);
 
-                // Anchors get the full puff; the run of the guide gets lighter dust per point.
+                // Original short-lived, falling chalk flecks.
                 Puff(world, points[0], 8f, 16f);
                 if (n > 1) Puff(world, points[n - 1], 8f, 16f);
                 for (int i = 1; i < n - 1; i++) Puff(world, points[i], 2f, 5f);
+
+                if (volume)
+                {
+                    // Sparse falling flecks and soft outward drift over the whole shell. The stronger base
+                    // ring remains, preserving the grounded chalk-line snap at the placement plane.
+                    List<SurfaceEmitPoint> shell = VolumeSurfacePoints(guide);
+                    if (shell != null)
+                    {
+                        foreach (SurfaceEmitPoint site in shell)
+                        {
+                            Puff(world, site.Position, 1f, 2f);
+                            DriftPuff(world, site.Position, site.Normal, 1f, 3f);
+                        }
+                    }
+                }
+                else
+                {
+                    foreach (Vec3d p in ThinEvenly(points, MaxLineDustPoints))
+                        DriftPuff(world, p, null, 1f, 3f);
+                }
             }
             catch (Exception e)
             {
@@ -70,9 +95,8 @@ namespace Layout.Systems
             }
         }
 
-        // --- emission-point generation ---------------------------------------------------------------
+        // --- original line/base emission points -----------------------------------------------------
 
-        /// <summary>2D shapes: the sampled curve thinned to ~one point per half block, capped.</summary>
         private static List<Vec3d> CurveEmitPoints(GuideData guide)
         {
             IGuideShape shape = ShapeFactory.Adopt(guide);
@@ -98,10 +122,6 @@ namespace Layout.Systems
             return points;
         }
 
-        /// <summary>
-        /// 3D volumes: a ring on the base plane (normal = the guide's intrinsic axis) through the two base
-        /// anchors — the "surface plane they are set on". Point count scales with circumference, capped.
-        /// </summary>
         private static List<Vec3d> BaseRingPoints(GuideData guide)
         {
             Vec3d a = null, b = null;
@@ -118,15 +138,7 @@ namespace Layout.Systems
             double radius = a.DistanceTo(b) / 2;
             if (radius < 0.05) return new List<Vec3d> { centre };
 
-            // In-plane basis perpendicular to the base axis.
-            Vec3d u, v;
-            switch (guide.ShapePlaneAxis)
-            {
-                case PlaneAxis.X: u = new Vec3d(0, 1, 0); v = new Vec3d(0, 0, 1); break;
-                case PlaneAxis.Z: u = new Vec3d(1, 0, 0); v = new Vec3d(0, 1, 0); break;
-                default:          u = new Vec3d(1, 0, 0); v = new Vec3d(0, 0, 1); break;
-            }
-
+            ShapeGeometry.InPlaneAxes(guide.ShapePlaneAxis, out Vec3d u, out Vec3d v);
             int count = (int)GameMath.Clamp(2 * Math.PI * radius / LineEmitSpacing, 8, MaxRingEmitPoints);
             var points = new List<Vec3d>(count);
             for (int i = 0; i < count; i++)
@@ -141,7 +153,215 @@ namespace Layout.Systems
             return points;
         }
 
-        // --- the puff itself -------------------------------------------------------------------------
+        private static List<Vec3d> ThinEvenly(List<Vec3d> points, int cap)
+        {
+            if (points == null || points.Count <= cap) return points ?? new List<Vec3d>();
+            var result = new List<Vec3d>(cap);
+            for (int i = 0; i < cap; i++)
+            {
+                int index = (int)Math.Round(i * (points.Count - 1.0) / (cap - 1.0));
+                result.Add(points[index]);
+            }
+            return result;
+        }
+
+        // --- capped, non-voxel 3D surface sampling -------------------------------------------------
+
+        private static List<SurfaceEmitPoint> VolumeSurfacePoints(GuideData guide) => guide.ShapeType switch
+        {
+            GuideShapeType.Sphere => SphereSurfacePoints(guide),
+            GuideShapeType.Dome => DomeSurfacePoints(guide),
+            GuideShapeType.Cylinder => RevolutionSurfacePoints(guide, 1.0),
+            GuideShapeType.Cone => RevolutionSurfacePoints(guide, 0.0),
+            GuideShapeType.TaperedCylinder => RevolutionSurfacePoints(guide, null),
+            GuideShapeType.Box => BoxSurfacePoints(guide),
+            _ => null
+        };
+
+        private static int SurfaceSiteCount(double area) =>
+            (int)GameMath.Clamp(Math.Ceiling(Math.Max(0, area) / 4.0), 10, MaxSurfaceEmitPoints);
+
+        private static double Phase(GuideData guide) =>
+            ((uint)guide.Id.GetHashCode() / (double)uint.MaxValue) * 2.0 * Math.PI;
+
+        private static bool TryBaseFrame(GuideData guide, out Vec3d centre, out double radius,
+            out Vec3d u, out Vec3d m, out Vec3d axis)
+        {
+            centre = u = m = axis = null; radius = 0;
+            if (guide.ControlPoints == null || guide.ControlPoints.Count < 2) return false;
+            Vec3d a = guide.ControlPoints[0]?.WorldPosition, b = guide.ControlPoints[1]?.WorldPosition;
+            if (a == null || b == null
+                || !ShapeGeometry.TryGetFrame(a, b, guide.ShapePlaneAxis, out u, out m, out double len))
+                return false;
+            centre = new Vec3d((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, (a.Z + b.Z) * 0.5);
+            radius = len * 0.5;
+            axis = ShapeGeometry.BaseNormal(u, guide.ShapePlaneAxis);
+            return axis != null && radius >= 0.05;
+        }
+
+        private static List<SurfaceEmitPoint> SphereSurfacePoints(GuideData guide)
+        {
+            if (guide.ControlPoints == null || guide.ControlPoints.Count < 2) return null;
+            Vec3d a = guide.ControlPoints[0]?.WorldPosition, b = guide.ControlPoints[1]?.WorldPosition;
+            if (a == null || b == null) return null;
+            var c = new Vec3d((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, (a.Z + b.Z) * 0.5);
+            double r = a.DistanceTo(b) * 0.5;
+            if (r < 0.05) return null;
+
+            int count = SurfaceSiteCount(4.0 * Math.PI * r * r);
+            double phase = Phase(guide);
+            var result = new List<SurfaceEmitPoint>(count);
+            for (int i = 0; i < count; i++)
+            {
+                double y = 1.0 - 2.0 * (i + 0.5) / count;
+                double ring = Math.Sqrt(Math.Max(0, 1.0 - y * y));
+                double ang = phase + i * GoldenAngle;
+                var normal = new Vec3d(Math.Cos(ang) * ring, y, Math.Sin(ang) * ring);
+                result.Add(new SurfaceEmitPoint(new Vec3d(
+                    c.X + normal.X * r, c.Y + normal.Y * r, c.Z + normal.Z * r), normal));
+            }
+            return result;
+        }
+
+        private static List<SurfaceEmitPoint> DomeSurfacePoints(GuideData guide)
+        {
+            if (!TryBaseFrame(guide, out Vec3d c, out double r,
+                out Vec3d u, out Vec3d m, out Vec3d axis)
+                || guide.ControlPoints.Count < 3) return null;
+
+            Vec3d apex = guide.ControlPoints[2]?.WorldPosition;
+            if (apex == null) return null;
+            var apexDelta = new Vec3d(apex.X - c.X, apex.Y - c.Y, apex.Z - c.Z);
+            if (ShapeGeometry.Dot(apexDelta, axis) < 0)
+                axis = new Vec3d(-axis.X, -axis.Y, -axis.Z);
+
+            int count = SurfaceSiteCount(2.0 * Math.PI * r * r);
+            double phase = Phase(guide);
+            var result = new List<SurfaceEmitPoint>(count);
+            for (int i = 0; i < count; i++)
+            {
+                double axial = (i + 0.5) / count;
+                double ring = Math.Sqrt(Math.Max(0, 1.0 - axial * axial));
+                double ang = phase + i * GoldenAngle;
+                double ca = Math.Cos(ang) * ring, sa = Math.Sin(ang) * ring;
+                var normal = Normalise(new Vec3d(
+                    u.X * ca + m.X * sa + axis.X * axial,
+                    u.Y * ca + m.Y * sa + axis.Y * axial,
+                    u.Z * ca + m.Z * sa + axis.Z * axial));
+                result.Add(new SurfaceEmitPoint(new Vec3d(
+                    c.X + normal.X * r, c.Y + normal.Y * r, c.Z + normal.Z * r), normal));
+            }
+            return result;
+        }
+
+        private static List<SurfaceEmitPoint> RevolutionSurfacePoints(GuideData guide, double? topRatio)
+        {
+            if (!TryBaseFrame(guide, out Vec3d c, out double r,
+                out Vec3d u, out Vec3d m, out Vec3d axis)
+                || guide.ControlPoints.Count < 3) return null;
+            Vec3d heightPoint = guide.ControlPoints[2]?.WorldPosition;
+            if (heightPoint == null) return null;
+            double h = (heightPoint.X - c.X) * axis.X + (heightPoint.Y - c.Y) * axis.Y
+                + (heightPoint.Z - c.Z) * axis.Z;
+            if (Math.Abs(h) < 0.05) return null;
+
+            double rTop;
+            if (topRatio.HasValue) rTop = r * topRatio.Value;
+            else if (guide.ControlPoints.Count >= 4 && guide.ControlPoints[3]?.WorldPosition != null)
+                rTop = RadialDistance(guide.ControlPoints[3].WorldPosition, c, axis);
+            else rTop = r * TaperedCylinderShape.DefaultTopRatio;
+            rTop = Math.Max(0, Math.Min(r * 4.0, rTop));
+
+            double slant = Math.Sqrt(h * h + (rTop - r) * (rTop - r));
+            int count = SurfaceSiteCount(Math.PI * (r + rTop) * slant);
+            double phase = Phase(guide), slope = (rTop - r) / h;
+            var result = new List<SurfaceEmitPoint>(count);
+            for (int i = 0; i < count; i++)
+            {
+                double t = (i + 0.5) / count;
+                double ang = phase + i * GoldenAngle;
+                var radial = new Vec3d(
+                    u.X * Math.Cos(ang) + m.X * Math.Sin(ang),
+                    u.Y * Math.Cos(ang) + m.Y * Math.Sin(ang),
+                    u.Z * Math.Cos(ang) + m.Z * Math.Sin(ang));
+                double localR = r + (rTop - r) * t;
+                var normal = Normalise(new Vec3d(
+                    radial.X - axis.X * slope,
+                    radial.Y - axis.Y * slope,
+                    radial.Z - axis.Z * slope));
+                result.Add(new SurfaceEmitPoint(new Vec3d(
+                    c.X + axis.X * h * t + radial.X * localR,
+                    c.Y + axis.Y * h * t + radial.Y * localR,
+                    c.Z + axis.Z * h * t + radial.Z * localR), normal));
+            }
+            return result;
+        }
+
+        private static List<SurfaceEmitPoint> BoxSurfacePoints(GuideData guide)
+        {
+            if (guide.ControlPoints == null || guide.ControlPoints.Count < 3) return null;
+            Vec3d a = guide.ControlPoints[0]?.WorldPosition;
+            Vec3d diagonal = guide.ControlPoints[1]?.WorldPosition;
+            Vec3d heightPoint = guide.ControlPoints[2]?.WorldPosition;
+            if (a == null || diagonal == null || heightPoint == null) return null;
+
+            ShapeGeometry.InPlaneAxes(guide.ShapePlaneAxis, out Vec3d u1, out Vec3d u2);
+            Vec3d axis = ShapeGeometry.AxisVec(guide.ShapePlaneAxis);
+            var d = new Vec3d(diagonal.X - a.X, diagonal.Y - a.Y, diagonal.Z - a.Z);
+            double du = ShapeGeometry.Dot(d, u1), dv = ShapeGeometry.Dot(d, u2);
+            if (Math.Abs(du) < 0.05 || Math.Abs(dv) < 0.05) return null;
+            var bc = new Vec3d(a.X + (u1.X * du + u2.X * dv) * 0.5,
+                a.Y + (u1.Y * du + u2.Y * dv) * 0.5,
+                a.Z + (u1.Z * du + u2.Z * dv) * 0.5);
+            double h = (heightPoint.X - bc.X) * axis.X + (heightPoint.Y - bc.Y) * axis.Y
+                + (heightPoint.Z - bc.Z) * axis.Z;
+            if (Math.Abs(h) < 0.05) return null;
+
+            double asFace = Math.Abs(dv * h), atFace = Math.Abs(du * h), awFace = Math.Abs(du * dv);
+            double total = 2.0 * (asFace + atFace + awFace);
+            int count = SurfaceSiteCount(total);
+            double phase = Phase(guide) / (2.0 * Math.PI);
+            var result = new List<SurfaceEmitPoint>(count);
+            for (int i = 0; i < count; i++)
+            {
+                double selector = (i + 0.5) * total / count;
+                double f1 = Frac(phase + i * 0.6180339887498949);
+                double f2 = Frac(phase * 0.37 + i * 0.4142135623730950);
+                double s, t, w;
+                Vec3d normal;
+                if ((selector -= asFace) < 0) { s = 0;  t = dv * f1; w = h * f2; normal = Scaled(u1, -Math.Sign(du)); }
+                else if ((selector -= asFace) < 0) { s = du; t = dv * f1; w = h * f2; normal = Scaled(u1, Math.Sign(du)); }
+                else if ((selector -= atFace) < 0) { s = du * f1; t = 0;  w = h * f2; normal = Scaled(u2, -Math.Sign(dv)); }
+                else if ((selector -= atFace) < 0) { s = du * f1; t = dv; w = h * f2; normal = Scaled(u2, Math.Sign(dv)); }
+                else if ((selector -= awFace) < 0) { s = du * f1; t = dv * f2; w = 0; normal = Scaled(axis, -Math.Sign(h)); }
+                else { s = du * f1; t = dv * f2; w = h; normal = Scaled(axis, Math.Sign(h)); }
+
+                result.Add(new SurfaceEmitPoint(new Vec3d(
+                    a.X + u1.X * s + u2.X * t + axis.X * w,
+                    a.Y + u1.Y * s + u2.Y * t + axis.Y * w,
+                    a.Z + u1.Z * s + u2.Z * t + axis.Z * w), normal));
+            }
+            return result;
+        }
+
+        private static double RadialDistance(Vec3d p, Vec3d c, Vec3d axis)
+        {
+            double px = p.X - c.X, py = p.Y - c.Y, pz = p.Z - c.Z;
+            double axial = px * axis.X + py * axis.Y + pz * axis.Z;
+            double rx = px - axis.X * axial, ry = py - axis.Y * axial, rz = pz - axis.Z * axial;
+            return Math.Sqrt(rx * rx + ry * ry + rz * rz);
+        }
+
+        private static Vec3d Normalise(Vec3d v)
+        {
+            double len = Math.Sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z);
+            return len < 1e-9 ? new Vec3d(0, 1, 0) : new Vec3d(v.X / len, v.Y / len, v.Z / len);
+        }
+
+        private static Vec3d Scaled(Vec3d v, double s) => new Vec3d(v.X * s, v.Y * s, v.Z * s);
+        private static double Frac(double v) => v - Math.Floor(v);
+
+        // --- particle recipes -----------------------------------------------------------------------
 
         private static void Puff(IWorldAccessor world, Vec3d pos, float minQuantity, float maxQuantity)
         {
@@ -160,6 +380,43 @@ namespace Layout.Systems
                 model: EnumParticleModel.Quad);
 
             world.SpawnParticles(puff);
+        }
+
+        private static void DriftPuff(IWorldAccessor world, Vec3d pos, Vec3d normal,
+            float minQuantity, float maxQuantity)
+        {
+            if (pos == null) return;
+
+            Vec3f minVelocity, maxVelocity;
+            if (normal == null)
+            {
+                // Flat guides read like chalk striking a surface: a broad sideways scatter rather than
+                // every mote rising together. Slight vertical variation keeps it dusty instead of planar.
+                minVelocity = new Vec3f(-0.34f, -0.05f, -0.34f);
+                maxVelocity = new Vec3f(0.34f, 0.16f, 0.34f);
+            }
+            else
+            {
+                float vx = (float)(normal.X * 0.12);
+                float vy = (float)(normal.Y * 0.12 + 0.12);
+                float vz = (float)(normal.Z * 0.12);
+                minVelocity = new Vec3f(vx - 0.12f, vy - 0.04f, vz - 0.12f);
+                maxVelocity = new Vec3f(vx + 0.12f, vy + 0.20f, vz + 0.12f);
+            }
+
+            var dust = new SimpleParticleProperties(
+                minQuantity, maxQuantity, FloatingDustColor,
+                new Vec3d(pos.X - 0.12, pos.Y - 0.05, pos.Z - 0.12),
+                new Vec3d(pos.X + 0.12, pos.Y + 0.12, pos.Z + 0.12),
+                minVelocity,
+                maxVelocity,
+                lifeLength: 1.65f,
+                gravityEffect: 0f,
+                minSize: 0.14f,
+                maxSize: 0.36f,
+                model: EnumParticleModel.Quad);
+
+            world.SpawnParticles(dust);
         }
     }
 }

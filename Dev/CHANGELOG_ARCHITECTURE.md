@@ -1,10 +1,40 @@
 # Layout — Architecture Changelog (document-version history)
 
 > **Split out of `ARCHITECTURE.md` to keep the orientation read cheap.** These are the per-revision deltas
-> for the architecture document itself, v2.5 → v3.3. **Nothing here is unique:** each delta is already folded
+> for the architecture document itself, v2.5 → v3.6. **Nothing here is unique:** each delta is already folded
 > in place into `ARCHITECTURE.md`'s body (Settled Decisions Register, file tree, module map, persistence,
 > edge cases), and each has a fuller narrative in its `SESSION_*.md` record. Kept as the audit trail — read
 > it when you need to know *when* something changed, not *what* the current state is.
+
+---
+
+## Changelog — v3.5 → v3.6 (stabilization + placement effects, v0.2.29 → v0.2.35; full record in `SESSION_19.md`)
+
+- **Cap semantics (0.2.29):** removed Tapered Cylinder's fixed 4M scan cutoff. Raised/unlimited server caps
+  now remain meaningful; the 10M hard render ceiling still protects the client.
+- **Height → rim handoff (0.2.30–0.2.32):** the top begins at the 60% default and cannot inherit the height
+  click's remote cursor target. A real mouse release rearms input; entering an annular band around the born
+  rim captures cursor control. The final fix listens to the engine's actual mouse-up event.
+- **Adaptive draft work (0.2.31):** input remains responsive while expensive preview/HUD/cap work throttles
+  by the last draft count: about 33/10/5/2 Hz across increasing voxel tiers. Unlimited public servers skip
+  live per-guide cap-clamp recounts; exact final validation and the hard ceiling remain.
+- **Placement effects (0.2.33–0.2.35):** retained the original falling flecks and added bounded parametric
+  surface sampling for zero-gravity dust. 2D shapes scatter sideways; 3D shapes drift outward/upward across
+  their full shell. No voxel generation is performed for the effect.
+- **Release verification:** public/private multiplayer passed; fired jugs still craft and raw jugs do not.
+  B-S9-1 is narrowed to an adjacent-voxel snap after unlocking a previous lock.
+
+---
+
+## Changelog — v3.4 → v3.5 (Tapered Cylinder, v0.2.24 → v0.2.28; full record in `SESSION_18.md`)
+
+- **Tapered Cylinder (0.2.24, protocol 7):** added the four-click frustum with a height handle and independent
+  rim handle. A 60% born top radius, ratio-preserving base resize, and up-to-4× flare are the shipped calls.
+- **Cylinder-family sizing and cap work (0.2.25–0.2.27):** corrected AABB scan estimates, replaced repeated
+  full cap bisection with a persistent bounded bracket, fixed the rim clamp's off-axis reference, and made
+  free-air rim aiming stable at shallow view angles.
+- **Recipe correctness (0.2.28):** Chalking Powder jug variants require `game:jug-*-fired`; raw clay jugs
+  cannot hold dye and no longer match.
 
 ---
 
