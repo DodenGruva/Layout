@@ -134,6 +134,11 @@ namespace Layout.Systems
             if (a == null) return null;
             if (b == null) return new List<Vec3d> { a.Clone() };
 
+            if (guide.ShapeType == GuideShapeType.PolygonalPrism
+                || guide.ShapeType == GuideShapeType.TaperedPolygonalPrism)
+                return PolygonBaseRingPoints(a, b, guide.ShapePlaneAxis, guide.Sides,
+                    guide.FlatSideAligned);
+
             var centre = new Vec3d((a.X + b.X) / 2, (a.Y + b.Y) / 2, (a.Z + b.Z) / 2);
             double radius = a.DistanceTo(b) / 2;
             if (radius < 0.05) return new List<Vec3d> { centre };
@@ -149,6 +154,42 @@ namespace Layout.Systems
                     centre.X + u.X * cu + v.X * sv,
                     centre.Y + u.Y * cu + v.Y * sv,
                     centre.Z + u.Z * cu + v.Z * sv));
+            }
+            return points;
+        }
+
+        private static List<Vec3d> PolygonBaseRingPoints(Vec3d a, Vec3d b, PlaneAxis axis,
+            int sideSetting, bool flatSideAligned)
+        {
+            if (!ShapeGeometry.TryGetFrame(a, b, axis, out Vec3d u, out Vec3d m, out double span))
+                return new List<Vec3d> { a.Clone() };
+
+            int sides = PolygonShape.ClampSides(sideSetting);
+            double apothemRatio = Math.Cos(Math.PI / sides);
+            double near = flatSideAligned ? apothemRatio : 1.0;
+            double far = flatSideAligned
+                ? (sides % 2 == 0 ? apothemRatio : 1.0)
+                : (sides % 2 == 0 ? 1.0 : apothemRatio);
+            double radius = span / (near + far);
+            if (radius < 0.05) return new List<Vec3d> { a.Clone() };
+
+            var centre = new Vec3d(a.X + u.X * radius * near,
+                a.Y + u.Y * radius * near, a.Z + u.Z * radius * near);
+            double perimeter = 2.0 * sides * radius * Math.Sin(Math.PI / sides);
+            int count = (int)GameMath.Clamp(perimeter / LineEmitSpacing, 8, MaxRingEmitPoints);
+            var points = new List<Vec3d>(count);
+            for (int i = 0; i < count; i++)
+            {
+                double edgePosition = i * sides / (double)count;
+                int edge = (int)Math.Floor(edgePosition);
+                double t = edgePosition - edge;
+                double phase = Math.PI + (flatSideAligned ? Math.PI / sides : 0.0);
+                double a0 = phase + 2.0 * Math.PI * edge / sides;
+                double a1 = phase + 2.0 * Math.PI * ((edge + 1) % sides) / sides;
+                double x = (Math.Cos(a0) * (1.0 - t) + Math.Cos(a1) * t) * radius;
+                double y = (Math.Sin(a0) * (1.0 - t) + Math.Sin(a1) * t) * radius;
+                points.Add(new Vec3d(centre.X + u.X * x + m.X * y,
+                    centre.Y + u.Y * x + m.Y * y, centre.Z + u.Z * x + m.Z * y));
             }
             return points;
         }
@@ -174,6 +215,8 @@ namespace Layout.Systems
             GuideShapeType.Cylinder => RevolutionSurfacePoints(guide, 1.0),
             GuideShapeType.Cone => RevolutionSurfacePoints(guide, 0.0),
             GuideShapeType.TaperedCylinder => RevolutionSurfacePoints(guide, null),
+            GuideShapeType.PolygonalPrism => PolygonalPrismSurfacePoints(guide, tapered: false),
+            GuideShapeType.TaperedPolygonalPrism => PolygonalPrismSurfacePoints(guide, tapered: true),
             GuideShapeType.Box => BoxSurfacePoints(guide),
             _ => null
         };
@@ -293,6 +336,72 @@ namespace Layout.Systems
                     c.X + axis.X * h * t + radial.X * localR,
                     c.Y + axis.Y * h * t + radial.Y * localR,
                     c.Z + axis.Z * h * t + radial.Z * localR), normal));
+            }
+            return result;
+        }
+
+        private static List<SurfaceEmitPoint> PolygonalPrismSurfacePoints(GuideData guide, bool tapered)
+        {
+            if (guide.ControlPoints == null || guide.ControlPoints.Count < 3) return null;
+            Vec3d a = guide.ControlPoints[0]?.WorldPosition, b = guide.ControlPoints[1]?.WorldPosition;
+            Vec3d heightPoint = guide.ControlPoints[2]?.WorldPosition;
+            if (a == null || b == null || heightPoint == null
+                || !ShapeGeometry.TryGetFrame(a, b, guide.ShapePlaneAxis,
+                    out Vec3d u, out Vec3d m, out double span)) return null;
+
+            int sides = PolygonShape.ClampSides(guide.Sides);
+            double apothemRatio = Math.Cos(Math.PI / sides);
+            double near = guide.FlatSideAligned ? apothemRatio : 1.0;
+            double far = guide.FlatSideAligned
+                ? (sides % 2 == 0 ? apothemRatio : 1.0)
+                : (sides % 2 == 0 ? 1.0 : apothemRatio);
+            double r = span / (near + far);
+            var c = new Vec3d(a.X + u.X * r * near,
+                a.Y + u.Y * r * near, a.Z + u.Z * r * near);
+            Vec3d axis = ShapeGeometry.BaseNormal(u, guide.ShapePlaneAxis);
+            if (axis == null || r < 0.05) return null;
+
+            double h = (heightPoint.X - c.X) * axis.X + (heightPoint.Y - c.Y) * axis.Y
+                + (heightPoint.Z - c.Z) * axis.Z;
+            if (Math.Abs(h) < 0.05) return null;
+            double rTop = tapered && guide.ControlPoints.Count >= 4
+                ? RadialDistance(guide.ControlPoints[3].WorldPosition, c, axis) : r;
+            rTop = Math.Max(0, Math.Min(r * 4.0, rTop));
+
+            double perimeterAverage = sides * (r + rTop) * Math.Sin(Math.PI / sides);
+            double apothemDelta = (rTop - r) * Math.Cos(Math.PI / sides);
+            double slant = Math.Sqrt(h * h + apothemDelta * apothemDelta);
+            int count = SurfaceSiteCount(perimeterAverage * slant);
+            double phase = Phase(guide);
+            var result = new List<SurfaceEmitPoint>(count);
+            for (int i = 0; i < count; i++)
+            {
+                double t = (i + 0.5) / count;
+                double angle = phase + i * GoldenAngle;
+                double dx = Math.Cos(angle), dy = Math.Sin(angle);
+                double bestDot = double.MinValue, edgeAngle = 0;
+                for (int edge = 0; edge < sides; edge++)
+                {
+                    double candidate = Math.PI
+                        + (2.0 * edge + (guide.FlatSideAligned ? 2.0 : 1.0)) * Math.PI / sides;
+                    double dot = dx * Math.Cos(candidate) + dy * Math.Sin(candidate);
+                    if (dot > bestDot) { bestDot = dot; edgeAngle = candidate; }
+                }
+
+                double localR = r + (rTop - r) * t;
+                double rayDistance = localR * Math.Cos(Math.PI / sides) / Math.Max(1e-6, bestDot);
+                var radial = new Vec3d(u.X * dx + m.X * dy,
+                    u.Y * dx + m.Y * dy, u.Z * dx + m.Z * dy);
+                var edgeNormal = new Vec3d(u.X * Math.Cos(edgeAngle) + m.X * Math.Sin(edgeAngle),
+                    u.Y * Math.Cos(edgeAngle) + m.Y * Math.Sin(edgeAngle),
+                    u.Z * Math.Cos(edgeAngle) + m.Z * Math.Sin(edgeAngle));
+                double slope = apothemDelta / h;
+                Vec3d normal = Normalise(new Vec3d(edgeNormal.X - axis.X * slope,
+                    edgeNormal.Y - axis.Y * slope, edgeNormal.Z - axis.Z * slope));
+                result.Add(new SurfaceEmitPoint(new Vec3d(
+                    c.X + axis.X * h * t + radial.X * rayDistance,
+                    c.Y + axis.Y * h * t + radial.Y * rayDistance,
+                    c.Z + axis.Z * h * t + radial.Z * rayDistance), normal));
             }
             return result;
         }

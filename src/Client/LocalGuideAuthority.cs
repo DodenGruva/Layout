@@ -191,11 +191,11 @@ namespace Layout.Client
         public GuideData Create(Vec3d start, Vec3d end, GuideRenderSettings settings,
             GuideShapeType shapeType, ShapeConstraint constraint, PlaneAxis shapePlaneAxis,
             bool inverted, int sides, Vec3d apex, IReadOnlyList<Vec3d> chain, bool closed,
-            Vec3d rim = null)
+            Vec3d rim = null, bool flatSideAligned = false)
         {
             GuideOperationResult result = _guides.CreateGuide(
                 start, end, settings, shapeType, constraint, shapePlaneAxis, PlayerUid,
-                apex, inverted, sides, chain, closed, rim);
+                apex, inverted, sides, chain, closed, rim, flatSideAligned);
 
             if (result.IsSuccess)
             {
@@ -390,7 +390,10 @@ namespace Layout.Client
             {
                 Vec3d curvePosition = shape != null ? shape.GetPointAt(t) : ClonePos(position);
                 bool marker = guide.ShapeType == GuideShapeType.Arch;
-                GuideOperationResult inserted = _guides.InsertControlPoint(id, t, curvePosition, marker);
+                // Passive Arch markers do not participate in the spline, so keep the exact rendered voxel
+                // the player selected. Projecting back to the mathematical curve could claim its neighbor.
+                Vec3d insertPosition = marker ? ClonePos(position) : curvePosition;
+                GuideOperationResult inserted = _guides.InsertControlPoint(id, t, insertPosition, marker);
                 if (inserted.IsSuccess)
                 {
                     int index = inserted.ControlPointIndex;
@@ -398,7 +401,7 @@ namespace Layout.Client
                     if (lockResult.IsSuccess)
                     {
                         _undo.Record(PlayerUid,
-                            new InsertControlPointCommand(id, index, curvePosition, marker));
+                            new InsertControlPointCommand(id, index, insertPosition, marker));
                         _undo.Record(PlayerUid, new LockPointCommand(id, index, false, true));
                         ApplyFull(lockResult.Guide);
                     }

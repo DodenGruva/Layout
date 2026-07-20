@@ -89,6 +89,7 @@ namespace Layout.Systems
         private PlaneAxis _previewPlaneAxis = PlaneAxis.Y;
         private int _previewSides;                                           // Session 11: polygon ghosts
         private bool _previewInverted;                                       // Session 11: SHIFT-invert ghosts
+        private bool _previewFlatSideAligned;
         private bool _hasPreviewKey;
 
         private readonly Dictionary<Guid, GuideMesh> _guideMeshes = new Dictionary<Guid, GuideMesh>();
@@ -305,7 +306,8 @@ namespace Layout.Systems
             GuideShapeType shapeType = GuideShapeType.Arch,
             ShapeConstraint constraint = ShapeConstraint.None,
             PlaneAxis shapePlaneAxis = PlaneAxis.Y,
-            int sides = 0, bool inverted = false, Vec3d apex = null, Vec3d rim = null)
+            int sides = 0, bool inverted = false, Vec3d apex = null, Vec3d rim = null,
+            bool flatSideAligned = false)
         {
             if (_disposed || start == null || end == null) return;
 
@@ -314,6 +316,7 @@ namespace Layout.Systems
                 && _previewShapeType == shapeType && _previewConstraint == constraint
                 && _previewPlaneAxis == shapePlaneAxis
                 && _previewSides == sides && _previewInverted == inverted
+                && _previewFlatSideAligned == flatSideAligned
                 && SamePos(_previewStart, start)
                 && SamePos(_previewEnd, end)
                 && (apex == null ? _previewApex == null
@@ -323,8 +326,9 @@ namespace Layout.Systems
 
             _previewShapeType = shapeType; _previewConstraint = constraint; _previewPlaneAxis = shapePlaneAxis;
             _previewSides = sides; _previewInverted = inverted;
+            _previewFlatSideAligned = flatSideAligned;
             IGuideShape shape = ShapeFactory.Create(shapeType, constraint, shapePlaneAxis, start, end,
-                inverted, sides);
+                inverted, sides, flatSideAligned: flatSideAligned);
             // A three-click shape mid-draft (triangle apex, or cylinder/cone/box height — 0.1.21): the
             // ghost's index-2 handle tracks the crosshair. A four-click Tapered Cylinder on its LAST stage
             // (0.2.24) also tracks the rim at index 3, so the taper opens and closes live.

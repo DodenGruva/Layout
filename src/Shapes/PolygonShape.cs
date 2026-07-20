@@ -37,6 +37,7 @@ namespace Layout.Shapes
         private readonly List<ControlPoint> _controlPoints;
         private readonly PlaneAxis _preferredAxis;
         private readonly int _sides;
+        private readonly bool _flatSideAligned;
 
         public List<ControlPoint> ControlPoints => _controlPoints;
 
@@ -50,10 +51,12 @@ namespace Layout.Shapes
             sides < MinSides ? (sides <= 0 ? DefaultSides : MinSides) : (sides > MaxSides ? MaxSides : sides);
 
         /// <summary>Creates a fresh polygon from the two draft clicks (vertex → opposite perimeter point).</summary>
-        public PolygonShape(Vec3d a, Vec3d b, PlaneAxis planeAxis, int sides)
+        public PolygonShape(Vec3d a, Vec3d b, PlaneAxis planeAxis, int sides,
+            bool flatSideAligned = false)
         {
             _preferredAxis = planeAxis;
             _sides = ClampSides(sides);
+            _flatSideAligned = flatSideAligned;
             _controlPoints = new List<ControlPoint>
             {
                 new ControlPoint(new Vec3d(a.X, a.Y, a.Z), isAnchor: true),
@@ -62,11 +65,13 @@ namespace Layout.Shapes
         }
 
         /// <summary>Adopts an existing list (load/wire path). Shared by reference, never copied.</summary>
-        public PolygonShape(List<ControlPoint> controlPoints, PlaneAxis planeAxis, int sides)
+        public PolygonShape(List<ControlPoint> controlPoints, PlaneAxis planeAxis, int sides,
+            bool flatSideAligned = false)
         {
             _controlPoints = controlPoints ?? throw new ArgumentNullException(nameof(controlPoints));
             _preferredAxis = planeAxis;
             _sides = ClampSides(sides);
+            _flatSideAligned = flatSideAligned;
         }
 
         // --- geometry ------------------------------------------------------------------------------
@@ -82,14 +87,20 @@ namespace Layout.Shapes
             if (span < MinSpan) return false;
 
             // Far feature along +û: a vertex (even N) or an edge midpoint at the apothem (odd N).
-            double far = _sides % 2 == 0 ? 1.0 : Math.Cos(Math.PI / _sides);
-            double r = span / (1.0 + far);
-            var c = new Vec3d(a.X + u.X * r, a.Y + u.Y * r, a.Z + u.Z * r);
+            double apothemRatio = Math.Cos(Math.PI / _sides);
+            double near = _flatSideAligned ? apothemRatio : 1.0;
+            double far = _flatSideAligned
+                ? (_sides % 2 == 0 ? apothemRatio : 1.0)
+                : (_sides % 2 == 0 ? 1.0 : apothemRatio);
+            double r = span / (near + far);
+            var c = new Vec3d(a.X + u.X * r * near, a.Y + u.Y * r * near,
+                a.Z + u.Z * r * near);
 
             verts = new Vec3d[_sides];
             for (int k = 0; k < _sides; k++)
             {
-                double phi = Math.PI + 2.0 * Math.PI * k / _sides;   // k = 0 → −û → exactly A
+                double phi = Math.PI + (_flatSideAligned ? Math.PI / _sides : 0.0)
+                    + 2.0 * Math.PI * k / _sides;
                 double cu = Math.Cos(phi) * r, cm = Math.Sin(phi) * r;
                 verts[k] = new Vec3d(
                     c.X + u.X * cu + m.X * cm,

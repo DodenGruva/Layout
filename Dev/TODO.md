@@ -1,11 +1,11 @@
-# Layout — TODO / Outstanding Items (current: v0.2.35)
+# Layout — TODO / Outstanding Items (current: v0.2.47)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.2.35 → next)
+## ⭐ Top of the list (v0.2.47 → next)
 
 > **Session-16 playtest results (human-confirmed):** the v0.2.21 **inventory refill and hotbar refill both
 > work** — the MouseDown-hook ordering and the `InventoryID` round-trip both hold, closing `SESSION_16.md` §8.
@@ -53,6 +53,28 @@
 4. ~~**Placement feedback needed complementary drifting dust.**~~ **DONE (v0.2.33–v0.2.35).** The original
    falling flecks remain; capped dust sites now cover 2D curves and full 3D shells without voxel generation.
    Dust has zero gravity. Flat shapes scatter broadly sideways; 3D dust drifts outward/upward.
+
+### A2. Session-20 polygonal volumes and placement modifiers (v0.2.36–v0.2.47) — full detail in `SESSION_20.md`
+
+1. ~~**Adjacent lock targeting could snap to a formerly locked voxel.**~~ **FIXED and playtest-confirmed
+   (v0.2.36).** The first rendered voxel hit is authoritative, and each point owns only its nearest visible
+   marker cell. **B-S9-1 is closed.**
+2. ~~**Chalking Kit ground placement used the wrong chord.**~~ **FIXED (v0.2.37).** It now uses the standard
+   SHIFT+right-click gesture advertised by its tooltip.
+3. ~~**Add 3D regular-polygon shapes.**~~ **DONE (v0.2.38).** Polygonal Prism and Tapered Polygonal Prism use
+   the same 3–24 side control as Polygon. The tapered version uses the four-stage base · base · height · rim
+   flow. Protocol advanced 7 → 8 for the appended catalog/wire fields.
+4. ~~**Make placement modifiers discoverable and stage-aware.**~~ **DONE (v0.2.39–v0.2.43).** Line supports
+   vertical constraint; tapered rims support Center Apex; native held-item notes appear only while their
+   action applies and use concise technical labels. Internal stage refreshes do not repeat the kit's ground
+   placement note.
+5. ~~**Add flat-side alignment, diagonal lines, and safe tapered rims.**~~ **DONE (v0.2.45).** SHIFT aligns a
+   Polygon-family base to a flat side; CTRL+SHIFT constrains Line/Free-Shape to 45°; tapered rims stop at the
+   base radius unless SHIFT explicitly allows flare. `FlatSideAligned` advanced DataVersion 8 → 9 and protocol
+   8 → 9.
+6. ~~**Create header shape names competed with explanatory text.**~~ **DONE (v0.2.47).** The rejected adaptive
+   shrink experiment was fully reverted; the header now shows `Create Mode` and the normal-size shape name,
+   without `- Next Guide:`.
 
 ### A. Human backlog — queued at Session-16 end — ✅ ALL SEVEN DELIVERED (v0.2.22–v0.2.23)
 
@@ -131,11 +153,9 @@
    draws only its outer skin. If that still lags, continue the staged plan in `SESSION_14.md` §6–§7:
    per-guide spatial chunk meshes + culling, then same-colour greedy face merging. Keep settled guides at true
    scale and the Surface/slab path on the legacy builder.
-2. **Fix the narrowed B-S9-1 adjacent-lock targeting residual.** v0.1.49–v0.1.52 implemented first-hit voxel picking, robust
-   curve-cache invalidation, complete drag snapshots, passive non-deforming Arch lock markers, stale-marker
-   removal, and curve-relative insertion ordering. The human confirms that locks no longer shift and the
-   broad lock → unlock → relock behavior is much better. Exact residual: after unlocking a voxel, attempting
-   to lock its immediate neighbor can snap to the formerly locked voxel. See OPEN BUGS and `SESSION_13.md`.
+2. ~~**Fix the narrowed B-S9-1 adjacent-lock targeting residual.**~~ **CLOSED (v0.2.36).** Exact rendered-cell
+   ownership removed the former-neighbor selection bias, and the human approved the result in play. Retain
+   the interaction as regression coverage; do not reopen the passive-marker design without a new report.
 3. ~~**The final F4/public multiplayer release check.**~~ **PASSED for v0.2.35.** Public/private multiplayer
    worked in the human's test. Release and wait for field reports; retain the full matrix as regression scope.
 4. Remaining flagged decisions (11a–11r, 16a–16d in `SESSION_11.md`) are cosmetic — walk them
@@ -180,7 +200,7 @@ hotbar or SHIFT+right-click a ground-stored kit in place), **private placements 
 `ChalkChargePacket`, protocol 3 → 4; chalk-free only where physically unenforceable — servers without
 Layout), **four deflating fill-state models** with progressively chalkier textures (full ≥22 · medium 11–21 ·
 low 1–10 · empty 0) rendering in every context including ground storage, **ground storage** of the kit
-(CTRL+SHIFT+right-click, idle-gated), chalk-puff particles on refill + placement, and the **chalk-line snap**
+(SHIFT+right-click since v0.2.37, idle-gated), chalk-puff particles on refill + placement, and the **chalk-line snap**
 (bow-release twang) on placement. Recipes: `8× powder/flour + 0.1 L yellow dye (bucket/fired bowl/fired jug) → 8 powder`;
 the kit = 8 powder + linen sack + flax twine + rope + copper nails. Config: `enableChalkDurability`
 (default true); creative never consumes. Plan-vs-shipped deltas listed atop `PLAN_CHALKING_KIT.md`.
@@ -222,7 +242,7 @@ the kit = 8 powder + linen sack + flax twine + rope + copper nails. Config: `ena
 F4 is implemented and playtested on `ClientOnlyFallback`: automatic local authority when the server lacks
 Layout; policy-controlled private overlays on Layout servers; Hammer + Flax Twine vanilla-server activation;
 the unchanged Layout tool on mixed servers; per-world/per-player persistence with backup recovery; normal
-create/edit/reshape/settings/undo parity; `.layout client dispel`; `/layout private`, `/layout public`, and
+create/edit/reshape/settings/undo parity; `.layout dispel`; `/layout private`, `/layout public`, and
 `/layout client push all`; private HUD/target indicators; mixed-server orange private anchors; ownership and
 last-operation routing; and protocol-2 policy/mode/publication messages. DataVersion remains **7** and the
 source count is **64**. See `PLAN_CLIENT_ONLY.md` for the final behavior matrix and architectural record.
@@ -293,7 +313,7 @@ native number input, floored at 0; division markers pair on off-cell boundaries.
 
 ## OPEN BUGS
 
-**B-S9-1 — Lock-in-place interaction regression (ACTIVE FOLLOW-UP; substantially improved in v0.1.49–v0.1.52).**
+~~**B-S9-1 — Lock-in-place interaction regression.**~~ **RESOLVED in v0.2.36 and playtest-confirmed.**
 
 The original symptoms were an adjacent voxel turning red and the Arch visibly shifting merely because a lock
 was placed. The following fixes are now implemented:
@@ -308,9 +328,9 @@ was placed. The following fixes are now implemented:
   markers are not adopted or targeted; later inserts are ordered by curve position so right-side grabs do not
   jump toward the apex.
 
-The broad lock → unlock → relock cycle is now much better. The remaining reproduction is precise: lock a
-voxel, unlock it, then try to lock the immediately adjacent voxel; targeting can snap back to the formerly
-locked voxel. Fix that selection bias without replacing the confirmed passive-marker design.
+v0.2.36 completed the fix: the first rendered voxel hit is authoritative, a point owns only its nearest
+visible rendered marker cell, and an adjacent body voxel receives its own passive marker. The human approved
+the lock → unlock → neighboring-lock behavior. Keep this as regression coverage.
 
 ~~**B-S10-2 — Surface→Volumetric bake grows the WRONG way (into the block).**~~ **FIXED in 0.1.14 and
 PLAYTEST-CONFIRMED ("This was fixed" — human, same session).** The bake runs exactly the fix this entry
@@ -476,8 +496,9 @@ deliberate (11r).
 against `GuideShapeType` = {Arch,Ellipse,Line,Triangle,Rectangle}, `ShapeConstraint` =
 {None,SemiCircle,Circle,Right,Equilateral,Isosceles,Square}, and the shape files — all present.)*
 **SECOND WAVE (Session 11): Polygon (regular N-gon, 3–24 sides) — DONE (0.1.14) + Free-Shape (0.1.15).**
-**THIRD WAVE (post-Session-11): the 3D VOLUME family — DONE (0.1.20–0.1.23): Sphere, Dome, Cylinder,
-Cone, Box.** The "planar-only, 3D LATER" decision has been **reopened and delivered** — see the resolved
+**THIRD WAVE (post-Session-11): the 3D VOLUME family — DONE (0.1.20–0.2.38): Sphere, Dome, Cylinder,
+Cone, Box, Tapered Cylinder, Polygonal Prism, and Tapered Polygonal Prism.** The "planar-only, 3D LATER"
+decision has been **reopened and delivered** — see the resolved
 section near the top. Natural next volumes if wanted: **Roof, Tunnel** (a walk-through extruded arch).
 
 ### F2. Favorites — ✅ DELIVERED AND CONFIRMED (Session 11, 0.1.15)
@@ -519,7 +540,8 @@ the inventory refill remains (Top of the list).
 ## Next session — start here
 
 **The agenda is "⭐ Top of the list" at the top of this file** — it is not repeated here. Current state:
-F4 and F5 are both feature-complete and playtested through **v0.2.21**, committed and pushed on `main`.
+the v0.2.47 shape/modifier arc is complete, documented, built, and packaged on `main`; collect field reports
+and revisit large-guide performance when requested.
 
 **Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;
 docs are updated ONLY when the human says so; commits/pushes only when the human instructs. `main` is the

@@ -3,7 +3,8 @@
 > **Status: ✅ IMPLEMENTED AND PLAYTESTED — v0.2.0–v0.2.9 (F5 delivered); refill channels extended v0.2.21.**
 > The reskin shipped in v0.2.0, ground storage in 0.2.1–0.2.4, the durability/refill system in 0.2.5–0.2.6,
 > the fill-state models in 0.2.7, and ground refill + feedback effects in 0.2.8. A fifth **High** fill state
-> (v0.2.20) and the two opt-in refill channels (v0.2.21) followed. **Full implementation record:
+> (v0.2.20), the two opt-in refill channels (v0.2.21), and the standard SHIFT+right-click ground set-down
+> gesture (v0.2.37) followed. **Full implementation record:
 > `SESSION_15.md` + `SESSION_16.md`.** The body below is the original design discussion, kept as the rationale
 > record.
 >

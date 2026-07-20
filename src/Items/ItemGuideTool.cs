@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
@@ -183,6 +184,79 @@ namespace Layout.Items
         private GuideToolController Controller =>
             api?.ModLoader?.GetModSystem<LayoutModSystem>()?.Controller;
 
+        /// <summary>
+        /// Native held-item prompts for every shape modifier. The controller refreshes these rows when the
+        /// placement stage changes. Inherited help (notably GroundStorable's set-down note) is included only
+        /// for the engine's normal item-selection composition, never for those stage-triggered refreshes.
+        /// </summary>
+        public override WorldInteraction[] GetHeldInteractionHelp(ItemSlot inSlot)
+        {
+            var interactions = new List<WorldInteraction>
+            {
+                ModifierInteraction(ShapeModifierHelp.CtrlCardinal, "ctrl",
+                    "heldhelp-layout-cardinal"),
+                ModifierInteraction(ShapeModifierHelp.ShiftVertical, "shift",
+                    "heldhelp-layout-vertical"),
+                ModifierInteraction(ShapeModifierHelp.ShiftCenterApex, "shift",
+                    "heldhelp-layout-centerapex"),
+                ModifierInteraction(ShapeModifierHelp.ShiftInvert, "shift",
+                    "heldhelp-layout-invert"),
+                ModifierInteraction(ShapeModifierHelp.CtrlCloseRim, "ctrl",
+                    "heldhelp-layout-closerim"),
+                ModifierInteraction(ShapeModifierHelp.ShiftRestore, "shift",
+                    "heldhelp-layout-restore"),
+                ModifierInteraction(ShapeModifierHelp.ShiftFlatSide, "shift",
+                    "heldhelp-layout-flatside"),
+                ModifierInteraction(ShapeModifierHelp.CtrlShiftDiagonal, new[] { "ctrl", "shift" },
+                    "heldhelp-layout-diagonal"),
+                ModifierInteraction(ShapeModifierHelp.ShiftAllowFlare, "shift",
+                    "heldhelp-layout-flare")
+            };
+
+            WorldInteraction[] inherited = Controller?.SuppressStandardHeldHelp == true
+                ? null : base.GetHeldInteractionHelp(inSlot);
+            if (inherited != null)
+            {
+                foreach (WorldInteraction interaction in inherited)
+                {
+                    InteractionMatcherDelegate inheritedPredicate = interaction.ShouldApply;
+                    var idleInteraction = new WorldInteraction
+                    {
+                        MouseButton = interaction.MouseButton,
+                        HotKeyCode = interaction.HotKeyCode,
+                        HotKeyCodes = interaction.HotKeyCodes,
+                        ActionLangCode = interaction.ActionLangCode,
+                        JsonItemStacks = interaction.JsonItemStacks,
+                        Itemstacks = interaction.Itemstacks,
+                        RequireFreeHand = interaction.RequireFreeHand,
+                        GetMatchingStacks = interaction.GetMatchingStacks,
+                        ShouldApply = (wi, block, entity) => (Controller?.IsIdle ?? true)
+                            && (inheritedPredicate == null || inheritedPredicate(wi, block, entity))
+                    };
+                    interactions.Add(idleInteraction);
+                }
+            }
+            return interactions.ToArray();
+        }
+
+        private WorldInteraction ModifierInteraction(ShapeModifierHelp flag, string hotKey, string langCode) =>
+            new WorldInteraction
+            {
+                MouseButton = EnumMouseButton.Left,
+                HotKeyCode = hotKey,
+                ActionLangCode = "layout:" + langCode,
+                ShouldApply = (_, _, _) => (Controller?.ModifierHelp & flag) != 0
+            };
+
+        private WorldInteraction ModifierInteraction(ShapeModifierHelp flag, string[] hotKeys, string langCode) =>
+            new WorldInteraction
+            {
+                MouseButton = EnumMouseButton.Left,
+                HotKeyCodes = hotKeys,
+                ActionLangCode = "layout:" + langCode,
+                ShouldApply = (_, _, _) => (Controller?.ModifierHelp & flag) != 0
+            };
+
         /// <summary>Left-click: suppress the vanilla attack/break and route to the mode's primary action.</summary>
         public override void OnHeldAttackStart(
             ItemSlot slot, EntityAgent byEntity, BlockSelection blockSel, EntitySelection entitySel,
@@ -202,7 +276,7 @@ namespace Layout.Items
             ItemSlot slot, EntityAgent byEntity, BlockSelection blockSel, EntitySelection entitySel,
             bool firstEvent, ref EnumHandHandling handling)
         {
-            // CTRL+SHIFT+right-click on a block, while the tool is idle: set the kit down as ground storage.
+            // SHIFT+right-click on a block, while the tool is idle: set the kit down as ground storage.
             // Delegate to the base collectible so the GroundStorable behavior (declared in guidetool.json)
             // handles placement, instead of suppressing the click and running the tool's secondary action.
             if (blockSel != null && IsGroundStoreGesture(byEntity))
@@ -219,7 +293,7 @@ namespace Layout.Items
         }
 
         /// <summary>
-        /// The ground-storage set-down gesture: CTRL + SHIFT both held. Read from <c>byEntity.Controls</c>
+        /// The ground-storage set-down gesture: SHIFT held. Read from <c>byEntity.Controls</c>
         /// (the SAME source the vanilla <c>GroundStorable</c> behavior checks — its <c>Interact</c> bails
         /// unless <c>Controls.ShiftKey</c> is set), so that whenever this gate passes, the behavior's own
         /// modifier check passes too. Reading the raw keyboard instead can diverge from these separable
@@ -230,7 +304,7 @@ namespace Layout.Items
         private bool IsGroundStoreGesture(EntityAgent byEntity)
         {
             EntityControls c = byEntity?.Controls;
-            if (c == null || !c.ShiftKey || !c.CtrlKey) return false;
+            if (c == null || !c.ShiftKey) return false;
             if (api is ICoreClientAPI) return Controller?.IsIdle ?? true;
             return true;   // server: modifier check only; trust the client's idle gate
         }

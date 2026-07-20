@@ -1,10 +1,29 @@
 # Layout — Architecture Changelog (document-version history)
 
 > **Split out of `ARCHITECTURE.md` to keep the orientation read cheap.** These are the per-revision deltas
-> for the architecture document itself, v2.5 → v3.6. **Nothing here is unique:** each delta is already folded
+> for the architecture document itself, v2.5 → v3.7. **Nothing here is unique:** each delta is already folded
 > in place into `ARCHITECTURE.md`'s body (Settled Decisions Register, file tree, module map, persistence,
 > edge cases), and each has a fuller narrative in its `SESSION_*.md` record. Kept as the audit trail — read
 > it when you need to know *when* something changed, not *what* the current state is.
+
+---
+
+## Changelog — v3.6 → v3.7 (polygonal volumes + modifier interaction, v0.2.36 → v0.2.47; full record in `SESSION_20.md`)
+
+- **Lock precision (0.2.36):** closed B-S9-1. The first rendered voxel hit owns a lock click; an existing
+  control point wins only on its own nearest visible marker cell, so adjacent body voxels no longer snap
+  back to a formerly locked point.
+- **User-facing cleanup (0.2.37–v0.2.38):** Chalking Kit set-down is SHIFT+right-click; private cleanup is
+  `.layout dispel all|<radius>` with no redundant `client` prefix.
+- **Polygonal volumes (0.2.38, protocol 8):** appended Polygonal Prism and Tapered Polygonal Prism, reusing
+  the Polygon side-count setting and adding full public/private, cap, edit, dust, GUI, and icon support.
+- **Stage-aware modifiers/help (0.2.39–v0.2.43):** Line SHIFT-vertical, CTRL tapered-rim closure, and native
+  held-item notes that refresh only where applicable without replaying the ground-storage hint.
+- **Orientation/diagonal/rim safety (0.2.45, DataVersion/protocol 9):** persisted SHIFT flat-side alignment
+  for all polygon families; CTRL+SHIFT 45-degree Line/Free-Shape diagonals; tapered rims capped to the base
+  radius unless SHIFT deliberately allows flare.
+- **GUI finish (0.2.47):** Create header is `Create Mode` plus the normal-size right-aligned shape name;
+  the unsuccessful v0.2.46 adaptive-shrink experiment was reverted.
 
 ---
 

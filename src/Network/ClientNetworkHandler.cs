@@ -4,6 +4,7 @@ using Vintagestory.API.Client;
 using Vintagestory.API.MathTools;
 using Layout.Client;
 using Layout.Guide;
+using Layout.Shapes;
 using Layout.Systems;
 
 namespace Layout.Network
@@ -496,8 +497,13 @@ namespace Layout.Network
         private void OnSetSides(GuideSetSidesPacket p)
         {
             if (!_guides.TryGetValue(p.GuideId(), out GuideData g)) return;
+            bool taperedPrism = g.ShapeType == GuideShapeType.TaperedPolygonalPrism;
+            if (g.ShapeType == GuideShapeType.PolygonalPrism || taperedPrism)
+                PolygonalPrismShape.ReseatForSideChange(
+                    g.ControlPoints, g.ShapePlaneAxis, g.Sides, p.Sides, taperedPrism,
+                    g.FlatSideAligned);
             g.Sides = p.Sides;
-            GuideAddedOrUpdated?.Invoke(g);   // the polygon re-derives its outline on the rebuild
+            GuideAddedOrUpdated?.Invoke(g);   // polygon geometry re-derives on the rebuild
         }
 
         // ==========================================================================================
@@ -544,14 +550,15 @@ namespace Layout.Network
             ShapeConstraint constraint = ShapeConstraint.None,
             PlaneAxis shapePlaneAxis = PlaneAxis.Y,
             bool inverted = false, int sides = 0, Vec3d apex = null,
-            IReadOnlyList<Vec3d> chain = null, bool closed = false, Vec3d rim = null)
+            IReadOnlyList<Vec3d> chain = null, bool closed = false, Vec3d rim = null,
+            bool flatSideAligned = false)
         {
             bool localMutation = AuthorityMode == ClientAuthorityMode.Local && _local != null;
             _lastMutationWasLocal = localMutation;
             if (localMutation)
             {
                 GuideData created = _local.Create(start, end, settings, shapeType, constraint,
-                    shapePlaneAxis, inverted, sides, apex, chain, closed, rim);
+                    shapePlaneAxis, inverted, sides, apex, chain, closed, rim, flatSideAligned);
 
                 // F5: PRIVATE placement on a Layout server still spends chalk — private is private, not
                 // free. The server owns the inventory but cannot see private guides, so the honest client
@@ -580,7 +587,7 @@ namespace Layout.Network
                 Vec3Dto.From(start), Vec3Dto.From(end), RenderSettingsDto.From(settings),
                 (int)shapeType, (int)constraint, (int)shapePlaneAxis,
                 inverted, sides, apex == null ? null : Vec3Dto.From(apex),
-                chainDto, closed, rim == null ? null : Vec3Dto.From(rim)));
+                chainDto, closed, rim == null ? null : Vec3Dto.From(rim), flatSideAligned));
         }
 
         /// <summary>

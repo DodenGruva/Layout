@@ -1,7 +1,7 @@
-# Layout — Architecture Document (v3.6)
+# Layout — Architecture Document (v3.7)
 
-**Supersedes v3.5 — tapered-cylinder stabilization, adaptive draft work, and placement dust
-(v0.2.29–v0.2.35).** v2.5 consolidated five
+**Supersedes v3.6 — precise adjacent locks, polygonal volumes, and stage-aware placement modifiers
+(v0.2.36–v0.2.47).** v2.5 consolidated five
 revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
 catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
 surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
@@ -31,20 +31,24 @@ and publication readiness — authorship, **all-1.22.x** targeting, and portable
 the Tapered Cylinder delta (v0.2.24–v0.2.28); v3.6 removes its fixed scan ceiling when server caps are
 raised/unlimited, stabilizes the height→rim transition with release-and-annulus capture, adds voxel-count-aware
 throttling for expensive draft work, and expands placement feedback with capped zero-gravity dust across 2D
-curves and full 3D shells.** The register, file tree, module map, persistence, and edge cases below are
-updated in place to the v0.2.35 / DataVersion 8 / protocol-7 / 69-file state; the per-revision deltas live
+curves and full 3D shells. **v3.7 closes B-S9-1 through exact rendered-cell ownership, adds straight and
+tapered Polygonal Prisms, simplifies the private dispel and ground-storage gestures, introduces stage-aware
+native modifier notes, persists polygon flat-side alignment, adds 45-degree Line/Free-Shape constraints, and
+makes tapered-rim flare opt-in.** The register, file tree, module map, persistence, and edge cases below are
+updated in place to the v0.2.47 / DataVersion 9 / protocol-9 / 70-file state; the per-revision deltas live
 in **`CHANGELOG_ARCHITECTURE.md`** (indexed below).
 
-**Where the project stands:** Layout **v0.2.35** is built, packaged, playtested, and pushed on `main`
+**Where the project stands:** Layout **v0.2.47** is built, packaged, documented, and pushed on `main`
 (the `ClientOnlyFallback` branch merged via PR #1).
 All seven modules, the complete 2D/3D catalog, normal public multiplayer, vanilla-server local
 fallback, mixed public/private operation, and the full F5 chalk system run against **VS 1.22.x** / .NET 10.
-The catalog is **13 shape types / 19 picker tiles**, **DataVersion 8**, **protocol 7**, and **69 source
+The catalog is **15 shape types / 21 picker tiles**, **DataVersion 9**, **protocol 9**, and **70 source
 files**. F4 and F5 are feature-complete. The large-guide **mesh pass Stage A (exposed-face meshing) has
 shipped** and **filled 3D volumes are retired**, so a ~100-block hollow Sphere now draws only its shell skin.
-The Session-16 backlog is fully delivered. Public/private multiplayer passed the v0.2.35 release test, and
-fired-jug/raw-jug crafting is confirmed. Remaining: mesh Stage B (spatial chunks + culling) **only if Stage
-A proves insufficient**, and the narrowed B-S9-1 adjacent-lock targeting residual. Two items carry
+The Session-16 backlog is fully delivered. Public/private multiplayer passed the v0.2.35 release test,
+fired-jug/raw-jug crafting is confirmed, and B-S9-1 closed with a human-approved v0.2.36 playtest. Remaining:
+ordinary v0.2.47 field soak and mesh Stage B (spatial chunks + culling) **only if Stage A proves insufficient**.
+Two items carry
 verification debt — the chalk ceiling has not been tested against xskills itself, and 1.22.0 support is
 declared but untested. See `TODO.md` and `SESSION_17.md`.
 
@@ -74,7 +78,7 @@ declared but untested. See `TODO.md` and `SESSION_17.md`.
 > player setting, not server policy as of v0.2.22). **Private placements on a
 > Layout server charge too** via the client-reported, server-validated `ChalkChargePacket`; the only chalk-free
 > case is a server without Layout, where no custom item can exist. Creative exempt; `enableChalkDurability`
-> server config. Ground storage: CTRL+SHIFT+right-click set-down, idle-gated. Placement feedback keeps the
+> server config. Ground storage: SHIFT+right-click set-down, idle-gated. Placement feedback keeps the
 > falling whole-guide chalk flecks and bow-release snap, plus capped zero-gravity dust: broad sideways scatter
 > along 2D curves and outward/upward drift distributed across full 3D shells.
 > `PLAN_CHALKING_KIT.md` carries the design rationale and plan-vs-shipped deltas; `SESSION_15.md` +
@@ -84,13 +88,14 @@ declared but untested. See `TODO.md` and `SESSION_17.md`.
 
 ## Document changelog — index
 
-Per-revision deltas for THIS document (v2.5 → v3.3) now live in **`CHANGELOG_ARCHITECTURE.md`**. They are
+Per-revision deltas for THIS document (v2.5 → v3.7) now live in **`CHANGELOG_ARCHITECTURE.md`**. They are
 not repeated here: every delta is already folded in place into the register / file tree / module map /
 persistence / edge cases below, and each has a fuller narrative in its session record. Use this table to find
 *when* something changed; read the body below for *what is true now*.
 
 | Doc rev | Mod versions | Theme | Session record |
 |---|---|---|---|
+| v3.7 | v0.2.36 → v0.2.47 | Precise locks; polygonal volumes; stage-aware help; flat/diagonal/rim modifiers | `SESSION_20.md` |
 | v3.6 | v0.2.29 → v0.2.35 | Unlimited-cap tapered-cylinder semantics; safe rim capture; adaptive draft work; full-shape dust | `SESSION_19.md` |
 | v3.5 | v0.2.24 → v0.2.28 | Tapered Cylinder (4-click frustum, protocol 7); scan-guard and cap-clamp fixes; raw-vessel recipe fix | `SESSION_18.md` |
 | v3.4 | v0.2.22 → v0.2.23 | Refill config → client (protocol 6), hard 32-chalk ceiling, publication readiness | `SESSION_17.md` |
@@ -119,16 +124,17 @@ blocks underneath.
 The tool is a held item with an F-key **tile menu** (Create/Edit/Delete mode, the shape picker, voxel scale
 1×1×1–16×16×16 defaulting to the finest to match chisel resolution, projection, plane, fill); all interaction
 uses first-person clicks and crosshair targeting rather than transform gizmos. The **shape catalog** is
-**13 shape types shown as 19 picker tiles**, split into a **2D section** — arch · half-circle · circle ·
+**15 shape types shown as 21 picker tiles**, split into a **2D section** — arch · half-circle · circle ·
 ellipse · line · triangle (+ right/equilateral/isosceles) · rectangle (+ square) · polygon (regular N-gon) ·
 Free-Shape (irregular polyline) — and a **3D VOLUME section** — sphere · dome · cylinder · tapered
-cylinder · cone · box. It is
+cylinder · polygonal prism · tapered polygonal prism · cone · box. It is
 built on the **primitives+constraints** model (a half-circle is an arch under a SemiCircle constraint, a
 circle is an ellipse under a Circle constraint, a square is a rectangle under a Square constraint, and the
 triangle constraints derive the apex); constrained variants are **not** separate types. **Most shapes place
 with a two-click gesture**, with the deliberately reopened exceptions: the free/right/isosceles triangles and
-the 3D cylinder/cone/box take **three clicks** (base, then a height click), the Tapered Cylinder takes
-**four** (base, height, then a rim click setting the top radius — the only 4-click shape), and the Free-Shape takes
+the 3D cylinder/polygonal prism/cone/box take **three clicks** (base, then a height click), the Tapered
+Cylinder and Tapered Polygonal Prism take **four** (base, height, then a rim click setting the top radius),
+and the Free-Shape takes
 **unbounded chained clicks** (≤64). Players reshape 2D guides by grabbing points (clicking the body
 inserts-and-grabs in one motion on the arch and Free-Shape families, or grabs the nearest handle on every
 other parametric shape), locking points as constraints, and relying on two standing contracts:
@@ -190,11 +196,12 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 - **CTRL cardinal constraint** (Session 11, human-directed — moved from SHIFT) in two places: drafting the
   second foot (level + cardinal from the first) and re-grabbing an anchor (same snap, referenced to the
   guide's **other** anchor).
-- **SHIFT is context-dependent** (Session 11, human-requested; supersedes "SHIFT = cardinal"): **while
-  drafting**, holding SHIFT inverts the ghost upside-down (arch opens downward; equilateral apex mirrors
-  below the base) and the completing click bakes it — except on a THREE-click triangle's apex stage, where
-  SHIFT **centres the apex on the base** (0.1.15), and on a **Free-Shape chain**, where SHIFT pins the next
-  segment **VERTICAL** off the previous corner (0.1.16; CTRL stays horizontal, SHIFT wins if both);
+- **SHIFT is context-dependent** (Session 11 + Session 20, human-requested; supersedes "SHIFT = cardinal"):
+  while drafting, it inverts applicable two-click shapes; centres a three-click triangle apex; constrains a
+  Line/Free-Shape segment vertically; aligns a flat side on polygon families; and deliberately permits a
+  tapered rim to flare past its base. **CTRL+SHIFT** makes a 45-degree Line/Free-Shape diagonal, while CTRL
+  alone stays horizontal/cardinal and closes a tapered rim to a point. Stage-aware native held-help rows make
+  the active meaning visible;
   **on a placed guide**, SHIFT+left-click **springs it
   back to its as-placed form** (points + constraint restored from the creation snapshot, one undo step).
   Prerequisite delivered with it: **every shape defaults "up"** regardless of click order (`ShapeGeometry`'s
@@ -207,7 +214,8 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 
 ### Data & wire
 - **Pinned, append-only enums** everywhere a value crosses wire or disk; **default-driven migration** via
-  `DataVersion` (currently **8**: v8 added passive `ControlPoint.IsLockMarker`; v7 added `IsClosed`
+  `DataVersion` (currently **9**: v9 added polygon `FlatSideAligned`; v8 added passive
+  `ControlPoint.IsLockMarker`; v7 added `IsClosed`
   (Free-Shape loop flag); v6 added `Sides` + the
   as-placed spring-back snapshot (`OriginalControlPoints`/`OriginalConstraint` — persisted, never wired);
   v5 added `Divisions`; v4 added `Constraint`, `ShapePlaneAxis`; v3 added `CreatorUid`; v2 added
@@ -220,7 +228,8 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   outside the network handler is the drag preview (plus its Session-8 sibling, the local constraint-clear).
 - **Voxel cells are 1/16-block, lower-corner, `Floor(world·16/scale)·scale`** — one quantise convention
   everywhere (`VoxelMarch` mirrors `CatmullRomSpline.Quantize` exactly), or caps and visuals disagree.
-- **The server builds shapes** from two clicks + settings (client never sends full GuideData); **tool state
+- **The authority builds shapes** from two/three/four clicks + settings (client never sends full GuideData);
+  **tool state
   is client-side** and travels with operations; `CreatorUid` is bookkeeping, never ownership, never wired.
 - **Voxels are never stored** — always derived on demand from control points.
 
@@ -362,7 +371,7 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   broadcast, and reset the running total.
 - **F4 commands:** `/layout private` asks an allowing Layout server to make new guides local;
   `/layout public` returns new placement to server authority; `/layout client push all` publishes up to 100
-  local guides after privilege/cap validation. `.layout client dispel all|<chunk radius>` is intentionally a
+  local guides after privilege/cap validation. `.layout dispel all|<chunk radius>` is intentionally a
   client command and deletes only private guides. Push is a committed ownership transfer and is not inserted
   into server undo history.
 - **Client `layout-client.json`:** remembers scale / projection / fill / **shape + constraint** (validated
@@ -387,7 +396,8 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   native N×N-grid scheme, N = voxel count** (16× = one solid block). **Divisions = a native number input**
   (wheel ±1, spinners, typed, floored at 0, clamped to `MaxDivisions`) — the one non-icon control. F-modal
   press-to-open, not the vanilla radial. Draft settings are **live** — mid-draft changes apply to the ghost
-  and the completed guide.
+  and the completed guide. The Create header is simply **`Create Mode` + a normal-size right-aligned shape
+  name** (v0.2.47); the redundant `- Next guide:` phrase and the rejected adaptive font shrink are gone.
 - **Hotkeys are rebindable and gate-aware** (Ctrl+Z/Y never hijack other UIs). On Layout servers the real
   guide tool is required in public and private placement modes. On servers without Layout, any vanilla
   Hammer variant/durability in the offhand + Flax Twine in the main hand substitutes for it; F opens the
@@ -397,6 +407,9 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   **32-chalk durability** (F5 — see the ▶ IMPLEMENTED callout up top for the full contract). The vanilla
   Hammer + Flax Twine fallback gate cannot carry custom durability, so a server WITHOUT Layout is the one
   chalk-free mode — physically unenforceable there, by accepted design.
+- **Held-item interaction notes are native and stage-aware (v0.2.39–v0.2.45):** Layout recomposes the
+  active-slot help when the draft stage changes, exposing only applicable CTRL/SHIFT meanings. Internal
+  refreshes suppress the inherited ground-storage note, which appears only on a real item swap.
 - **Runtime is .NET 10** (VS 1.22); `Entity.SidedPos` is obsolete — use `Pos`.
 
 ---
@@ -412,8 +425,8 @@ Layout/
 │       │   ├── guidetool.json            [Chalking Kit: durability 32, GroundStorable, chalkbag-full shape]
 │       │   └── chalkingpowder.json       [S15: the refill item; powdered-sulfur look, Messy12 storable]
 │       ├── recipes/grid/                 [guidetool (8-powder kit craft) + chalkingpowder (dye mixes)]
-│       ├── shapes/tools/                 [chalkbag-{full,medium,low,empty}.json — the 4 fill states]
-│       ├── textures/                     [20 per-state kit textures + sulfur + white]
+│       ├── shapes/tools/                 [chalkbag-{full,high,medium,low,empty}.json — the 5 fill states]
+│       ├── textures/                     [per-state kit textures + sulfur + white]
 │       └── lang/
 │           └── en.json
 └── src/
@@ -422,10 +435,10 @@ Layout/
     │   ├── ItemGuideTool.cs              [S15: + chalk helpers, fill-state OnBeforeRender, IContainedMeshSource, ground-store gesture]
     │   └── ItemChalkingPowder.cs         [S15: tap/hold refill — hotbar or ground-stored kit in place]
     ├── Guide/                            [pure data]
-    │   ├── GuideData.cs                  [DataVersion 8; + Sides, IsClosed, Original{ControlPoints,Constraint}]
+    │   ├── GuideData.cs                  [DataVersion 9; + FlatSideAligned, Sides, IsClosed, Original{ControlPoints,Constraint}]
     │   ├── ControlPoint.cs               [+ IsLockMarker: passive, non-deforming Arch lock]
     │   ├── VoxelPosition.cs              [VoxelRenderType: … Grabbed, Division (magenta, S9)]
-    │   ├── GuideShapeType.cs             [Arch, Ellipse, Line, Triangle, Rectangle, Polygon, FreeShape, Sphere, Dome, Cylinder, Cone, Box; + GuideShapeTypes.IsVolume]
+    │   ├── GuideShapeType.cs             [15 pinned types through PolygonalPrism/TaperedPolygonalPrism; + IsVolume/UsesSides]
     │   ├── ShapeConstraint.cs            [None, SemiCircle, Circle, Right, Equilateral, Isosceles, Square]
     │   ├── ProjectionMode.cs
     │   ├── ProjectionPlane.cs
@@ -444,6 +457,8 @@ Layout/
     │   ├── DomeShape.cs                  [3D (0.1.21; S14 exact shell + half-space clip)]
     │   ├── SphericalShellScan.cs         [S14: shared surface-area-oriented hollow Sphere/Dome scan]
     │   ├── CylinderShape.cs              [3D (0.1.21): centre-banded lateral shell; 3-click]
+    │   ├── TaperedCylinderShape.cs       [3D (0.2.24): independent top radius; 4-click]
+    │   ├── PolygonalPrismShape.cs        [3D (0.2.38): straight/tapered regular-polygon volumes]
     │   ├── ConeShape.cs                  [3D (0.1.21): centre-banded sloped shell; 3-click]
     │   ├── BoxShape.cs                   [3D (0.1.21): independent side lengths; exact shell; 3-click]
     │   ├── ShapeGeometry.cs              [S9: shared planar frame + nearest-claim marker; S11 BaseNormal deterministic up-axis]
@@ -459,7 +474,7 @@ Layout/
     │   ├── UndoManager.cs
     │   ├── GuideRenderer.cs
     │   ├── GuideMeshBuilder.cs
-    │   └── ChalkEffects.cs               [S15: chalk-puff particles + the bow-release placement snap]
+    │   └── ChalkEffects.cs               [S15/S19/S20: falling flecks, shell dust, placement snap]
     ├── Network/
     │   ├── PacketTypes.cs
     │   ├── ServerNetworkHandler.cs
@@ -497,13 +512,13 @@ Layout/
             └── BreakConstraintCommand.cs
 ```
 
-**69 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
+**70 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
 ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 in Session 10: LayoutToolIcons; + 4 in Session 11:
 PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 for the 3D family (v0.1.20–0.1.21):
 SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape; + 5 for F4: ClientAuthorityMode,
 ClientToolGate, ClientWorldGuidePersistence, LocalGuideAuthority, GuideManagerDependencies; + 1 in Session 13:
 RemoveLockMarkerCommand; + 1 in Session 14: SphericalShellScan; + 2 in Session 15: ItemChalkingPowder,
-ChalkEffects). Namespaces match
+ChalkEffects; + 1 in Session 20: PolygonalPrismShape). Namespaces match
 folders: `Layout`, `Layout.Guide`, `Layout.Shapes`, `Layout.Systems`,
 `Layout.Network`, `Layout.UI`, `Layout.Config`, `Layout.Items`, `Layout.Client`, `Layout.Undo`,
 `Layout.Undo.Commands`. (`UndoManager` is the one file whose folder differs from its namespace: it lives in
@@ -530,9 +545,10 @@ GuideData {
     ProjectionPlane   Plane             // the Surface PROJECTION plane (≠ ShapePlaneAxis)
     bool              IsFilled          // hollow vs filled (Tier 2, built)
     string            CreatorUid        // nullable; bookkeeping only, never ownership, never wired
-    int               DataVersion       // 8 (const CurrentDataVersion); older saves migrate by defaults
+    int               DataVersion       // 9 (const CurrentDataVersion); older saves migrate by defaults
     int               Divisions          // Session 9: visual equal-parts count (0/1 = none)
     int               Sides              // Session 11: polygon side count (3–24; 0 on other shapes)
+    bool              FlatSideAligned    // Session 20: polygon edge-facing orientation; false preserves old guides
     bool              IsClosed           // Session 11 (0.1.15): Free-Shape loop flag (false elsewhere)
     List<ControlPoint> OriginalControlPoints  // Session 11: as-placed snapshot for SHIFT spring-back
     ShapeConstraint   OriginalConstraint     //   (persisted, NEVER wired; null on pre-0.1.14 guides)
@@ -725,7 +741,7 @@ ints, Guids as 16 bytes, positions as three doubles, full point lists verbatim (
 | Packet | Direction | Contents |
 |---|---|---|
 | `GuideBulkSyncPacket` | S→C | All guides + active caps + lock states + draft anchors, on join. (Fields 6–7 carried the server's refill-channel policy in 0.2.21; **dead since v0.2.22**, retained unwritten as append-only padding) |
-| `GuideCreateRequestPacket` | C→S | Two points + settings + **shape + constraint + plane axis** |
+| `GuideCreateRequestPacket` | C→S | Base points + settings + **shape/constraint/plane, sides, optional apex/chain/rim, and flat-side alignment** |
 | `GuideCreatePacket` | S→C | Full `GuideData` (also the generic full-state broadcast) |
 | `GuideUpdatePacket` | S→C, C→S | Guide ID + edit array (client sends its one; server broadcasts the composed batch incl. soft-flow edits) |
 | `GuideInsertPointPacket` | S→C, C→S | Guide ID + index + position (+ `Locked` for lock-in-place) |
@@ -762,7 +778,7 @@ a row of exclusive SQUARE ICON tiles (42 px; hover names the option, auto-sized 
 mode. **Create:** tool defaults for the next guide — the Mode row's far-right **Current Shape chip
 (0.1.15: always lit, guide-body yellow, hover names the pick — visible even when the selection isn't on a
 slot)** · Shape (**0.1.15: FOUR hard-kept pinned slots + a ▾
-expand tile that unfolds the full 18-shape catalog — split into a **2D section and a 3D section** under
+expand tile that unfolds the full 21-tile catalog — split into a **2D section and a 3D section** under
 their own separators with centred "2D"/"3D" labels (0.1.22–0.1.23); pins shown as YELLOW glyphs (0.1.17);
 right-click pins/unpins (never evicts; message when full); the catalog STAYS OPEN after a pick (0.1.23) —
 only the ▾/▴ collapses it; selecting a shape never collapses; empty slots show faint placeholders; pins
@@ -780,7 +796,7 @@ back on clamp, and tolerates transient under-min typing in the Sides field). Rem
 selected guide relight the (shared-key) tiles in place; row-set changes defer a recompose (never per-frame).
 
 **`LayoutToolIcons.cs`** (Session 10) — every GUI glyph, drawn with Cairo and registered once (client start)
-in `capi.Gui.Icons.CustomIcons`: the 13 shape glyphs (the arch is an open elliptical dome — the true
+in `capi.Gui.Icons.CustomIcons`: the 15 shape glyphs (the arch is an open elliptical dome — the true
 Catmull-Rom silhouette; the polygon a point-up pentagon; the Free-Shape an irregular dotted-corner
 outline), the picker's expand chevrons (▾/▴), the empty-slot placeholder, and (0.1.15) per-shape
 **"-star"** (★-badged pinned catalog tiles) and **"-current"** (fixed guide-body-yellow, for the Current
@@ -829,21 +845,23 @@ block target.** Guide targeting tests real control points (precise, `max(0.10, v
 override available); the first click of any draft also fixes the ellipse family's **intrinsic** plane.
 Guides are referenced off blocks only at placement — never bound; removing the block changes nothing.
 
-### Creating a guide (two clicks; free/right/isosceles triangles take three)
+### Creating a guide (two to four clicks; Free-Shape chains)
 1. Pick the shape on the F-menu tiles (or keep the remembered default). **First click:** draft starts,
    plane axis captured, `DraftStartPacket` → others see an anchor dot; the acting player gets the live ghost
    (full placed-guide pipeline: colors, scale, Surface slabs, far-foot Blue/Indigo, the picked shape).
-2. Settings changed mid-draft apply live to the ghost. **CTRL** snaps the aimed foot level-and-cardinal
-   (Session 11 — moved from SHIFT); **SHIFT** live-inverts the ghost upside-down (arch family +
-   equilateral).
+2. Settings changed mid-draft apply live to the ghost. **CTRL** snaps level/cardinal; **SHIFT** performs the
+   current stage's invert/vertical/flat-side/flare action; **CTRL+SHIFT** gives a 45-degree Line/Free-Shape
+   diagonal. The live held-help rows state the applicable meaning.
 3. **Completing click:** client cap pre-check (factory shape, filled-aware) → `GuideCreateRequestPacket`
-   (points + settings + shape/constraint/plane + Session-11 inverted/sides/apex) → server builds via the
+   (base + settings + shape/constraint/plane + inverted/sides/apex/chain/rim/flat-side fields) → server builds via the
    factory, stores (stamping the as-placed spring-back snapshot), records `CreateGuideCommand`, broadcasts
    full state. **Three-click triangles:** the second click stores the base's far end (client-side only);
    the ghost's apex then tracks the crosshair — **SHIFT centres it on the base (0.1.15)** — and the THIRD
    click completes. **Free-Shape (0.1.15):** every click chains a corner (CTRL snaps relative to the
    PREVIOUS corner); clicking the LAST corner finishes open, the FIRST (≥3) closes the loop; the full
-   chain + closed flag cross in the create request. Right-click steps any multi-click draft back one click
+   chain + closed flag cross in the create request. Cylinder/Polygonal Prism/Cone/Box use a third height
+   click; Tapered Cylinder/Tapered Polygonal Prism add a fourth rim-radius click. A tapered rim cannot exceed
+   its base radius unless SHIFT is held; CTRL closes it to a point. Right-click steps any multi-click draft back one click
    (chains retract a corner, triangles the base end; otherwise the draft is discarded).
 
 ### Grabbing and reshaping (Create mode)
@@ -861,9 +879,9 @@ Guides are referenced off blocks only at placement — never bound; removing the
 3. **Release (left-click):** one `MoveControlPointCommand` per moved point (origin → final), lock freed.
    **Right-click instead:** cancel — origins restored server-side, an insert-born point removed entirely.
    Tool swap mid-drag = comatose (suspend, resume on re-equip).
-4. **Idle right-click:** on a point → lock toggle; on an arch-family body → **lock-in-place insert** (a
-   point born locked exactly ON the curve; two undo steps); on an ellipse-family body → nearest-handle lock
-   toggle.
+4. **Idle right-click:** the first rendered voxel hit is authoritative. A point toggles only when that voxel
+   is its nearest visible marker cell; an adjacent arch/Free-Shape body voxel receives its own passive lock
+   marker (B-S9-1 closed in v0.2.36). Other parametric bodies map to the nearest meaningful handle.
 
 ### Editing a placed guide (Edit mode — Session 10)
 Switch the Mode row to **Edit**, then **left-click a guide to select it** (empty click deselects; select-only
@@ -932,10 +950,11 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
 
 ---
 
-This v3.2 document is the authoritative architecture, consolidated to current state: **Layout v0.2.9 on
-`main`, built and playtested**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
+This v3.7 document is the authoritative architecture, consolidated to current state: **Layout v0.2.47 on
+`main`, built, packaged, documented, and pushed**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
 (+ right/equilateral/isosceles), rectangles (+ square), polygons, and Free-Shapes — plus the **3D volume
-family** (spheres, domes, cylinders, tapered cylinders, cones, boxes) place, preview, reshape, fill, lock/unlock, divide, and
+family** (spheres, domes, cylinders, tapered cylinders, straight/tapered polygonal prisms, cones, boxes)
+place, preview, reshape, fill, lock/unlock, divide, and
 project onto surfaces under server or local authority against VS 1.22.3 / .NET 10, drawn with the
 **Chalking Kit**'s finite, powder-refillable chalk. Status, flagged decisions, and the
 punch-list live in `PROJECT_STATUS.md` and `TODO.md`; the current-state brief for external analysis lives in

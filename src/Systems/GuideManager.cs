@@ -293,7 +293,8 @@ namespace Layout.Systems
             int sides = 0,
             IReadOnlyList<Vec3d> chain = null,
             bool closed = false,
-            Vec3d fourthPoint = null)
+            Vec3d fourthPoint = null,
+            bool flatSideAligned = false)
         {
             if (start == null || end == null) return GuideOperationResult.Invalid();
             if (!GuideData.IsValidVoxelScale(settings.Scale)) return GuideOperationResult.Invalid();
@@ -313,7 +314,7 @@ namespace Layout.Systems
                 return GuideOperationResult.OverGuideCount(null, CountGuidesBy(creatorUid), _maxGuidesPerPlayer);
 
             IGuideShape shape = ShapeFactory.Create(shapeType, constraint, shapePlaneAxis, start, end,
-                inverted, sides, chain, closed);
+                inverted, sides, chain, closed, flatSideAligned);
 
             // Three-click shapes (Session 11 triangle; 0.1.21 cylinder/cone/box): the third click sets the
             // apex/height, stored at control point index 2 — and the four-click Tapered Cylinder's fourth
@@ -331,8 +332,9 @@ namespace Layout.Systems
                 shape.Constraint,               // the shape may have rejected an inapplicable constraint
                 shapePlaneAxis,
                 settings.Divisions,
-                shapeType == GuideShapeType.Polygon ? Shapes.PolygonShape.ClampSides(sides) : 0,
-                shape is Shapes.FreeShape fs && fs.IsClosed);
+                GuideShapeTypes.UsesSides(shapeType) ? Shapes.PolygonShape.ClampSides(sides) : 0,
+                shape is Shapes.FreeShape fs && fs.IsClosed,
+                GuideShapeTypes.UsesSides(shapeType) && flatSideAligned);
             data.CreatorUid = creatorUid;
 
             int count = CountForCaps(data.Id, shape, data.VoxelScale, data.IsFilled);
@@ -665,20 +667,26 @@ namespace Layout.Systems
         }
 
         /// <summary>
-        /// Session 11: sets a polygon guide's side count (re-derives the outline; anchors are untouched).
-        /// Clamped to the polygon's 3..24 range; re-counts and reverts on a cap breach, since more sides
-        /// mean more perimeter voxels. Rejects non-polygon guides.
+        /// Sets a polygon-based guide's side count (re-derives the outline; anchors are untouched).
+        /// Polygonal volumes also re-seat their height/rim handles so odd/even centre changes preserve
+        /// height and taper ratio. Clamped to 3..24; re-counts and reverts on a cap breach.
         /// </summary>
         public GuideOperationResult SetSides(Guid id, int sides)
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
-            if (g.ShapeType != GuideShapeType.Polygon) return GuideOperationResult.Invalid(g);
+            if (!GuideShapeTypes.UsesSides(g.ShapeType)) return GuideOperationResult.Invalid(g);
 
             int oldSides = g.Sides;
             int clamped = Shapes.PolygonShape.ClampSides(sides);
             if (clamped == oldSides)
                 return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var c0) ? c0 : 0);
 
+            List<ControlPoint> oldPoints = SnapshotPoints(g);
+            bool taperedPrism = g.ShapeType == GuideShapeType.TaperedPolygonalPrism;
+            if (g.ShapeType == GuideShapeType.PolygonalPrism || taperedPrism)
+                Shapes.PolygonalPrismShape.ReseatForSideChange(
+                    g.ControlPoints, g.ShapePlaneAxis, oldSides, clamped, taperedPrism,
+                    g.FlatSideAligned);
             g.Sides = clamped;
             IGuideShape shape = ShapeFactory.Adopt(g);          // side count is baked into the shape view
             _shapes[id] = shape;
@@ -687,7 +695,10 @@ namespace Layout.Systems
             if (WouldExceedCaps(id, count, out int cap))
             {
                 g.Sides = oldSides;
+                g.ControlPoints.Clear();
+                foreach (ControlPoint point in oldPoints) g.ControlPoints.Add(point.Clone());
                 _shapes[id] = ShapeFactory.Adopt(g);
+                StoreCount(id, _shapes[id].GetVoxelCount(g.VoxelScale, g.IsFilled));
                 return GuideOperationResult.OverCap(g, count, cap);
             }
 

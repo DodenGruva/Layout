@@ -502,7 +502,8 @@ namespace Layout.Network
 
             GuideOperationResult result = _guides.CreateGuide(
                 start, end, settings, shapeType, constraint, planeAxis, fromPlayer.PlayerUID,
-                p.Apex?.ToVec3d(), p.Inverted, p.Sides, chain, p.Closed, p.Rim?.ToVec3d());
+                p.Apex?.ToVec3d(), p.Inverted, p.Sides, chain, p.Closed, p.Rim?.ToVec3d(),
+                p.FlatSideAligned);
             switch (result.Status)
             {
                 case GuideOpStatus.Success:
@@ -992,20 +993,21 @@ namespace Layout.Network
             IGuideShape shape = _guides.GetShape(id);
             float t = shape != null ? shape.GetNearestT(pos) : 0f;
 
-            // LOCK-IN-PLACE flavour (Session 8): "lock any point of the guide". The point is created ON
-            // the curve (the targeting chord's position would dent the shape), born locked, and the edit
-            // lock we acquired above is released immediately — no grab follows this insert.
+            // LOCK-IN-PLACE flavour (Session 8): "lock any point of the guide". A passive Arch marker keeps
+            // the exact rendered voxel selected—it cannot dent the spline because markers are omitted from
+            // it. Other insert-taking shapes still project onto their mathematical curve.
             if (p.Locked)
             {
                 Vec3d curvePos = shape != null ? shape.GetPointAt(t) : pos;
                 bool marker = gPre != null && gPre.ShapeType == GuideShapeType.Arch;
-                GuideOperationResult ins = _guides.InsertControlPoint(id, t, curvePos, marker);
+                Vec3d insertPos = marker ? pos : curvePos;
+                GuideOperationResult ins = _guides.InsertControlPoint(id, t, insertPos, marker);
                 if (ins.Status == GuideOpStatus.Success)
                 {
                     int idx = ins.ControlPointIndex;
                     _guides.SetPointLocked(id, idx, true);
                     // Two undo steps, honestly: first Ctrl+Z unlocks, second removes the point.
-                    _undo.Record(uid, new InsertControlPointCommand(id, idx, curvePos, marker));
+                    _undo.Record(uid, new InsertControlPointCommand(id, idx, insertPos, marker));
                     _undo.Record(uid, new LockPointCommand(id, idx, false, true));
                     // One full-state broadcast carries the new point AND its locked flag together.
                     if (_guides.TryGetGuide(id, out GuideData withLock))

@@ -1,6 +1,6 @@
 # Layout — Project Status & Handoff
 
-**Checkpoint: Layout v0.2.35, pushed on `main`** (the `ClientOnlyFallback` branch merged via
+**Checkpoint: Layout v0.2.47, pushed on `main`** (the `ClientOnlyFallback` branch merged via
 PR #1). **F4** is
 implemented and playtested: automatic client-only authority on servers without Layout; opt-in private
 overlays on Layout servers; per-world/per-UID client persistence; placement/reshape/settings/undo parity;
@@ -13,12 +13,13 @@ channels are **client-preference** opt-in as of v0.2.22), private placements cha
 ground storage, whole-guide chalk-puff/snap feedback. **The large-guide mesh pass Stage A (exposed-face
 meshing) shipped (v0.2.14–v0.2.16) and filled 3D volumes were retired (v0.2.17).** Targets **all of VS
 1.22.x**; the repo is publication-clean (no personal paths/usernames tracked).
-**DataVersion 8; protocol 7; 69 source files.** Release zips: `..\Layout Zips\` (0.1.10–0.1.27 + 0.2.x).
-**Top tasks: two verification debts — the 32-chalk ceiling vs xskills, and 1.22.0 support (both declared,
-neither live-tested) — plus the narrowed B-S9-1 adjacent-lock targeting bug. Mesh Stage B/C remains deferred
-unless large-guide performance needs it.** Standing rule: ship a zip per code iteration; update docs / commit ONLY on
-the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_19.md`**, `PLAN_CLIENT_ONLY.md`,
-`PLAN_CHALKING_KIT.md`, and `TODO.md`; the authoritative plan is **`ARCHITECTURE.md`** (v3.6).
+**DataVersion 9; protocol 9; 70 source files; 15 shape types / 21 picker tiles.** Release zips:
+`..\Layout Zips\` (0.1.10–0.1.27 + 0.2.x). **Top tasks:** collect v0.2.47 field reports; retain the two
+verification debts (32-chalk ceiling vs xskills, and VS 1.22.0/1.22.1 support); revisit mesh Stage B/C only
+if large-guide performance needs it. **B-S9-1 closed in v0.2.36.** Standing rule: ship a zip per code
+iteration; update docs / commit ONLY on the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_20.md`**,
+`PLAN_CLIENT_ONLY.md`, `PLAN_CHALKING_KIT.md`, and `TODO.md`; the authoritative plan is
+**`ARCHITECTURE.md`** (v3.7).
 
 ---
 
@@ -26,22 +27,24 @@ the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_19.md`**, `PLAN
 
 The doc set (now a Claude Code repo):
 
-1. **`ARCHITECTURE.md`** — the authoritative plan (v3.6); Settled Decisions Register updated through v0.2.35.
-2. **The code** — `src/` (**68 files**: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
+1. **`ARCHITECTURE.md`** — the authoritative plan (v3.7); Settled Decisions Register updated through v0.2.47.
+2. **The code** — `src/` (**70 files**: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
    RectangleShape, ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 Session-10 — LayoutToolIcons;
    + 4 Session-11 — PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 the 3D family
    (v0.1.20–0.1.21) — SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape; + 5 F4 —
    ClientAuthorityMode, ClientToolGate, ClientWorldGuidePersistence, LocalGuideAuthority,
    GuideManagerDependencies; + 1 Session-13 — RemoveLockMarkerCommand; + 1 Session-14 —
    SphericalShellScan; + 2 Session-15 — ItemChalkingPowder, ChalkEffects; Session-16 added no new files —
-   all edits to existing ones plus the High fill-state asset),
+   all edits to existing ones plus the High fill-state asset; + 1 Session-18 — TaperedCylinderShape; + 1
+   Session-20 — PolygonalPrismShape),
    `assets/layout/`, `modinfo.json`, `modicon.png`, `Layout.csproj`, `BUILD_INSTRUCTIONS.txt`.
 3. **`TODO.md`** — the live punch-list (renamed from `OUTSTANDING_ITEMS.md`).
-4. **`SESSION_9.md`** … **`SESSION_17.md`** — standalone records (SESSION_12 runs through v0.1.45;
+4. **`SESSION_9.md`** … **`SESSION_20.md`** — standalone records (SESSION_12 runs through v0.1.45;
    SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 shell/mesh handoff; SESSION_15 is the
    v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc; SESSION_17 is the
    v0.2.22–v0.2.23 seven-item backlog; SESSION_18 is the v0.2.24–v0.2.28 Tapered Cylinder arc;
-   SESSION_19 is the v0.2.29–v0.2.35 stabilization/effects arc).
+   SESSION_19 is the v0.2.29–v0.2.35 stabilization/effects arc; SESSION_20 is the
+   v0.2.36–v0.2.47 polygonal-volume/modifier arc).
 5. **`HANDOFF.md`** (repo root) — the consolidated current-state brief for external AI analysis
    (scope / status / direction / performance characteristics).
 6. **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix.
@@ -137,7 +140,7 @@ The doc set (now a Claude Code repo):
     compact HUD/target readout identifies private work without changing the main GUI.
   - **Persistence and commands:** private guides save per world/server + player UID under
     `Layout/ClientOnlyGuides`, with atomic replace, one backup, and corrupt-file quarantine. Client commands
-    are `.layout client dispel all|<radius>`; `/layout client push all` publishes up to 100 accepted guides
+    are `.layout dispel all|<radius>`; `/layout client push all` publishes up to 100 accepted guides
     as a committed, non-undoable transfer.
   - **Parity and hardening:** local create/edit/delete/locks/constraints/reshape/settings/undo use the same
     side-neutral `GuideManager`; ownership routes existing-guide mutations and last-operation authority
@@ -164,7 +167,8 @@ The doc set (now a Claude Code repo):
     faces included, as one uploaded mesh per guide. Next pass is exposed faces → chunks/culling → greedy
     same-colour merging. Filled Sphere/Dome retain their old guarded cubic path.
 - **Session 15 — the Chalking Kit, F5 (v0.2.0–v0.2.9): playtest-CONFIRMED.** Detail in `SESSION_15.md`.
-  - **Reskin + ground storage (0.2.0–0.2.4):** custom model, item renamed Chalking Kit, CTRL+SHIFT set-down
+  - **Reskin + ground storage (0.2.0–0.2.4; gesture updated in 0.2.37):** custom model, item renamed Chalking Kit,
+    SHIFT+right-click set-down
     (idle-gated; the F4 input hook now steps aside for the gesture — it had made the item's interact hooks
     unreachable).
   - **Durability (0.2.5–0.2.6):** 32 chalk; 2D −1 / 3D −2 on completed placements only; no refunds; NO
@@ -204,13 +208,22 @@ The doc set (now a Claude Code repo):
     install; zero tracked files carry a personal path or username.
   - **⚠️ Verification debt:** the chalk ceiling is untested against xskills itself, and 1.22.0 support is
     declared but never run.
-- **IN REAL PLAY:** save-compatibility matters — DataVersion **8** saves (v8: passive `IsLockMarker`; v7:
+- **Session 18 — Tapered Cylinder (v0.2.24–v0.2.28): DELIVERED.** Four-click frustum; protocol 7 rim field;
+  corrected scan accounting, persistent cap clamp, stable free-air rim aiming, and fired-only jug recipes.
+- **Session 19 — stabilization/effects (v0.2.29–v0.2.35): DELIVERED and playtest-confirmed.** Unlimited-cap
+  tapered scan semantics; release-and-annulus rim capture; adaptive 33→2 Hz draft work; zero-gravity dust
+  across 2D curves and full 3D shells; public/private release check passed.
+- **Session 20 — polygonal volumes/modifiers (v0.2.36–v0.2.47): DELIVERED.** B-S9-1 closed; Chalking Kit
+  set-down is SHIFT+right-click; private cleanup is `.layout dispel`; Polygonal Prism and Tapered Polygonal
+  Prism added; native stage-aware modifier notes; flat-side polygon alignment; 45-degree Line/Free-Shape
+  diagonals; default-safe tapered rims with SHIFT flare; simplified Create header. DataVersion/protocol 9.
+- **IN REAL PLAY:** save-compatibility matters — DataVersion **9** saves (v9: polygon
+  `FlatSideAligned`; v8: passive `IsLockMarker`; v7:
   IsClosed; v6: Sides + the
   never-wired spring-back snapshot); pinned-enum / additive-protobuf / default-migration rules remain in
   force. Session 11's and the 3D family's wire additions are all additive and registered append-only.
-- **ACTIVE FOLLOW-UP:** **B-S9-1 lock-in-place** — exact first-hit targeting and non-deforming placement are
-  implemented, and the broad lock → unlock → relock cycle is much better. The remaining reproduction is
-  locking immediately beside a formerly locked voxel, which can snap back to that old voxel; see `TODO.md`.
+- **CLOSED:** **B-S9-1 lock-in-place.** v0.2.36 assigns a point only its nearest visible rendered marker
+  cell; the adjacent first-hit body voxel receives its own passive marker. Human-confirmed in play.
 
 ---
 
@@ -218,13 +231,13 @@ The doc set (now a Claude Code repo):
 
 | # | Module | Effort | Status |
 |---|--------|--------|--------|
-| 1 | Pure math layer | **Max** | COMPLETE (+ S8 catalog; + S9 line/triangle/rectangle, divisions, slave-flow; + S11 PolygonShape, FreeShape, default-up frames, invertible arches; + 3D volumes; + S14 exact surface-area-oriented hollow Sphere/Dome scanner) |
-| 2 | Data model | Low | COMPLETE (DataVersion **8**: + S11 `Sides`, spring-back snapshot, `IsClosed`; + S13 passive `ControlPoint.IsLockMarker`) |
+| 1 | Pure math layer | **Max** | COMPLETE (+ 2D catalog; + 3D volumes including tapered cylinder and straight/tapered polygonal prisms; + exact hollow Sphere/Dome scanner) |
+| 2 | Data model | Low | COMPLETE (DataVersion **9**: + polygon `FlatSideAligned`; v8 passive `ControlPoint.IsLockMarker`; earlier Sides/snapshot/IsClosed) |
 | 3 | Systems + undo | High | COMPLETE (+ break/bake ops; + S9 `SetDivisionsCommand`; + S11 air-side bake, `SetSides`, `SpringBackCommand`, 3-click draft state; + F4 side-neutral persistence/probe dependencies and local authority; + S13 threshold counting, full drag snapshots, `RemoveLockMarkerCommand`) |
-| 4 | Networking | **Max** | COMPLETE (+ additive fields; + S11 guide settings/create fields; + F4 protocol 2 policy/mode/push packets; + S13 protocol 3 lock-marker field; combined public/private mirror with ownership routing) |
+| 4 | Networking | **Max** | COMPLETE (protocol **9**; combined public/private mirror, chalk packets, tapered rim, polygonal types, flat-side orientation) |
 | 5 | Rendering | High | FUNCTIONAL; **large-guide optimization active** (+ S9 `DivisionMarks.Apply`; + S11 apex-aware ghost, thinner Surface slabs; + F4 ownership palettes; current bottleneck is monolithic full-cube mesh; staged replacement in `SESSION_14.md`) |
-| 6 | UI | Medium | COMPLETE (+ S11 favorites picker + catalog fold-out, Sides row, auto-size tooltips) |
-| 7 | Integration | High | COMPLETE (+ S11 CTRL/SHIFT remap, spring-back gesture, 3-click routing; + F4 authority detection, vanilla-item gate, private persistence, commands, and mixed-mode HUD state) |
+| 6 | UI | Medium | COMPLETE (21-tile catalog, favorites fold-out, stage-aware native help, compact Create header) |
+| 7 | Integration | High | COMPLETE (+ CTRL/SHIFT stage modifiers, 2/3/4-click routing; + F4 authority, private persistence/commands, mixed-mode HUD) |
 
 Namespaces match folders: `Layout`, `Layout.Guide`, `Layout.Shapes`, `Layout.Systems`, `Layout.Network`,
 `Layout.Undo`, `Layout.Undo.Commands`, `Layout.UI`, `Layout.Config`, `Layout.Items`, `Layout.Client`.
@@ -297,40 +310,35 @@ comments, Surface flatten's move to the shape layer).
 **Settled — do not reopen:** everything in `ARCHITECTURE.md`'s Settled Decisions Register, plus the Session-9
 **slave-regime flow** (playtest-confirmed "MUCH better") and the **chord-invariant phantom drop**.
 
-**Active interaction follow-up (not a decision):** **B-S9-1 lock-in-place.** Ray-vs-rendered-voxel first-hit
-picking, complete drag snapshots, full geometry cache fingerprints, and passive non-deforming lock markers
-are implemented. v0.1.52 also removes stale unlocked markers and preserves curve-relative insertion order.
-The latest playtest narrowed the residual: after unlocking a voxel, trying to lock its immediate neighbor can
-select the formerly locked voxel. See `TODO.md` and `SESSION_13.md`.
+**Closed interaction follow-up:** **B-S9-1 lock-in-place.** v0.2.36 made the first rendered voxel hit
+authoritative and limited a point to its nearest visible marker cell. The formerly locked cell can no longer
+claim its immediate neighbor, and the human approved the result in play. See `SESSION_20.md`.
 
 **Flagged for review (cheap to reverse):** Session-10 adds Edit-mode select-only, divisions hover-scroll,
 the scale-icon/tile-proportion calls; Session-9 adds the regime split, triangle's 2-click+born-apex gesture,
 no-break-gesture for Right/Isosceles/Square, rectangle corners as markers, magenta division color, the
 per-keystroke divisions field; Session-8's list still stands. Full list + rationale in `TODO.md`.
 
-**Open — real-play agenda:** fix the adjacent-lock targeting residual; revisit large-guide performance only
-when requested. The v0.2.35 public/private multiplayer release check passed, so broader regression coverage
-can follow field reports rather than block release.
+**Open — real-play agenda:** revisit large-guide performance only when requested and collect field reports on
+the expanded shape/modifier matrix. The v0.2.35 public/private multiplayer release check passed, so broader
+regression coverage can follow field reports rather than block release.
 
 ---
 
 ## 7. Next session — start here
 
-**F4 and F5 are both feature-complete and playtested through v0.2.21, pushed on `main`.** Normal public
-multiplayer behavior is intentionally preserved. Read `SESSION_16.md` for the
-current mesh/polish state, `SESSION_14.md` for the staged mesh plan, and `SESSION_15.md` for the Chalking Kit.
+**The current checkpoint is v0.2.47 on `main`.** Read `SESSION_20.md` for the polygonal-volume and modifier
+arc, `SESSION_19.md` for tapered-cylinder stabilization/effects, and `SESSION_14.md` for the staged mesh plan.
 
-1. **The Session-16 human backlog — 7 items, detailed in `TODO.md` §A.** Client-side refill config; the
-   mid-draft packet-rate audit; a hard 32 chalk ceiling that ignores crafting-quality modifiers; drop the
-   hotbar-refill-off warning; authorship → "Doden"; portable build paths; target all of VS 1.22.x.
+1. **Field-test the v0.2.47 placement matrix.** Focus on Polygonal Prism/Tapered Polygonal Prism, flat-side
+   alignment, diagonal constraints, stage-aware notes, and capped-vs-flared tapered rims.
 2. **Large-guide meshes — Stage B/C, only if Stage A isn't enough.** Stage A (exposed-face meshing) shipped
    and filled volumes are retired. Next is per-guide spatial chunk mesh ownership/disposal and culling, then
    same-colour/orientation greedy merging. Preserve the verified shader, true settled-guide scale, marker
    palettes, and the legacy Surface/slab path. See `SESSION_14.md` §6–§7.
-3. **Fix B-S9-1's adjacent-lock targeting residual.** Reproduce lock → unlock → lock the neighboring voxel;
-   do not reopen the confirmed non-deforming design.
-4. **Release v0.2.35 and collect field reports.** Public/private multiplayer passed the requested test.
-5. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill; broadcasting the whole Free-Shape draft
+3. **Collect field reports.** Public/private multiplayer passed the requested release test and B-S9-1 is
+   playtest-closed; widen regression coverage when a concrete report justifies it.
+4. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill; broadcasting the whole Free-Shape draft
    chain (11q); the F3 re-constrain op. Remaining flagged decisions (11a–11r, 16a–16d) are cosmetic.
 
 ---
@@ -340,6 +348,6 @@ current mesh/polish state, `SESSION_14.md` for the staged mesh plan, and `SESSIO
 The working conventions are in `CLAUDE.md` ("How to work on this project"). In short: the human is not a
 programmer and validates by **playing** the mod and describing feel in plain English — the biggest wins
 ("the apex acts like a pin", "the voxel I target isn't the one that locks") came that way, so keep flagging
-anything that *sounds* wrong. **Decide-and-flag** on ambiguity; playtest arbitrates. Work on
-`ClientOnlyFallback` unless directed otherwise; do not merge to `main` implicitly. Ship a zip per code
+anything that *sounds* wrong. **Decide-and-flag** on ambiguity; playtest arbitrates. Work on `main` unless the
+human explicitly requests a feature branch. Ship a zip per code
 iteration; update docs / commit only on the human's say-so.

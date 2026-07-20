@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 7;
+        public const int ProtocolVersion = 9;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -142,6 +142,7 @@ namespace Layout.Network
         [ProtoMember(13)] public int Divisions;      // Session-9 additive: visual division marks
         [ProtoMember(14)] public int Sides;          // Session-11 additive: polygon side count
         [ProtoMember(15)] public bool IsClosed;      // Session-11 (0.1.15) additive: Free-Shape loop flag
+        [ProtoMember(16)] public bool FlatSideAligned; // 0.2.45: polygon edge, rather than vertex, alignment
         // (The as-placed spring-back snapshot deliberately does NOT cross the wire: the server executes
         //  spring-back; clients only ever request it by guide id.)
 
@@ -169,7 +170,8 @@ namespace Layout.Network
                 ShapePlaneAxis = (int)g.ShapePlaneAxis,
                 Divisions = g.Divisions,
                 Sides = g.Sides,
-                IsClosed = g.IsClosed
+                IsClosed = g.IsClosed,
+                FlatSideAligned = g.FlatSideAligned
             };
         }
 
@@ -204,7 +206,8 @@ namespace Layout.Network
                 ShapePlaneAxis = (PlaneAxis)ShapePlaneAxis,
                 Divisions = Divisions,
                 Sides = Sides,
-                IsClosed = IsClosed
+                IsClosed = IsClosed,
+                FlatSideAligned = FlatSideAligned
             };
         }
     }
@@ -460,13 +463,15 @@ namespace Layout.Network
         // 0.2.24 additive (protocol 7): the FOURTH click of a Tapered Cylinder — the rim point whose
         // distance from the axis sets the lid's radius. Null for every other shape (they derive one).
         [ProtoMember(12)] public Vec3Dto Rim;
+        [ProtoMember(13)] public bool FlatSideAligned;
 
         public GuideCreateRequestPacket() { }
 
         public GuideCreateRequestPacket(Vec3Dto start, Vec3Dto end, RenderSettingsDto settings,
             int shapeType = 0, int constraint = 0, int shapePlaneAxis = 0,
             bool inverted = false, int sides = 0, Vec3Dto apex = null,
-            Vec3Dto[] chain = null, bool closed = false, Vec3Dto rim = null)
+            Vec3Dto[] chain = null, bool closed = false, Vec3Dto rim = null,
+            bool flatSideAligned = false)
         {
             Start = start;
             End = end;
@@ -480,6 +485,7 @@ namespace Layout.Network
             Chain = chain;
             Closed = closed;
             Rim = rim;
+            FlatSideAligned = flatSideAligned;
         }
     }
 

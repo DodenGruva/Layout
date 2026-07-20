@@ -299,12 +299,10 @@ namespace Layout
             capi.ChatCommands
                 .Create("layout")
                 .WithDescription("Client-side Layout commands.")
-                .BeginSubCommand("client")
-                    .BeginSubCommand("dispel")
-                        .WithDescription("Dispel private guides locally.")
-                        .WithArgs(parsers.Word("all-or-radius"))
-                        .HandleWith(OnClientDispelCommand)
-                    .EndSubCommand()
+                .BeginSubCommand("dispel")
+                    .WithDescription("Dispel private guides locally.")
+                    .WithArgs(parsers.Word("all-or-radius"))
+                    .HandleWith(OnClientDispelCommand)
                 .EndSubCommand();
         }
 
@@ -329,7 +327,7 @@ namespace Layout
                     $"Dispelled {count} client-only guide(s) within {radius} chunk(s).");
             }
 
-            return TextCommandResult.Error("Usage: .layout client dispel all   OR   .layout client dispel <chunk radius>");
+            return TextCommandResult.Error("Usage: .layout dispel all   OR   .layout dispel <chunk radius>");
         }
 
         private void OnForceClientOnlyPreferenceChanged(bool forceClientOnly)

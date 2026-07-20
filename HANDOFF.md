@@ -2,12 +2,12 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-19 against **v0.2.35**, committed and pushed on
+> and the performance-relevant mechanics. Updated 2026-07-19 against **v0.2.47**, committed and pushed on
 > `main`. Where this file and the code disagree, **the code wins** — treat this as a map, then
 > read the `.cs` files it points at.
 >
-> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.6),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/19.md` (per-session
+> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.7),
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/20.md` (per-session
 > history), `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
 
@@ -21,18 +21,18 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.2.35 on `main`, **playtested successfully in public/private multiplayer**. The
-  tapered-cylinder placement flow and dust pass are playtest-confirmed; fired-jug crafting still works and
-  raw jugs correctly do not.
+- **Status:** v0.2.47 on `main`. Public/private multiplayer passed at v0.2.35; the tapered-cylinder flow,
+  dust pass, fired-only jug recipe, and v0.2.36 adjacent-lock targeting fix are playtest-confirmed. The
+  v0.2.38–v0.2.47 polygonal-volume and modifier interaction arc is built and packaged for field soak.
   F4 (client-only / private guides) and F5 (**the Chalking Kit**: finite chalk
   durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
   **mesh pass Stage A (exposed-face meshing) has shipped** and **filled 3D volumes are retired** (always
   hollow shells now), so a ~100-block hollow Sphere draws only its outer skin.
-- **Size:** **69 source files** (`src/`), ~one asset tree, one `.csproj`.
-- **Data schema:** **DataVersion 8** (additive passive-lock-marker flag; pinned enums/default migration).
-- **Wire protocol:** **7** (`GuideCreateRequestPacket.Rim`, after protocol-6 `ChalkRefillPrefsPacket`,
-  protocol-5 `ChalkInventoryRefillPacket`, and protocol-4 `ChalkChargePacket`).
-- **Catalog:** **13 shape types**, shown as **19 picker tiles** — a full 2D family plus a **3D volume family**.
+- **Size:** **70 source files** (`src/`), ~one asset tree, one `.csproj`.
+- **Data schema:** **DataVersion 9** (`FlatSideAligned`; v8 was the passive-lock-marker flag).
+- **Wire protocol:** **9** (`FlatSideAligned`; protocol 8 introduced polygonal volume types, protocol 7 the
+  tapered `Rim`; protocol 6/5/4 are chalk preference/refill/charge packets).
+- **Catalog:** **15 shape types**, shown as **21 picker tiles** — a full 2D family plus an eight-volume 3D family.
 - **The tool:** the **Chalking Kit** — 32-chalk durability (2D −1 / 3D −2, completed placements only; no
   lockout at 0, the kit can never break). **32 is a HARD ceiling** (`ItemGuideTool.MaxChalk`, v0.2.23):
   chalk is read straight off the stack attribute and clamped, and `GetMaxDurability`/`GetRemainingDurability`
@@ -43,9 +43,9 @@ guides on servers without Layout and, when server policy permits, alongside publ
   policy). Private placements charge via a client-reported, server-validated packet; creative exempt;
   `enableChalkDurability` server config. Five fill-state models (full=32 · high 22–31 · medium 11–21 ·
   low 1–10 · empty 0) render in every context including ground storage.
-- **Active follow-up:** B-S9-1 is narrowed: the lock → unlock → relock cycle is much better, but locking a
-  voxel immediately beside one that was previously locked can still snap to that old voxel. Two unrelated
-  verification debts remain: xskills itself and a VS 1.22.0/1.22.1 smoke test.
+- **Closed in v0.2.36:** B-S9-1 adjacent-lock targeting. Exact rendered-cell ownership prevents a formerly
+  locked marker from shadowing its neighbor. Two unrelated verification debts remain: xskills itself and a
+  VS 1.22.0/1.22.1 smoke test.
 - **Top performance task:** mesh **Stage A is done** — a ~100-block hollow Sphere now draws only its shell
   skin. Stage B (per-guide spatial chunks + culling) and Stage C (greedy face merging) remain, but only if
   the current win isn't enough. See §9 and `dev/SESSION_14.md` §6–§7 / `dev/SESSION_16.md`.
@@ -81,10 +81,10 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── HANDOFF.md                  ← THIS FILE
 ├── Layout.csproj  modinfo.json  modicon.png
 ├── assets/layout/              ← itemtypes, textures, lang
-├── src/                        ← all 69 .cs files (see §6)
+├── src/                        ← all 70 .cs files (see §6)
 └── dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
-    ├── SESSION_9.md … SESSION_17.md  SESSION_18.md  SESSION_19.md
+    ├── SESSION_9.md … SESSION_18.md  SESSION_19.md  SESSION_20.md
     ├── CHANGELOG_ARCHITECTURE.md   ← ARCHITECTURE.md's per-revision deltas (archive)
     ├── PLAN_CLIENT_ONLY.md  PLAN_CHALKING_KIT.md  BUILD_INSTRUCTIONS.txt
 ```
@@ -101,7 +101,7 @@ in a versioned subfolder).
   Chalking Powder + linen sack + flax twine + rope + copper nails; **32-chalk durability**, F5 — completed
   placements cost 2D −1 / 3D −2, refills via Chalking Powder [8× any powder/flour + 0.1 L yellow dye → 8],
   no lockout at 0, never breaks, and 32 is a hard ceiling no crafting-quality mod can raise; also
-  **ground-storable**: CTRL+SHIFT+right-click sets it down, SHIFT+right-click with powder refills it in
+  **ground-storable**: SHIFT+right-click sets it down, SHIFT+right-click with powder refills it in
   place — and, where the PLAYER opts in via `layout-client.json`, a hotbar tap/hold or a
   cursor-onto-inventory-slot refill). On a server without Layout, the equivalent gate is
   **Flax Twine main-hand + any vanilla Hammer variant off-hand** (damage irrelevant; no chalk there — a
@@ -112,8 +112,8 @@ in a versioned subfolder).
   reshape, insert, lock; right-click = cancel / lock-in-place). **Edit** is settings-only: left-click
   **selects** a guide and the GUI's setting rows then act on THAT guide (no reshaping). **Delete** dispels.
 - **Placement** is **two clicks for most shapes**, with deliberately-reopened exceptions: free/right/
-  isosceles triangles and the 3D cylinder/tapered cylinder/cone/box take **three clicks** (base + a height
-  click) — the Tapered Cylinder taking a **fourth** for its top radius; the
+  isosceles triangles and Cylinder/Polygonal Prism/Cone/Box take **three clicks** (base + height);
+  Tapered Cylinder and Tapered Polygonal Prism take a **fourth** click for the top radius; the
   Free-Shape takes **unbounded chained clicks** (≤64). Right-click steps a multi-click draft back one click.
 - **Reshaping (2D):** grab a point to move it; click the body to insert-and-grab (arch + Free-Shape
   families) or grab the nearest handle (every other parametric shape); lock points as constraints. Two
@@ -125,9 +125,10 @@ in a versioned subfolder).
     **Locking is the only thing that pins geometry.**
 - **Per-guide settings:** voxel scale (1/2/4/8/16 sixteenths; default 1 = chisel resolution), Volumetric↔
   Surface projection, hollow↔filled, a purely-visual **equal-parts Divisions** overlay, hidden↔shown.
-- **Held keys:** **CTRL** = level+cardinal snap; **SHIFT** = draft-invert (while placing) or **spring the
-  placed guide back to its as-placed form** (while idle over a guide). All hotkeys are rebindable and inert
-  unless the tool is held (Ctrl+Z/Y never hijack other UIs).
+- **Held keys are stage-aware:** **CTRL** = level/cardinal snap, or close a tapered rim to a point; **SHIFT**
+  = vertical Line/Free-Shape, draft invert where applicable, flat-side polygon alignment, deliberate tapered
+  rim flare, or reset a placed guide; **CTRL+SHIFT** = a 45-degree Line/Free-Shape diagonal. Native held-item
+  notes appear only where a modifier applies. All hotkeys are rebindable and inert unless the tool is held.
 - **Color language (authoritative table is in `GuideMeshBuilder.cs`):** yellow body · red locked · **green**
   apex/primary · public/fallback **blue** anchors (indigo off-shade) · mixed-server private **orange**
   anchors (burnt-orange off-shade) · white grabbed · magenta division marks · hidden guides = anchors only
@@ -135,18 +136,20 @@ in a versioned subfolder).
 
 ---
 
-## 5. The shape catalog (13 types / 19 tiles)
+## 5. The shape catalog (15 types / 21 tiles)
 
 Built on a **primitives + constraint-modifiers** model — constrained variants are **not** separate types,
 and fill is **not** a type. `enum GuideShapeType { Arch=0, Ellipse=1, Line=2, Triangle=3, Rectangle=4,
-Polygon=5, FreeShape=6, Sphere=7, Dome=8, Cylinder=9, Cone=10, Box=11 }`.
+Polygon=5, FreeShape=6, Sphere=7, Dome=8, Cylinder=9, Cone=10, Box=11, TaperedCylinder=12,
+PolygonalPrism=13, TaperedPolygonalPrism=14 }`.
 `GuideShapeTypes.IsVolume(t)` classifies the 3D family (an explicit switch, never inferred from ordering).
 
 **2D section (13 tiles):** Arch · Half-circle (Arch+SemiCircle) · Circle (Ellipse+Circle) · Ellipse · Line ·
 Triangle · Right · Equilateral · Isosceles (Triangle + constraint) · Rectangle · Square (Rectangle+Square) ·
 Polygon (regular N-gon, 3–24 sides, count in `GuideData.Sides`) · Free-Shape (irregular polyline, `IsClosed`).
 
-**3D volume section (6 tiles):** Sphere · Dome · Cylinder · Tapered Cylinder · Cone · Box. **Volumes are always a one-cell
+**3D volume section (8 tiles):** Sphere · Dome · Cylinder · Tapered Cylinder · Polygonal Prism · Tapered
+Polygonal Prism · Cone · Box. The polygonal pair shares Polygon's editable 3–24 side setting. **Volumes are always a one-cell
 hollow shell — Filled is retired for the 3D family (v0.2.17):** post-exposed-face-meshing a filled interior
 draws nothing, so it was pure invisible voxel cost; every volume shape now coerces `filled=false`, which also
 auto-lightens legacy filled saves. **Always Volumetric** (Surface + Divisions gated off, server-side and in
@@ -169,7 +172,7 @@ Pure, dependency-light layers under a server-authoritative core. Namespaces matc
 |---|---|---|
 | `src/` | `Layout` | `LayoutModSystem` — composition root (registers systems, item, channels, keybinds, HUD). |
 | `Guide/` | `Layout.Guide` | Pure data: `GuideData`, `ControlPoint`, `VoxelPosition`, the pinned enums, projection/render settings. Depends only on `Vec3d`. |
-| `Shapes/` | `Layout.Shapes` | Pure geometry math (no engine deps beyond `Vec3d`). `IGuideShape` seam; `ShapeFactory`; the 13 shape classes; `CatmullRomSpline`; `VoxelMarch` (the one cell-quantise convention); `ShapeGeometry`; `SoftPointFlow`; `DivisionMarks`. |
+| `Shapes/` | `Layout.Shapes` | Pure geometry math (no engine deps beyond `Vec3d`). `IGuideShape` seam; `ShapeFactory`; 14 shape-generator classes backing 15 enum types; `CatmullRomSpline`; `VoxelMarch`; `ShapeGeometry`; `SoftPointFlow`; `DivisionMarks`. |
 | `Systems/` | `Layout.Systems` | Side-neutral `GuideManager` (authority + JSON persistence + cap validation), persistence/block-probe seams, `GuideLockManager`, `DraftManager`, `UndoManager`, `GuideRenderer`, `GuideMeshBuilder`. |
 | `Network/` | `Layout.Network` | `PacketTypes` (protobuf DTOs, fixed append-only registration), `ServerNetworkHandler`, `ClientNetworkHandler`. |
 | `UI/` | `Layout.UI` | `GuideToolGui` (the F-menu icon-tile GUI), `LayoutToolIcons` (Cairo glyphs), `GuideHud`. |
@@ -197,7 +200,7 @@ mode decides only where a new guide is created.
 - **Voxels are NEVER stored.** A guide is fully defined by control points + settings; the voxel set is always
   **derived on demand** by the shape layer. Caps are enforced by *counting via the shape*, never a field.
 - **Pinned, append-only enums** anywhere a value crosses wire or disk. **Default-driven migration** via
-  `DataVersion` (8: `ControlPoint.IsLockMarker`; 7: `IsClosed`; 6: `Sides` + the never-wired as-placed spring-back snapshot; 5: `Divisions`;
+  `DataVersion` (9: `FlatSideAligned`; 8: `ControlPoint.IsLockMarker`; 7: `IsClosed`; 6: `Sides` + the never-wired as-placed spring-back snapshot; 5: `Divisions`;
   4: `Constraint`/`ShapePlaneAxis`; 3: `CreatorUid`; 2: `Projection`/`Plane`/`IsFilled`).
 - **Save format ≠ wire format.** JSON (Newtonsoft, custom `Vec3d` converter) is the **save**; protobuf DTOs
   are the **wire**. The paths are independent; POCOs are mapped to DTOs, never sent raw. Packet registration
@@ -336,7 +339,7 @@ by raising `HardVoxelCeiling`.
 - **Admin commands (v0.1.26–0.1.27):** `/layout dispel all` and `/layout dispel <chunk radius>`
   (`controlserver`; namespaced under `/layout` so they can't clash with other mods).
 - **Private commands (unchanged through v0.1.53):** `/layout private`, `/layout public`, `/layout client push all`, plus the
-  client-only `.layout client dispel all|<radius>`. Push assigns new public IDs, enforces server caps and
+  client-only `.layout dispel all|<radius>`. Push assigns new public IDs, enforces server caps and
   privilege, removes only confirmed private copies, and is deliberately not undoable.
 
 ---
@@ -391,12 +394,10 @@ counting and the natural at-cap drag clamp are implemented and playtest-confirme
 re-implemented in v0.2.19). Hollow Sphere/Dome shell scanning is exact-equivalent to the legacy predicate; the
 full F5 chalk system and the Stage-A mesh pass are playtested through **v0.2.23**.
 
-**Active follow-up — B-S9-1 (lock-in-place):** ray-vs-rendered-voxel first-hit picking is now implemented,
-curve target caches use a full geometry fingerprint, cancel restores a complete pre-drag snapshot, and passive
-lock markers no longer deform an Arch when placed. v0.1.52 also removes stale unlocked markers and orders new
-lock/grab points along the curve. The broad lock → unlock → relock cycle is much better; the remaining exact
-reproduction is attempting to lock the voxel immediately beside a formerly locked voxel, which can select
-the former voxel instead.
+**B-S9-1 closed (v0.2.36):** ray-vs-rendered-voxel first-hit picking, full geometry fingerprints, complete
+pre-drag snapshots, passive non-deforming markers, stale-marker cleanup, and curve-relative insertion order
+remain. The last adjacent-lock residual was removed by assigning a point only its own nearest visible marker
+cell; an adjacent first-hit body cell now receives a distinct passive marker. Human-confirmed in play.
 
 **Direction / roadmap (see `dev/TODO.md` for detail):**
 1. **Two verification debts from the (fully delivered) Session-16 backlog** — see `dev/SESSION_17.md` §8:
@@ -405,9 +406,10 @@ the former voxel instead.
    confirms every API used exists in 1.22.0.
 2. **Mesh pass Stage B/C** (§9 / `SESSION_14.md`) — per-guide chunks/culling → greedy same-colour face
    merging — **only if Stage A's win isn't enough**. Preserve true settled-guide scale and rendering semantics.
-3. **Fix the adjacent-voxel B-S9-1 targeting residual** without reopening the confirmed passive-marker design.
-4. **Release v0.2.35 and collect field reports.** The requested public/private multiplayer pass succeeded;
-   keep the broader matrix as future regression coverage rather than a release blocker.
+3. **Collect v0.2.47 field reports.** Protocol 9 adds polygon orientation state; deploy matching client and
+   server builds and soak the polygonal volumes/modifier interactions in normal play.
+4. **Keep the broader multiplayer matrix as future regression coverage.** The v0.2.35 public/private pass
+   succeeded and is not a release blocker.
 5. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill (fill is currently inert on Free-Shapes);
    an F3 re-constrain op; broadcasting the whole Free-Shape draft chain to other players.
 
@@ -427,10 +429,11 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   `GuideShapeType` / `ShapeConstraint` / projection enums, which are pinned append-only).
 - **`UndoManager` folder ≠ namespace:** it lives in `src/Systems/` but is `Layout.Systems.UndoManager` —
   the one file where folder and namespace diverge.
-- **The Session docs are historical.** `SESSION_9`…`SESSION_17.md` are point-in-time narratives (SESSION_12
+- **The Session docs are historical.** `SESSION_9`…`SESSION_20.md` are point-in-time narratives (SESSION_12
   covers F4 through v0.1.45; SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 mesh handoff;
   SESSION_15 is the v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc;
-  SESSION_17 is the v0.2.22–v0.2.23 seven-item backlog). For
+  SESSION_17 is the v0.2.22–v0.2.23 seven-item backlog; SESSION_18/19 cover the Tapered Cylinder and dust;
+  SESSION_20 covers v0.2.36–v0.2.47 polygonal volumes and modifier interactions). For
   current state, trust `HANDOFF.md` / `ARCHITECTURE.md` / the code, not a mid-session checklist inside a
   session record.
 - **`dev/BUILD_INSTRUCTIONS.txt`** is the original v0.1.0 first-build doc; its build/run steps are still

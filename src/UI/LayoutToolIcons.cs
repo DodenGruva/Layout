@@ -43,6 +43,8 @@ namespace Layout.UI
         public const string Dome = "layout-dome";
         public const string Cylinder = "layout-cylinder";
         public const string TaperedCylinder = "layout-taperedcylinder";
+        public const string PolygonalPrism = "layout-polygonalprism";
+        public const string TaperedPolygonalPrism = "layout-taperedpolygonalprism";
         public const string Cone = "layout-cone";
         public const string Box = "layout-box";
 
@@ -122,6 +124,8 @@ namespace Layout.UI
             reg[Dome] = DrawDome;
             reg[Cylinder] = DrawCylinder;
             reg[TaperedCylinder] = DrawTaperedCylinder;
+            reg[PolygonalPrism] = DrawPolygonalPrism;
+            reg[TaperedPolygonalPrism] = DrawTaperedPolygonalPrism;
             reg[Cone] = DrawCone;
             reg[Box] = DrawBox;
             reg[ExpandDown] = (ctx, x, y, w, h, rgba) => DrawExpandChevron(ctx, x, y, w, h, rgba, down: true);
@@ -133,7 +137,7 @@ namespace Layout.UI
             {
                 Arch, HalfCircle, Circle, Ellipse, Line, Triangle, RightTri, Equilateral,
                 Isosceles, Rectangle, Square, Polygon, FreeShapeIcon, Sphere, Dome, Cylinder,
-                TaperedCylinder, Cone, Box
+                TaperedCylinder, PolygonalPrism, TaperedPolygonalPrism, Cone, Box
             })
             {
                 var baseDrawer = reg[shapeName];
@@ -471,6 +475,32 @@ namespace Layout.UI
             { ctx.Save(); ctx.Translate(cx, yc); ctx.Scale(rx, ry); ctx.Arc(0, 0, 1, 0, 2 * Math.PI); ctx.Restore(); ctx.Stroke(); }
             Ell(botY, rxBot, ryBot);
             Ell(topY, rxTop, ryTop);
+        }
+
+        private static void DrawPolygonalPrism(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 76);
+            Pen(ctx, rgba, c.L(2.4));
+            Poly(ctx, c, rgba, true, 18, 48, 28, 42, 48, 42, 58, 48, 48, 54, 28, 54);
+            Poly(ctx, c, rgba, true, 18, 22, 28, 16, 48, 16, 58, 22, 48, 28, 28, 28);
+            ctx.MoveTo(c.X(18), c.Y(22)); ctx.LineTo(c.X(18), c.Y(48));
+            ctx.MoveTo(c.X(58), c.Y(22)); ctx.LineTo(c.X(58), c.Y(48));
+            ctx.MoveTo(c.X(28), c.Y(28)); ctx.LineTo(c.X(28), c.Y(54));
+            ctx.MoveTo(c.X(48), c.Y(28)); ctx.LineTo(c.X(48), c.Y(54));
+            ctx.Stroke();
+        }
+
+        private static void DrawTaperedPolygonalPrism(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 76);
+            Pen(ctx, rgba, c.L(2.4));
+            Poly(ctx, c, rgba, true, 14, 50, 26, 43, 50, 43, 62, 50, 50, 57, 26, 57);
+            Poly(ctx, c, rgba, true, 25, 22, 31, 18, 45, 18, 51, 22, 45, 26, 31, 26);
+            ctx.MoveTo(c.X(14), c.Y(50)); ctx.LineTo(c.X(25), c.Y(22));
+            ctx.MoveTo(c.X(62), c.Y(50)); ctx.LineTo(c.X(51), c.Y(22));
+            ctx.MoveTo(c.X(26), c.Y(57)); ctx.LineTo(c.X(31), c.Y(26));
+            ctx.MoveTo(c.X(50), c.Y(57)); ctx.LineTo(c.X(45), c.Y(26));
+            ctx.Stroke();
         }
 
         // The cone (0.1.21): an elliptical base rising to a tip.

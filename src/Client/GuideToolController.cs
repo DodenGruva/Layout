@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
@@ -12,6 +13,21 @@ using Layout.UI;
 
 namespace Layout.Client
 {
+    [Flags]
+    internal enum ShapeModifierHelp
+    {
+        None = 0,
+        CtrlCardinal = 1 << 0,
+        ShiftVertical = 1 << 1,
+        ShiftCenterApex = 1 << 2,
+        ShiftInvert = 1 << 3,
+        CtrlCloseRim = 1 << 4,
+        ShiftRestore = 1 << 5,
+        ShiftFlatSide = 1 << 6,
+        CtrlShiftDiagonal = 1 << 7,
+        ShiftAllowFlare = 1 << 8
+    }
+
     /// <summary>
     /// The "tidy aim-controller": all client-side interaction logic for the held Layout tool, kept out of
     /// both the (stateless) item and the (thin) ModSystem. Runs a lightweight per-tick loop while the tool
@@ -69,6 +85,14 @@ namespace Layout.Client
 
         private long _tickId;
         private bool _toolHeld;
+        private bool _springBackAvailable;
+        private bool _modifierHelpInitialised;
+        private bool _modifierHelpRefreshUnavailable;
+        private bool _suppressStandardHeldHelp;
+        private ShapeModifierHelp _lastModifierHelp;
+        private object _hotbarHud;
+        private FieldInfo _hotbarPrevIndex;
+        private MethodInfo _hotbarRecomposeHelp;
         private ToolMode _lastMode;
         private bool _disposed;
 
@@ -97,9 +121,54 @@ namespace Layout.Client
 
         /// <summary>
         /// True when the tool is at rest — no draft in progress and no grabbed point. Gates the
-        /// ground-storage set-down gesture (CTRL+SHIFT+right-click) so it can never fire mid-edit.
+        /// ground-storage set-down gesture (SHIFT+right-click) so it can never fire mid-edit.
         /// </summary>
         public bool IsIdle => !_draft.HasActiveDraft && _grab == null;
+
+        /// <summary>True only while Layout is rebuilding the hotbar for a shape-stage note.</summary>
+        internal bool SuppressStandardHeldHelp => _suppressStandardHeldHelp;
+
+        /// <summary>
+        /// Live modifier help for Vintage Story's held-item prompt. Layout recomposes the native hotbar
+        /// help whenever this value changes so the visible rows follow the exact draft/grab stage.
+        /// </summary>
+        internal ShapeModifierHelp ModifierHelp
+        {
+            get
+            {
+                if (!_toolHeld || _draft.Mode != ToolMode.Create) return ShapeModifierHelp.None;
+
+                if (_draft.HasActiveDraft)
+                {
+                    if (DraftManager.IsChainShape(_draft.Shape))
+                        return ShapeModifierHelp.CtrlCardinal | ShapeModifierHelp.ShiftVertical
+                            | ShapeModifierHelp.CtrlShiftDiagonal;
+                    if (_draft.AwaitingRim)
+                        return ShapeModifierHelp.CtrlCloseRim | ShapeModifierHelp.ShiftAllowFlare;
+                    if (_draft.AwaitingApex)
+                        return _draft.Shape == GuideShapeType.Triangle
+                            ? ShapeModifierHelp.ShiftCenterApex : ShapeModifierHelp.None;
+
+                    ShapeModifierHelp help = ShapeModifierHelp.CtrlCardinal;
+                    if (_draft.Shape == GuideShapeType.Line) help |= ShapeModifierHelp.ShiftVertical;
+                    if (_draft.Shape == GuideShapeType.Line) help |= ShapeModifierHelp.CtrlShiftDiagonal;
+                    if (GuideShapeTypes.UsesSides(_draft.Shape)) help |= ShapeModifierHelp.ShiftFlatSide;
+                    if (_draft.Shape == GuideShapeType.Arch || _draft.Shape == GuideShapeType.Dome
+                        || (_draft.Shape == GuideShapeType.Triangle
+                            && _draft.Constraint == ShapeConstraint.Equilateral))
+                        help |= ShapeModifierHelp.ShiftInvert;
+                    return help;
+                }
+
+                if (_grab != null && !_grab.Suspended
+                    && _net.Guides.TryGetValue(_grab.GuideId, out GuideData guide)
+                    && _grab.PointIndex >= 0 && _grab.PointIndex < guide.ControlPoints.Count
+                    && guide.ControlPoints[_grab.PointIndex].IsAnchor)
+                    return ShapeModifierHelp.CtrlCardinal;
+
+                return _springBackAvailable ? ShapeModifierHelp.ShiftRestore : ShapeModifierHelp.None;
+            }
+        }
 
         // --- Targeting cache (Session-8 fix): per-guide sampled-curve polylines --------------------
         // The near-anchor grab bug, finally at the root: targeting used the CHORDS between control points,
@@ -222,6 +291,77 @@ namespace Layout.Client
             }
 
             UpdateAim();
+            RefreshModifierHelpIfChanged();
+        }
+
+        // Vintage Story 1.22 composes held-item interaction help only when the hotbar slot changes; its
+        // ShouldApply predicates are evaluated once during that composition, not live. Re-run the native
+        // hotbar composition when our stage flags change so the normal help rows appear at the moment they
+        // become useful and retain the game's own key glyphs, position, and 3.5-second lifetime.
+        private void RefreshModifierHelpIfChanged()
+        {
+            ShapeModifierHelp current = ModifierHelp;
+            if (!_modifierHelpInitialised)
+            {
+                _modifierHelpInitialised = true;
+                _lastModifierHelp = current;
+                // A normal hotbar swap already composed the standard Chalking Kit note. Do not immediately
+                // replay it merely because our held-state tick caught up with the engine.
+                if (current == ShapeModifierHelp.None) return;
+            }
+            else
+            {
+                if (current == _lastModifierHelp) return;
+                _lastModifierHelp = current;
+            }
+            TryRefreshNativeHeldHelp();
+        }
+
+        private void TryRefreshNativeHeldHelp()
+        {
+            if (_modifierHelpRefreshUnavailable) return;
+            try
+            {
+                if (_hotbarHud == null)
+                {
+                    foreach (object gui in _capi.LoadedGuis)
+                    {
+                        Type type = gui?.GetType();
+                        if (type?.FullName != "Vintagestory.Client.NoObf.HudHotbar") continue;
+                        _hotbarHud = gui;
+                        _hotbarPrevIndex = type.GetField("prevIndex",
+                            BindingFlags.Instance | BindingFlags.NonPublic);
+                        _hotbarRecomposeHelp = type.GetMethod("RecomposeActiveSlotHoverText",
+                            BindingFlags.Instance | BindingFlags.NonPublic);
+                        break;
+                    }
+                }
+
+                if (_hotbarHud == null || _hotbarPrevIndex == null || _hotbarRecomposeHelp == null)
+                {
+                    _modifierHelpRefreshUnavailable = true;
+                    _capi.Logger.Warning("[Layout] Could not locate Vintage Story's held-help refresh path; "
+                        + "shape modifier notes will only update after changing hotbar slots.");
+                    return;
+                }
+
+                int slot = _capi.World.Player.InventoryManager.ActiveHotbarSlotNumber;
+                _hotbarPrevIndex.SetValue(_hotbarHud, -1);
+                _suppressStandardHeldHelp = true;
+                try
+                {
+                    _hotbarRecomposeHelp.Invoke(_hotbarHud, new object[] { slot });
+                }
+                finally
+                {
+                    _suppressStandardHeldHelp = false;
+                }
+            }
+            catch (Exception e)
+            {
+                _modifierHelpRefreshUnavailable = true;
+                _capi.Logger.Warning("[Layout] Held-help refresh failed: {0}", e.Message);
+            }
         }
 
         // The custom Layout item normally owns click interception. Client-only mode deliberately uses
@@ -237,7 +377,7 @@ namespace Layout.Client
             }
             else if (action == EnumEntityAction.InWorldRightMouseDown)
             {
-                // Ground-storage set-down (CTRL+SHIFT+right-click, tool idle, REAL item held): step aside
+                // Ground-storage set-down (SHIFT+right-click, tool idle, REAL item held): step aside
                 // instead of consuming, so the engine dispatches to ItemGuideTool.OnHeldInteractStart,
                 // which delegates to the vanilla GroundStorable behavior. This hook otherwise consumes
                 // right-clicks in BOTH modes (it fires before any held-item hook), so without this early
@@ -252,7 +392,7 @@ namespace Layout.Client
 
         /// <summary>
         /// True when this right-click should fall through to ground storage: the REAL Layout item is held
-        /// (never the client-only vanilla gate), the tool is idle (no draft, no grab), and CTRL+SHIFT are
+        /// (never the client-only vanilla gate), the tool is idle (no draft, no grab), and SHIFT is
         /// down — read from the entity's interaction-modifier controls, the same source the vanilla
         /// GroundStorable behavior checks, so the two gates can never disagree.
         /// </summary>
@@ -260,7 +400,7 @@ namespace Layout.Client
         {
             if (!IsToolHeld() || !IsIdle) return false;
             var c = _capi.World?.Player?.Entity?.Controls;
-            return c != null && c.ShiftKey && c.CtrlKey;
+            return c != null && c.ShiftKey;
         }
 
         // F5 inventory refill (0.2.21): right-click a held Chalking Powder stack (on the mouse cursor) onto a
@@ -301,6 +441,7 @@ namespace Layout.Client
         {
             if (held)
             {
+                _modifierHelpInitialised = false;
                 _hud.TryOpen();
                 ResumeGrabIfStillValid();
                 _lastMode = _draft.Mode;
@@ -315,6 +456,8 @@ namespace Layout.Client
                 _hud.TryClose();
                 if (_gui.IsOpened()) _gui.TryClose();
                 _renderer.ClearDraftPreview();       // the DRAFT survives the swap; the live ghost does not
+                _springBackAvailable = false;
+                _modifierHelpInitialised = false;
             }
         }
 
@@ -344,6 +487,7 @@ namespace Layout.Client
 
             // 1) Guide under the crosshair → HUD examine seam (id, lock status, count, cap bar).
             TargetHit hit = FindTarget(includeLockedPoints: true);
+            _springBackAvailable = hit.Found && !LockedByOther(hit.GuideId);
             _hud.SetExaminedGuide(hit.Found ? hit.GuideId : (Guid?)null);
 
             // 2) Live aim while drafting (Create mode): HUD readout + the world-space ghost of the guide
@@ -374,18 +518,20 @@ namespace Layout.Client
                     }
                     else if (_draft.AwaitingRim)
                     {
-                        // 0.2.24, the Tapered Cylinder's LAST stage: the base and height are down and the
+                        // Tapered volume's LAST stage: the base and height are down and the
                         // crosshair now sets the lid's radius — the ghost's taper opens and closes live.
                         // The one-way capture gate prevents the just-clicked, usually distant HEIGHT block
                         // from becoming a giant rim before the player has aimed back toward the lid.
                         aim = StabilizeDraftRimAim(aim);
+                        aim = ConstrainDraftRim(aim);
                         aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
-                        _hud.SetDraftAim(aim);
+                        _hud.SetDraftAim(aim, _draft.DraftFlatSideAligned);
                         if (DraftPreviewDue())
                             _renderer.SetDraftPreview(_draft.DraftStart, _draft.DraftSecond,
                                 BuildSettings(blockSel, aim),
                                 _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
-                                sides: _draft.Sides, apex: _draft.DraftThird, rim: aim);
+                                sides: _draft.Sides, apex: _draft.DraftThird, rim: aim,
+                                flatSideAligned: _draft.DraftFlatSideAligned);
                     }
                     else if (_draft.AwaitingApex)
                     {
@@ -394,22 +540,27 @@ namespace Layout.Client
                         // SHIFT-centering doesn't apply to them.
                         if (ShiftHeld() && _draft.Shape == GuideShapeType.Triangle) aim = CenterApexOnBase(aim);
                         aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
-                        _hud.SetDraftAim(aim);
+                        _hud.SetDraftAim(aim, _draft.DraftFlatSideAligned);
                         if (DraftPreviewDue())
                             _renderer.SetDraftPreview(_draft.DraftStart, _draft.DraftSecond,
                                 BuildSettings(blockSel, aim),
                                 _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
-                                sides: _draft.Sides, apex: aim);
+                                sides: _draft.Sides, apex: aim,
+                                flatSideAligned: _draft.DraftFlatSideAligned);
                     }
                     else
                     {
-                        if (CtrlHeld()) aim = ConstrainToStart(aim);
+                        aim = ConstrainDraftBaseAim(aim);
                         aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
-                        _hud.SetDraftAim(aim);
+                        bool flatSideAligned = GuideShapeTypes.UsesSides(_draft.Shape) && ShiftHeld();
+                        _hud.SetDraftAim(aim, flatSideAligned);
                         if (DraftPreviewDue())
                             _renderer.SetDraftPreview(_draft.DraftStart, aim, BuildSettings(blockSel, aim),
                                 _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
-                                sides: _draft.Sides, inverted: EffectiveInverted());
+                                sides: _draft.Sides,
+                                // Shift belongs exclusively to flat-side alignment for polygonal guides.
+                                inverted: !GuideShapeTypes.UsesSides(_draft.Shape) && EffectiveInverted(),
+                                flatSideAligned: flatSideAligned);
                     }
                 }
                 else
@@ -639,7 +790,7 @@ namespace Layout.Client
 
             IGuideShape shape = ShapeFactory.Adopt(
                 guide.ShapeType, guide.Constraint, guide.ShapePlaneAxis, points,
-                guide.Sides, guide.IsClosed);
+                guide.Sides, guide.IsClosed, guide.FlatSideAligned);
 
             if (guide.Constraint != ShapeConstraint.None && shape.WouldBreakOnMove(_grab.PointIndex))
                 shape.BreakConstraint();
@@ -751,7 +902,10 @@ namespace Layout.Client
                 Vec3d end = _draft.AwaitingApex ? _draft.DraftSecond : candidate;
                 IGuideShape shape = ShapeFactory.Create(
                     _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis, start, end,
-                    sides: _draft.Sides);
+                    sides: _draft.Sides,
+                    flatSideAligned: _draft.AwaitingApex
+                        ? _draft.DraftFlatSideAligned
+                        : GuideShapeTypes.UsesSides(_draft.Shape) && ShiftHeld());
                 Vec3d apex = _draft.AwaitingRim ? _draft.DraftThird
                     : _draft.AwaitingApex ? candidate : null;
                 Vec3d rim = _draft.AwaitingRim ? candidate : null;
@@ -915,12 +1069,24 @@ namespace Layout.Client
             if (!hit.Found) return;
             if (!_net.Guides.TryGetValue(hit.GuideId, out GuideData g)) return;
 
-            if (hit.PointIndex >= 0)
+            if (TakesBodyInserts(g.ShapeType))
+            {
+                // B-S9-1 (v0.2.36): the rendered voxel actually entered by the ray is authoritative.
+                // The old 2x point-radius + 1.5-voxel fallback made a neighboring body voxel lose to a
+                // previously locked point. A point now toggles only when this exact visible cell is the
+                // cell it owns; an adjacent body cell receives its own passive lock marker.
+                if (!TryFindFirstGuideVoxelHit(g, out Vec3d lockCellCentre, out int cellPoint)) return;
+                if (cellPoint >= 0)
+                    _net.SendLockPoint(hit.GuideId, cellPoint, !g.ControlPoints[cellPoint].IsLocked);
+                else
+                    _net.SendInsertPoint(hit.GuideId, lockCellCentre, locked: true);
+            }
+            else if (hit.PointIndex >= 0)
             {
                 bool locked = g.ControlPoints[hit.PointIndex].IsLocked;
                 _net.SendLockPoint(hit.GuideId, hit.PointIndex, !locked);
             }
-            else if (!TakesBodyInserts(g.ShapeType))
+            else
             {
                 // DECISION (Session 8, generalised in Session 9): lock-in-place has no meaning on a
                 // parametric shape (ellipse ring, line, triangle, rectangle, polygon — no arbitrary points
@@ -930,33 +1096,6 @@ namespace Layout.Client
                 int handle = NearestHandleIndex(g, hit.BodyPos);
                 if (handle >= 0)
                     _net.SendLockPoint(hit.GuideId, handle, !g.ControlPoints[handle].IsLocked);
-            }
-            else
-            {
-                // Session-9 batch-2 fix ("locking selects an adjacent voxel and warps the guide"): a
-                // right-click aimed at a point's MARKER voxel can resolve as a BODY hit — the claimed
-                // marker voxel sits up to a cell away from the true control point, and the body radius is
-                // wider than the point radius — which used to fire a lock-in-place INSERT: a brand-new
-                // locked point one voxel over, whose extra knot slightly warps the spline. Body hits
-                // within ~1.5 voxels of an existing real point now convert to a lock toggle on THAT point.
-                // Genuine lock-in-place (aimed clearly away from any point) is unchanged.
-                // [Flagged: right-click only — left-click body near a marker still means "insert here"
-                //  under the chisel-precision ethos; symmetric snap is one line if wanted.]
-                // B-S9-1: forgiving curve-nearest targeting can name an adjacent cell that the view ray
-                // never entered. Lock-in-place instead requires a real hit on a rendered outline voxel.
-                if (!TryFindFirstGuideVoxelHit(g, out Vec3d lockCellCentre)) return;
-
-                double snap = Math.Max(0.20, g.VoxelScale / 16.0 * 1.5);
-                int nearPoint = NearestHandleIndex(g, lockCellCentre);
-                if (nearPoint >= 0 &&
-                    Dist(g.ControlPoints[nearPoint].WorldPosition, lockCellCentre) <= snap)
-                {
-                    _net.SendLockPoint(hit.GuideId, nearPoint, !g.ControlPoints[nearPoint].IsLocked);
-                }
-                else
-                {
-                    _net.SendInsertPoint(hit.GuideId, lockCellCentre, locked: true);
-                }
             }
         }
 
@@ -1022,8 +1161,11 @@ namespace Layout.Client
             if (blockSel == null && !AwaitingVolumeHeight) return;
 
             Vec3d anchor = blockSel != null ? ResolveAnchorPoint(blockSel) : FreeAirAim();
-            // The cardinal snap rides CTRL now (Session 11); it applies to the BASE clicks, not the apex.
-            if (_draft.HasActiveDraft && !_draft.AwaitingApex && CtrlHeld()) anchor = ConstrainToStart(anchor);
+            // Base-stage modifiers: SHIFT makes a Line vertical; CTRL supplies the normal cardinal snap.
+            // SHIFT wins if both are held. Multi-corner Free-Shape segments use their own equivalent helper.
+            if (_draft.HasActiveDraft && !_draft.AwaitingApex
+                && !DraftManager.IsChainShape(_draft.Shape))
+                anchor = ConstrainDraftBaseAim(anchor);
 
             if (!_draft.HasActiveDraft)
             {
@@ -1088,7 +1230,8 @@ namespace Layout.Client
             // triangle with its apex tracking the crosshair until the third click places it.
             if (!_draft.AwaitingApex && DraftManager.NeedsApexClick(_draft.Shape, _draft.Constraint))
             {
-                _draft.PlaceSecondPoint(anchor);
+                _draft.PlaceSecondPoint(anchor,
+                    GuideShapeTypes.UsesSides(_draft.Shape) && ShiftHeld());
                 return;
             }
 
@@ -1110,6 +1253,7 @@ namespace Layout.Client
             if (_draft.AwaitingRim)
             {
                 rim = StabilizeDraftRimAim(anchor);  // held at 60% until the lid area captures the aim
+                rim = ConstrainDraftRim(rim);        // CTRL closes; SHIFT deliberately permits a flare
                 apex = _draft.DraftThird;            // the height was fixed by the third click
                 end = _draft.DraftSecond;            // the base by the second
             }
@@ -1133,12 +1277,16 @@ namespace Layout.Client
             // folded in first, so it defaults away from the surface it was placed on (see EffectiveInverted).
             bool inverted = apex == null && EffectiveInverted();
 
-            DraftCompletion completion = _draft.TryCompleteDraft(end, apex, inverted, rim);
+            bool flatSideAligned = GuideShapeTypes.UsesSides(_draft.Shape)
+                && (_draft.AwaitingApex ? _draft.DraftFlatSideAligned : ShiftHeld());
+            DraftCompletion completion = _draft.TryCompleteDraft(
+                end, apex, inverted, rim, flatSideAligned);
             if (completion.IsReady)
             {
                 _net.SendCreateRequest(completion.Start, completion.End, BuildSettings(blockSel, anchor),
                     _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
-                    inverted, _draft.Sides, completion.Apex, rim: completion.Rim);
+                    inverted, _draft.Sides, completion.Apex, rim: completion.Rim,
+                    flatSideAligned: completion.FlatSideAligned);
                 _draft.ClearDraft();
                 _rimAimArmed = false;
                 _rimAwaitingRelease = false;
@@ -1184,14 +1332,66 @@ namespace Layout.Client
 
         // The Free-Shape's segment constraints, keyed off the LAST placed corner: SHIFT (0.1.16,
         // human-requested) pins the next segment VERTICAL — same X/Z as that corner, height from the aim;
-        // CTRL keeps the 0.1.15 horizontal level-and-cardinal snap. SHIFT wins when both are held.
+        // CTRL keeps the 0.1.15 horizontal level-and-cardinal snap. Holding both modifiers instead
+        // selects a 45-degree vertical diagonal in the nearest cardinal plane.
         private Vec3d ConstrainChainAim(Vec3d aim)
         {
             Vec3d reference = _draft.ChainLast ?? _draft.DraftStart;
             if (reference == null) return aim;
+            if (CtrlHeld() && ShiftHeld()) return ConstrainDiagonal(reference, aim);
             if (ShiftHeld()) return new Vec3d(reference.X, aim.Y, reference.Z);
             if (CtrlHeld()) return ConstrainTo(reference, aim);
             return aim;
+        }
+
+        // The 2D Line shares Free-Shape's world-vertical SHIFT constraint. CTRL retains the usual
+        // level/cardinal base snap. Holding both selects a 45-degree vertical diagonal.
+        private Vec3d ConstrainDraftBaseAim(Vec3d aim)
+        {
+            Vec3d start = _draft.DraftStart;
+            if (start == null) return aim;
+            if (_draft.Shape == GuideShapeType.Line && CtrlHeld() && ShiftHeld())
+                return ConstrainDiagonal(start, aim);
+            if (_draft.Shape == GuideShapeType.Line && ShiftHeld())
+                return new Vec3d(start.X, aim.Y, start.Z);
+            return CtrlHeld() ? ConstrainTo(start, aim) : aim;
+        }
+
+        // The final tapered-rim stage is safe by default: its radius cannot pass the existing base.
+        // CTRL closes the rim to a point; SHIFT explicitly unlocks an outward flare. CTRL wins if both
+        // are held, making the destructive/simplifying action deterministic.
+        private Vec3d ConstrainDraftRim(Vec3d aim)
+        {
+            if (aim == null || !TryGetDraftRimFrame(
+                out Vec3d lid, out Vec3d axis, out _, out double baseRadius)) return aim;
+            if (CtrlHeld()) return lid;
+            if (ShiftHeld()) return aim;
+
+            double px = aim.X - lid.X, py = aim.Y - lid.Y, pz = aim.Z - lid.Z;
+            double axial = px * axis.X + py * axis.Y + pz * axis.Z;
+            double rx = px - axis.X * axial, ry = py - axis.Y * axial, rz = pz - axis.Z * axial;
+            double radius = Math.Sqrt(rx * rx + ry * ry + rz * rz);
+            if (radius <= baseRadius || radius < 1e-9) return aim;
+            double factor = baseRadius / radius;
+            return new Vec3d(lid.X + rx * factor, lid.Y + ry * factor, lid.Z + rz * factor);
+        }
+
+        // A 45-degree slope in the nearest north/south or east/west vertical plane. Averaging the
+        // horizontal and vertical reaches avoids an abrupt size jump when the modifier is pressed.
+        private static Vec3d ConstrainDiagonal(Vec3d reference, Vec3d aim)
+        {
+            double dx = aim.X - reference.X, dy = aim.Y - reference.Y, dz = aim.Z - reference.Z;
+            bool useX = Math.Abs(dx) >= Math.Abs(dz);
+            double horizontal = useX ? dx : dz;
+            if (Math.Abs(horizontal) < 1e-9 && Math.Abs(dy) < 1e-9) return aim;
+            double reach = (Math.Abs(horizontal) + Math.Abs(dy)) * 0.5;
+            double horizontalSign = horizontal < 0 ? -1.0 : 1.0;
+            double verticalSign = dy < 0 ? -1.0 : 1.0;
+            return useX
+                ? new Vec3d(reference.X + horizontalSign * reach,
+                    reference.Y + verticalSign * reach, reference.Z)
+                : new Vec3d(reference.X, reference.Y + verticalSign * reach,
+                    reference.Z + horizontalSign * reach);
         }
 
         // SHIFT on the apex stage (0.1.15): project the aimed apex onto the base's perpendicular bisector
@@ -1540,9 +1740,10 @@ namespace Layout.Client
         // Exact lock-in-place picker for B-S9-1. It intentionally samples the outline even when the guide
         // is filled: body targeting means the defining curve, not arbitrary interior fill cells. This work
         // happens only on a right-click, never in the per-tick targeting loop.
-        private bool TryFindFirstGuideVoxelHit(GuideData guide, out Vec3d cellCentre)
+        private bool TryFindFirstGuideVoxelHit(GuideData guide, out Vec3d cellCentre, out int pointIndex)
         {
             cellCentre = null;
+            pointIndex = -1;
             if (guide?.ControlPoints == null || guide.ControlPoints.Count < 2) return false;
 
             GuideData copy = guide.DeepClone();
@@ -1564,6 +1765,8 @@ namespace Layout.Client
             HashSet<(int, int)> surfaceCells = surface ? new HashSet<(int, int)>() : null;
             double bestT = double.MaxValue;
             double bestCentreDistance = double.MaxValue;
+            VoxelPosition hitVoxel = default;
+            bool found = false;
 
             foreach (VoxelPosition voxel in voxels)
             {
@@ -1609,11 +1812,86 @@ namespace Layout.Client
                     bestT = t;
                     bestCentreDistance = centreDistance;
                     cellCentre = centre;
+                    hitVoxel = voxel;
+                    found = true;
                 }
             }
 
-            return cellCentre != null;
+            if (!found) return false;
+            pointIndex = FindPointOwningVoxel(guide, voxels, hitVoxel, surface, flatAxis, plane);
+            return true;
         }
+
+        // Assigns the clicked rendered cell to a control point only when it is that point's nearest visible
+        // outline cell—the same one-cell marker model used by the shapes. This keeps easy whole-voxel
+        // unlocking while removing the old radius shadow over immediately adjacent cells.
+        private static int FindPointOwningVoxel(GuideData guide, List<VoxelPosition> voxels,
+            VoxelPosition clicked, bool surface, PlaneAxis flatAxis, double plane)
+        {
+            double edge = guide.VoxelScale / 16.0;
+            double half = edge * 0.5;
+            int owner = -1;
+            int ownerRole = -1;
+            double ownerDistance = double.MaxValue;
+
+            for (int pointIndex = 0; pointIndex < guide.ControlPoints.Count; pointIndex++)
+            {
+                ControlPoint point = guide.ControlPoints[pointIndex];
+                if (point.IsPhantom || (point.IsLockMarker && !point.IsLocked)) continue;
+
+                bool hasNearest = false;
+                VoxelPosition nearest = default;
+                double nearestDistance = double.MaxValue;
+                HashSet<(int, int)> seenSurfaceCells = surface ? new HashSet<(int, int)>() : null;
+
+                foreach (VoxelPosition voxel in voxels)
+                {
+                    if (surface && !seenSurfaceCells.Add(VisibleCellKey(voxel, flatAxis))) continue;
+
+                    double cx = voxel.X / 16.0 + half;
+                    double cy = voxel.Y / 16.0 + half;
+                    double cz = voxel.Z / 16.0 + half;
+                    if (surface)
+                    {
+                        if (flatAxis == PlaneAxis.X) cx = plane;
+                        else if (flatAxis == PlaneAxis.Y) cy = plane;
+                        else cz = plane;
+                    }
+
+                    Vec3d p = point.WorldPosition;
+                    double dx = cx - p.X, dy = cy - p.Y, dz = cz - p.Z;
+                    double distance = dx * dx + dy * dy + dz * dz;
+                    if (distance < nearestDistance)
+                    {
+                        nearestDistance = distance;
+                        nearest = voxel;
+                        hasNearest = true;
+                    }
+                }
+
+                if (!hasNearest || !SameVisibleCell(nearest, clicked, surface, flatAxis)) continue;
+
+                int role = point.IsLocked ? 3 : point.IsPrimary ? 2 : point.IsAnchor ? 1 : 0;
+                if (role > ownerRole || (role == ownerRole && nearestDistance < ownerDistance))
+                {
+                    owner = pointIndex;
+                    ownerRole = role;
+                    ownerDistance = nearestDistance;
+                }
+            }
+
+            return owner;
+        }
+
+        private static (int, int) VisibleCellKey(VoxelPosition voxel, PlaneAxis flatAxis) =>
+            flatAxis == PlaneAxis.X ? (voxel.Y, voxel.Z)
+            : flatAxis == PlaneAxis.Y ? (voxel.X, voxel.Z)
+            : (voxel.X, voxel.Y);
+
+        private static bool SameVisibleCell(VoxelPosition a, VoxelPosition b,
+            bool surface, PlaneAxis flatAxis) => surface
+                ? VisibleCellKey(a, flatAxis) == VisibleCellKey(b, flatAxis)
+                : a.X == b.X && a.Y == b.Y && a.Z == b.Z;
 
         // Slab-method ray/AABB intersection. Returns the first non-negative distance along a normalized ray.
         private static bool RayAabbEntry(
@@ -1797,9 +2075,18 @@ namespace Layout.Client
                 return false;
             axis = ShapeGeometry.BaseNormal(radial, _draft.DraftPlaneAxis);
             if (axis == null) return false;
-            baseRadius = baseLength * 0.5;
+            bool polygonal = _draft.Shape == GuideShapeType.TaperedPolygonalPrism;
+            int sides = PolygonShape.ClampSides(_draft.Sides);
+            double apothemRatio = Math.Cos(Math.PI / sides);
+            double near = polygonal && _draft.DraftFlatSideAligned ? apothemRatio : 1.0;
+            double far = !polygonal ? 1.0
+                : _draft.DraftFlatSideAligned
+                    ? (sides % 2 == 0 ? apothemRatio : 1.0)
+                    : (sides % 2 == 0 ? 1.0 : apothemRatio);
+            baseRadius = baseLength / (near + far);
 
-            var centre = new Vec3d((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, (a.Z + b.Z) * 0.5);
+            var centre = new Vec3d(a.X + radial.X * baseRadius * near,
+                a.Y + radial.Y * baseRadius * near, a.Z + radial.Z * baseRadius * near);
             double h = (third.X - centre.X) * axis.X + (third.Y - centre.Y) * axis.Y
                 + (third.Z - centre.Z) * axis.Z;
             lid = new Vec3d(centre.X + axis.X * h, centre.Y + axis.Y * h, centre.Z + axis.Z * h);
@@ -1829,6 +2116,15 @@ namespace Layout.Client
                 lid.Y + radial.Y * heldRadius, lid.Z + radial.Z * heldRadius);
 
             if (_rimAwaitingRelease) return HeldAim();
+
+            // Shift is an explicit flare gesture, so it also deliberately bypasses the normal annular
+            // capture step once the height click has physically been released.
+            if (ShiftHeld())
+            {
+                _rimAimArmed = true;
+                _draftClamp.Reset();
+                return requested;
+            }
 
             if (!_rimAimArmed)
             {
@@ -1873,15 +2169,7 @@ namespace Layout.Client
             return new Vec3d(eye.X + dir.X * depth, eye.Y + dir.Y * depth, eye.Z + dir.Z * depth);
         }
 
-        // Shift-to-constrain: the second foot snaps to the FIRST foot's elevation and to the nearest
-        // cardinal line from it — a level, square-on arch (and the all-Blue anchor shade) in one gesture.
-        private Vec3d ConstrainToStart(Vec3d aim)
-        {
-            Vec3d start = _draft.DraftStart;
-            return start == null ? aim : ConstrainTo(start, aim);
-        }
-
-        // The SHIFT cardinal constraint, generalised (Session-8 playtest fix): snap the aim onto the
+        // The CTRL cardinal constraint, generalised (Session-8 playtest fix): snap the aim onto the
         // east-west or north-south line through the reference point (whichever is dominant), at the
         // reference's height. During a draft the reference is the first foot; when RE-GRABBING an anchor
         // it is the guide's OTHER anchor — the same feet-align-to-each-other feel, after placement too.

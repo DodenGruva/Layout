@@ -95,12 +95,12 @@ established tool requirement.
 - `/layout private` — persist the preference and switch new placements to private mode when permitted.
 - `/layout public` — persist the preference and switch new placements to public/server mode.
 - `/layout client push all` — while in public mode, publish all loaded private guides to the server.
-- `.layout client dispel all` — remove every private guide in the current client world file.
-- `.layout client dispel <chunk radius>` — remove nearby private guides using the server command's
+- `.layout dispel all` — remove every private guide in the current client world file.
+- `.layout dispel <chunk radius>` — remove nearby private guides using the server command's
   Chebyshev chunk-radius rule.
 - `/layout dispel all|<chunk radius>` remains the existing `controlserver` command for public guides only.
 
-The leading dot on `.layout client dispel` is intentional: it is registered as a client command and works
+The leading dot on `.layout dispel` is intentional: it is registered as a client command and works
 even when the server has no Layout command tree.
 
 ## Private persistence and recovery

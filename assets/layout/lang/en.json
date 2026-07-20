@@ -1,6 +1,15 @@
 {
   "item-guidetool": "Chalking Kit",
   "itemdesc-guidetool": "Plan before you build: place translucent, world-shared voxel guides. Left-click acts by mode (create / edit / delete), F opens modes & settings, Ctrl+Z and Ctrl+Y undo and redo. Placing guides uses up chalk (flat guides 1, volumes 2); refill the kit with Chalking Powder. An empty kit can still edit and dispel — it just can't draw new guides.",
+  "heldhelp-layout-cardinal": "Constrain Horizontally",
+  "heldhelp-layout-vertical": "Constrain Vertically",
+  "heldhelp-layout-centerapex": "Center Apex",
+  "heldhelp-layout-invert": "Invert Guide",
+  "heldhelp-layout-closerim": "Close Rim",
+  "heldhelp-layout-restore": "Reset Guide",
+  "heldhelp-layout-flatside": "Align Flat Side",
+  "heldhelp-layout-diagonal": "Constrain Diagonally",
+  "heldhelp-layout-flare": "Allow Flare",
   "item-chalkingpowder": "Chalking Powder",
   "itemdesc-chalkingpowder": "Yellow marking chalk for the Chalking Kit. Hold it and right-click to refill a kit anywhere in your hotbar, or SHIFT+right-click a kit set down on the ground to refill it in place — tap for one scoop (+4 chalk), keep holding to pour until full. Mixed from any powder and a splash of yellow dye."
 }

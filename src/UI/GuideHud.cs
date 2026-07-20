@@ -63,6 +63,7 @@ namespace Layout.UI
 
         // --- tool-driven inputs ---
         private Vec3d _draftAim;          // live second-foot aim while drafting (deep-copied)
+        private bool _draftFlatSideAligned;
         private Guid? _examinedGuide;     // guide under the crosshair, if any
 
         // --- cap-warning flash state (fed by VoxelCapWarningReceived) ---
@@ -149,15 +150,17 @@ namespace Layout.UI
         // ---------------------------------------------------------------------------------
         //  Tool-driven seams
         // ---------------------------------------------------------------------------------
-        public void SetDraftAim(Vec3d aim)
+        public void SetDraftAim(Vec3d aim, bool flatSideAligned = false)
         {
             _draftAim = aim == null ? null : new Vec3d(aim.X, aim.Y, aim.Z);
+            _draftFlatSideAligned = flatSideAligned;
             RefreshText();
         }
 
         public void ClearDraftAim()
         {
             _draftAim = null;
+            _draftFlatSideAligned = false;
             _draftKeyX = _draftKeyY = _draftKeyZ = long.MinValue;
             _draftKeyScale = int.MinValue;
             _draftVoxelCount = 0;
@@ -329,7 +332,8 @@ namespace Layout.UI
             // fill/sides/draft-stage/chain-length forces a re-measure whenever any changes mid-draft.
             int shapeKey = scale + 1000 * ((int)_tool.Shape + 4 * (int)_tool.Constraint + 16 * (_tool.Filled ? 1 : 0)
                 + 32 * _tool.Sides + 1024 * (_tool.AwaitingApex ? 1 : 0) + 2048 * _tool.ChainCount
-                + 65536 * (_tool.AwaitingRim ? 1 : 0));
+                + 65536 * (_tool.AwaitingRim ? 1 : 0)
+                + 131072 * (_draftFlatSideAligned ? 1 : 0));
             if (qx == _draftKeyX && qy == _draftKeyY && qz == _draftKeyZ && shapeKey == _draftKeyScale) return;
 
             long now = capi.World.ElapsedMilliseconds;
@@ -362,7 +366,7 @@ namespace Layout.UI
                     Vec3d end = _tool.AwaitingApex ? _tool.DraftSecond : aim;
                     shape = ShapeFactory.Create(
                         _tool.Shape, _tool.Constraint, _tool.DraftPlaneAxis, start, end,
-                        sides: _tool.Sides);
+                        sides: _tool.Sides, flatSideAligned: _draftFlatSideAligned);
                     DraftManager.ApplyPlacementPoints(shape, _tool.Shape, _tool.Constraint,
                         _tool.AwaitingRim ? _tool.DraftThird : _tool.AwaitingApex ? aim : null,
                         _tool.AwaitingRim ? aim : null);

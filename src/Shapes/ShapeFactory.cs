@@ -23,7 +23,7 @@ namespace Layout.Shapes
         public static IGuideShape Create(
             GuideShapeType type, ShapeConstraint constraint, PlaneAxis shapePlaneAxis, Vec3d start, Vec3d end,
             bool inverted = false, int sides = 0,
-            IReadOnlyList<Vec3d> chain = null, bool closed = false)
+            IReadOnlyList<Vec3d> chain = null, bool closed = false, bool flatSideAligned = false)
         {
             switch (type)
             {
@@ -36,7 +36,7 @@ namespace Layout.Shapes
                 case GuideShapeType.Rectangle:
                     return new RectangleShape(start, end, shapePlaneAxis, constraint);
                 case GuideShapeType.Polygon:
-                    return new PolygonShape(start, end, shapePlaneAxis, sides);
+                    return new PolygonShape(start, end, shapePlaneAxis, sides, flatSideAligned);
                 case GuideShapeType.FreeShape:
                     return new FreeShape(chain != null && chain.Count >= 2 ? chain : new[] { start, end },
                         closed && chain != null && chain.Count >= 3);
@@ -48,6 +48,12 @@ namespace Layout.Shapes
                     return new CylinderShape(start, end, shapePlaneAxis, inverted);
                 case GuideShapeType.TaperedCylinder:
                     return new TaperedCylinderShape(start, end, shapePlaneAxis, inverted);
+                case GuideShapeType.PolygonalPrism:
+                    return new PolygonalPrismShape(start, end, shapePlaneAxis, sides,
+                        tapered: false, inverted: inverted, flatSideAligned: flatSideAligned);
+                case GuideShapeType.TaperedPolygonalPrism:
+                    return new PolygonalPrismShape(start, end, shapePlaneAxis, sides,
+                        tapered: true, inverted: inverted, flatSideAligned: flatSideAligned);
                 case GuideShapeType.Cone:
                     return new ConeShape(start, end, shapePlaneAxis, inverted);
                 case GuideShapeType.Box:
@@ -74,7 +80,7 @@ namespace Layout.Shapes
                 case GuideShapeType.Rectangle:
                     return new RectangleShape(g.ControlPoints, g.ShapePlaneAxis, g.Constraint);
                 case GuideShapeType.Polygon:
-                    return new PolygonShape(g.ControlPoints, g.ShapePlaneAxis, g.Sides);
+                    return new PolygonShape(g.ControlPoints, g.ShapePlaneAxis, g.Sides, g.FlatSideAligned);
                 case GuideShapeType.FreeShape:
                     return new FreeShape(g.ControlPoints, g.IsClosed);
                 case GuideShapeType.Sphere:
@@ -85,6 +91,12 @@ namespace Layout.Shapes
                     return new CylinderShape(g.ControlPoints, g.ShapePlaneAxis);
                 case GuideShapeType.TaperedCylinder:
                     return new TaperedCylinderShape(g.ControlPoints, g.ShapePlaneAxis);
+                case GuideShapeType.PolygonalPrism:
+                    return new PolygonalPrismShape(g.ControlPoints, g.ShapePlaneAxis, g.Sides,
+                        tapered: false, flatSideAligned: g.FlatSideAligned);
+                case GuideShapeType.TaperedPolygonalPrism:
+                    return new PolygonalPrismShape(g.ControlPoints, g.ShapePlaneAxis, g.Sides,
+                        tapered: true, flatSideAligned: g.FlatSideAligned);
                 case GuideShapeType.Cone:
                     return new ConeShape(g.ControlPoints, g.ShapePlaneAxis);
                 case GuideShapeType.Box:
@@ -97,7 +109,7 @@ namespace Layout.Shapes
         /// <summary>Adopt for transient lists that have no GuideData (the renderer's draft ghost).</summary>
         public static IGuideShape Adopt(
             GuideShapeType type, ShapeConstraint constraint, PlaneAxis shapePlaneAxis, List<ControlPoint> points,
-            int sides = 0, bool closed = false)
+            int sides = 0, bool closed = false, bool flatSideAligned = false)
         {
             switch (type)
             {
@@ -110,7 +122,7 @@ namespace Layout.Shapes
                 case GuideShapeType.Rectangle:
                     return new RectangleShape(points, shapePlaneAxis, constraint);
                 case GuideShapeType.Polygon:
-                    return new PolygonShape(points, shapePlaneAxis, sides);
+                    return new PolygonShape(points, shapePlaneAxis, sides, flatSideAligned);
                 case GuideShapeType.FreeShape:
                     return new FreeShape(points, closed);
                 case GuideShapeType.Sphere:
@@ -121,6 +133,12 @@ namespace Layout.Shapes
                     return new CylinderShape(points, shapePlaneAxis);
                 case GuideShapeType.TaperedCylinder:
                     return new TaperedCylinderShape(points, shapePlaneAxis);
+                case GuideShapeType.PolygonalPrism:
+                    return new PolygonalPrismShape(points, shapePlaneAxis, sides,
+                        tapered: false, flatSideAligned: flatSideAligned);
+                case GuideShapeType.TaperedPolygonalPrism:
+                    return new PolygonalPrismShape(points, shapePlaneAxis, sides,
+                        tapered: true, flatSideAligned: flatSideAligned);
                 case GuideShapeType.Cone:
                     return new ConeShape(points, shapePlaneAxis);
                 case GuideShapeType.Box:

@@ -57,8 +57,9 @@ namespace Layout.Guide
         /// snapshot (spring-back reports "no original recorded" for them) — default-driven migration.
         /// Version 7 (Session 11, 0.1.15) added <see cref="IsClosed"/> for the Free-Shape (default false —
         /// harmless on every earlier shape). Version 8 (0.1.51) added the default-false
-        /// <see cref="ControlPoint.IsLockMarker"/> role used by non-deforming Arch lock markers.
-        public const int CurrentDataVersion = 8;
+        /// <see cref="ControlPoint.IsLockMarker"/> role used by non-deforming Arch lock markers. Version 9
+        /// added <see cref="FlatSideAligned"/> for polygon-based guides (default false preserves old guides).
+        public const int CurrentDataVersion = 9;
 
         /// <summary>The voxel edge lengths a guide may use, in 1/16-block units (1 → 1/16 block, 16 → 1 block).</summary>
         public static readonly int[] ValidVoxelScales = { 1, 2, 4, 8, 16 };
@@ -80,10 +81,14 @@ namespace Layout.Guide
         public int Divisions { get; set; }
 
         /// <summary>
-        /// Session 11: the regular polygon's side count. Only meaningful when <see cref="ShapeType"/> is
-        /// <see cref="GuideShapeType.Polygon"/>; carried (0) but ignored by every other shape.
+        /// The regular polygon side count. Meaningful for the 2D Polygon and both polygonal prism volumes;
+        /// carried as 0 but ignored by every other shape.
         /// </summary>
         public int Sides { get; set; }
+
+        /// <summary>Whether a polygon-based guide aligns an edge midpoint, rather than a vertex, to its
+        /// two-click placement axis. Ignored by non-polygon shapes.</summary>
+        public bool FlatSideAligned { get; set; }
 
         /// <summary>
         /// Session 11 (0.1.15): whether a Free-Shape loops back to its first corner (drafted by clicking
@@ -159,6 +164,7 @@ namespace Layout.Guide
             ShapePlaneAxis = PlaneAxis.Y;
             Divisions = 0;
             Sides = 0;
+            FlatSideAligned = false;
             IsClosed = false;
             OriginalControlPoints = null;      // null = no as-placed snapshot (pre-0.1.14 records)
             OriginalConstraint = ShapeConstraint.None;
@@ -197,7 +203,8 @@ namespace Layout.Guide
             PlaneAxis shapePlaneAxis = PlaneAxis.Y,
             int divisions = 0,
             int sides = 0,
-            bool isClosed = false)
+            bool isClosed = false,
+            bool flatSideAligned = false)
         {
             if (controlPoints == null) throw new ArgumentNullException(nameof(controlPoints));
             if (!IsValidVoxelScale(voxelScale))
@@ -218,6 +225,7 @@ namespace Layout.Guide
                 ShapePlaneAxis = shapePlaneAxis,
                 Divisions = divisions,
                 Sides = sides,
+                FlatSideAligned = flatSideAligned,
                 IsClosed = isClosed,
                 OriginalControlPoints = original,
                 OriginalConstraint = constraint,
@@ -269,6 +277,7 @@ namespace Layout.Guide
                 ShapePlaneAxis = ShapePlaneAxis,
                 Divisions = Divisions,
                 Sides = Sides,
+                FlatSideAligned = FlatSideAligned,
                 IsClosed = IsClosed,
                 OriginalControlPoints = originalCopy,
                 OriginalConstraint = OriginalConstraint,

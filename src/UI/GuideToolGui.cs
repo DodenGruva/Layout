@@ -90,13 +90,15 @@ namespace Layout.UI
             "line", "triangle", "righttri", "equilateral",
             "isosceles", "rectangle", "square", "polygon",
             "freeshape",
-            "sphere", "dome", "cylinder", "taperedcylinder", "cone", "box" };
+            "sphere", "dome", "cylinder", "taperedcylinder",
+            "polygonalprism", "taperedpolygonalprism", "cone", "box" };
         private static readonly string[] ShapeNames = {
             "Arch", "Half-circle", "Circle", "Ellipse",
             "Line", "Triangle", "Right triangle", "Equilateral",
             "Isosceles", "Rectangle", "Square", "Polygon",
             "Free-Shape",
-            "Sphere", "Dome", "Cylinder", "Tapered Cylinder", "Cone", "Box" };
+            "Sphere", "Dome", "Cylinder", "Tapered Cylinder",
+            "Polygonal Prism", "Tapered Polygonal Prism", "Cone", "Box" };
 
         // Voxel-edge scale, ascending: the NxN icon IS the voxel count (1x1 smallest ... 16x16 = full block),
         // exactly like the game's native scale icons. Names are voxel counts, not fractions (human-requested).
@@ -126,7 +128,8 @@ namespace Layout.UI
             LayoutToolIcons.Isosceles, LayoutToolIcons.Rectangle, LayoutToolIcons.Square, LayoutToolIcons.Polygon,
             LayoutToolIcons.FreeShapeIcon,
             LayoutToolIcons.Sphere, LayoutToolIcons.Dome, LayoutToolIcons.Cylinder,
-            LayoutToolIcons.TaperedCylinder, LayoutToolIcons.Cone, LayoutToolIcons.Box };
+            LayoutToolIcons.TaperedCylinder, LayoutToolIcons.PolygonalPrism,
+            LayoutToolIcons.TaperedPolygonalPrism, LayoutToolIcons.Cone, LayoutToolIcons.Box };
         private static readonly string[] ModeIcons = { LayoutToolIcons.ModeCreate, LayoutToolIcons.ModeEdit, LayoutToolIcons.ModeDelete };
         private static readonly string[] ProjIcons = { LayoutToolIcons.ProjVolumetric, LayoutToolIcons.ProjSurface };
         private static readonly string[] FillIcons = { LayoutToolIcons.FillHollow, LayoutToolIcons.FillFilled };
@@ -316,7 +319,7 @@ namespace Layout.UI
             ElementBounds headerBounds = ElementBounds.Fixed(0, y, contentW, headerH);
             if (_tool.Mode == ToolMode.Create)
             {
-                c.AddDynamicText("Create Mode - Next guide:", font, headerBounds, "header");
+                c.AddDynamicText("Create Mode", font, headerBounds, "header");
                 CairoFont rightFont = CairoFont.WhiteSmallText();
                 rightFont.Orientation = EnumTextOrientation.Right;
                 c.AddDynamicText(ShapeDisplayName(_tool.Shape, _tool.Constraint), rightFont,
@@ -445,12 +448,17 @@ namespace Layout.UI
             // human-requested). Both are the native number input + wheel + spinners. On a 3D VOLUME the
             // whole row is HIDDEN (0.1.23, human-requested — same as the Sides field being polygon-only;
             // the equal-parts marks run along a curve and a volume has none).
-            bool sidesRow = editMode ? (selected != null && selected.ShapeType == GuideShapeType.Polygon)
-                                     : _tool.Shape == GuideShapeType.Polygon;
+            bool sidesRow = editMode ? (selected != null && GuideShapeTypes.UsesSides(selected.ShapeType))
+                                     : GuideShapeTypes.UsesSides(_tool.Shape);
             int divCurrent = editMode ? (selected?.Divisions ?? 0) : _tool.Divisions;
             Action<int> divChanged = editMode ? OnGuideDivisionsChanged : OnToolDivisionsChanged;
             bool numberInert = editMode ? settingsInert : deleteMode;
-            if (volumePicked)
+            if (volumePicked && sidesRow)
+                AddNumberControl(c, rowFont, font, ref y, labelW, pad, tile, tileGap, rowGap, "Sides",
+                    editMode ? (selected?.Sides ?? Shapes.PolygonShape.DefaultSides) : _tool.Sides,
+                    Shapes.PolygonShape.MinSides, Shapes.PolygonShape.MaxSides, numberInert, "sides",
+                    editMode ? OnGuideSidesChanged : OnToolSidesChanged);
+            else if (volumePicked)
             {
                 // no Divisions / Sides row for volumes
             }
@@ -1189,7 +1197,7 @@ namespace Layout.UI
                 if (surfaceNow) RelightRow("plane", PlaneEditCodes, AxisToEditIndex(g.Plane.FlattenedAxis));
                 RelightRow("fill", FillCodes, g.IsFilled ? 1 : 0);
                 SingleComposer?.GetTextInput("div:text")?.SetValue(g.Divisions > 0 ? g.Divisions.ToString() : "0");
-                if (g.ShapeType == GuideShapeType.Polygon)
+                if (GuideShapeTypes.UsesSides(g.ShapeType))
                     SingleComposer?.GetTextInput("sides:text")?.SetValue(
                         Shapes.PolygonShape.ClampSides(g.Sides).ToString());
                 RelightRow("vis", VisCodes, g.IsHidden ? 1 : 0);
@@ -1218,7 +1226,7 @@ namespace Layout.UI
             {
                 // Create composes as TWO texts (left label + right-aligned shape name) in SetupDialog;
                 // this left half only backstops any other caller.
-                ToolMode.Create => "Create Mode - Next guide:",
+                ToolMode.Create => "Create Mode",
                 ToolMode.Edit => "Edit Mode - Select a guide to edit it.",
                 ToolMode.Delete => "Delete Mode - Click a guide to remove it.",
                 _ => "Layout tool"
@@ -1337,6 +1345,8 @@ namespace Layout.UI
             "dome"        => (GuideShapeType.Dome,      ShapeConstraint.None),
             "cylinder"    => (GuideShapeType.Cylinder,  ShapeConstraint.None),
             "taperedcylinder" => (GuideShapeType.TaperedCylinder, ShapeConstraint.None),
+            "polygonalprism" => (GuideShapeType.PolygonalPrism, ShapeConstraint.None),
+            "taperedpolygonalprism" => (GuideShapeType.TaperedPolygonalPrism, ShapeConstraint.None),
             "cone"        => (GuideShapeType.Cone,      ShapeConstraint.None),
             "box"         => (GuideShapeType.Box,       ShapeConstraint.None),
             _             => (GuideShapeType.Arch,      ShapeConstraint.None)
@@ -1362,8 +1372,10 @@ namespace Layout.UI
             GuideShapeType.Dome      => 14,
             GuideShapeType.Cylinder  => 15,
             GuideShapeType.TaperedCylinder => 16,
-            GuideShapeType.Cone      => 17,
-            GuideShapeType.Box       => 18,
+            GuideShapeType.PolygonalPrism => 17,
+            GuideShapeType.TaperedPolygonalPrism => 18,
+            GuideShapeType.Cone      => 19,
+            GuideShapeType.Box       => 20,
             _ => constraint == ShapeConstraint.SemiCircle ? 1 : 0
         };
 

@@ -50,17 +50,19 @@ namespace Layout.Systems
         public Vec3d Apex { get; }
         /// <summary>0.2.24: the fourth click of a Tapered Cylinder (the rim/top-radius point), else null.</summary>
         public Vec3d Rim { get; }
+        public bool FlatSideAligned { get; }
         public int VoxelCount { get; }
         public int CapLimit { get; }
 
         public DraftCompletion(DraftCompletionStatus status, Vec3d start, Vec3d end, int voxelCount, int capLimit,
-            Vec3d apex = null, Vec3d rim = null)
+            Vec3d apex = null, Vec3d rim = null, bool flatSideAligned = false)
         {
             Status = status;
             Start = start;
             End = end;
             Apex = apex;
             Rim = rim;
+            FlatSideAligned = flatSideAligned;
             VoxelCount = voxelCount;
             CapLimit = capLimit;
         }
@@ -119,6 +121,7 @@ namespace Layout.Systems
         private Vec3d _draftStart;                      // deep-copied; owned
         private Vec3d _draftSecond;                     // Session 11: the placed BASE end of a 3-click draft
         private Vec3d _draftThird;                      // 0.2.24: the placed HEIGHT point of a 4-click draft
+        private bool _draftFlatSideAligned;
         private PlaneAxis _draftPlaneAxis = PlaneAxis.Y; // intrinsic plane for the ellipse family, from click 1's face
 
         // Session 11 (0.1.15): the Free-Shape's growing corner chain. Seeded with the start point on
@@ -207,11 +210,17 @@ namespace Layout.Systems
                     or GuideShapeType.Rectangle or GuideShapeType.Polygon
                     or GuideShapeType.FreeShape
                     or GuideShapeType.Sphere or GuideShapeType.Dome or GuideShapeType.Cylinder
-                    or GuideShapeType.TaperedCylinder or GuideShapeType.Cone or GuideShapeType.Box => shape,
+                    or GuideShapeType.TaperedCylinder or GuideShapeType.PolygonalPrism
+                    or GuideShapeType.TaperedPolygonalPrism or GuideShapeType.Cone
+                    or GuideShapeType.Box => shape,
                 _ => GuideShapeType.Arch
             };
             _constraint = IsValidPair(_shape, constraint) ? constraint : ShapeConstraint.None;
-            if (!NeedsApexClick(_shape, _constraint)) _draftSecond = null;
+            if (!NeedsApexClick(_shape, _constraint))
+            {
+                _draftSecond = null;
+                _draftFlatSideAligned = false;
+            }
             if (!NeedsRimClick(_shape)) _draftThird = null;
             // Switching away from the Free-Shape mid-draft drops any chained corners beyond the first
             // (the draft steps back to "one anchor placed", same as the 3-click base rule above).
@@ -238,6 +247,8 @@ namespace Layout.Systems
             (shape == GuideShapeType.Triangle && constraint != ShapeConstraint.Equilateral)
             || shape == GuideShapeType.Cylinder
             || shape == GuideShapeType.TaperedCylinder
+            || shape == GuideShapeType.PolygonalPrism
+            || shape == GuideShapeType.TaperedPolygonalPrism
             || shape == GuideShapeType.Cone
             || shape == GuideShapeType.Box;
 
@@ -245,7 +256,8 @@ namespace Layout.Systems
         /// True when this shape places with a FOURTH click after the height one (0.2.24): only the
         /// Tapered Cylinder, whose last click sets the lid's radius by its distance from the axis.
         /// </summary>
-        public static bool NeedsRimClick(GuideShapeType shape) => shape == GuideShapeType.TaperedCylinder;
+        public static bool NeedsRimClick(GuideShapeType shape) => shape == GuideShapeType.TaperedCylinder
+            || shape == GuideShapeType.TaperedPolygonalPrism;
 
         /// <summary>True for the chained-click Free-Shape (Session 11, 0.1.15).</summary>
         public static bool IsChainShape(GuideShapeType shape) => shape == GuideShapeType.FreeShape;
@@ -292,6 +304,8 @@ namespace Layout.Systems
 
         /// <summary>True when the active draft has its base down and is now aiming the apex (click 3 of 3).</summary>
         public bool AwaitingApex => _hasDraft && _draftSecond != null;
+
+        public bool DraftFlatSideAligned => _hasDraft && _draftFlatSideAligned;
 
         /// <summary>
         /// The placed HEIGHT point of a four-click draft (the third click), as a deep copy — or null while
@@ -377,6 +391,7 @@ namespace Layout.Systems
             _draftStart = new Vec3d(startPoint.X, startPoint.Y, startPoint.Z);
             _draftSecond = null;
             _draftThird = null;
+            _draftFlatSideAligned = false;
             _draftChain.Clear();
             _draftChain.Add(new Vec3d(startPoint.X, startPoint.Y, startPoint.Z));
             _draftPlaneAxis = shapePlaneAxis;
@@ -388,10 +403,11 @@ namespace Layout.Systems
         /// Stores the second click of a THREE-click draft (the base's far end); the draft then awaits its
         /// apex click. Only meaningful when <see cref="NeedsApexClick"/> is true for the current shape.
         /// </summary>
-        public void PlaceSecondPoint(Vec3d secondPoint)
+        public void PlaceSecondPoint(Vec3d secondPoint, bool flatSideAligned = false)
         {
             if (!_hasDraft || secondPoint == null) return;
             _draftSecond = new Vec3d(secondPoint.X, secondPoint.Y, secondPoint.Z);
+            _draftFlatSideAligned = GuideShapeTypes.UsesSides(_shape) && flatSideAligned;
         }
 
         /// <summary>
@@ -426,6 +442,7 @@ namespace Layout.Systems
             if (_draftSecond != null)
             {
                 _draftSecond = null;
+                _draftFlatSideAligned = false;
                 return true;
             }
             ClearDraft();
@@ -442,7 +459,7 @@ namespace Layout.Systems
         /// successful send, assembling the render settings via <see cref="BuildRenderSettings"/> then.
         /// </summary>
         public DraftCompletion TryCompleteDraft(Vec3d endPoint, Vec3d apexPoint = null, bool inverted = false,
-            Vec3d rimPoint = null)
+            Vec3d rimPoint = null, bool flatSideAligned = false)
         {
             if (!_hasDraft || endPoint == null)
                 return new DraftCompletion(DraftCompletionStatus.NoActiveDraft, null, null, 0, 0);
@@ -453,7 +470,7 @@ namespace Layout.Systems
             Vec3d rim = rimPoint == null ? null : new Vec3d(rimPoint.X, rimPoint.Y, rimPoint.Z);
 
             IGuideShape preview = ShapeFactory.Create(_shape, _constraint, _draftPlaneAxis, start, end,
-                inverted, _sides);
+                inverted, _sides, flatSideAligned: flatSideAligned);
             ApplyPlacementPoints(preview, _shape, _constraint, apex, rim);
             int count = _perGuideVoxelCap > 0
                 ? GuideShapeVoxelCounting.CountUpTo(preview, _scale, _filled, _perGuideVoxelCap)
@@ -464,7 +481,8 @@ namespace Layout.Systems
                 ? DraftCompletionStatus.RejectedOverCap
                 : DraftCompletionStatus.Ready;
 
-            return new DraftCompletion(status, start, end, count, _perGuideVoxelCap, apex, rim);
+            return new DraftCompletion(status, start, end, count, _perGuideVoxelCap, apex, rim,
+                flatSideAligned);
         }
 
         /// <summary>
@@ -490,6 +508,7 @@ namespace Layout.Systems
             _draftStart = null;
             _draftSecond = null;
             _draftThird = null;
+            _draftFlatSideAligned = false;
             _draftChain.Clear();
         }
     }
