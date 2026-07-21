@@ -133,6 +133,7 @@ namespace Layout.UI
         private static readonly string[] ModeIcons = { LayoutToolIcons.ModeCreate, LayoutToolIcons.ModeEdit, LayoutToolIcons.ModeDelete };
         private static readonly string[] ProjIcons = { LayoutToolIcons.ProjVolumetric, LayoutToolIcons.ProjSurface };
         private static readonly string[] FillIcons = { LayoutToolIcons.FillHollow, LayoutToolIcons.FillFilled };
+        private static readonly string[] FormIcons = { LayoutToolIcons.FormShell, LayoutToolIcons.FormWireframe };
         private static readonly string[] VisIcons  = { LayoutToolIcons.VisShown, LayoutToolIcons.VisHidden };
         private static readonly string[] PlaneToolIcons =
             { LayoutToolIcons.PlaneAuto, LayoutToolIcons.PlaneFloor, LayoutToolIcons.PlaneNS, LayoutToolIcons.PlaneEW };
@@ -416,19 +417,22 @@ namespace Layout.UI
             // Fill also greys for every 3D VOLUME (0.2.17, human-directed): exposed-face meshing made a
             // filled interior emit no geometry at all, so "filled" bought nothing visible at an enormous
             // voxel cost — volumes are always their hollow shell now.
-            bool fillInert = projFillInert || freeShapePicked || volumePicked;
+            bool fillInert = projFillInert || freeShapePicked;
             string[] fillNames = !projFillInert && freeShapePicked
                 ? new[] { FillNames[0] + "\nFill is not available on a Free-Shape.",
                           FillNames[1] + "\nFill is not available on a Free-Shape." }
                 : !projFillInert && volumePicked
-                    ? new[] { FillNames[0] + "\nA 3D shape is always a hollow shell.",
-                              FillNames[1] + "\nNot available on a 3D shape — its interior would be invisible anyway." }
+                    ? new[] { "Shell\nShow the complete outer shell.",
+                              "Wireframe\nShow only the shape's structural wires." }
                     : FillNames;
             AddIconRowPair(c, projInert ? ghostFont : rowFont, ref y, labelW, pad, tile, tileGap, rowGap,
                 "Projection", ProjCodes, projNames, ProjIcons, volumePicked ? 0 : (surface ? 1 : 0),
                 editMode ? OnGuideProjectionTile : OnProjectionTile, "proj", projInert,
-                "Fill", fillInert ? ghostFont : rowFont, FillCodes, fillNames, FillIcons,
-                !volumePicked && (editMode ? (selected?.IsFilled ?? false) : _tool.Filled) ? 1 : 0,
+                volumePicked ? "Form" : "Fill", fillInert ? ghostFont : rowFont,
+                FillCodes, fillNames, volumePicked ? FormIcons : FillIcons,
+                (volumePicked
+                    ? (editMode ? (selected?.IsWireframe ?? false) : _tool.Wireframe)
+                    : (editMode ? (selected?.IsFilled ?? false) : _tool.Filled)) ? 1 : 0,
                 editMode ? OnGuideFillTile : OnFillTile, "fill", fillInert);
 
             if (surface)
@@ -1078,7 +1082,10 @@ namespace Layout.UI
 
         private void OnFillTile(string rowKey, string code)
         {
-            _tool.SetFilled(code == "filled");
+            if (GuideShapeTypes.IsVolume(_tool.Shape))
+                _tool.SetWireframe(code == "filled");
+            else
+                _tool.SetFilled(code == "filled");
         }
 
         // ---------------------------------------------------------------------------------
@@ -1115,8 +1122,15 @@ namespace Layout.UI
         {
             GuideData g = ResolveSelectedGuide();
             if (g == null) return;
-            bool filled = code == "filled";
-            if (g.IsFilled != filled) _net.SendSetFilled(g.Id, filled);
+            bool secondOption = code == "filled";
+            if (GuideShapeTypes.IsVolume(g.ShapeType))
+            {
+                if (g.IsWireframe != secondOption) _net.SendSetWireframe(g.Id, secondOption);
+            }
+            else if (g.IsFilled != secondOption)
+            {
+                _net.SendSetFilled(g.Id, secondOption);
+            }
         }
 
         private void OnGuideVisibilityTile(string rowKey, string code)
@@ -1195,7 +1209,8 @@ namespace Layout.UI
                 RelightRow("scale", ScaleCodes, IndexOfScale(g.VoxelScale));
                 RelightRow("proj", ProjCodes, surfaceNow ? 1 : 0);
                 if (surfaceNow) RelightRow("plane", PlaneEditCodes, AxisToEditIndex(g.Plane.FlattenedAxis));
-                RelightRow("fill", FillCodes, g.IsFilled ? 1 : 0);
+                RelightRow("fill", FillCodes,
+                    GuideShapeTypes.IsVolume(g.ShapeType) ? (g.IsWireframe ? 1 : 0) : (g.IsFilled ? 1 : 0));
                 SingleComposer?.GetTextInput("div:text")?.SetValue(g.Divisions > 0 ? g.Divisions.ToString() : "0");
                 if (GuideShapeTypes.UsesSides(g.ShapeType))
                     SingleComposer?.GetTextInput("sides:text")?.SetValue(

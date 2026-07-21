@@ -64,6 +64,10 @@ namespace Layout.Config
         [JsonProperty("defaultFill")]
         public bool DefaultFill { get; set; } = false;
 
+        /// <summary>For 3D shapes, start with a structural wireframe instead of the shell.</summary>
+        [JsonProperty("defaultWireframe")]
+        public bool DefaultWireframe { get; set; } = false;
+
         /// <summary>The shape the tool starts on: 0 = Arch, 1 = Ellipse (pinned GuideShapeType values).</summary>
         public int DefaultShape { get; set; } = (int)GuideShapeType.Arch;
 

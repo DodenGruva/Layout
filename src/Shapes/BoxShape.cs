@@ -118,7 +118,13 @@ namespace Layout.Shapes
             var result = new List<VoxelPosition>();
             if (!TryGetFull(out Vec3d a, out Vec3d u1, out Vec3d u2, out Vec3d n,
                 out double du, out double dv, out double h)) return result;
-            if (ScanTooBig(scale, du, dv, h)) return result;
+            if (ScanTooBig(scale, du, dv, h))
+            {
+                result = LargeVolumeShellFallback.BoxShell(
+                    a, u1, u2, n, du, dv, h, scale, int.MaxValue, out _);
+                ClaimMarkers(result, scale);
+                return result;
+            }
 
             double cell = scale / 16.0;
             // Local coordinate ranges (signed extents → ordered [lo,hi]).
@@ -157,13 +163,7 @@ namespace Layout.Shapes
                 }
             }
 
-            for (int i = 0; i < 3 && i < _controlPoints.Count; i++)
-            {
-                ControlPoint cp = _controlPoints[i];
-                VoxelRenderType type = cp.IsLocked ? VoxelRenderType.Locked
-                    : cp.IsPrimary ? VoxelRenderType.Primary : VoxelRenderType.Anchor;
-                ShapeGeometry.ClaimMarker(result, scale, cp.WorldPosition, type);
-            }
+            ClaimMarkers(result, scale);
             return result;
         }
 
@@ -175,7 +175,15 @@ namespace Layout.Shapes
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             if (!TryGetFull(out Vec3d a, out Vec3d u1, out Vec3d u2, out Vec3d n,
                 out double du, out double dv, out double h)) return 0;
-            if (ScanTooBig(scale, du, dv, h)) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+            if (ScanTooBig(scale, du, dv, h))
+            {
+                List<VoxelPosition> fallback = LargeVolumeShellFallback.BoxShell(
+                    a, u1, u2, n, du, dv, h, scale, Math.Max(0, stopAfter), out bool exceeded);
+                if (exceeded) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+                ClaimMarkers(fallback, scale);
+                return fallback.Count > stopAfter
+                    ? GuideShapeVoxelCounting.Exceeded(stopAfter) : fallback.Count;
+            }
 
             stopAfter = Math.Max(0, stopAfter);
             double cell = scale / 16.0;
@@ -245,6 +253,17 @@ namespace Layout.Shapes
 
         private static int AlignDown(double world, int scale) =>
             (int)Math.Floor(world * 16.0 / scale) * scale;
+
+        private void ClaimMarkers(List<VoxelPosition> result, int scale)
+        {
+            for (int i = 0; i < 3 && i < _controlPoints.Count; i++)
+            {
+                ControlPoint cp = _controlPoints[i];
+                VoxelRenderType type = cp.IsLocked ? VoxelRenderType.Locked
+                    : cp.IsPrimary ? VoxelRenderType.Primary : VoxelRenderType.Anchor;
+                ShapeGeometry.ClaimMarker(result, scale, cp.WorldPosition, type);
+            }
+        }
 
         // --- IGuideShape: curve queries (targeting wireframe = the 12 edges) -------------------------
 

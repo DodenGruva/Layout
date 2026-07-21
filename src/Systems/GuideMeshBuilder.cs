@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Vintagestory.API.Client;
 using Vintagestory.API.MathTools;
 using Layout.Guide;
+using Layout.Shapes;
 
 namespace Layout.Systems
 {
@@ -107,6 +108,12 @@ namespace Layout.Systems
         /// everywhere), which is also the deterministic default the mesh tests rely on.
         /// </summary>
         public Func<int, int, int, bool> IsNeighborSolid = null;
+
+        /// <summary>
+        /// Optional complete voxel occupancy used when meshing only one materialization subset. Neighbour
+        /// faces are culled against the final shell even when the neighbouring voxel belongs to a later batch.
+        /// </summary>
+        public HashSet<(int, int, int)> Occupancy = null;
     }
 
     /// <summary>
@@ -313,17 +320,23 @@ namespace Layout.Systems
             MeshData mesh;
             if (cubePath)
             {
-                present = new HashSet<(int, int, int)>(voxels.Count);
+                present = options.Occupancy ?? new HashSet<(int, int, int)>(voxels.Count);
+                if (options.Occupancy == null)
+                {
+                    for (int i = 0; i < voxels.Count; i++)
+                    {
+                        VoxelPosition p = voxels[i];
+                        if (options.Hidden && p.Type != VoxelRenderType.Anchor) continue;
+                        present.Add((p.X, p.Y, p.Z));
+                    }
+                }
+
+                int faces = 0;
                 for (int i = 0; i < voxels.Count; i++)
                 {
                     VoxelPosition p = voxels[i];
                     if (options.Hidden && p.Type != VoxelRenderType.Anchor) continue;
-                    present.Add((p.X, p.Y, p.Z));
-                }
-
-                int faces = 0;
-                foreach ((int px, int py, int pz) in present)
-                {
+                    int px = p.X, py = p.Y, pz = p.Z;
                     if (!present.Contains((px - scale, py, pz))) faces++;
                     if (!present.Contains((px + scale, py, pz))) faces++;
                     if (!present.Contains((px, py - scale, pz))) faces++;
@@ -497,6 +510,46 @@ namespace Layout.Systems
             int blockHeight = CeilDiv(voxelHeight * scale, 16);
 
             return new GuideExtent(voxelWidth, voxelHeight, blockWidth, blockHeight);
+        }
+
+        /// <summary>
+        /// Cheap metadata measurement from a shape's fixed-size targeting wireframe. This intentionally
+        /// avoids shell voxelisation and is suitable for guide names, hover text, and live grab dimensions.
+        /// </summary>
+        public static GuideExtent MeasureShapeExtent(IGuideShape shape, int scale)
+        {
+            if (shape == null || scale <= 0) return GuideExtent.Empty;
+            List<Vec3d> curve = shape.SampleCurve(128);
+            if ((curve == null || curve.Count == 0) && shape.ControlPoints == null)
+                return GuideExtent.Empty;
+
+            int minX = int.MaxValue, minY = int.MaxValue, minZ = int.MaxValue;
+            int maxX = int.MinValue, maxY = int.MinValue, maxZ = int.MinValue;
+            void Include(Vec3d point)
+            {
+                if (point == null) return;
+                int x = (int)Math.Floor(point.X * 16.0 / scale) * scale;
+                int y = (int)Math.Floor(point.Y * 16.0 / scale) * scale;
+                int z = (int)Math.Floor(point.Z * 16.0 / scale) * scale;
+                minX = Math.Min(minX, x); maxX = Math.Max(maxX, x);
+                minY = Math.Min(minY, y); maxY = Math.Max(maxY, y);
+                minZ = Math.Min(minZ, z); maxZ = Math.Max(maxZ, z);
+            }
+
+            if (curve != null)
+                for (int i = 0; i < curve.Count; i++) Include(curve[i]);
+            if (shape.ControlPoints != null)
+                for (int i = 0; i < shape.ControlPoints.Count; i++)
+                    Include(shape.ControlPoints[i]?.WorldPosition);
+            if (minX == int.MaxValue) return GuideExtent.Empty;
+
+            double horizontal = Math.Sqrt(
+                (double)(maxX - minX) * (maxX - minX)
+                + (double)(maxZ - minZ) * (maxZ - minZ));
+            int voxelWidth = (int)Math.Round(horizontal / scale) + 1;
+            int voxelHeight = (maxY - minY) / scale + 1;
+            return new GuideExtent(voxelWidth, voxelHeight,
+                CeilDiv(voxelWidth * scale, 16), CeilDiv(voxelHeight * scale, 16));
         }
 
         /// <summary>

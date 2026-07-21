@@ -32,7 +32,7 @@ namespace Layout.Client
     /// The "tidy aim-controller": all client-side interaction logic for the held Layout tool, kept out of
     /// both the (stateless) item and the (thin) ModSystem. Runs a lightweight per-tick loop while the tool
     /// is held: raycasts the crosshair against the guide mirror, feeds the HUD seams
-    /// (<see cref="GuideHud.SetExaminedGuide"/>, <see cref="GuideHud.SetDraftAim"/>), drives an active drag,
+    /// (<see cref="GuideHud.SetExaminedGuide"/>, <see cref="GuideHud.SetDraftCalculating"/>), drives an active drag,
     /// and routes the item's left/right clicks by the current <see cref="ToolMode"/>.
     /// </summary>
     /// <remarks>
@@ -66,6 +66,7 @@ namespace Layout.Client
     {
         private const int TickIntervalMs = 30;          // ~33 Hz aim loop while the tool is held
         private const int MoveSendIntervalMs = 100;     // ~10 Hz throttled move packets (the M4 figure)
+        private const int PreviewFullResVoxelThreshold = 8000;
         private const double MaxReach = 12.0;           // furthest a guide can be targeted, in blocks
         private const int PendingInsertTimeoutMs = 2000;
         // Cap-clamp trackers (v0.2.25): one for the placement ghost, one for dragging a placed point.
@@ -73,8 +74,24 @@ namespace Layout.Client
         private readonly CapClampTracker _dragClamp = new CapClampTracker();
         private bool _rimAimArmed;
         private bool _rimAwaitingRelease;
-        private long _lastDraftPreviewMs;
         private long _lastDraftClampCheckMs;
+
+        // v0.3 motion-sensitive drafting. Cheap movement keeps the selected-scale shell; expensive movement
+        // uses an adaptive precision wireframe, then materializes the final selected-scale shell when still.
+        private const int DraftSettleDelayMs = 180;
+        private const int DraftMinimumRefineIntervalMs = 120;
+        private ulong _draftPoseFingerprint;
+        private ulong _draftRawAimFingerprint;
+        private int _draftGeneration;
+        private int _acceptedDraftScale;
+        private int _adaptiveMovingScale;
+        private int _healthyMovingUpdates;
+        private ulong _draftAdaptiveContextFingerprint;
+        private long _draftLastMotionMs;
+        private long _lastDraftRefineRequestMs;
+        private long _lastDraftWorkMilliseconds;
+        private double _draftBaselineFrameMilliseconds = 16.67;
+        private DraftPreviewSpec _currentDraftSpec;
 
         private readonly ICoreClientAPI _capi;
         private readonly DraftManager _draft;
@@ -210,6 +227,7 @@ namespace Layout.Client
             _net.GuideRemoved += OnGuideRemoved;
             _net.GuideAddedOrUpdated += OnGuideAddedOrUpdated;
             _net.AuthorityModeChanged += OnAuthorityModeChanged;
+            _renderer.DraftPreviewCompleted += OnDraftPreviewCompleted;
             _capi.Input.InWorldAction += OnInWorldAction;
             _capi.Event.MouseDown += OnMouseDown;      // F5 inventory refill (independent of the tool)
             _capi.Event.MouseUp += OnMouseUp;          // release-to-rearm between height and rim clicks
@@ -455,6 +473,7 @@ namespace Layout.Client
                 _hud.SetExaminedGuide(null);
                 _hud.TryClose();
                 if (_gui.IsOpened()) _gui.TryClose();
+                ResetDraftVisualState();
                 _renderer.ClearDraftPreview();       // the DRAFT survives the swap; the live ghost does not
                 _springBackAvailable = false;
                 _modifierHelpInitialised = false;
@@ -474,6 +493,11 @@ namespace Layout.Client
             if (valid)
             {
                 _grab.Suspended = false;   // the next tick's UpdateAim picks the point back up
+                if (_net.Guides.TryGetValue(_grab.GuideId, out GuideData guide))
+                {
+                    _renderer.SetGrabbedPoint(_grab.GuideId, _grab.PointIndex);
+                    _hud.SetGrabMeasurement(_grab.GuideId, _renderer.CurrentGrabExtent);
+                }
             }
             else
             {
@@ -511,10 +535,9 @@ namespace Layout.Client
                         bool closing = _draft.ChainCount >= 3
                             && Dist(aim, _draft.ChainFirst) <= ChainSnapRadius();
                         if (closing) aim = _draft.ChainFirst;
-                        _hud.SetDraftAim(aim);
-                        if (DraftPreviewDue())
-                            _renderer.SetDraftChainPreview(_draft.DraftChain, closing ? null : aim, closing,
-                                BuildSettings(blockSel, aim));
+                        ObserveDraftMotion(aim, flatSideAligned: false);
+                        PresentDraft(new DraftPreviewSpec(0, BuildSettings(blockSel, aim),
+                            _draft.DraftChain, closing ? null : aim, closing), aim, false);
                     }
                     else if (_draft.AwaitingRim)
                     {
@@ -524,14 +547,14 @@ namespace Layout.Client
                         // from becoming a giant rim before the player has aimed back toward the lid.
                         aim = StabilizeDraftRimAim(aim);
                         aim = ConstrainDraftRim(aim);
+                        ObserveDraftMotion(aim, _draft.DraftFlatSideAligned);
                         aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
-                        _hud.SetDraftAim(aim, _draft.DraftFlatSideAligned);
-                        if (DraftPreviewDue())
-                            _renderer.SetDraftPreview(_draft.DraftStart, _draft.DraftSecond,
-                                BuildSettings(blockSel, aim),
-                                _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
-                                sides: _draft.Sides, apex: _draft.DraftThird, rim: aim,
-                                flatSideAligned: _draft.DraftFlatSideAligned);
+                        PresentDraft(new DraftPreviewSpec(0, BuildSettings(blockSel, aim),
+                            _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
+                            _draft.DraftStart, _draft.DraftSecond,
+                            sides: _draft.Sides, apex: _draft.DraftThird, rim: aim,
+                            flatSideAligned: _draft.DraftFlatSideAligned),
+                            aim, _draft.DraftFlatSideAligned);
                     }
                     else if (_draft.AwaitingApex)
                     {
@@ -539,38 +562,40 @@ namespace Layout.Client
                         // volumes (cylinder/cone/box) project the height onto their axis themselves, so
                         // SHIFT-centering doesn't apply to them.
                         if (ShiftHeld() && _draft.Shape == GuideShapeType.Triangle) aim = CenterApexOnBase(aim);
+                        ObserveDraftMotion(aim, _draft.DraftFlatSideAligned);
                         aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
-                        _hud.SetDraftAim(aim, _draft.DraftFlatSideAligned);
-                        if (DraftPreviewDue())
-                            _renderer.SetDraftPreview(_draft.DraftStart, _draft.DraftSecond,
-                                BuildSettings(blockSel, aim),
-                                _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
-                                sides: _draft.Sides, apex: aim,
-                                flatSideAligned: _draft.DraftFlatSideAligned);
+                        PresentDraft(new DraftPreviewSpec(0, BuildSettings(blockSel, aim),
+                            _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
+                            _draft.DraftStart, _draft.DraftSecond,
+                            sides: _draft.Sides, apex: aim,
+                            flatSideAligned: _draft.DraftFlatSideAligned),
+                            aim, _draft.DraftFlatSideAligned);
                     }
                     else
                     {
                         aim = ConstrainDraftBaseAim(aim);
-                        aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
                         bool flatSideAligned = GuideShapeTypes.UsesSides(_draft.Shape) && ShiftHeld();
-                        _hud.SetDraftAim(aim, flatSideAligned);
-                        if (DraftPreviewDue())
-                            _renderer.SetDraftPreview(_draft.DraftStart, aim, BuildSettings(blockSel, aim),
-                                _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
-                                sides: _draft.Sides,
-                                // Shift belongs exclusively to flat-side alignment for polygonal guides.
-                                inverted: !GuideShapeTypes.UsesSides(_draft.Shape) && EffectiveInverted(),
-                                flatSideAligned: flatSideAligned);
+                        ObserveDraftMotion(aim, flatSideAligned);
+                        aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
+                        PresentDraft(new DraftPreviewSpec(0, BuildSettings(blockSel, aim),
+                            _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
+                            _draft.DraftStart, aim,
+                            sides: _draft.Sides,
+                            // Shift belongs exclusively to flat-side alignment for polygonal guides.
+                            inverted: !GuideShapeTypes.UsesSides(_draft.Shape) && EffectiveInverted(),
+                            flatSideAligned: flatSideAligned), aim, flatSideAligned);
                     }
                 }
                 else
                 {
+                    ResetDraftVisualState();
                     _hud.ClearDraftAim();
                     _renderer.ClearDraftPreview();   // no valid aim → no ghost
                 }
             }
             else
             {
+                if (_currentDraftSpec != null) ResetDraftVisualState();
                 _renderer.ClearDraftPreview();       // no live draft (completed / cancelled / other mode)
             }
 
@@ -653,11 +678,19 @@ namespace Layout.Client
                 }
                 cp.SetPosition(target.X, target.Y, target.Z);
                 _renderer.SetGrabbedPoint(_grab.GuideId, _grab.PointIndex);   // rebuild with the nudged points
+                _hud.SetGrabMeasurement(_grab.GuideId, _renderer.CurrentGrabExtent);
             }
 
             // Throttled authoritative updates (~10 Hz), only when the position actually changed.
             long now = _capi.World.ElapsedMilliseconds;
-            if (now - _grab.LastSendMs >= MoveSendIntervalMs &&
+            // A behemoth is edited as a local wireframe transaction. Streaming intermediate poses makes
+            // the authority recount every historical size and can leave a costly packet backlog behind a
+            // cancel. Only FinishRelease sends its final pose; cancellation sends no geometry at all.
+            if (g.CachedVoxelCount > PreviewFullResVoxelThreshold) return;
+            int sendInterval = g.CachedVoxelCount > 20_000 ? 500
+                : g.CachedVoxelCount > 8_000 ? 250
+                : MoveSendIntervalMs;
+            if (now - _grab.LastSendMs >= sendInterval &&
                 (_grab.LastSentPos == null || !NearlySame(_grab.LastSentPos, target)))
             {
                 _net.SendMovePoint(_grab.GuideId, _grab.PointIndex, target);
@@ -760,6 +793,11 @@ namespace Layout.Client
 
         private Vec3d ClampDragTargetToPerGuideCap(GuideData guide, Vec3d requested)
         {
+            // A behemoth's exact count is intentionally absent from the live client path. The authority still
+            // validates throttled move packets and the final release; repeated local scans would reintroduce
+            // the same lag-lock the wireframe preview removes.
+            if (guide.CachedVoxelCount > PreviewFullResVoxelThreshold) return requested;
+
             int configuredCap = _net.PerGuideVoxelCap;
             int cap = configuredCap > 0
                 ? Math.Min(configuredCap, GuideManager.HardVoxelCeiling)
@@ -769,6 +807,7 @@ namespace Layout.Client
             long key = ClampKeyOf(current) ^ (_grab.PointIndex * 6291469L)
                 ^ (guide.VoxelScale * 2654435761L) ^ guide.Id.GetHashCode()
                 ^ (guide.Divisions * 22801763L) ^ (guide.IsFilled ? 3298534883L : 0L)
+                ^ (guide.IsWireframe ? 1099511628211L : 0L)
                 ^ (cap * 51539607551L);
             return _dragClamp.Clamp(key, current, requested, c => PreviewFitsPerGuideCap(guide, c, cap));
         }
@@ -807,8 +846,10 @@ namespace Layout.Client
                 }
             }
 
-            return GuideShapeVoxelCounting.CountUpTo(
-                shape, guide.VoxelScale, guide.IsFilled, cap) <= cap;
+            return guide.IsWireframe
+                ? ShapeWireframe.GetVoxelCount(shape, guide.VoxelScale) <= cap
+                : GuideShapeVoxelCounting.CountUpTo(
+                    shape, guide.VoxelScale, guide.IsFilled, cap) <= cap;
         }
 
         /// <summary>
@@ -855,6 +896,7 @@ namespace Layout.Client
                 ^ ((long)_draft.Shape * 1000003L) ^ ((long)_draft.Constraint * 1000033L)
                 ^ (_draft.Scale * 2654435761L) ^ (_draft.Sides * 40503L)
                 ^ (_draft.Divisions * 22801763L) ^ (_draft.Filled ? 3298534883L : 0L)
+                ^ (_draft.Wireframe ? 1099511628211L : 0L)
                 ^ (_draft.AwaitingApex ? 5915587277L : 0L) ^ (_draft.AwaitingRim ? 1500450271L : 0L)
                 ^ (cap * 51539607551L);
 
@@ -862,34 +904,187 @@ namespace Layout.Client
                 DraftClampStepBudget());
         }
 
-        // Keep input at 33 Hz, but budget expensive draft work from the last completed full-resolution
-        // HUD count. The final click still performs an exact check through DraftManager/server authority.
-        private static int DraftWorkIntervalMs(int voxelCount) => voxelCount switch
+        private void ObserveDraftMotion(Vec3d aim, bool flatSideAligned)
         {
-            <= 8_000 => 30,
-            <= 50_000 => 100,
-            <= 200_000 => 200,
-            _ => 500
-        };
+            if (aim == null) return;
+            ulong h = 1469598103934665603UL;
+            void Mix(long value) { unchecked { h ^= (ulong)value; h *= 1099511628211UL; } }
+            Mix((long)Math.Floor(aim.X * 16.0));
+            Mix((long)Math.Floor(aim.Y * 16.0));
+            Mix((long)Math.Floor(aim.Z * 16.0));
+            Mix((long)_draft.Shape); Mix((long)_draft.Constraint); Mix(_draft.Scale); Mix(_draft.Sides);
+            Mix(_draft.AwaitingApex ? 1 : 0); Mix(_draft.AwaitingRim ? 1 : 0);
+            Mix(flatSideAligned ? 1 : 0); Mix(ShiftHeld() ? 1 : 0); Mix(CtrlHeld() ? 1 : 0);
+            if (h == _draftRawAimFingerprint) return;
+            _draftRawAimFingerprint = h;
+            _draftLastMotionMs = _capi.World.ElapsedMilliseconds;
+        }
 
-        private bool DraftPreviewDue()
+        /// <summary>
+        /// One owner for every live-draft visual decision. Small poses keep their exact shell and HUD number;
+        /// costly poses invalidate the number and use a wireframe. Once still, one background calculation
+        /// builds the player's final selected-scale shell and reveals it in bounded scattered batches.
+        /// </summary>
+        private void PresentDraft(DraftPreviewSpec unversioned, Vec3d hudAim, bool flatSideAligned)
         {
+            if (unversioned == null) return;
+            ulong fingerprint = unversioned.Fingerprint();
             long now = _capi.World.ElapsedMilliseconds;
-            int interval = DraftWorkIntervalMs(_hud.DraftVoxelCount);
-            if (_lastDraftPreviewMs != 0 && now - _lastDraftPreviewMs < interval) return false;
-            _lastDraftPreviewMs = now;
-            return true;
+
+            if (_currentDraftSpec == null || fingerprint != _draftPoseFingerprint)
+            {
+                ulong adaptiveContext = DraftAdaptiveContext(unversioned);
+                if (_draftAdaptiveContextFingerprint != adaptiveContext)
+                {
+                    _draftAdaptiveContextFingerprint = adaptiveContext;
+                    _adaptiveMovingScale = unversioned.Settings.Scale;
+                    _healthyMovingUpdates = 0;
+                    _draftBaselineFrameMilliseconds = Math.Max(1.0, _renderer.SmoothedFrameMilliseconds);
+                }
+
+                _draftGeneration++;
+                _draftPoseFingerprint = fingerprint;
+                _acceptedDraftScale = 0;
+                _draftLastMotionMs = now;
+                _lastDraftRefineRequestMs = 0;
+                _currentDraftSpec = unversioned.WithGeneration(_draftGeneration);
+
+                _renderer.BeginDraftGeneration(_draftGeneration);
+                MovingDraftPreviewResult moving = _renderer.ShowMovingDraft(
+                    _currentDraftSpec, _adaptiveMovingScale);
+                _hud.SetDraftCalculating(hudAim, flatSideAligned);
+
+                if (moving == null)
+                {
+                    return;
+                }
+
+                _lastDraftWorkMilliseconds = Math.Max(1, moving.WorkMilliseconds);
+                if (moving.IsFullShell)
+                {
+                    _acceptedDraftScale = moving.RenderScale;
+                    _hud.SetDraftMeasurement(moving.Extent, moving.VoxelCount);
+                }
+
+                AdaptMovingDraftScale(moving);
+                return;
+            }
+
+            // Keep the newest deep copy (e.g. harmless sub-cell movement) under the same generation.
+            _currentDraftSpec = unversioned.WithGeneration(_draftGeneration);
+            if (now - _draftLastMotionMs < DraftSettleDelayMs || _renderer.DraftRefinementBusy) return;
+
+            int targetScale = _currentDraftSpec.Settings.Scale;
+            if (_acceptedDraftScale == targetScale) return; // exact selected scale is already visible
+
+            long interval = Math.Max(DraftMinimumRefineIntervalMs,
+                Math.Min(1500L, Math.Max(1L, _lastDraftWorkMilliseconds) * 6L));
+
+            // Frame time is a safety signal, not the sole controller. Preserve at least a 60-FPS budget,
+            // or the pre-draft baseline plus 25%, whichever is more forgiving; recover without oscillating.
+            double targetFrameMs = Math.Max(16.67, _draftBaselineFrameMilliseconds * 1.25);
+            double pressure = _renderer.SmoothedFrameMilliseconds / targetFrameMs;
+            if (pressure > 1.0) interval = (long)Math.Min(2000.0, interval * Math.Min(4.0, pressure * pressure));
+
+            if (_lastDraftRefineRequestMs != 0 && now - _lastDraftRefineRequestMs < interval) return;
+            if (_renderer.RequestDraftRefinement(_currentDraftSpec, targetScale))
+                _lastDraftRefineRequestMs = now;
+        }
+
+        private void AdaptMovingDraftScale(MovingDraftPreviewResult moving)
+        {
+            double targetFrameMs = Math.Max(16.67, _draftBaselineFrameMilliseconds * 1.25);
+            double pressure = _renderer.SmoothedFrameMilliseconds / targetFrameMs;
+            bool expensive = moving.WorkMilliseconds >= 6 || pressure > 1.15;
+            if (expensive)
+            {
+                int steps = moving.WorkMilliseconds >= 14 || pressure > 1.5 ? 2 : 1;
+                int scale = Math.Max(_adaptiveMovingScale, moving.RenderScale);
+                while (steps-- > 0) scale = NextCoarserDraftScale(scale);
+                _adaptiveMovingScale = scale;
+                _healthyMovingUpdates = 0;
+                return;
+            }
+
+            if (moving.WorkMilliseconds > 3 || pressure > 0.95)
+            {
+                _healthyMovingUpdates = 0;
+                return;
+            }
+
+            if (++_healthyMovingUpdates < 7) return;
+            _healthyMovingUpdates = 0;
+            _adaptiveMovingScale = NextFinerAdaptiveScale(
+                _adaptiveMovingScale, _currentDraftSpec.Settings.Scale);
+        }
+
+        private static int NextCoarserDraftScale(int scale)
+        {
+            int[] scales = GuideData.ValidVoxelScales;
+            for (int i = 0; i < scales.Length; i++)
+                if (scales[i] > scale) return scales[i];
+            return scales[scales.Length - 1];
+        }
+
+        private static int NextFinerAdaptiveScale(int scale, int targetScale)
+        {
+            if (scale <= targetScale) return targetScale;
+            int[] scales = GuideData.ValidVoxelScales;
+            for (int i = scales.Length - 1; i >= 0; i--)
+                if (scales[i] < scale && scales[i] >= targetScale) return scales[i];
+            return targetScale;
+        }
+
+        private static ulong DraftAdaptiveContext(DraftPreviewSpec spec)
+        {
+            ulong h = 1469598103934665603UL;
+            void Mix(long value) { unchecked { h ^= (ulong)value; h *= 1099511628211UL; } }
+            Mix((long)spec.ShapeType); Mix((long)spec.Constraint); Mix((long)spec.PlaneAxis);
+            Mix(spec.Settings.Scale); Mix((long)spec.Settings.Mode); Mix(spec.Settings.Filled ? 1 : 0);
+            Mix(spec.Settings.Wireframe ? 1 : 0);
+            Mix((long)spec.Settings.Plane.FlattenedAxis); Mix(spec.Settings.Plane.PlaneOffset);
+            Mix(spec.Settings.Divisions); Mix(spec.Sides); Mix(spec.Inverted ? 1 : 0);
+            Mix(spec.FlatSideAligned ? 1 : 0); Mix(spec.IsChain ? 1 : 0); Mix(spec.ChainClosing ? 1 : 0);
+            Mix(spec.Chain?.Count ?? 0); Mix(spec.Apex == null ? 0 : 1); Mix(spec.Rim == null ? 0 : 1);
+            return h;
+        }
+
+        private void OnDraftPreviewCompleted(object sender, DraftPreviewCompletedEventArgs e)
+        {
+            if (e == null || e.Generation != _draftGeneration || _currentDraftSpec == null) return;
+            _acceptedDraftScale = e.RenderScale;
+            _lastDraftWorkMilliseconds = Math.Max(1, e.WorkMilliseconds);
+            if (e.RenderScale == _currentDraftSpec.Settings.Scale)
+                _hud.SetDraftMeasurement(e.Extent, e.VoxelCount);
+        }
+
+        private void ResetDraftVisualState()
+        {
+            _draftGeneration++;
+            _draftPoseFingerprint = 0;
+            _draftRawAimFingerprint = 0;
+            _acceptedDraftScale = 0;
+            _adaptiveMovingScale = 0;
+            _healthyMovingUpdates = 0;
+            _draftAdaptiveContextFingerprint = 0;
+            _draftLastMotionMs = 0;
+            _lastDraftRefineRequestMs = 0;
+            _lastDraftWorkMilliseconds = 0;
+            _currentDraftSpec = null;
+            _renderer.BeginDraftGeneration(_draftGeneration);
         }
 
         private int DraftClampStepBudget()
         {
-            int count = _hud.DraftVoxelCount;
-            if (count <= 8_000) return 2;
             long now = _capi.World.ElapsedMilliseconds;
-            int interval = DraftWorkIntervalMs(count);
+            // Never perform exact cap scans while the cursor is moving. The last safe ghost remains visible,
+            // and exact client/server completion validation is unchanged. Once still, converge gradually.
+            if (_draftLastMotionMs != 0 && now - _draftLastMotionMs < DraftSettleDelayMs) return 0;
+            long interval = Math.Max(120L, Math.Min(1000L,
+                Math.Max(1L, _lastDraftWorkMilliseconds) * 4L));
             if (_lastDraftClampCheckMs != 0 && now - _lastDraftClampCheckMs < interval) return 0;
             _lastDraftClampCheckMs = now;
-            return 2;
+            return _lastDraftWorkMilliseconds <= 8 ? 2 : 1;
         }
 
         // Builds the candidate draft exactly as the HUD measure / completion pre-check do, and counts with
@@ -911,7 +1106,10 @@ namespace Layout.Client
                 Vec3d rim = _draft.AwaitingRim ? candidate : null;
                 DraftManager.ApplyPlacementPoints(shape, _draft.Shape, _draft.Constraint, apex, rim);
 
-                return GuideShapeVoxelCounting.CountUpTo(shape, _draft.Scale, _draft.Filled, cap) <= cap;
+                return GuideShapeTypes.IsVolume(_draft.Shape) && _draft.Wireframe
+                    ? ShapeWireframe.GetVoxelCount(shape, _draft.Scale) <= cap
+                    : GuideShapeVoxelCounting.CountUpTo(
+                        shape, _draft.Scale, _draft.Filled, cap) <= cap;
             }
             catch
             {
@@ -1057,6 +1255,7 @@ namespace Layout.Client
                     _hud.ClearDraftAim();
                     _renderer.ClearDraftPreview();
                 }
+                ResetDraftVisualState();
                 return;
             }
 
@@ -1186,7 +1385,7 @@ namespace Layout.Client
                 _draft.StartDraft(anchor, AxisFromFace(blockSel), FaceIsNegative(blockSel));
                 _rimAimArmed = false;
                 _rimAwaitingRelease = false;
-                _lastDraftPreviewMs = 0;
+                ResetDraftVisualState();
                 _lastDraftClampCheckMs = 0;
                 _draftClamp.Reset();
                 _net.SendDraftStart(anchor, BuildSettings(blockSel, anchor));
@@ -1290,7 +1489,7 @@ namespace Layout.Client
                 _draft.ClearDraft();
                 _rimAimArmed = false;
                 _rimAwaitingRelease = false;
-                _lastDraftPreviewMs = 0;
+                ResetDraftVisualState();
                 _lastDraftClampCheckMs = 0;
                 _hud.ClearDraftAim();
                 _renderer.ClearDraftPreview();       // now: the real guide arrives via broadcast
@@ -1315,6 +1514,7 @@ namespace Layout.Client
                     inverted: false, sides: 0, apex: null,
                     chain: _draft.DraftChain, closed: closed);
                 _draft.ClearDraft();
+                ResetDraftVisualState();
                 _hud.ClearDraftAim();
                 _renderer.ClearDraftPreview();
             }
@@ -1469,6 +1669,7 @@ namespace Layout.Client
 
             _net.SendGrab(guideId);                                 // server broadcasts the lock state
             _renderer.SetGrabbedPoint(guideId, pointIndex);         // optimistic White; revoked via lock event
+            _hud.SetGrabMeasurement(guideId, _renderer.CurrentGrabExtent);
         }
 
         // Session-8 right-click cancel: the anti-release. Restore the complete pre-gesture snapshot in the
@@ -1498,8 +1699,11 @@ namespace Layout.Client
                 _curveCache.Remove(fallback.Id);
             }
 
-            _net.SendCancelGrab(_grab.GuideId);
-            DropGrabLocally();      // ClearGrabbedPoint rebuilds the guide — with the snapped-back point
+            Guid guideId = _grab.GuideId;
+            // End the local render transaction first. Client-only cancellation applies synchronously and
+            // releases the lock; otherwise that event could take the expensive ordinary-release path.
+            DropGrabLocally(cancelled: true);
+            _net.SendCancelGrab(guideId);
         }
 
         // Lands the last position, releases the lock, and commits the whole drag as one undo entry (server-side).
@@ -1522,9 +1726,11 @@ namespace Layout.Client
 
         // Clears local grab state only — used when the grab ended without us (lock lost, guide gone) or
         // after an explicit release. Never sends anything.
-        private void DropGrabLocally()
+        private void DropGrabLocally(bool cancelled = false)
         {
-            _renderer.ClearGrabbedPoint();
+            if (cancelled) _renderer.CancelGrabbedPoint();
+            else _renderer.ClearGrabbedPoint();
+            _hud.ClearGrabMeasurement();
             _grab = null;
             _dragClamp.Reset();     // the learned reach belonged to that point on that guide
         }
@@ -1548,7 +1754,7 @@ namespace Layout.Client
             if (_draft.HasActiveDraft) _draft.ClearDraft();
             _rimAimArmed = false;
             _rimAwaitingRelease = false;
-            _lastDraftPreviewMs = 0;
+            ResetDraftVisualState();
             _lastDraftClampCheckMs = 0;
             _hasPendingInsert = false;
             _pendingInsertOriginPoints = null;
@@ -1620,6 +1826,7 @@ namespace Layout.Client
                 SoftFlow = adoptedFlow
             };
             _renderer.SetGrabbedPoint(g.Id, nearest);
+            _hud.SetGrabMeasurement(g.Id, _renderer.CurrentGrabExtent);
             _capi.Logger.VerboseDebug("[Layout] body-insert adopted as grab: point {0} on {1}", nearest, g.Id);
         }
 
@@ -2258,7 +2465,7 @@ namespace Layout.Client
             if (GuideShapeTypes.IsVolume(_draft.Shape)
                 && (settings.Mode == ProjectionMode.Surface || settings.Divisions != 0))
                 settings = new GuideRenderSettings(settings.Scale, ProjectionMode.Volumetric,
-                    settings.Plane, settings.Filled, 0);
+                    settings.Plane, settings.Filled, 0, settings.Wireframe);
 
             return settings;
         }
@@ -2346,6 +2553,7 @@ namespace Layout.Client
             _net.GuideRemoved -= OnGuideRemoved;
             _net.GuideAddedOrUpdated -= OnGuideAddedOrUpdated;
             _net.AuthorityModeChanged -= OnAuthorityModeChanged;
+            _renderer.DraftPreviewCompleted -= OnDraftPreviewCompleted;
             _capi.Input.InWorldAction -= OnInWorldAction;
             _capi.Event.MouseDown -= OnMouseDown;
             _capi.Event.MouseUp -= OnMouseUp;

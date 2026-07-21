@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 9;
+        public const int ProtocolVersion = 11;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -143,6 +143,13 @@ namespace Layout.Network
         [ProtoMember(14)] public int Sides;          // Session-11 additive: polygon side count
         [ProtoMember(15)] public bool IsClosed;      // Session-11 (0.1.15) additive: Free-Shape loop flag
         [ProtoMember(16)] public bool FlatSideAligned; // 0.2.45: polygon edge, rather than vertex, alignment
+        [ProtoMember(17)] public string DisplayName;
+        [ProtoMember(18)] public int CachedVoxelCount;
+        [ProtoMember(19)] public int CachedVoxelWidth;
+        [ProtoMember(20)] public int CachedVoxelHeight;
+        [ProtoMember(21)] public int CachedBlockWidth;
+        [ProtoMember(22)] public int CachedBlockHeight;
+        [ProtoMember(23)] public bool IsWireframe;
         // (The as-placed spring-back snapshot deliberately does NOT cross the wire: the server executes
         //  spring-back; clients only ever request it by guide id.)
 
@@ -171,7 +178,14 @@ namespace Layout.Network
                 Divisions = g.Divisions,
                 Sides = g.Sides,
                 IsClosed = g.IsClosed,
-                FlatSideAligned = g.FlatSideAligned
+                FlatSideAligned = g.FlatSideAligned,
+                DisplayName = g.DisplayName,
+                CachedVoxelCount = g.CachedVoxelCount,
+                CachedVoxelWidth = g.CachedVoxelWidth,
+                CachedVoxelHeight = g.CachedVoxelHeight,
+                CachedBlockWidth = g.CachedBlockWidth,
+                CachedBlockHeight = g.CachedBlockHeight,
+                IsWireframe = g.IsWireframe
             };
         }
 
@@ -207,7 +221,14 @@ namespace Layout.Network
                 Divisions = Divisions,
                 Sides = Sides,
                 IsClosed = IsClosed,
-                FlatSideAligned = FlatSideAligned
+                FlatSideAligned = FlatSideAligned,
+                DisplayName = DisplayName,
+                CachedVoxelCount = CachedVoxelCount,
+                CachedVoxelWidth = CachedVoxelWidth,
+                CachedVoxelHeight = CachedVoxelHeight,
+                CachedBlockWidth = CachedBlockWidth,
+                CachedBlockHeight = CachedBlockHeight,
+                IsWireframe = IsWireframe
             };
         }
     }
@@ -223,6 +244,7 @@ namespace Layout.Network
         [ProtoMember(5)] public bool Filled;
         // Session-9 additive: visual division marks (absent = 0 = none).
         [ProtoMember(6)] public int Divisions;
+        [ProtoMember(7)] public bool Wireframe;
 
         public RenderSettingsDto() { }
 
@@ -233,7 +255,8 @@ namespace Layout.Network
             PlaneAxis = (int)s.Plane.FlattenedAxis,
             PlaneOffset = s.Plane.PlaneOffset,
             Filled = s.Filled,
-            Divisions = s.Divisions
+            Divisions = s.Divisions,
+            Wireframe = s.Wireframe
         };
 
         public GuideRenderSettings ToRenderSettings() => new GuideRenderSettings(
@@ -241,7 +264,8 @@ namespace Layout.Network
             (ProjectionMode)Mode,
             new ProjectionPlane((PlaneAxis)PlaneAxis, PlaneOffset),
             Filled,
-            Divisions);
+            Divisions,
+            Wireframe);
     }
 
     /// <summary>One element of a control-point update: which point (by index) moves, and to where.</summary>
@@ -861,6 +885,24 @@ namespace Layout.Network
         public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
     }
 
+    /// <summary>Both directions. Select a 3D guide's persistent shell or structural wireframe.</summary>
+    [ProtoContract]
+    public class GuideSetWireframePacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public bool Wireframe;
+
+        public GuideSetWireframePacket() { }
+
+        public GuideSetWireframePacket(Guid guideId, bool wireframe)
+        {
+            GuideIdBytes = NetIds.ToBytes(guideId);
+            Wireframe = wireframe;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+    }
+
     /// <summary>
     /// Client → server (F5 chalk, protocol 4). An honest client reports a completed PRIVATE placement on a
     /// mixed Layout server so the server — which owns the inventory but cannot see private guides — applies
@@ -978,7 +1020,9 @@ namespace Layout.Network
             // F5 inventory refill (protocol 5)
             typeof(ChalkInventoryRefillPacket),
             // F5 refill channels became a client preference (protocol 6)
-            typeof(ChalkRefillPrefsPacket)
+            typeof(ChalkRefillPrefsPacket),
+            // 0.3.7: persistent 3D shell/wireframe mode (protocol 11)
+            typeof(GuideSetWireframePacket)
         };
     }
 }

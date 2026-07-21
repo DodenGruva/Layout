@@ -1,11 +1,11 @@
-# Layout — TODO / Outstanding Items (current: v0.2.47)
+# Layout — TODO / Outstanding Items (current: v0.3.8)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.2.47 → next)
+## ⭐ Top of the list (v0.3.8 → next)
 
 > **Session-16 playtest results (human-confirmed):** the v0.2.21 **inventory refill and hotbar refill both
 > work** — the MouseDown-hook ordering and the `InventoryID` round-trip both hold, closing `SESSION_16.md` §8.
@@ -75,6 +75,35 @@
 6. ~~**Create header shape names competed with explanatory text.**~~ **DONE (v0.2.47).** The rejected adaptive
    shrink experiment was fully reverted; the header now shows `Create Mode` and the normal-size shape name,
    without `- Next Guide:`.
+
+### A3. Session-21 adaptive large-guide and structural-form arc (v0.3.0–v0.3.8) — full detail in `SESSION_21.md`
+
+1. ~~**Large 3D drafts repeatedly calculated full shells/HUD dimensions and lagged despite fast settled
+   rendering.**~~ **FIXED (v0.3.0–v0.3.2).** Cheap poses keep their selected-scale shell. Expensive motion
+   uses an adaptive structural wireframe; the cursor retains selected-scale precision; settling performs one
+   generation-safe background refinement and materializes bounded random batches. Pending HUD values yield
+   to changing calculation glyphs.
+2. ~~**Placed hover could re-trigger behemoth calculation.**~~ **FIXED (v0.3.3).** Cached dimensions become
+   the display name, cached count feeds the cap bar, and the placed dimension field is blank. Active
+   draft/grab measurement remains live when ready. DataVersion/protocol advanced to 10.
+3. ~~**Cancelling a giant wireframe grab could restore visually, then launch a delayed shell expansion and
+   climb from ~7 GB toward 12 GB.**~~ **FIXED (v0.3.4–v0.3.5).** Cancel reveals the retained settled mesh,
+   invalidates transient generations, and quarantines the confirming authority echo by render fingerprint.
+4. ~~**Structural guides needed more legible wires.**~~ **DONE (v0.3.6).** Round volumes use eight ribs;
+   polygonal prisms use one longitudinal wire per corner.
+5. ~~**Expose structural Wireframe as a real 3D guide form.**~~ **DONE (v0.3.7).** The contextual volume pair
+   is Shell/Wireframe; state persists and has save/network/local-authority/undo/count/render/grab parity at
+   selected scale. DataVersion/protocol 11. 2D Hollow/Filled is unchanged.
+6. ~~**Large-guide placement sound should carry more weight.**~~ **DONE (v0.3.7).** Cached size drives a
+   capped logarithmic curve: larger guides are louder, lower-pitched, and audible farther away.
+7. ~~**Cylinder/Cone/Box still refused oversized valid shells at their legacy cubic scan guard.**~~ **FIXED
+   (v0.3.8).** Under the legacy work budget they retain established voxelization; beyond it they use a
+   surface-proportional ring/face fallback. Normal caps and the hard ceiling remain.
+8. ~~**3D Form borrowed the Hollow/Filled icons.**~~ **FIXED (v0.3.8).** Dedicated faced-skin Shell and open
+   corner-strutted Wireframe Cairo glyphs.
+
+**Next playtest focus:** Shell↔Wireframe before/after placement; oversized Cylinder/Cone/Box; giant-grab
+cancel; polygon corner-wire count; placement sound across small/large/behemoth guides.
 
 ### A. Human backlog — queued at Session-16 end — ✅ ALL SEVEN DELIVERED (v0.2.22–v0.2.23)
 
@@ -148,11 +177,11 @@
 
 ### B. Carried forward
 
-1. **Large-guide mesh — Stage B/C, only if Stage A isn't enough.** Stage A (exposed-face Volumetric meshing)
-   shipped in v0.2.14–v0.2.16 and filled 3D volumes were retired (v0.2.17), so a ~100-block hollow Sphere now
-   draws only its outer skin. If that still lags, continue the staged plan in `SESSION_14.md` §6–§7:
-   per-guide spatial chunk meshes + culling, then same-colour greedy face merging. Keep settled guides at true
-   scale and the Surface/slab path on the legacy builder.
+1. **Large-guide follow-up only from a measured remaining bottleneck.** v0.3 addressed interaction-side
+   calculation with adaptive wireframes/background materialization. If calculate-first refinement itself
+   remains costly, revisit the streamed chunk pipeline in `SESSION_21.md`. If already-settled rendering is
+   the problem, continue Stage B/C in `SESSION_14.md` §6–§7: per-guide chunk meshes/culling, then same-colour
+   greedy merging. Keep settled Shells and persistent Wireframes at true selected scale.
 2. ~~**Fix the narrowed B-S9-1 adjacent-lock targeting residual.**~~ **CLOSED (v0.2.36).** Exact rendered-cell
    ownership removed the former-neighbor selection bias, and the human approved the result in play. Retain
    the interaction as regression coverage; do not reopen the passive-marker design without a new report.
@@ -474,10 +503,13 @@ deliberate (11r).
 
 - **Filled guides recount exactly per drag update** (cells generated each move packet). If big filled discs
   drag sluggishly → add a per-drag count cache. Correctness-first per the standing rule.
-- **Settled guides always mesh at full resolution** (the coarsening-leak fix). v0.1.53 confirms that a roughly
-  100-block hollow Sphere can lag under the current 8-vertices/36-indices-per-voxel monolithic mesh. Optimize
-  representation/chunking; do not silently coarsen settled guides.
-- **`PreviewFullResVoxelCap` = 8,000** — draft-ghost-only; tune if huge drafts stutter.
+- **Settled Shells and persistent Wireframes use true selected scale.** Adaptive coarsening is motion-only;
+  the cursor neighbourhood stays precise and Shell refinement materializes after settling.
+- **`PreviewFullResVoxelCap` = 8,000** — the cheap/full-shell moving threshold. Tune only from playtest data;
+  adaptive scale, work time, and frame pressure already provide secondary controls.
+- **Materialization currently calculate-first.** The background task finishes the full selected-scale shell,
+  then uploads prebuilt batches. A cancellable producer/consumer chunk pipeline is explicitly deferred in
+  `SESSION_21.md`; never implement one upload per voxel or rebuild one growing mesh each frame.
 - **Division marks add a render-side pass** *(verified)* — `DivisionMarks.Apply` is called on every mesh
   rebuild in `GuideRenderer` (both the draft ghost and placed guides), walking `SampleCurve(128)` for arc
   length then a nearest-cell claim per boundary; cheap, but it does walk the cell list. Watch on very high
@@ -540,8 +572,9 @@ the inventory refill remains (Top of the list).
 ## Next session — start here
 
 **The agenda is "⭐ Top of the list" at the top of this file** — it is not repeated here. Current state:
-the v0.2.47 shape/modifier arc is complete, documented, built, and packaged on `main`; collect field reports
-and revisit large-guide performance when requested.
+the v0.3.8 adaptive large-guide/form arc is complete, documented, built, and packaged locally (`main` last
+pushed through v0.2.47); collect the focused v0.3.8 field reports above and revisit performance only from a
+measured remaining bottleneck.
 
 **Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;
 docs are updated ONLY when the human says so; commits/pushes only when the human instructs. `main` is the

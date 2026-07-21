@@ -95,8 +95,15 @@ namespace Layout.Shapes
         {
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             var result = new List<VoxelPosition>();
-            if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h)) return result;
-            if (ScanTooBig(scale, c, n, r, h)) return result;
+            if (!TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n, out double h))
+                return result;
+            if (ScanTooBig(scale, c, n, r, h))
+            {
+                result = LargeVolumeShellFallback.RadialShell(
+                    c, r, u, m, n, h, false, scale, int.MaxValue, out _);
+                ClaimHandleMarkers(result, scale);
+                return result;
+            }
 
             double cell = scale / 16.0;
             double hd = cell * 0.866;                            // half the cell diagonal — the band width
@@ -134,8 +141,17 @@ namespace Layout.Shapes
         public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter)
         {
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
-            if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h)) return 0;
-            if (ScanTooBig(scale, c, n, r, h)) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+            if (!TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n, out double h))
+                return 0;
+            if (ScanTooBig(scale, c, n, r, h))
+            {
+                List<VoxelPosition> fallback = LargeVolumeShellFallback.RadialShell(
+                    c, r, u, m, n, h, false, scale, Math.Max(0, stopAfter), out bool exceeded);
+                if (exceeded) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+                ClaimHandleMarkers(fallback, scale);
+                return fallback.Count > stopAfter
+                    ? GuideShapeVoxelCounting.Exceeded(stopAfter) : fallback.Count;
+            }
 
             stopAfter = Math.Max(0, stopAfter);
             double cell = scale / 16.0;
@@ -232,12 +248,21 @@ namespace Layout.Shapes
                 c.Y + n.Y * axial + (u.Y * Math.Cos(ang) + m.Y * Math.Sin(ang)) * r,
                 c.Z + n.Z * axial + (u.Z * Math.Cos(ang) + m.Z * Math.Sin(ang)) * r);
 
-            for (int i = 0; i <= nn; i++) pts.Add(Ring(0, Math.PI + 2.0 * Math.PI * i / nn));   // base, from A
-            pts.Add(Ring(h, Math.PI));                                                          // lateral A→A′
-            for (int i = 0; i <= nn; i++) pts.Add(Ring(h, Math.PI + 2.0 * Math.PI * i / nn));   // top, from A′
-            int half = Math.Max(8, nn / 2);
-            for (int i = 0; i <= half; i++) pts.Add(Ring(h, Math.PI - Math.PI * i / half));     // A′→B′
-            pts.Add(Ring(0, 0));                                                                // lateral B′→B
+            for (int i = 0; i <= nn; i++) pts.Add(Ring(0, Math.PI + 2.0 * Math.PI * i / nn));
+
+            // Eight evenly-spaced longitudinal wires make the volume readable without approaching shell
+            // density. Retraced ribs keep every consecutive segment on real geometry; marching deduplicates.
+            const int ribs = 8;
+            int arcSamples = Math.Max(3, nn / ribs);
+            for (int rib = 0; rib < ribs; rib++)
+            {
+                double a = Math.PI + 2.0 * Math.PI * rib / ribs;
+                double b = Math.PI + 2.0 * Math.PI * (rib + 1) / ribs;
+                pts.Add(Ring(h, a));
+                for (int j = 1; j <= arcSamples; j++)
+                    pts.Add(Ring(h, a + (b - a) * j / arcSamples));
+                pts.Add(Ring(0, b));
+            }
             return pts;
         }
 

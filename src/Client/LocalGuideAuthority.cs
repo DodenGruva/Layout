@@ -29,6 +29,7 @@ namespace Layout.Client
         private readonly Action<GuideRescalePacket> _applyRescale;
         private readonly Action<GuideSetProjectionPacket> _applyProjection;
         private readonly Action<GuideSetFilledPacket> _applyFilled;
+        private readonly Action<GuideSetWireframePacket> _applyWireframe;
         private readonly Action<GuideSetDivisionsPacket> _applyDivisions;
         private readonly Action<GuideSetSidesPacket> _applySides;
         private readonly Action<GuideLockStatePacket> _applyLockState;
@@ -42,6 +43,7 @@ namespace Layout.Client
             public readonly Dictionary<int, Vec3d> Origins = new Dictionary<int, Vec3d>();
             public ShapeConstraint OriginConstraint;
             public List<ControlPoint> OriginPoints;
+            public int OriginVoxelCount = -1;
             public int InsertedIndex = -1;
             public SoftPointFlow SoftFlow;
 
@@ -62,6 +64,7 @@ namespace Layout.Client
             Action<GuideRescalePacket> applyRescale,
             Action<GuideSetProjectionPacket> applyProjection,
             Action<GuideSetFilledPacket> applyFilled,
+            Action<GuideSetWireframePacket> applyWireframe,
             Action<GuideSetDivisionsPacket> applyDivisions,
             Action<GuideSetSidesPacket> applySides,
             Action<GuideLockStatePacket> applyLockState,
@@ -75,6 +78,7 @@ namespace Layout.Client
             _applyRescale = applyRescale ?? throw new ArgumentNullException(nameof(applyRescale));
             _applyProjection = applyProjection ?? throw new ArgumentNullException(nameof(applyProjection));
             _applyFilled = applyFilled ?? throw new ArgumentNullException(nameof(applyFilled));
+            _applyWireframe = applyWireframe ?? throw new ArgumentNullException(nameof(applyWireframe));
             _applyDivisions = applyDivisions ?? throw new ArgumentNullException(nameof(applyDivisions));
             _applySides = applySides ?? throw new ArgumentNullException(nameof(applySides));
             _applyLockState = applyLockState ?? throw new ArgumentNullException(nameof(applyLockState));
@@ -217,7 +221,8 @@ namespace Layout.Client
             _drag = new DragSession(id)
             {
                 OriginConstraint = guide.Constraint,
-                OriginPoints = SnapshotPoints(guide)
+                OriginPoints = SnapshotPoints(guide),
+                OriginVoxelCount = guide.CachedVoxelCount
             };
             _applyLockState(new GuideLockStatePacket(id, PlayerUid));
         }
@@ -282,7 +287,8 @@ namespace Layout.Client
                 if (_drag.OriginPoints != null)
                 {
                     mutated = _guides.RestoreConstraint(
-                        id, _drag.OriginConstraint, _drag.OriginPoints).IsSuccess;
+                        id, _drag.OriginConstraint, _drag.OriginPoints,
+                        _drag.OriginVoxelCount).IsSuccess;
                 }
                 else if (_drag.InsertedIndex >= 0)
                 {
@@ -372,6 +378,7 @@ namespace Layout.Client
 
             ShapeConstraint insertOriginConstraint = guide.Constraint;
             List<ControlPoint> insertOriginPoints = SnapshotPoints(guide);
+            int insertOriginVoxelCount = guide.CachedVoxelCount;
 
             _heldGuideId = id;
             _applyLockState(new GuideLockStatePacket(id, PlayerUid));
@@ -422,7 +429,8 @@ namespace Layout.Client
                 {
                     InsertedIndex = result.ControlPointIndex,
                     OriginConstraint = insertOriginConstraint,
-                    OriginPoints = insertOriginPoints
+                    OriginPoints = insertOriginPoints,
+                    OriginVoxelCount = insertOriginVoxelCount
                 };
                 ApplyFull(result.Guide);
             }
@@ -536,6 +544,19 @@ namespace Layout.Client
             {
                 _undo.Record(PlayerUid, new SetFilledCommand(id, before, result.Guide.IsFilled));
                 _applyFilled(new GuideSetFilledPacket(id, result.Guide.IsFilled));
+            }
+            else HandleFailure(id, result);
+        }
+
+        public void SetWireframe(Guid id, bool wireframe)
+        {
+            if (!TryGet(id, out GuideData guide)) return;
+            bool before = guide.IsWireframe;
+            GuideOperationResult result = _guides.SetWireframe(id, wireframe);
+            if (result.IsSuccess)
+            {
+                _undo.Record(PlayerUid, new SetWireframeCommand(id, before, result.Guide.IsWireframe));
+                _applyWireframe(new GuideSetWireframePacket(id, result.Guide.IsWireframe));
             }
             else HandleFailure(id, result);
         }

@@ -89,8 +89,15 @@ namespace Layout.Shapes
         {
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             var result = new List<VoxelPosition>();
-            if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h)) return result;
-            if (ScanTooBig(scale, c, n, r, h)) return result;
+            if (!TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n, out double h))
+                return result;
+            if (ScanTooBig(scale, c, n, r, h))
+            {
+                result = LargeVolumeShellFallback.RadialShell(
+                    c, r, u, m, n, h, true, scale, int.MaxValue, out _);
+                ClaimMarkers(result, scale);
+                return result;
+            }
 
             double cell = scale / 16.0;
             double hd = cell * 0.866;
@@ -122,13 +129,7 @@ namespace Layout.Shapes
                 }
             }
 
-            for (int i = 0; i < 3 && i < _controlPoints.Count; i++)
-            {
-                ControlPoint cp = _controlPoints[i];
-                VoxelRenderType t = cp.IsLocked ? VoxelRenderType.Locked
-                    : cp.IsPrimary ? VoxelRenderType.Primary : VoxelRenderType.Anchor;
-                ShapeGeometry.ClaimMarker(result, scale, cp.WorldPosition, t);
-            }
+            ClaimMarkers(result, scale);
             return result;
         }
 
@@ -138,8 +139,17 @@ namespace Layout.Shapes
         public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter)
         {
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
-            if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h)) return 0;
-            if (ScanTooBig(scale, c, n, r, h)) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+            if (!TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n, out double h))
+                return 0;
+            if (ScanTooBig(scale, c, n, r, h))
+            {
+                List<VoxelPosition> fallback = LargeVolumeShellFallback.RadialShell(
+                    c, r, u, m, n, h, true, scale, Math.Max(0, stopAfter), out bool exceeded);
+                if (exceeded) return GuideShapeVoxelCounting.Exceeded(stopAfter);
+                ClaimMarkers(fallback, scale);
+                return fallback.Count > stopAfter
+                    ? GuideShapeVoxelCounting.Exceeded(stopAfter) : fallback.Count;
+            }
 
             stopAfter = Math.Max(0, stopAfter);
             double cell = scale / 16.0;
@@ -191,6 +201,17 @@ namespace Layout.Shapes
         private static int AlignDown(double world, int scale) =>
             (int)Math.Floor(world * 16.0 / scale) * scale;
 
+        private void ClaimMarkers(List<VoxelPosition> result, int scale)
+        {
+            for (int i = 0; i < 3 && i < _controlPoints.Count; i++)
+            {
+                ControlPoint cp = _controlPoints[i];
+                VoxelRenderType type = cp.IsLocked ? VoxelRenderType.Locked
+                    : cp.IsPrimary ? VoxelRenderType.Primary : VoxelRenderType.Anchor;
+                ShapeGeometry.ClaimMarker(result, scale, cp.WorldPosition, type);
+            }
+        }
+
         // --- IGuideShape: curve queries (targeting wireframe) ----------------------------------------
 
         // Base loop from A → slant A→tip → slant tip→B → base quarter B→P(+m̂) → slant P→tip.
@@ -207,12 +228,16 @@ namespace Layout.Shapes
                 c.Z + (u.Z * Math.Cos(ang) + m.Z * Math.Sin(ang)) * r);
             var tip = new Vec3d(c.X + n.X * h, c.Y + n.Y * h, c.Z + n.Z * h);
 
-            for (int i = 0; i <= nn; i++) pts.Add(Base(Math.PI + 2.0 * Math.PI * i / nn));   // base, from A
-            pts.Add(tip);                                                                    // slant A→tip
-            pts.Add(Base(0));                                                                // slant tip→B
-            int q = Math.Max(6, nn / 4);
-            for (int i = 0; i <= q; i++) pts.Add(Base(0.5 * Math.PI * i / q));               // B→P
-            pts.Add(tip);                                                                    // slant P→tip
+            for (int i = 0; i <= nn; i++) pts.Add(Base(Math.PI + 2.0 * Math.PI * i / nn));
+
+            // Eight evenly-spaced slant wires. Alternating base→tip→base keeps the trail entirely on the
+            // cone and duplicate passes collapse during voxel marching.
+            const int ribs = 8;
+            for (int rib = 0; rib < ribs; rib++)
+            {
+                pts.Add(tip);
+                pts.Add(Base(Math.PI + 2.0 * Math.PI * (rib + 1) / ribs));
+            }
             return pts;
         }
 

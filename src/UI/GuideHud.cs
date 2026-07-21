@@ -5,7 +5,6 @@ using Vintagestory.API.MathTools;
 using Layout.Client;
 using Layout.Guide;
 using Layout.Network;
-using Layout.Shapes;
 using Layout.Systems;
 
 namespace Layout.UI
@@ -27,7 +26,7 @@ namespace Layout.UI
     //
     //  ---- Tool-driven seams (Module 7 drives these; mirrors Module 5's SetGrabbedPoint) --
     //  The HUD does not raycast. The held tool feeds it:
-    //     SetDraftAim(Vec3d) / ClearDraftAim()   – the live "where the 2nd foot would land"
+    //     SetDraftCalculating(Vec3d) / ClearDraftAim() – the live draft pose / pending measurement state
     //                                              point while a draft is active.
     //     SetExaminedGuide(Guid?)                – the guide currently under the crosshair
     //                                              (null when not looking at one).
@@ -73,22 +72,17 @@ namespace Layout.UI
         private long _warnUntil;          // ElapsedMilliseconds deadline for the flash
 
         // --- measurement caches ---
-        // Draft: keyed by the quantized aim point + scale, so tiny sub-1/16 jitters don't
-        // trigger a rebuild every frame.
-        private long _draftKeyX = long.MinValue, _draftKeyY = long.MinValue, _draftKeyZ = long.MinValue;
-        private int _draftKeyScale = int.MinValue;
+        // v0.3.0: the HUD never voxelises an active draft. The renderer hands back one settled result;
+        // until then a changing alien-looking readout makes the pending calculation explicit.
         private GuideExtent _draftExtent = GuideExtent.Empty;
         private int _draftVoxelCount;
-        private long _lastDraftMeasureMs;
+        private bool _draftMeasurementReady;
+        private int _calculationFrame;
 
-        /// <summary>Last completed full-resolution draft count; used to budget preview work.</summary>
-        public int DraftVoxelCount => _draftVoxelCount;
-
-        // Examine: coarse cache, invalidated whenever the examined guide changes or the
-        // server reports an update to it (GuideAddedOrUpdated).
-        private Guid _measuredGuide = Guid.Empty;
-        private GuideExtent _guideExtent = GuideExtent.Empty;
-        private int _guideVoxelCount;
+        // Existing guides carry cached metadata; only an active grab temporarily repopulates the dedicated
+        // dimensions line from a cheap curve measurement supplied by the controller.
+        private Guid? _grabMeasurementGuide;
+        private GuideExtent _grabExtent = GuideExtent.Empty;
 
         private long _tickId;
         private bool _subscribed;
@@ -150,10 +144,19 @@ namespace Layout.UI
         // ---------------------------------------------------------------------------------
         //  Tool-driven seams
         // ---------------------------------------------------------------------------------
-        public void SetDraftAim(Vec3d aim, bool flatSideAligned = false)
+        public void SetDraftCalculating(Vec3d aim, bool flatSideAligned = false)
         {
             _draftAim = aim == null ? null : new Vec3d(aim.X, aim.Y, aim.Z);
             _draftFlatSideAligned = flatSideAligned;
+            _draftMeasurementReady = false;
+            RefreshText();
+        }
+
+        public void SetDraftMeasurement(GuideExtent extent, int voxelCount)
+        {
+            _draftExtent = extent;
+            _draftVoxelCount = Math.Max(0, voxelCount);
+            _draftMeasurementReady = true;
             RefreshText();
         }
 
@@ -161,24 +164,34 @@ namespace Layout.UI
         {
             _draftAim = null;
             _draftFlatSideAligned = false;
-            _draftKeyX = _draftKeyY = _draftKeyZ = long.MinValue;
-            _draftKeyScale = int.MinValue;
             _draftVoxelCount = 0;
-            _lastDraftMeasureMs = 0;
+            _draftExtent = GuideExtent.Empty;
+            _draftMeasurementReady = false;
+            RefreshText();
+        }
+
+        public void SetGrabMeasurement(Guid guideId, GuideExtent extent)
+        {
+            _grabMeasurementGuide = guideId;
+            _grabExtent = extent;
+            RefreshText();
+        }
+
+        public void ClearGrabMeasurement()
+        {
+            if (_grabMeasurementGuide == null) return;
+            _grabMeasurementGuide = null;
+            _grabExtent = GuideExtent.Empty;
             RefreshText();
         }
 
         public void SetExaminedGuide(Guid? guideId)
         {
-            // The controller feeds this EVERY tick (33 Hz). Bail when the target hasn't changed, or the
-            // measurement cache below is wiped each tick and a huge guide re-generates its whole voxel set
-            // 30+ times a second just from being hovered (invisible on small guides; found via the
-            // ~100-block sphere, 0.2.18). Server-side updates to the examined guide still invalidate via
-            // OnGuideAddedOrUpdated.
+            // The controller feeds this every tick. Existing guide text now reads cached authoritative
+            // metadata only, but unchanged targeting still has no reason to recompose the HUD.
             if (guideId == _examinedGuide) return;
 
             _examinedGuide = guideId;
-            _measuredGuide = Guid.Empty; // force a re-measure for the new target
             RefreshText();
         }
 
@@ -277,25 +290,31 @@ namespace Layout.UI
                 : "Mode: " + ModeLabel(_tool.Mode));
             SetText("scale", "Scale: " + ScaleLabel(_tool.Scale));
             SetText("proj", "Projection: " + ProjectionLabel());
-            SetText("fill", "Fill: " + (_tool.Filled ? "Filled" : "Hollow"));
+            SetText("fill", GuideShapeTypes.IsVolume(_tool.Shape)
+                ? "Form: " + (_tool.Wireframe ? "Wireframe" : "Shell")
+                : "Fill: " + (_tool.Filled ? "Filled" : "Hollow"));
 
             // --- situational: draft has priority over examine ---
             if (_tool.HasActiveDraft && _draftAim != null && _tool.DraftStart != null)
             {
-                EnsureMeasuredDraft();
-                SetText("dims", DimsText(_draftExtent));
+                _calculationFrame = (_calculationFrame + 1) % CalculationGlyphs.Length;
+                SetText("dims", _draftMeasurementReady
+                    ? DimsText(_draftExtent)
+                    : CalculatingDimensionsText(_calculationFrame));
                 SetText("guide", "Placing new arch…");
-                SetText("cap", CapGauge(_draftVoxelCount, _net.PerGuideVoxelCap, Guid.Empty));
+                SetText("cap", _draftMeasurementReady
+                    ? CapGauge(_draftVoxelCount, _net.PerGuideVoxelCap, Guid.Empty)
+                    : CalculatingCapText(_calculationFrame));
                 return;
             }
 
-            GuideData examined = ResolveExaminedGuide();
+            GuideData examined = ResolveGrabbedGuide() ?? ResolveExaminedGuide();
             if (examined != null)
             {
-                EnsureMeasuredGuide(examined);
-                SetText("dims", DimsText(_guideExtent));
-                SetText("guide", GuideInfoText(examined, _guideVoxelCount));
-                SetText("cap", CapGauge(_guideVoxelCount, _net.PerGuideVoxelCap, examined.Id));
+                bool grabbing = _grabMeasurementGuide == examined.Id;
+                SetText("dims", grabbing ? DimsText(_grabExtent) : "");
+                SetText("guide", GuideInfoText(examined));
+                SetText("cap", CapGauge(examined.CachedVoxelCount, _net.PerGuideVoxelCap, examined.Id));
                 return;
             }
 
@@ -313,97 +332,11 @@ namespace Layout.UI
             return null;
         }
 
-        // ---------------------------------------------------------------------------------
-        //  Measurement (cached)
-        // ---------------------------------------------------------------------------------
-        private void EnsureMeasuredDraft()
+        private GuideData ResolveGrabbedGuide()
         {
-            int scale = _tool.Scale;
-            Vec3d start = _tool.DraftStart;
-            Vec3d aim = _draftAim;
-            if (start == null || aim == null) { _draftExtent = GuideExtent.Empty; _draftVoxelCount = 0; return; }
-
-            // Quantize the aim to 1/16-block units for cache keying.
-            long qx = (long)Math.Floor(aim.X * 16.0);
-            long qy = (long)Math.Floor(aim.Y * 16.0);
-            long qz = (long)Math.Floor(aim.Z * 16.0);
-
-            // Shape changes fold into the scale key slot cheaply: shifting the key by shape/constraint/
-            // fill/sides/draft-stage/chain-length forces a re-measure whenever any changes mid-draft.
-            int shapeKey = scale + 1000 * ((int)_tool.Shape + 4 * (int)_tool.Constraint + 16 * (_tool.Filled ? 1 : 0)
-                + 32 * _tool.Sides + 1024 * (_tool.AwaitingApex ? 1 : 0) + 2048 * _tool.ChainCount
-                + 65536 * (_tool.AwaitingRim ? 1 : 0)
-                + 131072 * (_draftFlatSideAligned ? 1 : 0));
-            if (qx == _draftKeyX && qy == _draftKeyY && qz == _draftKeyZ && shapeKey == _draftKeyScale) return;
-
-            long now = capi.World.ElapsedMilliseconds;
-            int interval = _draftVoxelCount switch
-            {
-                <= 8_000 => 30,
-                <= 50_000 => 100,
-                <= 200_000 => 200,
-                _ => 500
-            };
-            if (_lastDraftMeasureMs != 0 && now - _lastDraftMeasureMs < interval) return;
-            _lastDraftMeasureMs = now;
-            _draftKeyX = qx; _draftKeyY = qy; _draftKeyZ = qz; _draftKeyScale = shapeKey;
-
-            try
-            {
-                IGuideShape shape;
-                if (DraftManager.IsChainShape(_tool.Shape))
-                {
-                    // The Free-Shape measures its whole placed chain + the live aim corner (0.1.15).
-                    var corners = _tool.DraftChain;
-                    corners.Add(new Vintagestory.API.MathTools.Vec3d(aim.X, aim.Y, aim.Z));
-                    shape = new FreeShape(corners, false);
-                }
-                else
-                {
-                    // A three-click triangle whose base is down measures with the aim as its APEX (the
-                    // base is fixed); a four-click Tapered Cylinder on its last stage measures with the
-                    // aim as its RIM (0.2.24); every other draft measures start → aim (Session 11).
-                    Vec3d end = _tool.AwaitingApex ? _tool.DraftSecond : aim;
-                    shape = ShapeFactory.Create(
-                        _tool.Shape, _tool.Constraint, _tool.DraftPlaneAxis, start, end,
-                        sides: _tool.Sides, flatSideAligned: _draftFlatSideAligned);
-                    DraftManager.ApplyPlacementPoints(shape, _tool.Shape, _tool.Constraint,
-                        _tool.AwaitingRim ? _tool.DraftThird : _tool.AwaitingApex ? aim : null,
-                        _tool.AwaitingRim ? aim : null);
-                }
-                var voxels = shape.GetVoxelPositions(scale, _tool.Filled);
-                _draftVoxelCount = voxels.Count;
-                _draftExtent = GuideMeshBuilder.MeasureExtent(voxels, scale);
-            }
-            catch
-            {
-                _draftExtent = GuideExtent.Empty;
-                _draftVoxelCount = 0;
-            }
-        }
-
-        private void EnsureMeasuredGuide(GuideData g)
-        {
-            if (g.Id == _measuredGuide) return;
-            _measuredGuide = g.Id;
-
-            try
-            {
-                // Adopt the guide's own control points (by reference, matching how the
-                // renderer builds it), refresh phantoms so the spline endpoints are correct,
-                // then measure. This runs on the main thread alongside rendering, so sharing
-                // the list is safe.
-                IGuideShape shape = ShapeFactory.Adopt(g);
-                shape.RecalculatePhantomPoints();
-                var voxels = shape.GetVoxelPositions(g.VoxelScale, g.IsFilled);
-                _guideVoxelCount = voxels.Count;
-                _guideExtent = GuideMeshBuilder.MeasureExtent(voxels, g.VoxelScale);
-            }
-            catch
-            {
-                _guideExtent = GuideExtent.Empty;
-                _guideVoxelCount = 0;
-            }
+            if (_grabMeasurementGuide == null) return null;
+            return _net.Guides.TryGetValue(_grabMeasurementGuide.Value, out GuideData guide)
+                ? guide : null;
         }
 
         // ---------------------------------------------------------------------------------
@@ -437,13 +370,9 @@ namespace Layout.UI
         private void OnGuideAddedOrUpdated(GuideData g)
         {
             if (g == null) return;
-            // If the guide we're currently measuring changed, drop the cache so the next
-            // refresh recomputes its extent/count.
-            if (_examinedGuide != null && g.Id == _examinedGuide.Value)
-            {
-                _measuredGuide = Guid.Empty;
+            if ((_examinedGuide != null && g.Id == _examinedGuide.Value)
+                || (_grabMeasurementGuide != null && g.Id == _grabMeasurementGuide.Value))
                 RefreshText();
-            }
         }
 
         // ---------------------------------------------------------------------------------
@@ -456,13 +385,32 @@ namespace Layout.UI
                  + "\u2194 " + e.BlockWidth + " / \u2195 " + e.BlockHeight + " blk";
         }
 
-        private string GuideInfoText(GuideData g, int voxelCount)
+        // Deliberately strange but compact: the shifting sequence reads as active computation without
+        // pretending that an old number still describes the moving guide.
+        private static readonly string[] CalculationGlyphs =
+        {
+            "⌬⟟⋔⧖", "⟟⋔⧖⌬", "⋔⧖⌬⟟", "⧖⌬⟟⋔"
+        };
+
+        private static string CalculatingDimensionsText(int frame)
+        {
+            string a = CalculationGlyphs[frame % CalculationGlyphs.Length];
+            string b = CalculationGlyphs[(frame + 2) % CalculationGlyphs.Length];
+            return "↔ " + a + " / ↕ " + b + " vox    ↔ " + b + " / ↕ " + a + " blk";
+        }
+
+        private static string CalculatingCapText(int frame) =>
+            "Cap: " + CalculationGlyphs[(frame + 1) % CalculationGlyphs.Length] + "  ·  calculating";
+
+        private string GuideInfoText(GuideData g)
         {
             string editable = _net.LockHolders.TryGetValue(g.Id, out string holder) && !string.IsNullOrEmpty(holder)
                 ? "in use"
                 : "editable";
             string guideLabel = _net.IsLocalGuide(g.Id) ? "Private guide " : "Guide ";
-            return guideLabel + ShortId(g.Id) + " · " + editable + " · " + voxelCount.ToString("N0") + " vox";
+            string name = string.IsNullOrWhiteSpace(g.DisplayName) ? "dimensions pending" : g.DisplayName;
+            return guideLabel + name + " · " + editable + " · "
+                + g.CachedVoxelCount.ToString("N0") + " vox";
         }
 
         // Text-only cap gauge: "Cap [████░░░░] 62%" plus a near/over-cap marker. We keep it
@@ -541,6 +489,5 @@ namespace Layout.UI
             _ => axis.ToString()
         };
 
-        private static string ShortId(Guid id) => id.ToString("N").Substring(0, 8);
     }
 }

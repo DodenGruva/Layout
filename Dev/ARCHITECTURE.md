@@ -1,7 +1,7 @@
-# Layout — Architecture Document (v3.7)
+# Layout — Architecture Document (v3.8)
 
-**Supersedes v3.6 — precise adjacent locks, polygonal volumes, and stage-aware placement modifiers
-(v0.2.36–v0.2.47).** v2.5 consolidated five
+**Supersedes v3.7 — adaptive large-guide drafting, safe giant-grab rollback, and persistent structural
+wireframes (v0.3.0–v0.3.8).** v2.5 consolidated five
 revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
 catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
 surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
@@ -34,20 +34,26 @@ throttling for expensive draft work, and expands placement feedback with capped 
 curves and full 3D shells. **v3.7 closes B-S9-1 through exact rendered-cell ownership, adds straight and
 tapered Polygonal Prisms, simplifies the private dispel and ground-storage gestures, introduces stage-aware
 native modifier notes, persists polygon flat-side alignment, adds 45-degree Line/Free-Shape constraints, and
-makes tapered-rim flare opt-in.** The register, file tree, module map, persistence, and edge cases below are
-updated in place to the v0.2.47 / DataVersion 9 / protocol-9 / 70-file state; the per-revision deltas live
+makes tapered-rim flare opt-in. **v3.8 adds motion-sensitive structural previews, selected-scale cursor
+precision, generation-safe background refinement and batched materialization, cached placed-guide metadata,
+retained-mesh cancel quarantine, canonical/persistent Shell↔Wireframe form, size-weighted placement sound,
+and surface-proportional oversized Cylinder/Cone/Box fallback generation.** The register, file tree, module
+map, persistence, and edge cases below are updated in place to the v0.3.8 / DataVersion 11 / protocol-11 /
+74-file state; the per-revision deltas live
 in **`CHANGELOG_ARCHITECTURE.md`** (indexed below).
 
-**Where the project stands:** Layout **v0.2.47** is built, packaged, documented, and pushed on `main`
-(the `ClientOnlyFallback` branch merged via PR #1).
+**Where the project stands:** Layout **v0.3.8** is built, packaged, and documented locally; `main` was last
+pushed through **v0.2.47** (the `ClientOnlyFallback` branch merged via PR #1).
 All seven modules, the complete 2D/3D catalog, normal public multiplayer, vanilla-server local
 fallback, mixed public/private operation, and the full F5 chalk system run against **VS 1.22.x** / .NET 10.
-The catalog is **15 shape types / 21 picker tiles**, **DataVersion 9**, **protocol 9**, and **70 source
-files**. F4 and F5 are feature-complete. The large-guide **mesh pass Stage A (exposed-face meshing) has
-shipped** and **filled 3D volumes are retired**, so a ~100-block hollow Sphere now draws only its shell skin.
+The catalog is **15 shape types / 21 picker tiles**, **DataVersion 11**, **protocol 11**, and **74 source
+files**. F4 and F5 are feature-complete. The large-guide mesh Stage A remains, and v0.3’s adaptive interaction
+pipeline is playtest-successful on a behemoth guide. Filled 3D interiors are retired; volumes persist as a
+hollow Shell or canonical structural Wireframe.
 The Session-16 backlog is fully delivered. Public/private multiplayer passed the v0.2.35 release test,
 fired-jug/raw-jug crafting is confirmed, and B-S9-1 closed with a human-approved v0.2.36 playtest. Remaining:
-ordinary v0.2.47 field soak and mesh Stage B (spatial chunks + culling) **only if Stage A proves insufficient**.
+ordinary v0.3.8 field soak and mesh Stage B (spatial chunks + culling) only if settled rendering—not drafting
+calculation—proves insufficient.
 Two items carry
 verification debt — the chalk ceiling has not been tested against xskills itself, and 1.22.0 support is
 declared but untested. See `TODO.md` and `SESSION_17.md`.
@@ -88,13 +94,14 @@ declared but untested. See `TODO.md` and `SESSION_17.md`.
 
 ## Document changelog — index
 
-Per-revision deltas for THIS document (v2.5 → v3.7) now live in **`CHANGELOG_ARCHITECTURE.md`**. They are
+Per-revision deltas for THIS document (v2.5 → v3.8) now live in **`CHANGELOG_ARCHITECTURE.md`**. They are
 not repeated here: every delta is already folded in place into the register / file tree / module map /
 persistence / edge cases below, and each has a fuller narrative in its session record. Use this table to find
 *when* something changed; read the body below for *what is true now*.
 
 | Doc rev | Mod versions | Theme | Session record |
 |---|---|---|---|
+| v3.8 | v0.3.0 → v0.3.8 | Adaptive draft/materialization; cached hover; safe cancel; persistent Shell/Wireframe | `SESSION_21.md` |
 | v3.7 | v0.2.36 → v0.2.47 | Precise locks; polygonal volumes; stage-aware help; flat/diagonal/rim modifiers | `SESSION_20.md` |
 | v3.6 | v0.2.29 → v0.2.35 | Unlimited-cap tapered-cylinder semantics; safe rim capture; adaptive draft work; full-shape dust | `SESSION_19.md` |
 | v3.5 | v0.2.24 → v0.2.28 | Tapered Cylinder (4-click frustum, protocol 7); scan-guard and cap-clamp fixes; raw-vessel recipe fix | `SESSION_18.md` |
@@ -214,7 +221,8 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 
 ### Data & wire
 - **Pinned, append-only enums** everywhere a value crosses wire or disk; **default-driven migration** via
-  `DataVersion` (currently **9**: v9 added polygon `FlatSideAligned`; v8 added passive
+  `DataVersion` (currently **11**: v11 added persistent `IsWireframe`; v10 added cached
+  display/count/dimensions; v9 added polygon `FlatSideAligned`; v8 added passive
   `ControlPoint.IsLockMarker`; v7 added `IsClosed`
   (Free-Shape loop flag); v6 added `Sides` + the
   as-placed spring-back snapshot (`OriginalControlPoints`/`OriginalConstraint` — persisted, never wired);
@@ -272,22 +280,25 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   and shipped).** `GuideShapeTypes.IsVolume` gates the family. **Sphere / Dome** = two clicks (a diameter /
   a base diameter); **Cylinder / Cone / Box** = three clicks (base, then a height click — reusing the
   triangle's apex machinery, `NeedsApexClick`). Box is a true box (independent side lengths). **Volumes are
-  always a one-cell hollow shell (v0.2.17) — Filled is retired for the 3D family** (post-Stage-A a filled
-  interior draws nothing, so it was pure invisible voxel cost; every volume shape now coerces `filled=false`,
-  which also auto-lightens legacy filled saves). v0.1.53 routes hollow Sphere/Dome through the exact
-  surface-area-oriented `SphericalShellScan`; Box retains a lattice scan, while Cylinder/Cone remain
-  centre-banded. A cylinder cap / dome floor is recovered cheaply with a filled 2D circle at the base. The
-  remaining cubic paths keep `MaxScanCells` guards; Tapered Cylinder deliberately does not, so a raised or
-  unlimited server cap is governed by the configured cap / 10M hard render ceiling instead. Volumes are **always
+  always hollow rather than solid-filled (v0.2.17)** — 3D Filled is retired because the invisible interior
+  was pure cost. Each volume may now persist as a complete **Shell** or canonical structural **Wireframe**
+  (`IsWireframe`, v0.3.7); both use the selected scale and exact cap counts. v0.1.53 routes hollow Sphere/Dome
+  through `SphericalShellScan`; normal Box retains its lattice scan and normal Cylinder/Cone remain
+  centre-banded. When those three legacy bounding scans would cross their old 4M work guard, v0.3.8 switches
+  to `LargeVolumeShellFallback` (face/ring work proportional to visible shell area) instead of rejecting the
+  guide. Configured caps and the 10M hard ceiling remain authoritative. Volumes are **always
   Volumetric** (Surface + Divisions gated off server-side and greyed/hidden in the GUI). The base plane / axis
   comes from the clicked face; the axis is the **deterministic `ShapeGeometry.BaseNormal`** (+up regardless of
   anchor order — SHIFT is the only invert, e.g. dome → bowl). **Targeting is a wireframe** (equator/meridians,
   rings + verticals, box edges), not every shell cell — the anchors and the height handle are the reliable
-  grab points. Height may be set in **free air** (no block → the handle follows the view ray; a targeted
-  block wins). No new persisted/wire fields — volumes reuse `ControlPoints` + `ShapePlaneAxis`; enum values
-  appended, **DataVersion stays 7**. Natural next volumes: **Roof, Tunnel**.
-- **Fill is a guide property (`IsFilled`), constraints are modifiers — neither is a shape type.** Fill applies
-  to **2D shapes only**; the 3D volume family is locked hollow (v0.2.17, above).
+  grab points. `ShapeWireframe` is the canonical selected-scale topology path; round volumes have eight ribs
+  and polygonal prisms one longitudinal wire per corner. Height may be set in **free air** (no block → the handle follows the view ray; a targeted
+  block wins). The original volume catalog reused `ControlPoints` + `ShapePlaneAxis`; v0.3.7 later added the
+  shared persisted/wired `IsWireframe` form flag (**DataVersion/protocol 11**). Natural next volumes:
+  **Roof, Tunnel**.
+- **Fill is a 2D guide property (`IsFilled`); Form is a 3D guide property (`IsWireframe`).** Constraints are
+  modifiers, not shape types. The same GUI positions contextually read Hollow/Filled for 2D and
+  Shell/Wireframe for volumes.
 
 ### Rendering
 - **The verified draw recipe:** Opaque stage + manual blend (not OIT); `PreparedStandardShader` overridden to
@@ -298,6 +309,16 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   cell). **Division marks share that even-span pairing** (Session 10, `ShapeGeometry.ClaimMarkerPaired`): a
   boundary landing between two voxels claims both, so the equal parts read even; boundaries on a cell centre
   stay single.
+- **Adaptive large-guide drafting (v0.3):** cheap poses render their normal selected-scale shell. Expensive
+  moving 3D poses use a structural wireframe under work/frame-pressure hysteresis; at least four selected-
+  scale voxels around the cursor remain precise, stepping outward across roughly two blocks. After the settle
+  delay, one generation-tagged background task builds the exact selected-scale result. Prebuilt pseudo-random
+  mesh batches upload at a bounded cadence; movement invalidates stale work. Pending draft/grab measurements
+  show animated calculation glyphs rather than blocking input.
+- **Placed behemoth safeguards (v0.3.3–v0.3.5):** display name/count/dimensions are cached; placed hover never
+  voxelizes. Giant grabs use a wireframe while retaining the settled mesh. Cancel reveals that mesh
+  immediately and fingerprints/quarantines the confirming authority echo so no delayed duplicate shell build
+  or stale worker result can expand afterward.
 - **Surface guides render as paper-thin slabs (0.01)** hugging the wall face on the **air side** (world
   solidity probe; majority fallback) with a **plane-axis-only** inset. **Volumetric anti-z-fight is a
   per-face geometry inset** (`BlockPlaneInset = 0.003`, v0.2.10–0.2.16), not a camera nudge: a voxel face is
@@ -435,7 +456,7 @@ Layout/
     │   ├── ItemGuideTool.cs              [S15: + chalk helpers, fill-state OnBeforeRender, IContainedMeshSource, ground-store gesture]
     │   └── ItemChalkingPowder.cs         [S15: tap/hold refill — hotbar or ground-stored kit in place]
     ├── Guide/                            [pure data]
-    │   ├── GuideData.cs                  [DataVersion 9; + FlatSideAligned, Sides, IsClosed, Original{ControlPoints,Constraint}]
+    │   ├── GuideData.cs                  [DataVersion 11; + IsWireframe, cached display/count/dimensions]
     │   ├── ControlPoint.cs               [+ IsLockMarker: passive, non-deforming Arch lock]
     │   ├── VoxelPosition.cs              [VoxelRenderType: … Grabbed, Division (magenta, S9)]
     │   ├── GuideShapeType.cs             [15 pinned types through PolygonalPrism/TaperedPolygonalPrism; + IsVolume/UsesSides]
@@ -461,6 +482,8 @@ Layout/
     │   ├── PolygonalPrismShape.cs        [3D (0.2.38): straight/tapered regular-polygon volumes]
     │   ├── ConeShape.cs                  [3D (0.1.21): centre-banded sloped shell; 3-click]
     │   ├── BoxShape.cs                   [3D (0.1.21): independent side lengths; exact shell; 3-click]
+    │   ├── ShapeWireframe.cs             [S21: canonical structural topology → selected-scale voxels]
+    │   ├── LargeVolumeShellFallback.cs   [S21: surface-only oversized Cylinder/Cone/Box fallback]
     │   ├── ShapeGeometry.cs              [S9: shared planar frame + nearest-claim marker; S11 BaseNormal deterministic up-axis]
     │   ├── ShapeFactory.cs               [the single shape construction point]
     │   ├── SoftPointFlow.cs              [S9: slave-regime (interior grabs) + proportional (structural); both sides]
@@ -471,6 +494,7 @@ Layout/
     │   ├── GuideManagerDependencies.cs  [F4: persistence/recovery, block-probe, and logging seams]
     │   ├── GuideLockManager.cs
     │   ├── DraftManager.cs
+    │   ├── DraftPreviewSpec.cs           [S21: immutable generation-tagged refinement work]
     │   ├── UndoManager.cs
     │   ├── GuideRenderer.cs
     │   ├── GuideMeshBuilder.cs
@@ -506,13 +530,15 @@ Layout/
             ├── HideGuideCommand.cs
             ├── SetProjectionCommand.cs   [optional pre-bake point snapshot]
             ├── SetFilledCommand.cs
+            ├── SetWireframeCommand.cs    [S21: persistent volume Form undo/redo]
             ├── SetDivisionsCommand.cs    [S9: old/new count; undo/redo re-applies]
             ├── SetSidesCommand.cs        [S11: old/new polygon side count]
             ├── SpringBackCommand.cs      [S11: pre/post point+constraint snapshots around a SHIFT spring-back]
             └── BreakConstraintCommand.cs
 ```
 
-**70 source files** (43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
+**74 source files** (70 through Session 20, plus Session 21’s `DraftPreviewSpec`, `ShapeWireframe`,
+`LargeVolumeShellFallback`, and `SetWireframeCommand`). Historical breakdown: 43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
 ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 in Session 10: LayoutToolIcons; + 4 in Session 11:
 PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 for the 3D family (v0.1.20–0.1.21):
 SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape; + 5 for F4: ClientAuthorityMode,
@@ -543,9 +569,13 @@ GuideData {
     bool              IsHidden
     ProjectionMode    Projection        // Volumetric | Surface
     ProjectionPlane   Plane             // the Surface PROJECTION plane (≠ ShapePlaneAxis)
-    bool              IsFilled          // hollow vs filled (Tier 2, built)
+    bool              IsFilled          // 2D hollow vs filled
+    bool              IsWireframe       // 3D Shell(false) vs canonical structural Wireframe(true)
+    string            DisplayName       // cached human-readable whole-block dimensions
+    int               CachedVoxelCount
+    int               Cached{Voxel,Block}{Width,Height}
     string            CreatorUid        // nullable; bookkeeping only, never ownership, never wired
-    int               DataVersion       // 9 (const CurrentDataVersion); older saves migrate by defaults
+    int               DataVersion       // 11 (const CurrentDataVersion); older saves migrate by defaults
     int               Divisions          // Session 9: visual equal-parts count (0/1 = none)
     int               Sides              // Session 11: polygon side count (3–24; 0 on other shapes)
     bool              FlatSideAligned    // Session 20: polygon edge-facing orientation; false preserves old guides
@@ -610,7 +640,7 @@ Unchanged since v2: `ProjectionMode { Volumetric, Surface }`; `ProjectionPlane` 
 ## 3. Module Map
 
 ### `LayoutModSystem.cs`
-Entry point and composition root: registers systems, the tool item, protocol-2 network channels, commands,
+Entry point and composition root: registers systems, the tool item, protocol-11 network channels, commands,
 keybinds, and HUD on both sides; owns the shared instances per side; seeds `DraftManager` from client config
 and persists it back. Client startup begins in Detecting, creates the local-authority/persistence stack, and
 lets the network handler resolve Networked vs. Local. All keybinds are rebindable, none hard-coded.
@@ -693,30 +723,33 @@ client `StartGrab`, client insert-adoption.
 **`GuideManager.cs`** — side-neutral guide authority. Registry + injected `IGuidePersistence` (versioned
 JSON on the server or per-world/per-UID JSON on the client), optional recovery, injected block probe/logger;
 builds shapes via the factory on create (shape/constraint/plane from the request) and
-re-adopts on load/restore; validates every mutation (**filled-aware voxel caps**, lock, existence) and
+re-adopts on load/restore; validates every mutation (**form/fill-aware voxel caps**, lock, existence) and
 reverts on rejection. Mutations: `CreateGuide`, `RestoreGuide`, `UpdateControlPoints` (multi-edit, atomic),
 `InsertControlPoint`, `RemoveControlPoint`, `SetPointLocked`, `DeleteGuide`, `SetHidden`, `SetProjection`
 (**bakes flattened positions into the points when leaving Surface**; preserves the stored plane through
-Volumetric), `SetFilled` (recounts with the new value, rolls back over cap), `Rescale`, `BreakConstraint` /
+Volumetric), `SetFilled` and `SetWireframe` (recount with the new value, roll back over cap), `Rescale`, `BreakConstraint` /
 `RestoreConstraint`, `RestoreControlPoints`. Communicates by `GuideOperationResult` return values, not events.
 
 **`GuideLockManager.cs`** — pure; one edit lock per guide, first grab wins; `ReleaseAllLocksForPlayer`,
 `ClearLock`, `IsHeldBy`.
 
-**`DraftManager.cs`** — client-side draft + tool state: mode, scale, projection, plane override, fill,
+**`DraftManager.cs`** — client-side draft + tool state: mode, scale, projection, plane override, 2D fill,
+3D form (`Wireframe`),
 **shape + constraint** (the picker's target), the per-draft intrinsic plane axis, and the selected guide.
 Holds only the draft's start point; settings are read live at completion. Cap pre-check builds a throwaway
-shape via the factory, counted filled-aware.
+shape via the factory, counted with the current 2D fill / 3D form.
 
 **`UndoManager.cs`** — per-authority, per-player bounded stacks (server default 50; local uses the same
 semantics). Validate-then-apply
 with stale-command skip; `Blocked` for valid-but-cap-rejected commands (pushed back, history preserved);
 returns results, never broadcasts.
 
-**`GuideRenderer.cs`** — client-side; one compiled mesh per guide, rebuilt only on change (every
-mirror-apply raises the change event → rebuild). Shapes adopted via the factory; **settled guides always
-mesh at true scale**; the draft ghost may coarsen above `PreviewFullResVoxelCap` (≈ 8,000) and carries the
-picked shape/constraint/plane in its rebuild key. Surface: flatten to the **air-side** cell layer (world
+**`GuideRenderer.cs`** — client-side; placed meshes rebuild on accepted change events. Shapes adopt through
+the factory; settled Shells and persistent Wireframes use the true selected scale. Cheap drafts show their
+normal shell. Expensive motion uses adaptive structural wireframes plus a selected-scale cursor region;
+`DraftPreviewSpec` identifies one deep-copied generation, background refinement rejects stale completions,
+and selected-scale materialization uploads bounded pseudo-random batches. Giant grabs retain the settled mesh
+for instant cancel, and confirming echoes are fingerprint-quarantined. Surface: flatten to the **air-side** cell layer (world
 solidity probe, majority fallback) as **0.01-block slabs** with a plane-axis-only inset; volumetric meshes
 get a 0.003-block per-frame camera nudge. Grabbed point painted White (single voxel); hidden guides =
 anchors-only at low alpha. No selection/collision geometry.
@@ -746,7 +779,7 @@ ints, Guids as 16 bytes, positions as three doubles, full point lists verbatim (
 | `GuideUpdatePacket` | S→C, C→S | Guide ID + edit array (client sends its one; server broadcasts the composed batch incl. soft-flow edits) |
 | `GuideInsertPointPacket` | S→C, C→S | Guide ID + index + position (+ `Locked` for lock-in-place) |
 | `GuideCancelGrabPacket` | C→S | Cancel the grab: restore origins / remove an insert-born point |
-| `GuideDeletePacket` / `GuideHidePacket` / `GuideLockPointPacket` / `GuideRescalePacket` / `GuideSetProjectionPacket` / `GuideSetFilledPacket` / `GuideSetDivisionsPacket` (S9) | S→C, C→S | The atomic ops (divisions = pure visual recolor) |
+| `GuideDeletePacket` / `GuideHidePacket` / `GuideLockPointPacket` / `GuideRescalePacket` / `GuideSetProjectionPacket` / `GuideSetFilledPacket` / `GuideSetWireframePacket` / `GuideSetDivisionsPacket` | S→C, C→S | Atomic settings ops (wireframe = 3D Form; divisions = pure visual recolor) |
 | `GuideGrabPacket` / `GuideReleasePacket` / `GuideLockStatePacket` | C→S / S→C | Edit-lock lifecycle |
 | `DraftStartPacket` / `DraftCancelPacket` / `DraftAnchorBroadcastPacket` / `DraftAnchorRemovePacket` | mixed | Draft lifecycle (anchor dot only) |
 | `UndoRequestPacket` / `RedoRequestPacket` / `VoxelCapWarningPacket` | C→S / S→C | Undo + cap warnings |
@@ -783,8 +816,9 @@ their own separators with centred "2D"/"3D" labels (0.1.22–0.1.23); pins shown
 right-click pins/unpins (never evicts; message when full); the catalog STAYS OPEN after a pick (0.1.23) —
 only the ▾/▴ collapses it; selecting a shape never collapses; empty slots show faint placeholders; pins
 persist in `layout-client.json`; the old Favorites strip is gone**) · Scale (native N×N voxel-count icons;
-16× = one solid block) · **Projection + Fill on ONE row** (0.1.17; Projection greys on volumes, Fill greys
-on the Free-Shape) · Plane · **Divisions (+ Sides for polygons on the same row; the whole row HIDDEN on 3D
+16× = one solid block) · **Projection + Fill/Form on ONE row** (Projection greys on volumes; 2D uses
+Hollow/Filled; 3D contextually uses Shell/Wireframe with dedicated skin/frame icons; Fill greys on the
+Free-Shape) · Plane · **Divisions (+ Sides for polygons on the same row; the whole row HIDDEN on 3D
 volumes, 0.1.23)**. All the primary row labels (Mode/Shape/Scale/…) are **centre-aligned** in their column
 (0.1.23). **Edit:** the SAME rows plus **Visibility** (no shape picker) act
 on the SELECTED guide via the send API, with a compact guide-info line + **Deselect**; greyed with a "click
@@ -800,13 +834,13 @@ in `capi.Gui.Icons.CustomIcons`: the 15 shape glyphs (the arch is an open ellipt
 Catmull-Rom silhouette; the polygon a point-up pentagon; the Free-Shape an irregular dotted-corner
 outline), the picker's expand chevrons (▾/▴), the empty-slot placeholder, and (0.1.15) per-shape
 **"-star"** (★-badged pinned catalog tiles) and **"-current"** (fixed guide-body-yellow, for the Current
-Shape chip) wrapper variants, plus mode/projection/fill/visibility pairs, plane cubes (active face filled),
+Shape chip) wrapper variants, plus mode/projection/fill/form/visibility pairs, plane cubes (active face filled),
 and the scale grids (`DrawScaleGrid(n)` + `DrawScaleFullBlock`). Uniform aspect-preserving design-box
 mapping; strokes/fills take the button's tint, so normal/hover/pressed states come free.
 
-**`GuideHud.cs`** — mode (+ the picked shape in Create) · scale · projection/plane · fill · live ↔/↕
-dimensions in voxels and blocks (draft and examined guide, factory-built shapes, fill-aware) · examined
-guide's id, lock, count, cap bar (`Cap: 62%` + ⚠ from the warning packet) · **the Current Shape chip
+**`GuideHud.cs`** — mode (+ the picked shape in Create) · scale · projection/plane · Fill or 3D Form · live
+draft/grab dimensions when ready (animated calculation glyphs while pending) · placed guide’s cached
+dimension-name/count without hover regeneration · lock and cap bar (`Cap: 62%` + ⚠ from the warning packet) · **the Current Shape chip
 (0.1.16): the same always-lit yellow glyph as the F-menu's, top-right of the panel in Create mode,
 recomposed on shape/mode changes.**
 
@@ -818,7 +852,7 @@ recomposed on shape/mode changes.**
 snapshots) · MoveControlPoint (before/after; one per drag per moved point, soft-flow included) ·
 InsertControlPoint (landing index refreshed on re-insert) · LockPoint · RescaleGuide · HideGuide ·
 SetProjection (**+ optional pre-bake point snapshot**; undo restores mode/plane then the points) ·
-SetFilled · **BreakConstraint** (pre-break constraint + points; undo restores both, redo re-breaks) ·
+SetFilled · **SetWireframe** · **BreakConstraint** (pre-break constraint + points; undo restores both, redo re-breaks) ·
 **SetSides** (S11: old/new polygon side count) · **SpringBack** (S11: pre/post point+constraint snapshots
 around a SHIFT spring-back; undo restores the distorted form).
 Move/insert confirm the point is still where the command left it, so they never clobber another player's edit.
@@ -871,13 +905,15 @@ Guides are referenced off blocks only at placement — never bound; removing the
    carrying both changes); ellipse family → the nearest handle is grabbed instead.
 2. **Dragging:** anchors snap to block faces (CTRL → cardinal line through the other anchor; Session 11 —
    SHIFT+left-click on a guide is now spring-back-to-original instead of a grab); interior
-   points move at retained depth. The client previews locally at full fidelity — including **soft-point
-   flow** (unlocked interior points flowing proportionally with the structural baseline) and any constraint
+   points move at retained depth. The client previews locally with full geometry semantics; giant guides may
+   use their structural wireframe during motion while preserving selected-scale precision near the cursor.
+   Preview still includes **soft-point flow** (unlocked interior points flowing proportionally with the structural baseline) and any constraint
    break (mirror constraint cleared at grab start). Throttled sends (~100 ms); the server composes the
    authoritative batch (grabbed edit + its own soft-flow reflow), cap-checks once, broadcasts to everyone.
    Dragging a circle's minor handle auto-breaks circle → ellipse on the first move.
 3. **Release (left-click):** one `MoveControlPointCommand` per moved point (origin → final), lock freed.
-   **Right-click instead:** cancel — origins restored server-side, an insert-born point removed entirely.
+   **Right-click instead:** cancel — origins restore authoritatively, the retained settled mesh reappears
+   immediately, transient generations invalidate, and an insert-born point is removed entirely.
    Tool swap mid-drag = comatose (suspend, resume on re-equip).
 4. **Idle right-click:** the first rendered voxel hit is authoritative. A point toggles only when that voxel
    is its nearest visible marker cell; an adjacent arch/Free-Shape body voxel receives its own passive lock
@@ -885,16 +921,16 @@ Guides are referenced off blocks only at placement — never bound; removing the
 
 ### Editing a placed guide (Edit mode — Session 10)
 Switch the Mode row to **Edit**, then **left-click a guide to select it** (empty click deselects; select-only
-— no reshaping). The F-menu's Scale / Projection / Plane / Fill / Divisions / Visibility rows now drive THAT
-guide through the send API (`SendRescale` / `SendSetProjection` / `SendSetFilled` / `SendSetDivisions` /
+— no reshaping). The F-menu's Scale / Projection / Plane / Fill-or-Form / Divisions / Visibility rows drive THAT
+guide through the send API (`SendRescale` / `SendSetProjection` / `SendSetFilled` / `SendSetWireframe` / `SendSetDivisions` /
 `SendHide`) instead of the tool defaults — no separate panel section, so the GUI never expands. Reshaping
 (grab / insert / lock) stays in **Create**.
 
-### Projection, plane, fill (F-menu tiles — tool defaults in Create, the selected guide in Edit)
+### Projection, plane, fill/form (F-menu tiles — tool defaults in Create, the selected guide in Edit)
 Volumetric ↔ Surface: switching a guide **to** Volumetric bakes the flattened positions into its points
 (what you saw is what you get; single undo step; full-state broadcast); switching back **to** Surface
-restores its stored plane. Plane and Fill apply atomically with cap re-checks (turning Fill on can be
-rejected over cap and rolls back). All rebuild every client's mesh via the normal change events.
+restores its stored plane. Plane, 2D Fill, and 3D Shell/Wireframe Form apply atomically with cap re-checks and
+roll back on rejection. All rebuild every client's mesh via the normal change events.
 
 ### Delete mode
 Left-click a guide → dispel. Ownership routes the request to local or server authority; the authority owns
@@ -940,7 +976,7 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
 - **Disconnect mid-grab** → locks freed and broadcast; uncommitted drag never recorded; undo history cleared.
   **Mid-draft** → draft cancelled, anchor dot removed.
 - **Two players grab one guide** → first packet wins; the second sees the lock state, click is a no-op.
-- **Over-cap mid-edit** → server counts (filled-aware) before committing; rejects, warns, reverts. Clients
+- **Over-cap mid-edit** → server counts with the current 2D fill / 3D form before committing; rejects, warns, reverts. Clients
   pre-check to avoid jank.
 - **Cross-player undo** → stale commands are skipped, never corrupting state; valid-but-rejected commands
   are `Blocked` and preserved.
@@ -950,14 +986,14 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
 
 ---
 
-This v3.7 document is the authoritative architecture, consolidated to current state: **Layout v0.2.47 on
-`main`, built, packaged, documented, and pushed**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
+This v3.8 document is the authoritative architecture, consolidated to current state: **Layout v0.3.8 built,
+packaged, and documented locally; `main` last pushed through v0.2.47**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
 (+ right/equilateral/isosceles), rectangles (+ square), polygons, and Free-Shapes — plus the **3D volume
 family** (spheres, domes, cylinders, tapered cylinders, straight/tapered polygonal prisms, cones, boxes)
-place, preview, reshape, fill, lock/unlock, divide, and
+place, preview, reshape, fill/form, lock/unlock, divide, and
 project onto surfaces under server or local authority against VS 1.22.3 / .NET 10, drawn with the
 **Chalking Kit**'s finite, powder-refillable chalk. Status, flagged decisions, and the
 punch-list live in `PROJECT_STATUS.md` and `TODO.md`; the current-state brief for external analysis lives in
 `HANDOFF.md` at the repo root; F4's final behavior record lives in `PLAN_CLIENT_ONLY.md`, its implementation
-history in `SESSION_12.md`, the interaction checkpoint in `SESSION_13.md`, and the active mesh resume plan in
-`SESSION_14.md`.
+history in `SESSION_12.md`, the interaction checkpoint in `SESSION_13.md`, the mesh resume plan in
+`SESSION_14.md`, and the current adaptive large-guide record in `SESSION_21.md`.

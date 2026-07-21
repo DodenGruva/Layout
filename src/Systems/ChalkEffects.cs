@@ -61,8 +61,14 @@ namespace Layout.Systems
                 double cx = 0, cy = 0, cz = 0;
                 foreach (Vec3d p in points) { cx += p.X; cy += p.Y; cz += p.Z; }
                 int n = points.Count;
+                int spanBlocks = Math.Max(guide.CachedBlockWidth, guide.CachedBlockHeight);
+                double size = Math.Max(1, spanBlocks);
+                float heft = (float)Math.Max(0.0, Math.Min(1.0, Math.Log(size, 2.0) / 10.0));
+                float pitch = 1.0f - 0.38f * heft;
+                float range = 32f + 20f * heft;
+                float soundVolume = 0.55f + 0.40f * heft;
                 world.PlaySoundAt(new AssetLocation("sounds/bow-release"),
-                    cx / n, cy / n, cz / n, null, true, 32f, 0.55f);
+                    cx / n, cy / n, cz / n, null, pitch, range, soundVolume);
 
                 // Original short-lived, falling chalk flecks.
                 Puff(world, points[0], 8f, 16f);

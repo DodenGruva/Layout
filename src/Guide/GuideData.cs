@@ -59,7 +59,9 @@ namespace Layout.Guide
         /// harmless on every earlier shape). Version 8 (0.1.51) added the default-false
         /// <see cref="ControlPoint.IsLockMarker"/> role used by non-deforming Arch lock markers. Version 9
         /// added <see cref="FlatSideAligned"/> for polygon-based guides (default false preserves old guides).
-        public const int CurrentDataVersion = 9;
+        /// Version 10 stores lightweight display dimensions/count so merely hovering a large guide never
+        /// has to regenerate its voxel shell.
+        public const int CurrentDataVersion = 11;
 
         /// <summary>The voxel edge lengths a guide may use, in 1/16-block units (1 → 1/16 block, 16 → 1 block).</summary>
         public static readonly int[] ValidVoxelScales = { 1, 2, 4, 8, 16 };
@@ -146,6 +148,21 @@ namespace Layout.Guide
         /// <summary>Hollow curve (false) vs. filled region (true). Per-guide and toggleable after creation.</summary>
         public bool IsFilled { get; set; }
 
+        /// <summary>For 3D volumes, render/count the canonical structural wireframe instead of the shell.</summary>
+        public bool IsWireframe { get; set; }
+
+        /// <summary>Human-readable guide name derived from its cached whole-block dimensions.</summary>
+        public string DisplayName { get; set; }
+
+        /// <summary>Last authoritative voxel count, stored for hover/cap display without regeneration.</summary>
+        public int CachedVoxelCount { get; set; }
+
+        /// <summary>Cached lightweight dimensions in selected-scale voxels and whole blocks.</summary>
+        public int CachedVoxelWidth { get; set; }
+        public int CachedVoxelHeight { get; set; }
+        public int CachedBlockWidth { get; set; }
+        public int CachedBlockHeight { get; set; }
+
         /// <summary>Schema version of this record; see <see cref="CurrentDataVersion"/>.</summary>
         public int DataVersion { get; set; }
 
@@ -174,6 +191,9 @@ namespace Layout.Guide
             Projection = ProjectionMode.Volumetric;
             Plane = ProjectionPlane.Default;
             IsFilled = false;
+            IsWireframe = false;
+            DisplayName = null;
+            CachedVoxelCount = 0;
             DataVersion = 0;
         }
 
@@ -204,7 +224,8 @@ namespace Layout.Guide
             int divisions = 0,
             int sides = 0,
             bool isClosed = false,
-            bool flatSideAligned = false)
+            bool flatSideAligned = false,
+            bool isWireframe = false)
         {
             if (controlPoints == null) throw new ArgumentNullException(nameof(controlPoints));
             if (!IsValidVoxelScale(voxelScale))
@@ -235,6 +256,7 @@ namespace Layout.Guide
                 Projection = projection,
                 Plane = plane ?? ProjectionPlane.Default,
                 IsFilled = isFilled,
+                IsWireframe = isWireframe,
                 DataVersion = CurrentDataVersion
             };
         }
@@ -245,7 +267,7 @@ namespace Layout.Guide
         /// cap checks) never hand the shape a <see cref="GuideData"/> directly.
         /// </summary>
         public GuideRenderSettings GetRenderSettings() =>
-            new GuideRenderSettings(VoxelScale, Projection, Plane, IsFilled);
+            new GuideRenderSettings(VoxelScale, Projection, Plane, IsFilled, wireframe: IsWireframe);
 
         /// <summary>
         /// Produces a fully INDEPENDENT deep copy for undo snapshots: a new control-point list whose
@@ -287,6 +309,13 @@ namespace Layout.Guide
                 Projection = Projection,
                 Plane = Plane,
                 IsFilled = IsFilled,
+                IsWireframe = IsWireframe,
+                DisplayName = DisplayName,
+                CachedVoxelCount = CachedVoxelCount,
+                CachedVoxelWidth = CachedVoxelWidth,
+                CachedVoxelHeight = CachedVoxelHeight,
+                CachedBlockWidth = CachedBlockWidth,
+                CachedBlockHeight = CachedBlockHeight,
                 CreatorUid = CreatorUid,
                 DataVersion = DataVersion
             };
@@ -302,6 +331,6 @@ namespace Layout.Guide
 
         public override string ToString() =>
             $"GuideData({ShapeType}, {Id}, points={ControlPoints?.Count ?? 0}, scale={VoxelScale}, " +
-            $"{Projection}, filled={IsFilled}, hidden={IsHidden}, v{DataVersion})";
+            $"{Projection}, filled={IsFilled}, wireframe={IsWireframe}, hidden={IsHidden}, v{DataVersion})";
     }
 }

@@ -109,6 +109,7 @@ namespace Layout.Systems
         private ProjectionMode _projection = ProjectionMode.Volumetric;
         private PlaneAxis? _planeOverride;              // null => auto-select the plane from the clicked face
         private bool _filled;
+        private bool _wireframe;
         private int _divisions;
         private int _sides = Shapes.PolygonShape.DefaultSides;          // Session 11: polygon side count
         private GuideShapeType _shape = GuideShapeType.Arch;            // Session 8: shape catalog
@@ -176,6 +177,9 @@ namespace Layout.Systems
 
         public bool Filled => _filled;
         public void SetFilled(bool filled) => _filled = filled;
+
+        public bool Wireframe => _wireframe;
+        public void SetWireframe(bool wireframe) => _wireframe = wireframe;
 
         /// <summary>Session 9: equal-part division marks for the NEXT guide (0/1 = none; clamped).</summary>
         public int Divisions => _divisions;
@@ -286,7 +290,8 @@ namespace Layout.Systems
         /// Volumetric mode the plane is ignored, so any value (e.g. <see cref="ProjectionPlane.Default"/>) is fine.
         /// </summary>
         public GuideRenderSettings BuildRenderSettings(ProjectionPlane plane) =>
-            new GuideRenderSettings(_scale, _projection, plane, _filled, _divisions);
+            new GuideRenderSettings(_scale, _projection, plane, _filled, _divisions,
+                GuideShapeTypes.IsVolume(_shape) && _wireframe);
 
         // --- Draft lifecycle --------------------------------------------------------------------
 
@@ -368,9 +373,7 @@ namespace Layout.Systems
                 return new DraftCompletion(DraftCompletionStatus.NoActiveDraft, null, null, 0, 0);
 
             IGuideShape preview = new Shapes.FreeShape(_draftChain, closed);
-            int count = _perGuideVoxelCap > 0
-                ? GuideShapeVoxelCounting.CountUpTo(preview, _scale, _filled, _perGuideVoxelCap)
-                : preview.GetVoxelCount(_scale, _filled);
+            int count = CountDraftVoxels(preview);
 
             DraftCompletionStatus status = _perGuideVoxelCap > 0 && count > _perGuideVoxelCap
                 ? DraftCompletionStatus.RejectedOverCap
@@ -472,9 +475,7 @@ namespace Layout.Systems
             IGuideShape preview = ShapeFactory.Create(_shape, _constraint, _draftPlaneAxis, start, end,
                 inverted, _sides, flatSideAligned: flatSideAligned);
             ApplyPlacementPoints(preview, _shape, _constraint, apex, rim);
-            int count = _perGuideVoxelCap > 0
-                ? GuideShapeVoxelCounting.CountUpTo(preview, _scale, _filled, _perGuideVoxelCap)
-                : preview.GetVoxelCount(_scale, _filled);
+            int count = CountDraftVoxels(preview);
 
             // Cap of 0 or less = the server enforces no per-guide cap (unlimited); everything passes.
             DraftCompletionStatus status = _perGuideVoxelCap > 0 && count > _perGuideVoxelCap
@@ -483,6 +484,15 @@ namespace Layout.Systems
 
             return new DraftCompletion(status, start, end, count, _perGuideVoxelCap, apex, rim,
                 flatSideAligned);
+        }
+
+        private int CountDraftVoxels(IGuideShape preview)
+        {
+            if (GuideShapeTypes.IsVolume(_shape) && _wireframe)
+                return ShapeWireframe.GetVoxelCount(preview, _scale);
+            return _perGuideVoxelCap > 0
+                ? GuideShapeVoxelCounting.CountUpTo(preview, _scale, _filled, _perGuideVoxelCap)
+                : preview.GetVoxelCount(_scale, _filled);
         }
 
         /// <summary>

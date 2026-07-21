@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Threading.Tasks;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
@@ -51,9 +53,15 @@ namespace Layout.Systems
         // world. Guide-vs-guide overlap is order-dependent, which is fine for translucent overlays.
         private const EnumRenderStage RenderStage = EnumRenderStage.Opaque;
 
-        // Above this voxel count the preview is coarsened (rendered at the next larger voxel scale) to keep the
-        // mesh cheap. Purely a render optimisation; the guide's real scale and the HUD readout are unaffected.
+        // Moving drafts keep a normal selected-scale shell while this cheap estimate fits. Expensive poses
+        // fall back to a wireframe with its own smaller moving-mesh target.
         private const int PreviewFullResVoxelCap = 8000;
+        private const int MovingWireframeVoxelTarget = 6000;
+        private const double PrecisionTransitionRadius = 2.0;
+        private const int MaterializationTargetVoxelsPerBatch = 1000;
+        private const int MaterializationMinimumBatches = 8;
+        private const int MaterializationMaximumBatches = 64;
+        private const int MaterializationUploadIntervalMs = 30;
 
         // Remote draft-anchor marker: a small blue cube (a fraction of a block) centred on the anchor.
         private const int DraftMarkerScale = 4;                          // 1/16 units → 0.25-block cube
@@ -92,6 +100,27 @@ namespace Layout.Systems
         private bool _previewFlatSideAligned;
         private bool _hasPreviewKey;
 
+        // v0.3 progressive drafting. Cheap moving poses retain their shell; expensive poses use an adaptive
+        // wireframe, and settled shell refinements are accepted only while their generation is current.
+        private readonly object _draftWorkGate = new object();
+        private bool _draftWorkBusy;
+        private int _activeDraftGeneration;
+        private double _smoothedFrameMilliseconds = 16.67;
+        private readonly List<MeshRef> _draftPrecisionMeshes = new List<MeshRef>();
+        private readonly List<MeshRef> _draftMaterializationMeshes = new List<MeshRef>();
+        private Queue<MeshData> _pendingDraftMaterialization;
+        private long _lastDraftMaterializationUploadMs;
+
+        public event EventHandler<DraftPreviewCompletedEventArgs> DraftPreviewCompleted;
+
+        /// <summary>Smoothed render-frame time used by the draft scheduler as a secondary pressure signal.</summary>
+        public double SmoothedFrameMilliseconds => _smoothedFrameMilliseconds;
+
+        public bool DraftRefinementBusy
+        {
+            get { lock (_draftWorkGate) return _draftWorkBusy; }
+        }
+
         private readonly Dictionary<Guid, GuideMesh> _guideMeshes = new Dictionary<Guid, GuideMesh>();
         private readonly Dictionary<string, Vec3d> _remoteAnchors = new Dictionary<string, Vec3d>();
 
@@ -109,6 +138,14 @@ namespace Layout.Systems
         // Which control point (if any) is being actively dragged locally, so its voxels render White.
         private Guid _grabbedGuide = Guid.Empty;
         private int _grabbedIndex = -1;
+        private int _grabAdaptiveScale;
+        private int _grabHealthyUpdates;
+        private double _grabBaselineFrameMilliseconds = 16.67;
+        private GuideExtent _grabExtent = GuideExtent.Empty;
+        private Guid _cancelRestoreGuide = Guid.Empty;
+        private ulong _cancelRestoreFingerprint;
+
+        public GuideExtent CurrentGrabExtent => _grabExtent;
 
         private bool _disposed;
 
@@ -117,6 +154,10 @@ namespace Layout.Systems
         {
             public MeshRef Ref;
             public Vec3d Origin;
+            public readonly List<MeshRef> Auxiliary = new List<MeshRef>();
+            public MeshRef GrabRef;
+            public Vec3d GrabOrigin;
+            public readonly List<MeshRef> GrabAuxiliary = new List<MeshRef>();
         }
 
         public GuideRenderer(ICoreClientAPI capi, ClientNetworkHandler network)
@@ -148,7 +189,11 @@ namespace Layout.Systems
         public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
         {
             if (_disposed || stage != RenderStage) return;
-            if (_guideMeshes.Count == 0 && _remoteAnchors.Count == 0 && _draftPreviewMesh == null) return;
+            double frameMs = Math.Max(1.0, Math.Min(250.0, deltaTime * 1000.0));
+            _smoothedFrameMilliseconds += (frameMs - _smoothedFrameMilliseconds) * 0.08;
+            AdvanceDraftMaterialization();
+            if (_guideMeshes.Count == 0 && _remoteAnchors.Count == 0 && _draftPreviewMesh == null
+                && _draftPrecisionMeshes.Count == 0 && _draftMaterializationMeshes.Count == 0) return;
 
             IClientPlayer player = _capi.World?.Player;
             if (player?.Entity == null) return;
@@ -188,10 +233,15 @@ namespace Layout.Systems
 
             foreach (GuideMesh gm in _guideMeshes.Values)
             {
-                if (gm.Ref == null) continue;
-                SetModelMatrix(gm.Origin.X - camPos.X, gm.Origin.Y - camPos.Y, gm.Origin.Z - camPos.Z);
+                MeshRef primary = gm.GrabRef ?? gm.Ref;
+                Vec3d origin = gm.GrabRef != null ? gm.GrabOrigin : gm.Origin;
+                if (primary == null || origin == null) continue;
+                SetModelMatrix(origin.X - camPos.X, origin.Y - camPos.Y, origin.Z - camPos.Z);
                 prog.ModelMatrix = _modelMat;
-                rpi.RenderMesh(gm.Ref);
+                rpi.RenderMesh(primary);
+                List<MeshRef> auxiliary = gm.GrabRef != null ? gm.GrabAuxiliary : gm.Auxiliary;
+                for (int i = 0; i < auxiliary.Count; i++)
+                    if (auxiliary[i] != null) rpi.RenderMesh(auxiliary[i]);
             }
 
             if (_draftPreviewMesh != null)
@@ -202,6 +252,26 @@ namespace Layout.Systems
                     _draftPreviewOrigin.Z - camPos.Z);
                 prog.ModelMatrix = _modelMat;
                 rpi.RenderMesh(_draftPreviewMesh);
+            }
+
+            for (int i = 0; i < _draftPrecisionMeshes.Count; i++)
+            {
+                SetModelMatrix(
+                    _draftPreviewOrigin.X - camPos.X,
+                    _draftPreviewOrigin.Y - camPos.Y,
+                    _draftPreviewOrigin.Z - camPos.Z);
+                prog.ModelMatrix = _modelMat;
+                rpi.RenderMesh(_draftPrecisionMeshes[i]);
+            }
+
+            for (int i = 0; i < _draftMaterializationMeshes.Count; i++)
+            {
+                SetModelMatrix(
+                    _draftPreviewOrigin.X - camPos.X,
+                    _draftPreviewOrigin.Y - camPos.Y,
+                    _draftPreviewOrigin.Z - camPos.Z);
+                prog.ModelMatrix = _modelMat;
+                rpi.RenderMesh(_draftMaterializationMeshes[i]);
             }
 
             if (_markerMesh != null)
@@ -250,7 +320,19 @@ namespace Layout.Systems
 
         private void OnGuideAddedOrUpdated(GuideData guide)
         {
-            if (guide != null) RebuildGuide(guide);
+            if (guide == null) return;
+
+            // A cancelled grab already restored the original view by revealing the retained settled mesh.
+            // The authority's full-state echo confirms that same geometry; rebuilding it would synchronously
+            // voxelise the behemoth again for no visual change.
+            if (guide.Id == _cancelRestoreGuide)
+            {
+                ulong fingerprint = RenderFingerprint(guide);
+                _cancelRestoreGuide = Guid.Empty;
+                if (fingerprint == _cancelRestoreFingerprint) return;
+            }
+
+            RebuildGuide(guide);
         }
 
         private void OnGuideRemoved(Guid id) => RemoveGuideMesh(id);
@@ -277,6 +359,12 @@ namespace Layout.Systems
         public void SetGrabbedPoint(Guid guideId, int controlPointIndex)
         {
             Guid previous = _grabbedGuide;
+            if (previous != guideId)
+            {
+                _grabAdaptiveScale = 0;
+                _grabHealthyUpdates = 0;
+                _grabBaselineFrameMilliseconds = Math.Max(1.0, _smoothedFrameMilliseconds);
+            }
             _grabbedGuide = guideId;
             _grabbedIndex = controlPointIndex;
 
@@ -291,10 +379,676 @@ namespace Layout.Systems
             Guid was = _grabbedGuide;
             _grabbedGuide = Guid.Empty;
             _grabbedIndex = -1;
+            _grabAdaptiveScale = 0;
+            _grabHealthyUpdates = 0;
+            _grabExtent = GuideExtent.Empty;
+            RebuildGuideById(was);
+            DeleteGrabMeshes(was);
+        }
+
+        /// <summary>
+        /// Ends a cancelled grab. A large guide's wireframe is a separate working asset, so cancellation
+        /// can discard it and reveal the untouched settled mesh. Small guides keep the inexpensive rebuild
+        /// path because their live full-shell preview still replaces the settled mesh in place.
+        /// </summary>
+        public void CancelGrabbedPoint()
+        {
+            if (_grabbedGuide == Guid.Empty) return;
+            Guid was = _grabbedGuide;
+            _grabbedGuide = Guid.Empty;
+            _grabbedIndex = -1;
+            _grabAdaptiveScale = 0;
+            _grabHealthyUpdates = 0;
+            _grabExtent = GuideExtent.Empty;
+
+            bool canRestoreRetained = _guideMeshes.TryGetValue(was, out GuideMesh mesh)
+                && mesh.Ref != null && mesh.GrabRef != null;
+            if (canRestoreRetained)
+            {
+                if (_network.Guides.TryGetValue(was, out GuideData restored) && restored != null)
+                {
+                    _cancelRestoreGuide = was;
+                    _cancelRestoreFingerprint = RenderFingerprint(restored);
+                }
+                DeleteGrabMeshes(mesh);
+                return;
+            }
+
             RebuildGuideById(was);
         }
 
         // -- Local draft preview (driven by the held tool, Module 7) --------------------------------
+
+        private sealed class DraftBuildResult
+        {
+            public DraftPreviewSpec Spec;
+            public int RenderScale;
+            public int VoxelCount;
+            public GuideExtent Extent;
+            public long WorkMilliseconds;
+            public IGuideShape Shape;
+            public List<VoxelPosition> Voxels;
+            public List<MeshData> MaterializationMeshes;
+            public Vec3d Origin;
+            public Exception Error;
+        }
+
+        /// <summary>
+        /// Invalidates older refinement results without removing the currently visible ghost. The moving
+        /// wireframe replaces it immediately; an already-running older worker is allowed to finish and is
+        /// then discarded instead of ever snapping the preview backward.
+        /// </summary>
+        public void BeginDraftGeneration(int generation)
+        {
+            _activeDraftGeneration = generation;
+            _hasPreviewKey = false;
+            ClearDraftMaterialization();
+        }
+
+        /// <summary>
+        /// Shows one moving pose. Cheap guides retain the exact selected-scale shell and HUD measurement.
+        /// Expensive guides use a bounded wireframe at the least-coarse scale that fits the moving budgets.
+        /// The estimator only samples the already-cheap parametric curve; it never scans a volume.
+        /// </summary>
+        public MovingDraftPreviewResult ShowMovingDraft(DraftPreviewSpec spec, int adaptiveMinimumScale = 0)
+        {
+            if (_disposed || spec == null) return null;
+            _activeDraftGeneration = spec.Generation;
+            var timer = Stopwatch.StartNew();
+
+            try
+            {
+                IGuideShape shape = spec.CreateShape();
+                List<Vec3d> curve = shape.SampleCurve(128);
+                int selectedScale = spec.Settings.Scale;
+                double selectedEstimate = EstimateMovingShellWork(shape, curve, spec, selectedScale);
+                bool useFullShell = adaptiveMinimumScale <= selectedScale
+                    && selectedEstimate <= PreviewFullResVoxelCap;
+
+                if (useFullShell)
+                {
+                    List<VoxelPosition> shell = spec.Settings.Wireframe
+                        ? ShapeWireframe.GetVoxelPositions(shape, selectedScale)
+                        : shape.GetVoxelPositions(selectedScale, spec.Settings.Filled);
+                    if (spec.Settings.Divisions > 1)
+                        DivisionMarks.Apply(shell, curve, spec.Settings.Divisions, selectedScale);
+                    GuideExtent extent = GuideMeshBuilder.MeasureExtent(shell, selectedScale);
+                    UploadPreviewVoxels(shape, shell, spec.Settings, selectedScale);
+                    timer.Stop();
+                    return new MovingDraftPreviewResult(
+                        selectedScale, true, shell.Count, extent, timer.ElapsedMilliseconds);
+                }
+
+                int movingScale = ChooseMovingWireframeScale(
+                    curve, Math.Max(selectedScale, adaptiveMinimumScale));
+                List<VoxelPosition> voxels = BuildWireframe(curve, movingScale);
+
+                for (int i = 0; i < shape.ControlPoints.Count; i++)
+                {
+                    ControlPoint cp = shape.ControlPoints[i];
+                    if (cp?.WorldPosition == null || cp.IsPhantom) continue;
+                    VoxelRenderType type = cp.IsLocked ? VoxelRenderType.Locked
+                        : cp.IsPrimary ? VoxelRenderType.Primary : VoxelRenderType.Anchor;
+                    ShapeGeometry.ClaimMarker(voxels, movingScale, cp.WorldPosition, type);
+                }
+
+                if (movingScale > selectedScale && spec.ActiveAim != null)
+                {
+                    Vec3d aim = spec.ActiveAim;
+                    double half = movingScale / 32.0;
+                    double r2 = PrecisionTransitionRadius * PrecisionTransitionRadius;
+                    voxels.RemoveAll(v =>
+                    {
+                        double dx = (v.X / 16.0 + half) - aim.X;
+                        double dy = (v.Y / 16.0 + half) - aim.Y;
+                        double dz = (v.Z / 16.0 + half) - aim.Z;
+                        return dx * dx + dy * dy + dz * dz <= r2;
+                    });
+                }
+
+                UploadPreviewVoxels(shape, voxels, spec.Settings, movingScale);
+                UploadPrecisionLayers(shape, curve, spec, movingScale);
+                timer.Stop();
+                return new MovingDraftPreviewResult(
+                    movingScale, false, voxels.Count, GuideExtent.Empty, timer.ElapsedMilliseconds);
+            }
+            catch (Exception e)
+            {
+                _capi.Logger.Warning("[Layout] Moving draft preview failed: {0}", e.Message);
+                return null;
+            }
+        }
+
+        private static int ChooseMovingWireframeScale(IReadOnlyList<Vec3d> curve, int minimumScale)
+        {
+            double length = 0.0;
+            if (curve != null)
+            {
+                for (int i = 1; i < curve.Count; i++)
+                {
+                    Vec3d a = curve[i - 1], b = curve[i];
+                    if (a == null || b == null) continue;
+                    double dx = b.X - a.X, dy = b.Y - a.Y, dz = b.Z - a.Z;
+                    length += Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                }
+            }
+
+            int[] scales = GuideData.ValidVoxelScales;
+            int chosen = scales[scales.Length - 1];
+            for (int i = 0; i < scales.Length; i++)
+            {
+                int scale = scales[i];
+                if (scale < minimumScale) continue;
+                chosen = scale;
+                double estimatedWireCells = length * 16.0 / scale + (curve?.Count ?? 0);
+                if (estimatedWireCells <= MovingWireframeVoxelTarget) return scale;
+            }
+            return chosen;
+        }
+
+        private static List<VoxelPosition> BuildWireframe(IReadOnlyList<Vec3d> curve, int scale)
+        {
+            var voxels = new List<VoxelPosition>();
+            var seen = new HashSet<(int, int, int)>();
+            if (curve == null) return voxels;
+            if (curve.Count == 1)
+            {
+                VoxelMarch.MarchInto(voxels, seen, curve, scale);
+                return voxels;
+            }
+            for (int i = 1; i < curve.Count; i++)
+                VoxelMarch.MarchSegmentInto(voxels, seen, curve[i - 1], curve[i], scale);
+            return voxels;
+        }
+
+        private void UploadPrecisionLayers(
+            IGuideShape shape, IReadOnlyList<Vec3d> curve, DraftPreviewSpec spec, int movingScale)
+        {
+            int selectedScale = spec.Settings.Scale;
+            Vec3d aim = spec.ActiveAim;
+            if (aim == null || movingScale <= selectedScale || curve == null || curve.Count == 0) return;
+
+            var scales = new List<int>();
+            for (int i = 0; i < GuideData.ValidVoxelScales.Length; i++)
+            {
+                int scale = GuideData.ValidVoxelScales[i];
+                if (scale >= selectedScale && scale < movingScale) scales.Add(scale);
+            }
+            if (scales.Count == 0) return;
+
+            double innerRadius = Math.Max(selectedScale * 4.0 / 16.0, selectedScale / 16.0);
+            double outerRadius = Math.Max(PrecisionTransitionRadius, innerRadius);
+            if (outerRadius <= innerRadius + 1e-6 && scales.Count > 1)
+                scales.RemoveRange(1, scales.Count - 1);
+
+            for (int i = 0; i < scales.Count; i++)
+            {
+                int scale = scales[i];
+                double extra = Math.Max(0.0, outerRadius - innerRadius);
+                double lower = i == 0 ? 0.0 : innerRadius + extra * i / scales.Count;
+                double upper = innerRadius + extra * (i + 1) / scales.Count;
+                List<VoxelPosition> band = BuildLocalWireBand(curve, scale, aim, lower, upper);
+                if (band.Count == 0) continue;
+
+                if (i == 0)
+                    ShapeGeometry.ClaimMarker(band, scale, aim, ActiveAimMarkerType(shape, aim));
+                UploadAuxiliaryPreviewVoxels(shape, band, spec.Settings, scale);
+            }
+        }
+
+        private static List<VoxelPosition> BuildLocalWireBand(
+            IReadOnlyList<Vec3d> curve, int scale, Vec3d aim, double lowerRadius, double upperRadius)
+        {
+            var marched = new List<VoxelPosition>();
+            var seen = new HashSet<(int, int, int)>();
+            double guard = upperRadius + scale * 0.125;
+            double guard2 = guard * guard;
+
+            if (curve.Count == 1)
+            {
+                if (DistanceSquared(curve[0], aim) <= guard2)
+                    VoxelMarch.MarchInto(marched, seen, curve, scale);
+            }
+            else
+            {
+                for (int i = 1; i < curve.Count; i++)
+                {
+                    Vec3d a = curve[i - 1], b = curve[i];
+                    if (a == null || b == null || PointSegmentDistanceSquared(aim, a, b) > guard2) continue;
+                    VoxelMarch.MarchSegmentInto(marched, seen, a, b, scale);
+                }
+            }
+
+            double half = scale / 32.0;
+            double overlap = scale / 32.0;
+            double low2 = Math.Max(0.0, lowerRadius - overlap);
+            low2 *= low2;
+            double high2 = upperRadius + overlap;
+            high2 *= high2;
+            marched.RemoveAll(v =>
+            {
+                double dx = v.X / 16.0 + half - aim.X;
+                double dy = v.Y / 16.0 + half - aim.Y;
+                double dz = v.Z / 16.0 + half - aim.Z;
+                double d2 = dx * dx + dy * dy + dz * dz;
+                return d2 < low2 || d2 > high2;
+            });
+            return marched;
+        }
+
+        private static double PointSegmentDistanceSquared(Vec3d p, Vec3d a, Vec3d b)
+        {
+            double abx = b.X - a.X, aby = b.Y - a.Y, abz = b.Z - a.Z;
+            double length2 = abx * abx + aby * aby + abz * abz;
+            if (length2 <= 1e-12) return DistanceSquared(p, a);
+            double t = ((p.X - a.X) * abx + (p.Y - a.Y) * aby + (p.Z - a.Z) * abz) / length2;
+            t = Math.Max(0.0, Math.Min(1.0, t));
+            double x = a.X + abx * t, y = a.Y + aby * t, z = a.Z + abz * t;
+            double dx = p.X - x, dy = p.Y - y, dz = p.Z - z;
+            return dx * dx + dy * dy + dz * dz;
+        }
+
+        private static double DistanceSquared(Vec3d a, Vec3d b)
+        {
+            if (a == null || b == null) return double.MaxValue;
+            double dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
+            return dx * dx + dy * dy + dz * dz;
+        }
+
+        private static VoxelRenderType ActiveAimMarkerType(IGuideShape shape, Vec3d aim)
+        {
+            ControlPoint nearest = null;
+            double best = double.MaxValue;
+            for (int i = 0; i < shape.ControlPoints.Count; i++)
+            {
+                ControlPoint cp = shape.ControlPoints[i];
+                if (cp?.WorldPosition == null || cp.IsPhantom) continue;
+                double d2 = DistanceSquared(cp.WorldPosition, aim);
+                if (d2 < best) { best = d2; nearest = cp; }
+            }
+            if (nearest?.IsLocked == true) return VoxelRenderType.Locked;
+            if (nearest?.IsPrimary == true) return VoxelRenderType.Primary;
+            return VoxelRenderType.Anchor;
+        }
+
+        private static double EstimateMovingShellWork(
+            IGuideShape shape, IReadOnlyList<Vec3d> curve, DraftPreviewSpec spec, int scale)
+        {
+            double minX = double.MaxValue, minY = double.MaxValue, minZ = double.MaxValue;
+            double maxX = double.MinValue, maxY = double.MinValue, maxZ = double.MinValue;
+            double length = 0.0;
+
+            void Include(Vec3d p)
+            {
+                if (p == null) return;
+                minX = Math.Min(minX, p.X); minY = Math.Min(minY, p.Y); minZ = Math.Min(minZ, p.Z);
+                maxX = Math.Max(maxX, p.X); maxY = Math.Max(maxY, p.Y); maxZ = Math.Max(maxZ, p.Z);
+            }
+
+            if (curve != null)
+            {
+                for (int i = 0; i < curve.Count; i++)
+                {
+                    Vec3d p = curve[i];
+                    Include(p);
+                    if (i == 0 || p == null || curve[i - 1] == null) continue;
+                    Vec3d previous = curve[i - 1];
+                    double dx = p.X - previous.X, dy = p.Y - previous.Y, dz = p.Z - previous.Z;
+                    length += Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                }
+            }
+            if (shape?.ControlPoints != null)
+                for (int i = 0; i < shape.ControlPoints.Count; i++)
+                    Include(shape.ControlPoints[i]?.WorldPosition);
+
+            if (minX == double.MaxValue) return 0.0;
+            double cell = Math.Max(1, scale) / 16.0;
+            double curveCells = length / cell + (curve?.Count ?? 0);
+            if (spec.Settings.Wireframe
+                || (!GuideShapeTypes.IsVolume(spec.ShapeType) && !spec.Settings.Filled))
+                return curveCells;
+
+            double dxSpan = Math.Max(cell, maxX - minX);
+            double dySpan = Math.Max(cell, maxY - minY);
+            double dzSpan = Math.Max(cell, maxZ - minZ);
+            double projectedAreas = dxSpan * dySpan + dxSpan * dzSpan + dySpan * dzSpan;
+            double areaCells = projectedAreas / (cell * cell);
+
+            // A filled planar shape occupies one projected sheet; a volume shell may cover every face of
+            // its bounding box. Both deliberately err high so an unexpectedly intricate pose falls back.
+            return curveCells + (GuideShapeTypes.IsVolume(spec.ShapeType) ? 2.0 : 1.0) * areaCells;
+        }
+
+        /// <summary>
+        /// Starts one settled shell refinement. Only one worker is allowed at a time; the controller asks
+        /// again on a later tick. Pure volumetric mesh construction stays off-thread. Surface air-side
+        /// probing remains on the main thread because it touches the live world accessor.
+        /// </summary>
+        public bool RequestDraftRefinement(DraftPreviewSpec spec, int renderScale)
+        {
+            if (_disposed || spec == null || renderScale <= 0) return false;
+            lock (_draftWorkGate)
+            {
+                if (_draftWorkBusy) return false;
+                _draftWorkBusy = true;
+            }
+
+            bool privateAnchors = _network.ServerLayoutAvailable
+                && _network.AuthorityMode == ClientAuthorityMode.Local;
+
+            Task.Run(() => BuildDraftRefinement(spec, renderScale, privateAnchors))
+                .ContinueWith(task =>
+                {
+                    DraftBuildResult result = task.Status == TaskStatus.RanToCompletion
+                        ? task.Result
+                        : new DraftBuildResult
+                        {
+                            Spec = spec,
+                            RenderScale = renderScale,
+                            Error = task.Exception?.GetBaseException()
+                        };
+
+                    try
+                    {
+                        _capi.Event.EnqueueMainThreadTask(
+                            () => FinishDraftRefinement(result), "layout-draft-refinement");
+                    }
+                    catch
+                    {
+                        lock (_draftWorkGate) _draftWorkBusy = false;
+                    }
+                });
+            return true;
+        }
+
+        private static DraftBuildResult BuildDraftRefinement(
+            DraftPreviewSpec spec, int renderScale, bool privateAnchors)
+        {
+            var timer = Stopwatch.StartNew();
+            var result = new DraftBuildResult { Spec = spec, RenderScale = renderScale };
+            try
+            {
+                IGuideShape shape = spec.CreateShape();
+                List<VoxelPosition> voxels = spec.Settings.Wireframe
+                    ? ShapeWireframe.GetVoxelPositions(shape, renderScale)
+                    : shape.GetVoxelPositions(renderScale, spec.Settings.Filled);
+                if (spec.Settings.Divisions > 1)
+                    DivisionMarks.Apply(voxels, shape.SampleCurve(128), spec.Settings.Divisions, renderScale);
+
+                result.Shape = shape;
+                result.VoxelCount = voxels.Count;
+                result.Extent = GuideMeshBuilder.MeasureExtent(voxels, renderScale);
+                result.Origin = ComputeOrigin(shape.ControlPoints);
+
+                if (spec.Settings.Mode == ProjectionMode.Volumetric)
+                {
+                    result.MaterializationMeshes = BuildMaterializationMeshes(
+                        shape, voxels, spec, renderScale, result.Origin, privateAnchors);
+                }
+                else
+                {
+                    result.Voxels = voxels;
+                }
+            }
+            catch (Exception e)
+            {
+                result.Error = e;
+            }
+            timer.Stop();
+            result.WorkMilliseconds = timer.ElapsedMilliseconds;
+            return result;
+        }
+
+        private static List<MeshData> BuildMaterializationMeshes(
+            IGuideShape shape, List<VoxelPosition> voxels, DraftPreviewSpec spec,
+            int renderScale, Vec3d origin, bool privateAnchors)
+        {
+            int batchCount = Math.Max(MaterializationMinimumBatches,
+                (voxels.Count + MaterializationTargetVoxelsPerBatch - 1)
+                    / MaterializationTargetVoxelsPerBatch);
+            batchCount = Math.Min(MaterializationMaximumBatches, Math.Max(1, batchCount));
+
+            var batches = new List<VoxelPosition>[batchCount];
+            for (int i = 0; i < batchCount; i++) batches[i] = new List<VoxelPosition>();
+            Vec3d activeAim = spec.ActiveAim;
+            double aimRadius = renderScale * 4.0 / 16.0;
+            double aimRadius2 = aimRadius * aimRadius;
+            double half = renderScale / 32.0;
+            for (int i = 0; i < voxels.Count; i++)
+            {
+                VoxelPosition voxel = voxels[i];
+                bool nearAim = false;
+                if (activeAim != null)
+                {
+                    double dx = voxel.X / 16.0 + half - activeAim.X;
+                    double dy = voxel.Y / 16.0 + half - activeAim.Y;
+                    double dz = voxel.Z / 16.0 + half - activeAim.Z;
+                    nearAim = dx * dx + dy * dy + dz * dz <= aimRadius2;
+                }
+                int bucket = voxel.Type != VoxelRenderType.Normal || nearAim
+                    ? 0
+                    : (int)(MaterializationHash(voxel.X, voxel.Y, voxel.Z) % (uint)batchCount);
+                batches[bucket].Add(voxel);
+            }
+
+            var occupancy = new HashSet<(int, int, int)>(voxels.Count);
+            for (int i = 0; i < voxels.Count; i++)
+                occupancy.Add((voxels[i].X, voxels[i].Y, voxels[i].Z));
+
+            var meshes = new List<MeshData>(batchCount);
+            for (int i = 0; i < batches.Length; i++)
+            {
+                if (batches[i].Count == 0) continue;
+                var options = new GuideMeshOptions
+                {
+                    Scale = renderScale,
+                    Mode = ProjectionMode.Volumetric,
+                    Plane = spec.Settings.Plane,
+                    Origin = origin,
+                    Hidden = false,
+                    GrabbedPoint = null,
+                    PrivateAnchors = privateAnchors,
+                    Occupancy = occupancy,
+                    // Never consult the live world from a worker. The camera nudge still protects the
+                    // transient ghost; settled guides retain the full solidity-aware placed pipeline.
+                    IsNeighborSolid = (_, _, _) => false
+                };
+                AssignAnchors(shape.ControlPoints, options);
+                meshes.Add(GuideMeshBuilder.Build(batches[i], options));
+            }
+            return meshes;
+        }
+
+        private static uint MaterializationHash(int x, int y, int z)
+        {
+            unchecked
+            {
+                uint h = 2166136261u;
+                h = (h ^ (uint)x) * 16777619u;
+                h = (h ^ (uint)y) * 16777619u;
+                h = (h ^ (uint)z) * 16777619u;
+                h ^= h >> 16;
+                h *= 0x7feb352du;
+                h ^= h >> 15;
+                return h;
+            }
+        }
+
+        private void FinishDraftRefinement(DraftBuildResult result)
+        {
+            lock (_draftWorkGate) _draftWorkBusy = false;
+            if (_disposed || result == null) return;
+            if (result.Error != null)
+            {
+                _capi.Logger.Warning("[Layout] Draft refinement failed: {0}", result.Error.Message);
+                return;
+            }
+            if (result.Spec.Generation != _activeDraftGeneration) return;
+
+            if (result.MaterializationMeshes != null)
+            {
+                StartDraftMaterialization(result.MaterializationMeshes, result.Origin);
+                DraftPreviewCompleted?.Invoke(this, new DraftPreviewCompletedEventArgs(
+                    result.Spec.Generation, result.RenderScale, result.VoxelCount,
+                    result.Extent, result.WorkMilliseconds));
+                return;
+            }
+
+            // Surface flattening and its five-point air-side vote intentionally remain on the main
+            // thread. Large 3D volumetric shells take the materialization branch above.
+            List<VoxelPosition> voxels = result.Voxels ?? new List<VoxelPosition>();
+            bool isSurface = result.Spec.Settings.Mode == ProjectionMode.Surface;
+            int slabSide = 0;
+            if (isSurface)
+                voxels = FlattenToPlaneLayer(voxels, result.Spec.Settings.Plane,
+                    result.RenderScale, out slabSide, out _);
+            var options = new GuideMeshOptions
+            {
+                Scale = result.RenderScale,
+                Mode = ProjectionMode.Volumetric,
+                Plane = result.Spec.Settings.Plane,
+                Origin = result.Origin,
+                Hidden = false,
+                PlaneInset = isSurface ? SurfacePlaneInset : 0f,
+                SurfaceSlabThickness = isSurface ? SurfaceSlabThicknessWorld : 0f,
+                SurfaceSlabSide = slabSide,
+                GrabbedPoint = null,
+                PrivateAnchors = _network.ServerLayoutAvailable
+                    && _network.AuthorityMode == ClientAuthorityMode.Local,
+                IsNeighborSolid = NeighborSolidProbe
+            };
+            AssignAnchors(result.Shape.ControlPoints, options);
+            MeshData data = GuideMeshBuilder.Build(voxels, options);
+
+            ReplaceDraftMesh(data, result.Origin);
+            DraftPreviewCompleted?.Invoke(this, new DraftPreviewCompletedEventArgs(
+                result.Spec.Generation, result.RenderScale, result.VoxelCount,
+                result.Extent, result.WorkMilliseconds));
+        }
+
+        private void UploadPreviewVoxels(
+            IGuideShape shape, List<VoxelPosition> voxels, GuideRenderSettings settings, int renderScale)
+        {
+            if (voxels == null || voxels.Count == 0) return;
+            bool isSurface = settings.Mode == ProjectionMode.Surface;
+            int slabSide = 0;
+            if (isSurface)
+                voxels = FlattenToPlaneLayer(voxels, settings.Plane, renderScale, out slabSide, out _);
+
+            Vec3d origin = ComputeOrigin(shape.ControlPoints);
+            var options = new GuideMeshOptions
+            {
+                Scale = renderScale,
+                Mode = ProjectionMode.Volumetric,
+                Plane = settings.Plane,
+                Origin = origin,
+                Hidden = false,
+                PlaneInset = isSurface ? SurfacePlaneInset : 0f,
+                SurfaceSlabThickness = isSurface ? SurfaceSlabThicknessWorld : 0f,
+                SurfaceSlabSide = slabSide,
+                GrabbedPoint = null,
+                PrivateAnchors = _network.ServerLayoutAvailable
+                    && _network.AuthorityMode == ClientAuthorityMode.Local,
+                IsNeighborSolid = NeighborSolidProbe
+            };
+            AssignAnchors(shape.ControlPoints, options);
+            ReplaceDraftMesh(GuideMeshBuilder.Build(voxels, options), origin);
+        }
+
+        private void UploadAuxiliaryPreviewVoxels(
+            IGuideShape shape, List<VoxelPosition> voxels, GuideRenderSettings settings, int renderScale)
+        {
+            if (voxels == null || voxels.Count == 0) return;
+            bool isSurface = settings.Mode == ProjectionMode.Surface;
+            int slabSide = 0;
+            if (isSurface)
+                voxels = FlattenToPlaneLayer(voxels, settings.Plane, renderScale, out slabSide, out _);
+
+            Vec3d origin = ComputeOrigin(shape.ControlPoints);
+            var options = new GuideMeshOptions
+            {
+                Scale = renderScale,
+                Mode = ProjectionMode.Volumetric,
+                Plane = settings.Plane,
+                Origin = origin,
+                Hidden = false,
+                PlaneInset = isSurface ? SurfacePlaneInset : 0f,
+                SurfaceSlabThickness = isSurface ? SurfaceSlabThicknessWorld : 0f,
+                SurfaceSlabSide = slabSide,
+                GrabbedPoint = null,
+                PrivateAnchors = _network.ServerLayoutAvailable
+                    && _network.AuthorityMode == ClientAuthorityMode.Local,
+                IsNeighborSolid = NeighborSolidProbe
+            };
+            AssignAnchors(shape.ControlPoints, options);
+            _draftPrecisionMeshes.Add(_capi.Render.UploadMesh(GuideMeshBuilder.Build(voxels, options)));
+            _draftPreviewOrigin = origin;
+        }
+
+        private void ReplaceDraftMesh(MeshData data, Vec3d origin)
+        {
+            ClearDraftPrecisionMeshes();
+            ClearDraftMaterialization();
+            MeshRef replacement = _capi.Render.UploadMesh(data);
+            MeshRef previous = _draftPreviewMesh;
+            _draftPreviewMesh = replacement;
+            _draftPreviewOrigin = origin;
+            if (previous != null) _capi.Render.DeleteMesh(previous);
+        }
+
+        private void StartDraftMaterialization(List<MeshData> batches, Vec3d origin)
+        {
+            ClearDraftPrecisionMeshes();
+            ClearDraftMaterialization();
+            if (_draftPreviewMesh != null)
+            {
+                _capi.Render.DeleteMesh(_draftPreviewMesh);
+                _draftPreviewMesh = null;
+            }
+
+            _draftPreviewOrigin = origin;
+            _pendingDraftMaterialization = new Queue<MeshData>(batches ?? new List<MeshData>());
+            _lastDraftMaterializationUploadMs = 0;
+            AdvanceDraftMaterialization(force: true);
+        }
+
+        private void AdvanceDraftMaterialization(bool force = false)
+        {
+            if (_pendingDraftMaterialization == null || _pendingDraftMaterialization.Count == 0)
+            {
+                _pendingDraftMaterialization = null;
+                return;
+            }
+
+            long now = _capi.World?.ElapsedMilliseconds ?? 0;
+            int interval = MaterializationUploadIntervalMs;
+            if (_smoothedFrameMilliseconds > 22.0) interval *= 2;
+            if (_smoothedFrameMilliseconds > 32.0) interval *= 2;
+            if (!force && _lastDraftMaterializationUploadMs != 0
+                && now - _lastDraftMaterializationUploadMs < interval) return;
+
+            MeshData next = _pendingDraftMaterialization.Dequeue();
+            _draftMaterializationMeshes.Add(_capi.Render.UploadMesh(next));
+            _lastDraftMaterializationUploadMs = now;
+            if (_pendingDraftMaterialization.Count == 0) _pendingDraftMaterialization = null;
+        }
+
+        private void ClearDraftPrecisionMeshes()
+        {
+            for (int i = 0; i < _draftPrecisionMeshes.Count; i++)
+                if (_draftPrecisionMeshes[i] != null) _capi.Render.DeleteMesh(_draftPrecisionMeshes[i]);
+            _draftPrecisionMeshes.Clear();
+        }
+
+        private void ClearDraftMaterialization()
+        {
+            _pendingDraftMaterialization = null;
+            _lastDraftMaterializationUploadMs = 0;
+            for (int i = 0; i < _draftMaterializationMeshes.Count; i++)
+                if (_draftMaterializationMeshes[i] != null)
+                    _capi.Render.DeleteMesh(_draftMaterializationMeshes[i]);
+            _draftMaterializationMeshes.Clear();
+        }
 
         /// <summary>
         /// Shows (or updates) the acting player's live draft ghost: the arch that WOULD be created from
@@ -384,8 +1138,12 @@ namespace Layout.Systems
         // mesh build + upload. Returns false when the shape sampled to nothing (preview cleared).
         private bool UploadPreviewMesh(IGuideShape shape, GuideRenderSettings settings)
         {
-            int renderScale = ChooseRenderScale(shape, settings.Scale, settings.Filled);
-            List<VoxelPosition> voxels = shape.GetVoxelPositions(renderScale, settings.Filled);
+            int renderScale = settings.Wireframe
+                ? settings.Scale
+                : ChooseRenderScale(shape, settings.Scale, settings.Filled);
+            List<VoxelPosition> voxels = settings.Wireframe
+                ? ShapeWireframe.GetVoxelPositions(shape, renderScale)
+                : shape.GetVoxelPositions(renderScale, settings.Filled);
             if (settings.Divisions > 1)
                 DivisionMarks.Apply(voxels, shape.SampleCurve(128), settings.Divisions, renderScale);
             if (voxels.Count == 0) { ClearDraftPreview(); return false; }
@@ -425,6 +1183,8 @@ namespace Layout.Systems
         public void ClearDraftPreview()
         {
             _hasPreviewKey = false;
+            ClearDraftPrecisionMeshes();
+            ClearDraftMaterialization();
             if (_draftPreviewMesh != null)
             {
                 _capi.Render.DeleteMesh(_draftPreviewMesh);
@@ -669,13 +1429,26 @@ namespace Layout.Systems
             IGuideShape shape = ShapeFactory.Adopt(guide);
             shape.RecalculatePhantomPoints();
 
+            bool locallyGrabbed = guide.Id == _grabbedGuide;
+            if (locallyGrabbed)
+            {
+                _grabExtent = GuideMeshBuilder.MeasureShapeExtent(shape, guide.VoxelScale);
+                if (guide.CachedVoxelCount > PreviewFullResVoxelCap)
+                {
+                    RebuildGrabWireframe(guide, shape, points);
+                    return;
+                }
+            }
+
             // Session-8 playtest fix: PLACED guides always render at their TRUE scale. The coarsening
             // fallback (ChooseRenderScale) is a drafting-only courtesy — while the second foot is still
             // being aimed, a huge ghost may temporarily render coarser to stay cheap — and it was leaking
             // into settled guides here, permanently degrading anything over the preview cap. Once the
             // second anchor is placed, what you see is exactly the resolution you chose.
             int renderScale = guide.VoxelScale;
-            List<VoxelPosition> voxels = shape.GetVoxelPositions(renderScale, guide.IsFilled);
+            List<VoxelPosition> voxels = guide.IsWireframe
+                ? ShapeWireframe.GetVoxelPositions(shape, renderScale)
+                : shape.GetVoxelPositions(renderScale, guide.IsFilled);
 
             // Session 9: equal-part division marks — a pure renderer-side recolor by arc length; never
             // touches geometry, counts, or caps. Functional markers win by precedence.
@@ -721,7 +1494,147 @@ namespace Layout.Systems
             AssignAnchors(points, options);
 
             MeshData data = GuideMeshBuilder.Build(voxels, options);
-            UploadOrReplace(guide.Id, data, origin);
+            if (locallyGrabbed) UploadOrReplaceGrab(guide.Id, data, origin);
+            else UploadOrReplace(guide.Id, data, origin);
+        }
+
+        private void RebuildGrabWireframe(GuideData guide, IGuideShape shape, List<ControlPoint> points)
+        {
+            var timer = Stopwatch.StartNew();
+            int selectedScale = guide.VoxelScale;
+            int minimumScale = Math.Max(selectedScale,
+                _grabAdaptiveScale > 0 ? _grabAdaptiveScale : selectedScale);
+            List<Vec3d> curve = shape.SampleCurve(128);
+            int movingScale = ChooseMovingWireframeScale(curve, minimumScale);
+            List<VoxelPosition> coarse = BuildWireframe(curve, movingScale);
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                ControlPoint point = points[i];
+                if (point?.WorldPosition == null || point.IsPhantom) continue;
+                VoxelRenderType type = point.IsLocked ? VoxelRenderType.Locked
+                    : point.IsPrimary ? VoxelRenderType.Primary : VoxelRenderType.Anchor;
+                ShapeGeometry.ClaimMarker(coarse, movingScale, point.WorldPosition, type);
+            }
+
+            Vec3d aim = ResolveGrabbedPoint(guide, points);
+            if (movingScale > selectedScale && aim != null)
+            {
+                double half = movingScale / 32.0;
+                double radius2 = PrecisionTransitionRadius * PrecisionTransitionRadius;
+                coarse.RemoveAll(v =>
+                {
+                    double dx = v.X / 16.0 + half - aim.X;
+                    double dy = v.Y / 16.0 + half - aim.Y;
+                    double dz = v.Z / 16.0 + half - aim.Z;
+                    return dx * dx + dy * dy + dz * dz <= radius2;
+                });
+            }
+
+            bool isSurface = guide.Projection == ProjectionMode.Surface;
+            int slabSide = 0;
+            if (isSurface)
+                coarse = FlattenToPlaneLayer(coarse, guide.Plane, movingScale, out slabSide, out _);
+            Vec3d origin = ComputeOrigin(points);
+            var options = GrabWireOptions(guide, points, origin, movingScale, isSurface, slabSide, aim);
+            UploadOrReplaceGrab(guide.Id, GuideMeshBuilder.Build(coarse, options), origin);
+
+            if (movingScale > selectedScale && aim != null
+                && _guideMeshes.TryGetValue(guide.Id, out GuideMesh mesh))
+            {
+                var scales = new List<int>();
+                for (int i = 0; i < GuideData.ValidVoxelScales.Length; i++)
+                {
+                    int scale = GuideData.ValidVoxelScales[i];
+                    if (scale >= selectedScale && scale < movingScale) scales.Add(scale);
+                }
+                double innerRadius = selectedScale * 4.0 / 16.0;
+                double outerRadius = Math.Max(PrecisionTransitionRadius, innerRadius);
+                if (outerRadius <= innerRadius + 1e-6 && scales.Count > 1)
+                    scales.RemoveRange(1, scales.Count - 1);
+
+                for (int i = 0; i < scales.Count; i++)
+                {
+                    int scale = scales[i];
+                    double extra = Math.Max(0.0, outerRadius - innerRadius);
+                    double lower = i == 0 ? 0.0 : innerRadius + extra * i / scales.Count;
+                    double upper = innerRadius + extra * (i + 1) / scales.Count;
+                    List<VoxelPosition> band = BuildLocalWireBand(curve, scale, aim, lower, upper);
+                    if (band.Count == 0) continue;
+                    int bandSlabSide = 0;
+                    if (isSurface)
+                        band = FlattenToPlaneLayer(band, guide.Plane, scale, out bandSlabSide, out _);
+                    GuideMeshOptions bandOptions = GrabWireOptions(
+                        guide, points, origin, scale, isSurface, bandSlabSide, aim);
+                    mesh.GrabAuxiliary.Add(_capi.Render.UploadMesh(GuideMeshBuilder.Build(band, bandOptions)));
+                }
+            }
+
+            timer.Stop();
+            AdaptGrabScale(movingScale, selectedScale, timer.ElapsedMilliseconds);
+        }
+
+        private GuideMeshOptions GrabWireOptions(
+            GuideData guide, List<ControlPoint> points, Vec3d origin, int scale,
+            bool isSurface, int slabSide, Vec3d aim)
+        {
+            var options = new GuideMeshOptions
+            {
+                Scale = scale,
+                Mode = ProjectionMode.Volumetric,
+                Plane = guide.Plane,
+                Origin = origin,
+                Hidden = guide.IsHidden,
+                PlaneInset = isSurface ? SurfacePlaneInset : 0f,
+                SurfaceSlabThickness = isSurface ? SurfaceSlabThicknessWorld : 0f,
+                SurfaceSlabSide = slabSide,
+                GrabbedPoint = aim,
+                PrivateAnchors = _network.ServerLayoutAvailable && _network.IsLocalGuide(guide.Id),
+                IsNeighborSolid = NeighborSolidProbe
+            };
+            AssignAnchors(points, options);
+            return options;
+        }
+
+        private void AdaptGrabScale(int renderedScale, int selectedScale, long workMilliseconds)
+        {
+            double targetFrame = Math.Max(16.67, _grabBaselineFrameMilliseconds * 1.25);
+            double pressure = _smoothedFrameMilliseconds / targetFrame;
+            if (workMilliseconds >= 6 || pressure > 1.15)
+            {
+                int scale = Math.Max(renderedScale, _grabAdaptiveScale);
+                int steps = workMilliseconds >= 14 || pressure > 1.5 ? 2 : 1;
+                while (steps-- > 0) scale = NextCoarserScale(scale);
+                _grabAdaptiveScale = scale;
+                _grabHealthyUpdates = 0;
+                return;
+            }
+            if (workMilliseconds > 3 || pressure > 0.95)
+            {
+                _grabHealthyUpdates = 0;
+                return;
+            }
+            if (++_grabHealthyUpdates < 7) return;
+            _grabHealthyUpdates = 0;
+            _grabAdaptiveScale = NextFinerScale(
+                _grabAdaptiveScale > 0 ? _grabAdaptiveScale : selectedScale, selectedScale);
+        }
+
+        private static int NextCoarserScale(int scale)
+        {
+            for (int i = 0; i < GuideData.ValidVoxelScales.Length; i++)
+                if (GuideData.ValidVoxelScales[i] > scale) return GuideData.ValidVoxelScales[i];
+            return GuideData.ValidVoxelScales[GuideData.ValidVoxelScales.Length - 1];
+        }
+
+        private static int NextFinerScale(int scale, int targetScale)
+        {
+            if (scale <= targetScale) return targetScale;
+            for (int i = GuideData.ValidVoxelScales.Length - 1; i >= 0; i--)
+                if (GuideData.ValidVoxelScales[i] < scale
+                    && GuideData.ValidVoxelScales[i] >= targetScale)
+                    return GuideData.ValidVoxelScales[i];
+            return targetScale;
         }
 
         // The world position of this guide's grabbed control point, or null if none is grabbed on it.
@@ -792,6 +1705,7 @@ namespace Layout.Systems
             if (_guideMeshes.TryGetValue(id, out GuideMesh existing))
             {
                 if (existing.Ref != null) _capi.Render.DeleteMesh(existing.Ref);
+                DeleteAuxiliaryMeshes(existing);
                 existing.Ref = _capi.Render.UploadMesh(data);
                 existing.Origin = origin;
             }
@@ -801,13 +1715,96 @@ namespace Layout.Systems
             }
         }
 
+        private void UploadOrReplaceGrab(Guid id, MeshData data, Vec3d origin)
+        {
+            if (!_guideMeshes.TryGetValue(id, out GuideMesh mesh))
+            {
+                mesh = new GuideMesh();
+                _guideMeshes[id] = mesh;
+            }
+
+            MeshRef replacement = _capi.Render.UploadMesh(data);
+            if (mesh.GrabRef != null) _capi.Render.DeleteMesh(mesh.GrabRef);
+            DeleteMeshList(mesh.GrabAuxiliary);
+            mesh.GrabRef = replacement;
+            mesh.GrabOrigin = origin;
+        }
+
         private void RemoveGuideMesh(Guid id)
         {
             _deferredSurface.Remove(id);
             if (_guideMeshes.TryGetValue(id, out GuideMesh gm))
             {
                 if (gm.Ref != null) _capi.Render.DeleteMesh(gm.Ref);
+                DeleteAuxiliaryMeshes(gm);
+                DeleteGrabMeshes(gm);
                 _guideMeshes.Remove(id);
+            }
+        }
+
+        private void DeleteGrabMeshes(Guid id)
+        {
+            if (_guideMeshes.TryGetValue(id, out GuideMesh mesh)) DeleteGrabMeshes(mesh);
+        }
+
+        private void DeleteGrabMeshes(GuideMesh mesh)
+        {
+            if (mesh == null) return;
+            if (mesh.GrabRef != null) _capi.Render.DeleteMesh(mesh.GrabRef);
+            mesh.GrabRef = null;
+            mesh.GrabOrigin = null;
+            DeleteMeshList(mesh.GrabAuxiliary);
+        }
+
+        private void DeleteAuxiliaryMeshes(GuideMesh mesh)
+        {
+            if (mesh == null) return;
+            DeleteMeshList(mesh.Auxiliary);
+        }
+
+        private void DeleteMeshList(List<MeshRef> meshes)
+        {
+            if (meshes == null) return;
+            for (int i = 0; i < meshes.Count; i++)
+                if (meshes[i] != null) _capi.Render.DeleteMesh(meshes[i]);
+            meshes.Clear();
+        }
+
+        private static ulong RenderFingerprint(GuideData guide)
+        {
+            unchecked
+            {
+                ulong h = 1469598103934665603UL;
+                void Mix(long value) { h ^= (ulong)value; h *= 1099511628211UL; }
+
+                Mix((long)guide.ShapeType); Mix((long)guide.Constraint); Mix((long)guide.ShapePlaneAxis);
+                Mix(guide.VoxelScale); Mix(guide.IsHidden ? 1 : 0); Mix((long)guide.Projection);
+                Mix((long)guide.Plane.FlattenedAxis); Mix(guide.Plane.PlaneOffset);
+                Mix(guide.IsFilled ? 1 : 0); Mix(guide.Divisions); Mix(guide.Sides);
+                Mix(guide.IsWireframe ? 1 : 0);
+                Mix(guide.FlatSideAligned ? 1 : 0); Mix(guide.IsClosed ? 1 : 0);
+
+                List<ControlPoint> points = guide.ControlPoints;
+                Mix(points?.Count ?? 0);
+                if (points != null)
+                {
+                    for (int i = 0; i < points.Count; i++)
+                    {
+                        ControlPoint point = points[i];
+                        Vec3d p = point?.WorldPosition;
+                        Mix(p == null ? 0 : BitConverter.DoubleToInt64Bits(p.X));
+                        Mix(p == null ? 0 : BitConverter.DoubleToInt64Bits(p.Y));
+                        Mix(p == null ? 0 : BitConverter.DoubleToInt64Bits(p.Z));
+                        int flags = point == null ? 0
+                            : (point.IsLocked ? 1 : 0)
+                            | (point.IsPhantom ? 2 : 0)
+                            | (point.IsAnchor ? 4 : 0)
+                            | (point.IsPrimary ? 8 : 0)
+                            | (point.IsLockMarker ? 16 : 0);
+                        Mix(flags);
+                    }
+                }
+                return h;
             }
         }
 
@@ -893,9 +1890,15 @@ namespace Layout.Systems
                 _capi.Render.DeleteMesh(_draftPreviewMesh);
                 _draftPreviewMesh = null;
             }
+            ClearDraftPrecisionMeshes();
+            ClearDraftMaterialization();
 
             foreach (GuideMesh gm in _guideMeshes.Values)
+            {
                 if (gm.Ref != null) _capi.Render.DeleteMesh(gm.Ref);
+                DeleteAuxiliaryMeshes(gm);
+                DeleteGrabMeshes(gm);
+            }
             _guideMeshes.Clear();
             _remoteAnchors.Clear();
 

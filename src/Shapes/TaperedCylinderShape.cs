@@ -247,11 +247,19 @@ namespace Layout.Shapes
                 c.Z + n.Z * axial + (u.Z * Math.Cos(ang) + m.Z * Math.Sin(ang)) * rad);
 
             for (int i = 0; i <= nn; i++) pts.Add(Ring(0, r, Math.PI + 2.0 * Math.PI * i / nn));
-            pts.Add(Ring(h, rTop, Math.PI));                                               // slant A→A′
-            for (int i = 0; i <= nn; i++) pts.Add(Ring(h, rTop, Math.PI + 2.0 * Math.PI * i / nn));
-            int half = Math.Max(8, nn / 2);
-            for (int i = 0; i <= half; i++) pts.Add(Ring(h, rTop, Math.PI - Math.PI * i / half));
-            pts.Add(Ring(0, r, 0));                                                        // slant B′→B
+
+            // Eight evenly-spaced longitudinal wires preserve the frustum read at very low cost.
+            const int ribs = 8;
+            int arcSamples = Math.Max(3, nn / ribs);
+            for (int rib = 0; rib < ribs; rib++)
+            {
+                double a = Math.PI + 2.0 * Math.PI * rib / ribs;
+                double b = Math.PI + 2.0 * Math.PI * (rib + 1) / ribs;
+                pts.Add(Ring(h, rTop, a));
+                for (int j = 1; j <= arcSamples; j++)
+                    pts.Add(Ring(h, rTop, a + (b - a) * j / arcSamples));
+                pts.Add(Ring(0, r, b));
+            }
             return pts;
         }
 

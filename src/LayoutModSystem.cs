@@ -202,6 +202,7 @@ namespace Layout
             Draft.SetScale(ClientConfig.DefaultScale);
             Draft.SetProjection((ProjectionMode)ClientConfig.DefaultProjection);
             Draft.SetFilled(ClientConfig.DefaultFill);
+            Draft.SetWireframe(ClientConfig.DefaultWireframe);
             Draft.SetShape((GuideShapeType)ClientConfig.DefaultShape,
                            (ShapeConstraint)ClientConfig.DefaultConstraint);
             Draft.SetDivisions(ClientConfig.DefaultDivisions);
@@ -390,6 +391,7 @@ namespace Layout
             ClientConfig.DefaultScale = Draft.Scale;
             ClientConfig.DefaultProjection = (int)Draft.Projection;
             ClientConfig.DefaultFill = Draft.Filled;
+            ClientConfig.DefaultWireframe = Draft.Wireframe;
             ClientConfig.DefaultShape = (int)Draft.Shape;
             ClientConfig.DefaultConstraint = (int)Draft.Constraint;
             ClientConfig.DefaultDivisions = Draft.Divisions;

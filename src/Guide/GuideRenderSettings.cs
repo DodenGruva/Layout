@@ -45,14 +45,18 @@ namespace Layout.Guide
         public int Divisions { get; }
 
         public GuideRenderSettings(int scale, ProjectionMode mode, ProjectionPlane plane, bool filled,
-            int divisions = 0)
+            int divisions = 0, bool wireframe = false)
         {
             Scale = scale;
             Mode = mode;
             Plane = plane;
             Filled = filled;
             Divisions = divisions;
+            Wireframe = wireframe;
         }
+
+        /// <summary>For 3D volumes, use structural wires instead of the complete shell.</summary>
+        public bool Wireframe { get; }
 
         /// <summary>Volumetric settings at the given scale. The plane is irrelevant and left at default.</summary>
         public static GuideRenderSettings Volumetric(int scale, bool filled = false) =>
@@ -64,17 +68,19 @@ namespace Layout.Guide
 
         public bool Equals(GuideRenderSettings other) =>
             Scale == other.Scale && Mode == other.Mode && Plane == other.Plane && Filled == other.Filled
-            && Divisions == other.Divisions;
+            && Divisions == other.Divisions && Wireframe == other.Wireframe;
 
         public override bool Equals(object obj) => obj is GuideRenderSettings other && Equals(other);
 
-        public override int GetHashCode() => HashCode.Combine(Scale, (int)Mode, Plane, Filled, Divisions);
+        public override int GetHashCode() =>
+            HashCode.Combine(Scale, (int)Mode, Plane, Filled, Divisions, Wireframe);
 
         public static bool operator ==(GuideRenderSettings a, GuideRenderSettings b) => a.Equals(b);
 
         public static bool operator !=(GuideRenderSettings a, GuideRenderSettings b) => !a.Equals(b);
 
         public override string ToString() =>
-            $"GuideRenderSettings(scale {Scale}, {Mode}, {Plane}, filled={Filled}, div={Divisions})";
+            $"GuideRenderSettings(scale {Scale}, {Mode}, {Plane}, filled={Filled}, " +
+            $"wireframe={Wireframe}, div={Divisions})";
     }
 }

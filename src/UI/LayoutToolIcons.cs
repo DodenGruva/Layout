@@ -74,6 +74,8 @@ namespace Layout.UI
         public const string ProjSurface = "layout-proj-surf";
         public const string FillHollow = "layout-fill-hollow";
         public const string FillFilled = "layout-fill-filled";
+        public const string FormShell = "layout-form-shell";
+        public const string FormWireframe = "layout-form-wireframe";
         public const string VisShown = "layout-vis-shown";
         public const string VisHidden = "layout-vis-hidden";
 
@@ -161,6 +163,8 @@ namespace Layout.UI
             reg[ProjSurface] = DrawProjSurface;
             reg[FillHollow] = DrawFillHollow;
             reg[FillFilled] = DrawFillFilled;
+            reg[FormShell] = DrawFormShell;
+            reg[FormWireframe] = DrawFormWireframe;
             reg[VisShown] = DrawVisShown;
             reg[VisHidden] = DrawVisHidden;
 
@@ -626,6 +630,40 @@ namespace Layout.UI
             SetColor(ctx, rgba, 1.0);
             ctx.Rectangle(c.X(16), c.Y(16), c.L(28), c.L(28));
             ctx.Fill();
+        }
+
+        private static void DrawFormShell(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+
+            // Three continuous faces make this read as an enclosing skin, not a solid interior.
+            SetColor(ctx, rgba, 0.22);
+            ctx.MoveTo(c.X(13), c.Y(24)); ctx.LineTo(c.X(30), c.Y(14));
+            ctx.LineTo(c.X(47), c.Y(24)); ctx.LineTo(c.X(30), c.Y(34)); ctx.ClosePath(); ctx.Fill();
+            SetColor(ctx, rgba, 0.34);
+            ctx.MoveTo(c.X(13), c.Y(24)); ctx.LineTo(c.X(30), c.Y(34));
+            ctx.LineTo(c.X(30), c.Y(51)); ctx.LineTo(c.X(13), c.Y(41)); ctx.ClosePath(); ctx.Fill();
+            SetColor(ctx, rgba, 0.48);
+            ctx.MoveTo(c.X(30), c.Y(34)); ctx.LineTo(c.X(47), c.Y(24));
+            ctx.LineTo(c.X(47), c.Y(41)); ctx.LineTo(c.X(30), c.Y(51)); ctx.ClosePath(); ctx.Fill();
+
+            Pen(ctx, rgba, c.L(2.3));
+            Poly(ctx, c, rgba, true, 13, 24, 30, 14, 47, 24, 47, 41, 30, 51, 13, 41);
+        }
+
+        private static void DrawFormWireframe(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(2.2));
+
+            // Two offset frames plus their four corner wires: unmistakably skeletal and open.
+            Poly(ctx, c, rgba, true, 14, 22, 34, 22, 34, 42, 14, 42);
+            Poly(ctx, c, rgba, true, 25, 13, 46, 13, 46, 34, 25, 34);
+            ctx.MoveTo(c.X(14), c.Y(22)); ctx.LineTo(c.X(25), c.Y(13));
+            ctx.MoveTo(c.X(34), c.Y(22)); ctx.LineTo(c.X(46), c.Y(13));
+            ctx.MoveTo(c.X(34), c.Y(42)); ctx.LineTo(c.X(46), c.Y(34));
+            ctx.MoveTo(c.X(14), c.Y(42)); ctx.LineTo(c.X(25), c.Y(34));
+            ctx.Stroke();
         }
 
         private static void DrawVisShown(Context ctx, int x, int y, float w, float h, double[] rgba)

@@ -1,6 +1,6 @@
 # Layout — Project Status & Handoff
 
-**Checkpoint: Layout v0.2.47, pushed on `main`** (the `ClientOnlyFallback` branch merged via
+**Checkpoint: Layout v0.3.8 built and packaged locally; `main` last pushed through v0.2.47** (the `ClientOnlyFallback` branch merged via
 PR #1). **F4** is
 implemented and playtested: automatic client-only authority on servers without Layout; opt-in private
 overlays on Layout servers; per-world/per-UID client persistence; placement/reshape/settings/undo parity;
@@ -10,16 +10,18 @@ hardening. **F5 is implemented and playtested:** the tool is the **Chalking Kit*
 only, no lockout at 0, kit can never break; **32 is a HARD ceiling as of v0.2.23** — immune to other mods'
 crafting-quality bonuses), **Chalking Powder** refills (ground storage always; hotbar + inventory-slot
 channels are **client-preference** opt-in as of v0.2.22), private placements charge via `ChalkChargePacket`,
-ground storage, whole-guide chalk-puff/snap feedback. **The large-guide mesh pass Stage A (exposed-face
-meshing) shipped (v0.2.14–v0.2.16) and filled 3D volumes were retired (v0.2.17).** Targets **all of VS
+ground storage, whole-guide chalk-puff/snap feedback. **The large-guide mesh pass Stage A shipped, and the
+v0.3 adaptive interaction pass now uses motion wireframes, selected-scale cursor precision, background
+refinement/materialization, cached hover metadata, and retained-mesh cancel safety.** Filled 3D interiors are
+retired; volumes may persist as Shell or structural Wireframe. Targets **all of VS
 1.22.x**; the repo is publication-clean (no personal paths/usernames tracked).
-**DataVersion 9; protocol 9; 70 source files; 15 shape types / 21 picker tiles.** Release zips:
-`..\Layout Zips\` (0.1.10–0.1.27 + 0.2.x). **Top tasks:** collect v0.2.47 field reports; retain the two
-verification debts (32-chalk ceiling vs xskills, and VS 1.22.0/1.22.1 support); revisit mesh Stage B/C only
-if large-guide performance needs it. **B-S9-1 closed in v0.2.36.** Standing rule: ship a zip per code
-iteration; update docs / commit ONLY on the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_20.md`**,
+**DataVersion 11; protocol 11; 74 source files; 15 shape types / 21 picker tiles.** Release zips:
+`..\Layout Zips\` (through `Layout0.3.8.zip`). **Top tasks:** collect v0.3.8 field reports; retain the two
+verification debts (32-chalk ceiling vs xskills, and VS 1.22.0/1.22.1 support); revisit the deferred streamed
+pipeline or mesh Stage B/C only when measured need remains. **B-S9-1 closed in v0.2.36.** Standing rule: ship
+a zip per code iteration; update docs / commit ONLY on the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_21.md`**,
 `PLAN_CLIENT_ONLY.md`, `PLAN_CHALKING_KIT.md`, and `TODO.md`; the authoritative plan is
-**`ARCHITECTURE.md`** (v3.7).
+**`ARCHITECTURE.md`** (v3.8).
 
 ---
 
@@ -27,8 +29,9 @@ iteration; update docs / commit ONLY on the human's say-so. Detail lives in **`S
 
 The doc set (now a Claude Code repo):
 
-1. **`ARCHITECTURE.md`** — the authoritative plan (v3.7); Settled Decisions Register updated through v0.2.47.
-2. **The code** — `src/` (**70 files**: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
+1. **`ARCHITECTURE.md`** — the authoritative plan (v3.8); Settled Decisions Register updated through v0.3.8.
+2. **The code** — `src/` (**74 files**: 70 through Session 20, plus Session 21’s `DraftPreviewSpec`,
+   `ShapeWireframe`, `LargeVolumeShellFallback`, and `SetWireframeCommand`; historical breakdown: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
    RectangleShape, ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 Session-10 — LayoutToolIcons;
    + 4 Session-11 — PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 the 3D family
    (v0.1.20–0.1.21) — SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape; + 5 F4 —
@@ -39,12 +42,13 @@ The doc set (now a Claude Code repo):
    Session-20 — PolygonalPrismShape),
    `assets/layout/`, `modinfo.json`, `modicon.png`, `Layout.csproj`, `BUILD_INSTRUCTIONS.txt`.
 3. **`TODO.md`** — the live punch-list (renamed from `OUTSTANDING_ITEMS.md`).
-4. **`SESSION_9.md`** … **`SESSION_20.md`** — standalone records (SESSION_12 runs through v0.1.45;
+4. **`SESSION_9.md`** … **`SESSION_21.md`** — standalone records (SESSION_12 runs through v0.1.45;
    SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 shell/mesh handoff; SESSION_15 is the
    v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc; SESSION_17 is the
    v0.2.22–v0.2.23 seven-item backlog; SESSION_18 is the v0.2.24–v0.2.28 Tapered Cylinder arc;
    SESSION_19 is the v0.2.29–v0.2.35 stabilization/effects arc; SESSION_20 is the
-   v0.2.36–v0.2.47 polygonal-volume/modifier arc).
+   v0.2.36–v0.2.47 polygonal-volume/modifier arc; SESSION_21 is the v0.3.0–v0.3.8 adaptive large-guide and
+   persistent structural-wireframe arc).
 5. **`HANDOFF.md`** (repo root) — the consolidated current-state brief for external AI analysis
    (scope / status / direction / performance characteristics).
 6. **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix.
@@ -121,7 +125,8 @@ The doc set (now a Claude Code repo):
   - **3D volumes (0.1.20–0.1.21):** Sphere/Dome/Cylinder/Cone/Box — `GuideShapeTypes.IsVolume`; hollow =
     one-cell shell, filled = solid, via a **cell-lattice scan** (`MaxScanCells` 4M guard); Sphere/Dome
     2-click, Cylinder/Cone/Box 3-click; always Volumetric; deterministic up-axis `ShapeGeometry.BaseNormal`;
-    wireframe targeting; own 3D catalog section. **No new persisted/wire fields — DataVersion stays 7.**
+    wireframe targeting; own 3D catalog section. **At initial delivery** there were no new persisted/wire
+    fields (DataVersion 7); v0.3.7 later added shared persistent `IsWireframe` form state (version 11).
   - **3D fixes (0.1.22–0.1.23):** `SetShape` whitelist, centred 2D/3D labels, catalog stays expanded,
     Divisions row hidden on volumes, height-inversion fix, free-air height.
 - **Client-lifecycle + admin + safety (0.1.24–0.1.27):** icons re-register per client start; favorites
@@ -217,7 +222,14 @@ The doc set (now a Claude Code repo):
   set-down is SHIFT+right-click; private cleanup is `.layout dispel`; Polygonal Prism and Tapered Polygonal
   Prism added; native stage-aware modifier notes; flat-side polygon alignment; 45-degree Line/Free-Shape
   diagonals; default-safe tapered rims with SHIFT flare; simplified Create header. DataVersion/protocol 9.
-- **IN REAL PLAY:** save-compatibility matters — DataVersion **9** saves (v9: polygon
+- **Session 21 — adaptive large guides/structural form (v0.3.0–v0.3.8): DELIVERED and playtested.** Cheap
+  drafts preserve selected-scale shells; expensive motion uses adaptive wireframes with a precise cursor
+  neighbourhood; exact shells refine off-thread and materialize in batches. Placed hover is cached, giant
+  grab cancel retains/restores the settled mesh safely, wire topology gained shape-appropriate ribs, and 3D
+  guides can persist as Shell or Wireframe. Size-weighted placement sound, dedicated form icons, and
+  surface-proportional oversized Cylinder/Cone/Box fallback shipped. DataVersion/protocol 11.
+- **IN REAL PLAY:** save-compatibility matters — DataVersion **11** saves (v11: `IsWireframe`; v10: cached
+  display/count/dimensions; v9: polygon
   `FlatSideAligned`; v8: passive `IsLockMarker`; v7:
   IsClosed; v6: Sides + the
   never-wired spring-back snapshot); pinned-enum / additive-protobuf / default-migration rules remain in
@@ -232,11 +244,11 @@ The doc set (now a Claude Code repo):
 | # | Module | Effort | Status |
 |---|--------|--------|--------|
 | 1 | Pure math layer | **Max** | COMPLETE (+ 2D catalog; + 3D volumes including tapered cylinder and straight/tapered polygonal prisms; + exact hollow Sphere/Dome scanner) |
-| 2 | Data model | Low | COMPLETE (DataVersion **9**: + polygon `FlatSideAligned`; v8 passive `ControlPoint.IsLockMarker`; earlier Sides/snapshot/IsClosed) |
-| 3 | Systems + undo | High | COMPLETE (+ break/bake ops; + S9 `SetDivisionsCommand`; + S11 air-side bake, `SetSides`, `SpringBackCommand`, 3-click draft state; + F4 side-neutral persistence/probe dependencies and local authority; + S13 threshold counting, full drag snapshots, `RemoveLockMarkerCommand`) |
-| 4 | Networking | **Max** | COMPLETE (protocol **9**; combined public/private mirror, chalk packets, tapered rim, polygonal types, flat-side orientation) |
-| 5 | Rendering | High | FUNCTIONAL; **large-guide optimization active** (+ S9 `DivisionMarks.Apply`; + S11 apex-aware ghost, thinner Surface slabs; + F4 ownership palettes; current bottleneck is monolithic full-cube mesh; staged replacement in `SESSION_14.md`) |
-| 6 | UI | Medium | COMPLETE (21-tile catalog, favorites fold-out, stage-aware native help, compact Create header) |
+| 2 | Data model | Low | COMPLETE (DataVersion **11**: persistent form + cached metadata; v9 polygon orientation; earlier passive markers/Sides/snapshot/IsClosed) |
+| 3 | Systems + undo | High | COMPLETE (+ public/private `SetWireframe`; canonical form counts; adaptive draft state; cancel quarantine) |
+| 4 | Networking | **Max** | COMPLETE (protocol **11**; appended cached metadata/form state and wireframe operation; prior public/private/chalk/polygon fields retained) |
+| 5 | Rendering | High | FUNCTIONAL and playtest-successful for behemoth interaction: exposed faces + adaptive motion wireframes + selected-scale cursor precision + background refinement/materialization; spatial Stage B/C remains optional for steady rendering |
+| 6 | UI | Medium | COMPLETE (21-tile catalog, favorites fold-out, stage-aware help, contextual 2D Fill / 3D Form icons, calculating glyphs) |
 | 7 | Integration | High | COMPLETE (+ CTRL/SHIFT stage modifiers, 2/3/4-click routing; + F4 authority, private persistence/commands, mixed-mode HUD) |
 
 Namespaces match folders: `Layout`, `Layout.Guide`, `Layout.Shapes`, `Layout.Systems`, `Layout.Network`,
@@ -298,10 +310,9 @@ config. (The build-hiccup note about the packet class once being omitted is now 
 
 ## 5. Tuning backlog
 
-Full annotated list in `TODO.md`. Headlines: filled recount per drag; settled guides mesh at full res;
-`PreviewFullResVoxelCap` 8,000 (draft-only); **division-mark recolor pass** (new — cheap but walks the cell
-list); ghost-greying vs native `Enabled`; carried Session-7 items (item transforms, recipe balance, stale
-comments, Surface flatten's move to the shape layer).
+Full annotated list in `TODO.md`. Headlines: filled 2D recount per drag; true selected-scale settled
+Shell/Wireframe semantics; adaptive thresholds/materialization cadence; the deferred streamed-shell pipeline;
+division-mark recolor; optional spatial Stage B/C; carried Session-7 cosmetic items.
 
 ---
 
@@ -319,25 +330,25 @@ the scale-icon/tile-proportion calls; Session-9 adds the regime split, triangle'
 no-break-gesture for Right/Isosceles/Square, rectangle corners as markers, magenta division color, the
 per-keystroke divisions field; Session-8's list still stands. Full list + rationale in `TODO.md`.
 
-**Open — real-play agenda:** revisit large-guide performance only when requested and collect field reports on
-the expanded shape/modifier matrix. The v0.2.35 public/private multiplayer release check passed, so broader
+**Open — real-play agenda:** collect v0.3.8 field reports on persistent form switching, oversized
+Cylinder/Cone/Box placement, giant cancel, and weighted placement audio. Revisit performance only from a
+measured remaining bottleneck. The v0.2.35 public/private multiplayer release check passed, so broader
 regression coverage can follow field reports rather than block release.
 
 ---
 
 ## 7. Next session — start here
 
-**The current checkpoint is v0.2.47 on `main`.** Read `SESSION_20.md` for the polygonal-volume and modifier
-arc, `SESSION_19.md` for tapered-cylinder stabilization/effects, and `SESSION_14.md` for the staged mesh plan.
+**The current checkpoint is v0.3.8 built and packaged locally; `main` was last pushed through v0.2.47.**
+Read `SESSION_21.md` first for current large-guide behavior, then `SESSION_14.md` for the optional mesh plan.
 
-1. **Field-test the v0.2.47 placement matrix.** Focus on Polygonal Prism/Tapered Polygonal Prism, flat-side
-   alignment, diagonal constraints, stage-aware notes, and capped-vs-flared tapered rims.
-2. **Large-guide meshes — Stage B/C, only if Stage A isn't enough.** Stage A (exposed-face meshing) shipped
-   and filled volumes are retired. Next is per-guide spatial chunk mesh ownership/disposal and culling, then
-   same-colour/orientation greedy merging. Preserve the verified shader, true settled-guide scale, marker
-   palettes, and the legacy Surface/slab path. See `SESSION_14.md` §6–§7.
-3. **Collect field reports.** Public/private multiplayer passed the requested release test and B-S9-1 is
-   playtest-closed; widen regression coverage when a concrete report justifies it.
+1. **Field-test v0.3.8.** Exercise Shell↔Wireframe both before and after placement, polygon-corner wire counts,
+   oversized Cylinder/Cone/Box Shell placement, giant-grab right-click cancel, and sound heft across sizes.
+2. **Performance only from evidence.** If calculate-first materialization still leaves background pressure,
+   revisit the deferred cancellable producer/consumer pipeline in `SESSION_21.md`. If steady rendering is the
+   issue, use Stage B/C from `SESSION_14.md`; these solve different bottlenecks.
+3. **Preserve the settled invariants.** Input remains smooth; cursor region remains selected-scale; placed
+   hover stays metadata-only; persistent wires and settled shells remain true selected scale.
 4. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill; broadcasting the whole Free-Shape draft
    chain (11q); the F3 re-constrain op. Remaining flagged decisions (11a–11r, 16a–16d) are cosmetic.
 

@@ -256,19 +256,19 @@ namespace Layout.Shapes
 
             Vec3d[] bottom = Vertices(c, r, u, m, n, 0, _sides);
             Vec3d[] top = Vertices(c, rTop, u, m, n, h, _sides);
-            for (int i = 0; i <= _sides; i++) points.Add(bottom[i % _sides]);
-            points.Add(top[0]);
-            for (int i = 1; i <= _sides; i++) points.Add(top[i % _sides]);
 
-            int half = _sides / 2;
-            for (int i = 1; i <= half; i++) points.Add(top[i]);
-            double far = _sides % 2 == 0 ? 1.0 : Math.Cos(Math.PI / _sides);
-            var topFar = new Vec3d(c.X + n.X * h + u.X * rTop * far,
-                c.Y + n.Y * h + u.Y * rTop * far, c.Z + n.Z * h + u.Z * rTop * far);
-            var bottomFar = new Vec3d(c.X + u.X * r * far,
-                c.Y + u.Y * r * far, c.Z + u.Z * r * far);
-            points.Add(topFar);
-            points.Add(bottomFar);
+            // Close the base, then walk the top perimeter while visiting every matching corner pair.
+            // Consecutive points always share a real prism edge. Some verticals are retraced to keep this
+            // as one safe polyline, but voxel marching deduplicates them. The visible result is exactly one
+            // longitudinal wire per polygon corner: a six-sided prism has six, an octagon has eight, etc.
+            for (int i = 0; i <= _sides; i++) points.Add(bottom[i % _sides]);
+            for (int i = 0; i < _sides; i++)
+            {
+                int next = (i + 1) % _sides;
+                points.Add(top[i]);
+                points.Add(top[next]);
+                points.Add(bottom[next]);
+            }
             return points;
         }
 

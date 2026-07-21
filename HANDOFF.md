@@ -2,12 +2,12 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-19 against **v0.2.47**, committed and pushed on
-> `main`. Where this file and the code disagree, **the code wins** — treat this as a map, then
+> and the performance-relevant mechanics. Updated 2026-07-20 against the local built/package checkpoint
+> **v0.3.8** (`main` was last pushed through v0.2.47). Where this file and the code disagree, **the code wins** — treat this as a map, then
 > read the `.cs` files it points at.
 >
-> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.7),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/20.md` (per-session
+> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.8),
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/21.md` (per-session
 > history), `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
 
@@ -21,17 +21,18 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.2.47 on `main`. Public/private multiplayer passed at v0.2.35; the tapered-cylinder flow,
-  dust pass, fired-only jug recipe, and v0.2.36 adjacent-lock targeting fix are playtest-confirmed. The
-  v0.2.38–v0.2.47 polygonal-volume and modifier interaction arc is built and packaged for field soak.
+- **Status:** v0.3.8 built and packaged locally; `main` was last pushed through v0.2.47. The v0.3 arc is
+  playtest-driven and successful: behemoth drafting stays responsive, selected-scale detail materializes
+  after settling, giant grabs/cancels no longer rebuild catastrophically, and persistent Shell/Wireframe
+  mode works. v0.3.8 removes the remaining Cylinder/Cone/Box scan-wall and adds dedicated form icons.
   F4 (client-only / private guides) and F5 (**the Chalking Kit**: finite chalk
   durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
-  **mesh pass Stage A (exposed-face meshing) has shipped** and **filled 3D volumes are retired** (always
-  hollow shells now), so a ~100-block hollow Sphere draws only its outer skin.
-- **Size:** **70 source files** (`src/`), ~one asset tree, one `.csproj`.
-- **Data schema:** **DataVersion 9** (`FlatSideAligned`; v8 was the passive-lock-marker flag).
-- **Wire protocol:** **9** (`FlatSideAligned`; protocol 8 introduced polygonal volume types, protocol 7 the
-  tapered `Rim`; protocol 6/5/4 are chalk preference/refill/charge packets).
+  **mesh pass Stage A (exposed-face meshing) has shipped** and filled 3D interiors are retired. Volumes may
+  persist as their hollow **Shell** or canonical structural **Wireframe**.
+- **Size:** **74 source files** (`src/`), ~one asset tree, one `.csproj`.
+- **Data schema:** **DataVersion 11** (`IsWireframe`; v10 cached display/count/dimensions; v9 flat-side alignment).
+- **Wire protocol:** **11** (persistent wireframe state/operation; v10 cached placed-guide metadata;
+  protocol 9 polygon orientation; earlier append-only fields remain compatible with matching builds).
 - **Catalog:** **15 shape types**, shown as **21 picker tiles** — a full 2D family plus an eight-volume 3D family.
 - **The tool:** the **Chalking Kit** — 32-chalk durability (2D −1 / 3D −2, completed placements only; no
   lockout at 0, the kit can never break). **32 is a HARD ceiling** (`ItemGuideTool.MaxChalk`, v0.2.23):
@@ -46,9 +47,10 @@ guides on servers without Layout and, when server policy permits, alongside publ
 - **Closed in v0.2.36:** B-S9-1 adjacent-lock targeting. Exact rendered-cell ownership prevents a formerly
   locked marker from shadowing its neighbor. Two unrelated verification debts remain: xskills itself and a
   VS 1.22.0/1.22.1 smoke test.
-- **Top performance task:** mesh **Stage A is done** — a ~100-block hollow Sphere now draws only its shell
-  skin. Stage B (per-guide spatial chunks + culling) and Stage C (greedy face merging) remain, but only if
-  the current win isn't enough. See §9 and `dev/SESSION_14.md` §6–§7 / `dev/SESSION_16.md`.
+- **Current performance state:** interaction-side large-guide work was rebuilt in v0.3.0–v0.3.8. Motion
+  uses bounded/adaptive wireframes, the cursor keeps selected-scale precision, exact shells calculate once
+  after settling and materialize in batches, and placed hover uses cached metadata. Stage B/C remain only
+  for a future settled-rendering bottleneck. See §9 and `dev/SESSION_21.md`.
 - **Design philosophy (standing rule): correctness over performance** unless told otherwise. Several
   deliberate un-optimized paths exist by choice; see §9.
 
@@ -84,7 +86,7 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── src/                        ← all 70 .cs files (see §6)
 └── dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
-    ├── SESSION_9.md … SESSION_18.md  SESSION_19.md  SESSION_20.md
+    ├── SESSION_9.md … SESSION_18.md  SESSION_19.md  SESSION_20.md  SESSION_21.md
     ├── CHANGELOG_ARCHITECTURE.md   ← ARCHITECTURE.md's per-revision deltas (archive)
     ├── PLAN_CLIENT_ONLY.md  PLAN_CHALKING_KIT.md  BUILD_INSTRUCTIONS.txt
 ```
@@ -200,7 +202,8 @@ mode decides only where a new guide is created.
 - **Voxels are NEVER stored.** A guide is fully defined by control points + settings; the voxel set is always
   **derived on demand** by the shape layer. Caps are enforced by *counting via the shape*, never a field.
 - **Pinned, append-only enums** anywhere a value crosses wire or disk. **Default-driven migration** via
-  `DataVersion` (9: `FlatSideAligned`; 8: `ControlPoint.IsLockMarker`; 7: `IsClosed`; 6: `Sides` + the never-wired as-placed spring-back snapshot; 5: `Divisions`;
+  `DataVersion` (11: `IsWireframe`; 10: cached display/count/dimensions; 9: `FlatSideAligned`; 8:
+  `ControlPoint.IsLockMarker`; 7: `IsClosed`; 6: `Sides` + the never-wired as-placed spring-back snapshot; 5: `Divisions`;
   4: `Constraint`/`ShapePlaneAxis`; 3: `CreatorUid`; 2: `Projection`/`Plane`/`IsFilled`).
 - **Save format ≠ wire format.** JSON (Newtonsoft, custom `Vec3d` converter) is the **save**; protobuf DTOs
   are the **wire**. The paths are independent; POCOs are mapped to DTOs, never sent raw. Packet registration
@@ -247,19 +250,30 @@ path.
 - **No spatial partition/culling yet:** each guide owns one `{MeshRef, Origin}` and the render loop draws
   every loaded guide mesh; replacing a guide deletes and uploads that entire mesh. Per-guide chunking +
   culling is the Stage B target.
+- **Adaptive draft pipeline (v0.3):** cheap poses retain the selected-scale shell. Expensive moving poses use
+  a canonical structural wireframe under work/frame-pressure hysteresis; a four-selected-voxel cursor region
+  remains precise and transitions outward across roughly two blocks. After settling, one generation-tagged
+  background calculation builds the exact selected-scale result and the main thread reveals prebuilt,
+  pseudo-random batches at a bounded cadence. Movement invalidates stale generations.
+- **Persistent structural form (v0.3.7):** a 3D guide may be saved as Shell or Wireframe. Persistent wires
+  use canonical topology at the selected scale and have their own exact count/cap semantics; they are distinct
+  from the temporary adaptive/coarse preview used while moving a Shell guide.
 
 ---
 
 ## 9. Performance characteristics & deliberate trade-offs
 
-**Stage A of the mesh pass has shipped and moved the needle.** Standing rule: **correctness over
-performance**. The human confirmed visible lag from a ~100-block hollow Sphere in v0.1.53; **exposed-face
-meshing (v0.2.14–v0.2.16) + the retirement of filled 3D volumes (v0.2.17)** cut that guide to its outer skin.
-Stage B/C remain available (§ "Active mesh plan") but are gated on whether the current win is enough.
+**The interaction bottleneck has been addressed.** Stage A reduced steady mesh cost; v0.3 then removed
+repeated full shape/HUD calculations from active drafting and giant grabs. A behemoth playtest was smooth.
+Standing rule remains **input smoothness first for this path**: exact visuals and numbers may settle later,
+but cursor/input responsiveness must not wait on them. Stage B/C remain available for a distinct future
+steady-rendering bottleneck.
 
 **Hot paths & large-quantity structures**
-- **Voxel generation per guide** — up to the configured cap or unconditional 10M ceiling. Regenerated whenever
-  the guide changes. Hollow Sphere/Dome use the surface-area-oriented `SphericalShellScan`.
+- **Voxel generation per guide** — up to the configured cap or unconditional 10M ceiling. During drafts it
+  is generation-tagged and deferred until settling when expensive. Sphere/Dome use `SphericalShellScan`;
+  oversized Cylinder/Cone/Box switch from their legacy scan to `LargeVolumeShellFallback`, whose work scales
+  with rings/faces rather than empty bounding volume.
 - **Mesh rebuild** — a full `MeshData` rebuild for a guide on every change event. The cube path now emits
   **only exposed faces** (4 verts / 6 indices each, no interior/shared faces), pre-counted and exactly
   allocated. Settled guides mesh at **true scale, never coarsened** (see below).
@@ -269,9 +283,9 @@ Stage B/C remain available (§ "Active mesh plan") but are gated on whether the 
 - **3D volumes are hollow-only (v0.2.17).** Filled interiors are retired for the volume family, so the old
   filled-Sphere/Dome cubic-scan lag path is gone; Box retains its lattice scan (shell). Do not reintroduce
   filled volumes.
-- **HUD hover measurement is cached (v0.2.18).** `GuideHud.SetExaminedGuide` no longer re-derives a guide's
-  voxel set when the hovered target is unchanged — hovering a huge guide previously re-ran the full measure
-  ~33×/s.
+- **Placed-guide hover is metadata-only (v0.3.3).** Human-readable names are cached whole-block dimensions;
+  cached count feeds the cap bar, and the placed dimension field is blank. Looking at a behemoth cannot
+  trigger voxel generation. Active draft/grab measurements show changing calculation glyphs until ready.
 - **Targeting** samples each guide's curve (`IGuideShape.SampleCurve`) into a polyline **cached behind a full
   per-coordinate geometry fingerprint** — resampled only on actual geometry change, not per tick.
 - **Division recolor** — `DivisionMarks.Apply` runs on **every mesh rebuild** (draft ghost + placed),
@@ -284,9 +298,9 @@ Stage B/C remain available (§ "Active mesh plan") but are gated on whether the 
 - **Filled 2D guides recount voxels exactly per drag update** (cells generated each move packet) — no
   per-drag count cache. If large filled discs drag sluggishly, a count cache is the sanctioned fix. (3D
   volumes are hollow-only now, so this is a 2D-fill concern.)
-- **Settled guides always mesh at full resolution.** `ChooseRenderScale` coarsening (an 8,000-voxel courtesy,
-  `PreviewFullResVoxelCap`) is **draft-ghost-only** — it once leaked into placed guides and permanently
-  degraded them, so it is deliberately confined. Huge settled guides pay their real rebuild cost.
+- **Settled Shell guides resolve at true selected scale; persistent Wireframes also use true selected scale.**
+  Adaptive coarsening is interaction-only. Cancel reveals the retained settled mesh and fingerprints the
+  confirming authority echo so it cannot launch a delayed duplicate rebuild.
 - **Exact voxel counting** (generated, not estimated) everywhere caps are enforced — correctness-first.
 - **Cylinder/cone diagonal shells may run 2 cells thick** at odd orientations (centre-banded, not exact) —
   an accepted v1 trade; sphere/dome/box are exact.
@@ -309,8 +323,9 @@ Stage B/C remain available (§ "Active mesh plan") but are gated on whether the 
    Border neighbour checks must cross chunk boundaries. Dispose all refs on replace/delete/bulk sync/shutdown.
 3. **Stage C — distance/frustum culling** when dependable, then same-colour/orientation **greedy face
    merging** inside chunks.
-4. Only if still needed, consider temporary coarse interaction previews or async CPU builds. Never permanently
-   coarsen settled guides without explicit human approval.
+4. ~~Temporary coarse interaction previews + async CPU builds~~ **DONE differently in v0.3:** adaptive
+   wireframes, selected-scale cursor precision, generation-safe background refinement, and materialization.
+   The stronger streamed producer/consumer shell pipeline remains deferred in `SESSION_21.md`.
 
 Stages B–C are gated on whether Stage A's win is enough on the ~100-block sphere in real play. Do not begin
 by raising `HardVoxelCeiling`.
@@ -363,13 +378,14 @@ by raising `HardVoxelCeiling`.
 | `allowHotbarChalkRefill` | false (ground-storage refill is always allowed; this opts in the hotbar shortcut) |
 | `allowInventoryChalkRefill` | false (opts in cursor-onto-inventory-slot refill) |
 
-**Hard-coded limits (in code, not config):** `HardVoxelCeiling` 10M · `MaxScanCells` 4M on the remaining
-cubic scan paths (**not** Tapered Cylinder, whose scan follows the configured/unlimited server cap) ·
+**Hard-coded limits (in code, not config):** `HardVoxelCeiling` 10M · legacy `MaxScanCells` 4M selects the
+surface-only fallback for oversized Cylinder/Cone/Box rather than rejecting them (Tapered Cylinder already
+uses surface-oriented generation) ·
 `MaxDivisions` 256 · Polygon `MinSides` 3 / `MaxSides` 24 · Free-Shape `MaxCorners` 64 ·
 `PreviewFullResVoxelCap` 8,000 (draft-ghost coarsening only) · valid voxel scales {1,2,4,8,16}.
 
 **Client `layout-client.json`** (`LayoutClientConfig`): `forceClientOnly` preference (subject
-to server policy), last scale / projection / fill / shape+constraint / divisions / sides, six role
+to server policy), last scale / projection / 2D fill / 3D wireframe form / shape+constraint / divisions / sides, six role
 opacities, and up to **four hard-kept pinned favorite shape codes**. Default scale 1. Since v0.2.22 it also
 holds **`allowHotbarChalkRefill`** and **`allowInventoryChalkRefill`** (both default false; ground-storage
 refill is always allowed and ungated) — player convenience toggles, moved here from the server config.
@@ -404,10 +420,10 @@ cell; an adjacent first-hit body cell now receives a distinct passive marker. Hu
    (a) the hard 32-chalk ceiling is verified by an offline harness but **never tested against xskills
    itself**; (b) **1.22.x support is declared, not tested** — the code was built against 1.22.3, so nothing
    confirms every API used exists in 1.22.0.
-2. **Mesh pass Stage B/C** (§9 / `SESSION_14.md`) — per-guide chunks/culling → greedy same-colour face
-   merging — **only if Stage A's win isn't enough**. Preserve true settled-guide scale and rendering semantics.
-3. **Collect v0.2.47 field reports.** Protocol 9 adds polygon orientation state; deploy matching client and
-   server builds and soak the polygonal volumes/modifier interactions in normal play.
+2. **Collect v0.3.8 field reports.** Focus on Shell↔Wireframe edits, oversized Cylinder/Cone/Box placement,
+   giant-grab cancel, and whether the size-weighted placement sound needs tuning.
+3. **Mesh pass Stage B/C** (§9 / `SESSION_14.md`) only if settled rendering—not drafting calculation—becomes
+   the next measured bottleneck. Preserve true selected-scale semantics.
 4. **Keep the broader multiplayer matrix as future regression coverage.** The v0.2.35 public/private pass
    succeeded and is not a release blocker.
 5. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill (fill is currently inert on Free-Shapes);
@@ -429,11 +445,12 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   `GuideShapeType` / `ShapeConstraint` / projection enums, which are pinned append-only).
 - **`UndoManager` folder ≠ namespace:** it lives in `src/Systems/` but is `Layout.Systems.UndoManager` —
   the one file where folder and namespace diverge.
-- **The Session docs are historical.** `SESSION_9`…`SESSION_20.md` are point-in-time narratives (SESSION_12
+- **The Session docs are historical.** `SESSION_9`…`SESSION_21.md` are point-in-time narratives (SESSION_12
   covers F4 through v0.1.45; SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 mesh handoff;
   SESSION_15 is the v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc;
   SESSION_17 is the v0.2.22–v0.2.23 seven-item backlog; SESSION_18/19 cover the Tapered Cylinder and dust;
-  SESSION_20 covers v0.2.36–v0.2.47 polygonal volumes and modifier interactions). For
+  SESSION_20 covers v0.2.36–v0.2.47 polygonal volumes/modifiers; SESSION_21 covers the v0.3.0–v0.3.8
+  adaptive large-guide and persistent-wireframe arc). For
   current state, trust `HANDOFF.md` / `ARCHITECTURE.md` / the code, not a mid-session checklist inside a
   session record.
 - **`dev/BUILD_INSTRUCTIONS.txt`** is the original v0.1.0 first-build doc; its build/run steps are still

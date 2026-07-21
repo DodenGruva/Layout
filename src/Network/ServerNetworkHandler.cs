@@ -94,6 +94,7 @@ namespace Layout.Network
             public readonly Dictionary<int, Vec3d> Origins = new Dictionary<int, Vec3d>();
             public ShapeConstraint OriginConstraint;
             public List<ControlPoint> OriginPoints;
+            public int OriginVoxelCount = -1;
 
             /// <summary>
             /// Index of the point this grab CREATED (body insert), or −1 for a grab of a pre-existing
@@ -155,6 +156,7 @@ namespace Layout.Network
                 .SetMessageHandler<GuideRescalePacket>(OnRescale)
                 .SetMessageHandler<GuideSetProjectionPacket>(OnSetProjection)
                 .SetMessageHandler<GuideSetFilledPacket>(OnSetFilled)
+                .SetMessageHandler<GuideSetWireframePacket>(OnSetWireframe)
                 .SetMessageHandler<GuideSetDivisionsPacket>(OnSetDivisions)
                 .SetMessageHandler<GuideSetSidesPacket>(OnSetSides)
                 .SetMessageHandler<GuideSpringBackPacket>(OnSpringBack)
@@ -691,6 +693,7 @@ namespace Layout.Network
                 {
                     session.OriginConstraint = grabbedGuide.Constraint;
                     session.OriginPoints = ClonePoints(grabbedGuide.ControlPoints);
+                    session.OriginVoxelCount = grabbedGuide.CachedVoxelCount;
                 }
             }
             // Everyone learns the holder; the requester learns whether the grab was granted or denied.
@@ -790,7 +793,8 @@ namespace Layout.Network
                     // Restore the gesture atomically: every soft-flow point, the grabbed point, phantom
                     // geometry, and any constraint broken by the first move all return together.
                     mutated = _guides.RestoreConstraint(
-                        id, session.OriginConstraint, session.OriginPoints).Status == GuideOpStatus.Success;
+                        id, session.OriginConstraint, session.OriginPoints,
+                        session.OriginVoxelCount).Status == GuideOpStatus.Success;
                 }
                 else if (session.InsertedIndex >= 0)
                 {
@@ -968,10 +972,12 @@ namespace Layout.Network
             Vec3d pos = p.Position.ToVec3d();
             ShapeConstraint insertOriginConstraint = ShapeConstraint.None;
             List<ControlPoint> insertOriginPoints = null;
+            int insertOriginVoxelCount = -1;
             if (_guides.TryGetGuide(id, out GuideData insertOriginGuide))
             {
                 insertOriginConstraint = insertOriginGuide.Constraint;
                 insertOriginPoints = ClonePoints(insertOriginGuide.ControlPoints);
+                insertOriginVoxelCount = insertOriginGuide.CachedVoxelCount;
             }
 
             // ABSORB-OR-BREAK (Session 8): a body insert is a grab no constraint can absorb — an arbitrary
@@ -1039,6 +1045,7 @@ namespace Layout.Network
                 session.InsertedIndex = landedIndex;
                 session.OriginConstraint = insertOriginConstraint;
                 session.OriginPoints = insertOriginPoints;
+                session.OriginVoxelCount = insertOriginVoxelCount;
 
                 // Announce the lock (the player now holds it) and the new point to everyone. After a
                 // constraint break the point LIST changed shape, so one full-state packet replaces the
@@ -1209,6 +1216,28 @@ namespace Layout.Network
             {
                 _undo.Record(fromPlayer.PlayerUID, new SetFilledCommand(id, oldFilled, p.Filled));
                 _channel.BroadcastPacket(new GuideSetFilledPacket(id, p.Filled));
+            }
+            else HandleNonSuccessToggle(fromPlayer, id, result, g);
+        }
+
+        private void OnSetWireframe(IServerPlayer fromPlayer, GuideSetWireframePacket p)
+        {
+            if (DeniedByPrivilege(fromPlayer)) return;
+            Guid id = p.GuideId();
+            if (!_guides.TryGetGuide(id, out GuideData g))
+            {
+                _channel.SendPacket(new GuideDeletePacket(id), fromPlayer);
+                return;
+            }
+            if (BlockedByEditLock(fromPlayer, id)) return;
+
+            bool oldWireframe = g.IsWireframe;
+            GuideOperationResult result = _guides.SetWireframe(id, p.Wireframe);
+            if (result.Status == GuideOpStatus.Success)
+            {
+                _undo.Record(fromPlayer.PlayerUID,
+                    new SetWireframeCommand(id, oldWireframe, result.Guide.IsWireframe));
+                _channel.BroadcastPacket(new GuideSetWireframePacket(id, result.Guide.IsWireframe));
             }
             else HandleNonSuccessToggle(fromPlayer, id, result, g);
         }

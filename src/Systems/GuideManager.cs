@@ -305,7 +305,10 @@ namespace Layout.Systems
             if (GuideShapeTypes.IsVolume(shapeType)
                 && (settings.Mode == ProjectionMode.Surface || settings.Divisions != 0 || settings.Filled))
                 settings = new GuideRenderSettings(settings.Scale, ProjectionMode.Volumetric,
-                    settings.Plane, false, 0);
+                    settings.Plane, false, 0, settings.Wireframe);
+            else if (!GuideShapeTypes.IsVolume(shapeType) && settings.Wireframe)
+                settings = new GuideRenderSettings(settings.Scale, settings.Mode,
+                    settings.Plane, settings.Filled, settings.Divisions, false);
 
             // Guide-COUNT caps first — cheap, and nothing has been built yet (Guide is null in the result).
             if (_maxGuidesWorldWide > 0 && _guides.Count >= _maxGuidesWorldWide)
@@ -334,10 +337,11 @@ namespace Layout.Systems
                 settings.Divisions,
                 GuideShapeTypes.UsesSides(shapeType) ? Shapes.PolygonShape.ClampSides(sides) : 0,
                 shape is Shapes.FreeShape fs && fs.IsClosed,
-                GuideShapeTypes.UsesSides(shapeType) && flatSideAligned);
+                GuideShapeTypes.UsesSides(shapeType) && flatSideAligned,
+                GuideShapeTypes.IsVolume(shapeType) && settings.Wireframe);
             data.CreatorUid = creatorUid;
 
-            int count = CountForCaps(data.Id, shape, data.VoxelScale, data.IsFilled);
+            int count = CountForCaps(data.Id, shape, data.VoxelScale, data.IsFilled, data.IsWireframe);
             if (count > HardVoxelCeiling)                        // scan-guard sentinel — too big to render
                 return GuideOperationResult.OverCap(data, count, HardVoxelCeiling);
             if (_perGuideVoxelCap > 0 && count > _perGuideVoxelCap)
@@ -381,7 +385,7 @@ namespace Layout.Systems
             if (_maxGuidesPerPlayer > 0 && live.CreatorUid != null && CountGuidesBy(live.CreatorUid) >= _maxGuidesPerPlayer)
                 return GuideOperationResult.OverGuideCount(live, CountGuidesBy(live.CreatorUid), _maxGuidesPerPlayer);
 
-            int count = CountForCaps(live.Id, shape, live.VoxelScale, live.IsFilled);
+            int count = CountForCaps(live.Id, shape, live.VoxelScale, live.IsFilled, live.IsWireframe);
             // Restore is also the import seam used by client-only "push". Keep the absolute rendering
             // safeguard identical to normal creation even when an administrator disables configurable
             // per-guide and world caps; otherwise a client-supplied snapshot could bypass the ceiling.
@@ -515,7 +519,7 @@ namespace Layout.Systems
             g.ControlPoints.RemoveAt(index);     // mutates the shared list in place
             shape.RecalculatePhantomPoints();    // restore validity after an external list change
 
-            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            int count = ExactVoxelCount(id, shape, g.VoxelScale, g.IsFilled);
             StoreCount(id, count);
             Persist();
             return GuideOperationResult.Success(g, count);
@@ -698,7 +702,7 @@ namespace Layout.Systems
                 g.ControlPoints.Clear();
                 foreach (ControlPoint point in oldPoints) g.ControlPoints.Add(point.Clone());
                 _shapes[id] = ShapeFactory.Adopt(g);
-                StoreCount(id, _shapes[id].GetVoxelCount(g.VoxelScale, g.IsFilled));
+                StoreCount(id, ExactVoxelCount(id, _shapes[id], g.VoxelScale, g.IsFilled));
                 return GuideOperationResult.OverCap(g, count, cap);
             }
 
@@ -735,7 +739,7 @@ namespace Layout.Systems
             _shapes[id] = shape;
             shape.RecalculatePhantomPoints();
 
-            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            int count = ExactVoxelCount(id, shape, g.VoxelScale, g.IsFilled);
             StoreCount(id, count);
             Persist();
             return GuideOperationResult.Success(g, count);
@@ -758,7 +762,7 @@ namespace Layout.Systems
                 return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var c0) ? c0 : 0);
 
             g.Constraint = ShapeConstraint.None;
-            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            int count = ExactVoxelCount(id, shape, g.VoxelScale, g.IsFilled);
             StoreCount(id, count);
             Persist();
             return GuideOperationResult.Success(g, count);
@@ -768,7 +772,9 @@ namespace Layout.Systems
         /// Restores a guide's constraint AND its exact pre-break control points — the undo of
         /// <see cref="BreakConstraint"/>. The snapshot list is deep-copied in.
         /// </summary>
-        public GuideOperationResult RestoreConstraint(Guid id, ShapeConstraint constraint, List<ControlPoint> pointsSnapshot)
+        public GuideOperationResult RestoreConstraint(
+            Guid id, ShapeConstraint constraint, List<ControlPoint> pointsSnapshot,
+            int knownVoxelCount = -1)
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             if (pointsSnapshot == null) return GuideOperationResult.Invalid();
@@ -780,7 +786,11 @@ namespace Layout.Systems
             _shapes[id] = shape;
             shape.RecalculatePhantomPoints();
 
-            int count = shape.GetVoxelCount(g.VoxelScale, g.IsFilled);
+            // Cancellation restores the exact snapshot whose authoritative count was captured at grab
+            // start. Reuse it instead of rescanning a behemoth; undo and other callers still recount.
+            int count = knownVoxelCount >= 0
+                ? knownVoxelCount
+                : ExactVoxelCount(id, shape, g.VoxelScale, g.IsFilled);
             StoreCount(id, count);
             Persist();
             return GuideOperationResult.Success(g, count);
@@ -826,6 +836,29 @@ namespace Layout.Systems
             return GuideOperationResult.Success(g, count);
         }
 
+        public GuideOperationResult SetWireframe(Guid id, bool wireframe)
+        {
+            if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
+            if (!GuideShapeTypes.IsVolume(g.ShapeType)) return GuideOperationResult.Invalid(g);
+            if (g.IsWireframe == wireframe)
+                return GuideOperationResult.Success(g,
+                    _voxelCounts.TryGetValue(id, out int existing) ? existing : 0);
+
+            IGuideShape shape = _shapes[id];
+            bool oldWireframe = g.IsWireframe;
+            g.IsWireframe = wireframe;
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled);
+            if (WouldExceedCaps(id, count, out int cap))
+            {
+                g.IsWireframe = oldWireframe;
+                return GuideOperationResult.OverCap(g, count, cap);
+            }
+
+            StoreCount(id, count);
+            Persist();
+            return GuideOperationResult.Success(g, count);
+        }
+
         /// <summary>
         /// Changes a guide's voxel scale (one of 1/2/4/8/16). This is the most likely cap trigger — a finer
         /// scale multiplies the voxel count — so the new count is validated and the scale reverted if it breaches.
@@ -856,8 +889,11 @@ namespace Layout.Systems
         // Counts only as far as cap enforcement needs. Volume shapes can stop their cell scan as soon as
         // this threshold is crossed; other shapes fall back to their exact counter. When the result is
         // accepted it is still exact, so the running total/cache retain their existing invariant.
-        private int CountForCaps(Guid id, IGuideShape shape, int scale, bool filled)
+        private int CountForCaps(Guid id, IGuideShape shape, int scale, bool filled,
+            bool wireframe = false)
         {
+            if (wireframe || (_guides.TryGetValue(id, out GuideData guide) && guide.IsWireframe))
+                return ShapeWireframe.GetVoxelCount(shape, scale);
             int limit = HardVoxelCeiling;
             if (_perGuideVoxelCap > 0) limit = Math.Min(limit, _perGuideVoxelCap);
 
@@ -874,6 +910,11 @@ namespace Layout.Systems
 
             return GuideShapeVoxelCounting.CountUpTo(shape, scale, filled, limit);
         }
+
+        private int ExactVoxelCount(Guid id, IGuideShape shape, int scale, bool filled) =>
+            _guides.TryGetValue(id, out GuideData guide) && guide.IsWireframe
+                ? ShapeWireframe.GetVoxelCount(shape, scale)
+                : shape.GetVoxelCount(scale, filled);
 
         // True if making guide `id`'s count `newCount` would breach the per-guide or projected total cap.
         // A cap of 0 means unlimited — that check is skipped (normalised in the ctor).
@@ -911,6 +952,19 @@ namespace Layout.Systems
             int prev = _voxelCounts.TryGetValue(id, out var c) ? c : 0;
             _totalVoxels += count - prev;
             _voxelCounts[id] = count;
+
+            if (_guides.TryGetValue(id, out GuideData guide)
+                && _shapes.TryGetValue(id, out IGuideShape shape))
+            {
+                GuideExtent extent = GuideMeshBuilder.MeasureShapeExtent(shape, guide.VoxelScale);
+                guide.CachedVoxelCount = Math.Max(0, count);
+                guide.CachedVoxelWidth = extent.VoxelWidth;
+                guide.CachedVoxelHeight = extent.VoxelHeight;
+                guide.CachedBlockWidth = extent.BlockWidth;
+                guide.CachedBlockHeight = extent.BlockHeight;
+                guide.DisplayName = extent.BlockWidth + " \u00D7 " + extent.BlockHeight + " blocks";
+                guide.DataVersion = GuideData.CurrentDataVersion;
+            }
         }
 
         // Drops a guide's count from the cache and the running total.
@@ -945,7 +999,7 @@ namespace Layout.Systems
             foreach (var cp in snapshot)
                 g.ControlPoints.Add(cp.Clone());
             shape.RecalculatePhantomPoints();
-            StoreCount(id, shape.GetVoxelCount(g.VoxelScale, g.IsFilled));
+            StoreCount(id, ExactVoxelCount(id, shape, g.VoxelScale, g.IsFilled));
         }
 
         // --- Persistence --------------------------------------------------------------------------
@@ -1044,7 +1098,7 @@ namespace Layout.Systems
 
                 _guides[g.Id] = g;
                 _shapes[g.Id] = shape;
-                StoreCount(g.Id, shape.GetVoxelCount(g.VoxelScale, g.IsFilled));
+                StoreCount(g.Id, ExactVoxelCount(g.Id, shape, g.VoxelScale, g.IsFilled));
             }
         }
 

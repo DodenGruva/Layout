@@ -8,6 +8,31 @@
 
 ---
 
+## Changelog — v3.7 → v3.8 (adaptive large guides + structural form, v0.3.0 → v0.3.8; full record in `SESSION_21.md`)
+
+- **Adaptive drafting (0.3.0–0.3.2):** expensive moving 3D poses use work/FPS-sensitive structural
+  wireframes; the cursor retains selected-scale precision; settling runs one generation-safe background
+  calculation and reveals the selected-scale shell in bounded pseudo-random batches. Draft HUD measurement
+  yields to changing calculation glyphs while work is pending.
+- **Placed metadata and giant-grab safety (0.3.3):** cached whole-block dimensions become the guide display
+  name, placed hover never regenerates dimensions, and giant grabs retain their settled mesh while moving as
+  wireframes. Cached metadata advanced DataVersion/protocol to 10.
+- **Cancel quarantine (0.3.4–0.3.5):** right-click cancel reveals the retained settled mesh immediately;
+  generation invalidation plus an authoritative-echo fingerprint prevents delayed shell regeneration and
+  the observed 7→12 GB memory climb.
+- **Structural topology (0.3.6):** round volumes use eight ribs; polygonal prisms use one longitudinal wire
+  per polygon corner.
+- **Persistent Shell/Wireframe form (0.3.7, DataVersion/protocol 11):** `IsWireframe`,
+  `GuideSetWireframePacket`, and `SetWireframeCommand` provide save, public/private authority, multiplayer,
+  undo, rendering, cap-count, rescale, grab, and client-default parity. 2D Hollow/Filled is unchanged; the
+  same volume-tile positions contextually become Shell/Wireframe. Placement sound grows louder/lower/longer-
+  ranged logarithmically with cached guide size.
+- **Oversized shell fallback + icons (0.3.8):** Cylinder/Cone/Box retain their established voxelizer under
+  the legacy scan budget, then switch to a surface-proportional ring/face sampler instead of rejecting valid
+  oversized shells. Dedicated Shell and Wireframe Cairo glyphs replace the borrowed 2D fill icons.
+- **Deferred, not built:** a cancellable chunk producer/consumer shell pipeline. Current materialization
+  progressively uploads a complete precomputed result; see `SESSION_21.md` for the safe future design.
+
 ## Changelog — v3.6 → v3.7 (polygonal volumes + modifier interaction, v0.2.36 → v0.2.47; full record in `SESSION_20.md`)
 
 - **Lock precision (0.2.36):** closed B-S9-1. The first rendered voxel hit owns a lock click; an existing

@@ -52,6 +52,19 @@ namespace Layout.Network
         private readonly Dictionary<Guid, string> _lockHolders = new Dictionary<Guid, string>();
         private readonly Dictionary<string, Vec3d> _remoteDraftAnchors = new Dictionary<string, Vec3d>();
 
+        // Right-click cancel is locally immediate, while already-sent move responses may still be queued.
+        // Hold those responses behind a two-part barrier: the authority must restate the exact origin and
+        // release our edit lock before normal geometry packets for the guide are accepted again.
+        private sealed class PendingGrabCancel
+        {
+            public GuideData Expected;
+            public GuideData Confirmation;
+            public bool LockReleased;
+        }
+
+        private readonly Dictionary<Guid, PendingGrabCancel> _pendingGrabCancels =
+            new Dictionary<Guid, PendingGrabCancel>();
+
         private int _perGuideVoxelCap = 25000;
         private int _totalVoxelCap = 250000;
 
@@ -135,6 +148,8 @@ namespace Layout.Network
                 .SetMessageHandler<GuideSetFilledPacket>(p => ApplyServerGuidePacket(p.GuideId(), p, OnSetFilled))
                 .SetMessageHandler<GuideSetDivisionsPacket>(p => ApplyServerGuidePacket(p.GuideId(), p, OnSetDivisions))
                 .SetMessageHandler<GuideSetSidesPacket>(p => ApplyServerGuidePacket(p.GuideId(), p, OnSetSides))
+                .SetMessageHandler<GuideSetWireframePacket>(
+                    p => ApplyServerGuidePacket(p.GuideId(), p, OnSetWireframe))
                 .SetMessageHandler<GuideLockStatePacket>(OnLockState)
                 .SetMessageHandler<DraftAnchorBroadcastPacket>(OnDraftAnchorBroadcast)
                 .SetMessageHandler<DraftAnchorRemovePacket>(OnDraftAnchorRemove)
@@ -239,7 +254,8 @@ namespace Layout.Network
             _local = new LocalGuideAuthority(
                 _capi,
                 OnLocalCreate, OnLocalDelete, OnHide, OnLockPoint, OnRescale,
-                OnSetProjection, OnSetFilled, OnSetDivisions, OnSetSides, OnLockState, OnCapWarning);
+                OnSetProjection, OnSetFilled, OnSetWireframe, OnSetDivisions, OnSetSides,
+                OnLockState, OnCapWarning);
             OnLocalBulkSync(_local.CreateBulkSyncPacket());
         }
 
@@ -406,8 +422,73 @@ namespace Layout.Network
         {
             if (p?.Guide == null) return;
             GuideData g = p.Guide.ToGuideData();
+
+            if (_pendingGrabCancels.TryGetValue(g.Id, out PendingGrabCancel pending))
+            {
+                // Constraint-breaking drags can have older full-state packets in the same backlog as their
+                // incremental moves. Only the exact pre-grab render state can confirm cancellation.
+                if (SameRenderState(g, pending.Expected))
+                {
+                    pending.Confirmation = g;
+                    TryCompleteGrabCancel(g.Id, pending);
+                }
+                return;
+            }
+
             _guides[g.Id] = g;                 // upsert: also the resync / undo-broadcast path
             GuideAddedOrUpdated?.Invoke(g);
+        }
+
+        private void TryCompleteGrabCancel(Guid id, PendingGrabCancel pending)
+        {
+            if (pending == null || !pending.LockReleased || pending.Confirmation == null) return;
+            if (!_pendingGrabCancels.TryGetValue(id, out PendingGrabCancel current)
+                || !ReferenceEquals(current, pending)) return;
+
+            _pendingGrabCancels.Remove(id);
+            _guides[id] = pending.Confirmation;
+            GuideAddedOrUpdated?.Invoke(pending.Confirmation);
+        }
+
+        private static bool SameRenderState(GuideData a, GuideData b) =>
+            a != null && b != null && RenderFingerprint(a) == RenderFingerprint(b);
+
+        private static ulong RenderFingerprint(GuideData guide)
+        {
+            unchecked
+            {
+                ulong h = 1469598103934665603UL;
+                void Mix(long value) { h ^= (ulong)value; h *= 1099511628211UL; }
+
+                Mix((long)guide.ShapeType); Mix((long)guide.Constraint); Mix((long)guide.ShapePlaneAxis);
+                Mix(guide.VoxelScale); Mix(guide.IsHidden ? 1 : 0); Mix((long)guide.Projection);
+                Mix((long)guide.Plane.FlattenedAxis); Mix(guide.Plane.PlaneOffset);
+                Mix(guide.IsFilled ? 1 : 0); Mix(guide.Divisions); Mix(guide.Sides);
+                Mix(guide.IsWireframe ? 1 : 0);
+                Mix(guide.FlatSideAligned ? 1 : 0); Mix(guide.IsClosed ? 1 : 0);
+
+                List<ControlPoint> points = guide.ControlPoints;
+                Mix(points?.Count ?? 0);
+                if (points != null)
+                {
+                    for (int i = 0; i < points.Count; i++)
+                    {
+                        ControlPoint point = points[i];
+                        Vec3d p = point?.WorldPosition;
+                        Mix(p == null ? 0 : BitConverter.DoubleToInt64Bits(p.X));
+                        Mix(p == null ? 0 : BitConverter.DoubleToInt64Bits(p.Y));
+                        Mix(p == null ? 0 : BitConverter.DoubleToInt64Bits(p.Z));
+                        int flags = point == null ? 0
+                            : (point.IsLocked ? 1 : 0)
+                            | (point.IsPhantom ? 2 : 0)
+                            | (point.IsAnchor ? 4 : 0)
+                            | (point.IsPrimary ? 8 : 0)
+                            | (point.IsLockMarker ? 16 : 0);
+                        Mix(flags);
+                    }
+                }
+                return h;
+            }
         }
 
         // ==========================================================================================
@@ -416,6 +497,7 @@ namespace Layout.Network
 
         private void OnUpdate(GuideUpdatePacket p)
         {
+            if (_pendingGrabCancels.ContainsKey(p.GuideId())) return;
             if (!_guides.TryGetValue(p.GuideId(), out GuideData g) || p.Edits == null) return;
 
             foreach (var edit in p.Edits)
@@ -445,6 +527,7 @@ namespace Layout.Network
         private void OnDelete(GuideDeletePacket p)
         {
             Guid id = p.GuideId();
+            _pendingGrabCancels.Remove(id);
             bool removed = _guides.Remove(id);
             _lockHolders.Remove(id);
             if (removed) GuideRemoved?.Invoke(id);
@@ -487,6 +570,13 @@ namespace Layout.Network
             GuideAddedOrUpdated?.Invoke(g);
         }
 
+        private void OnSetWireframe(GuideSetWireframePacket p)
+        {
+            if (!_guides.TryGetValue(p.GuideId(), out GuideData g)) return;
+            g.IsWireframe = p.Wireframe;
+            GuideAddedOrUpdated?.Invoke(g);
+        }
+
         private void OnSetDivisions(GuideSetDivisionsPacket p)
         {
             if (!_guides.TryGetValue(p.GuideId(), out GuideData g)) return;
@@ -517,6 +607,12 @@ namespace Layout.Network
             if (holder == null) _lockHolders.Remove(id);
             else _lockHolders[id] = holder;
             LockStateChanged?.Invoke(id, holder);
+
+            if (holder == null && _pendingGrabCancels.TryGetValue(id, out PendingGrabCancel pending))
+            {
+                pending.LockReleased = true;
+                TryCompleteGrabCancel(id, pending);
+            }
         }
 
         private void OnDraftAnchorBroadcast(DraftAnchorBroadcastPacket p)
@@ -643,6 +739,13 @@ namespace Layout.Network
         /// <summary>Cancel (not commit) our in-progress grab — see <see cref="GuideCancelGrabPacket"/>.</summary>
         public void SendCancelGrab(Guid guideId)
         {
+            if (_guides.TryGetValue(guideId, out GuideData restored))
+            {
+                _pendingGrabCancels[guideId] = new PendingGrabCancel
+                {
+                    Expected = restored.DeepClone()
+                };
+            }
             if (IsLocalGuide(guideId) && _local != null) { _local.CancelGrab(guideId); return; }
             _channel.SendPacket(new GuideCancelGrabPacket(guideId));
         }
@@ -741,6 +844,15 @@ namespace Layout.Network
             _lastMutationWasLocal = localMutation;
             if (localMutation) { _local.SetFilled(guideId, filled); return; }
             _channel.SendPacket(new GuideSetFilledPacket(guideId, filled));
+        }
+
+        /// <summary>Switch a 3D guide between its shell and structural wireframe.</summary>
+        public void SendSetWireframe(Guid guideId, bool wireframe)
+        {
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation) { _local.SetWireframe(guideId, wireframe); return; }
+            _channel.SendPacket(new GuideSetWireframePacket(guideId, wireframe));
         }
 
         /// <summary>Session 9: set a guide's equal-part division marks (purely visual).</summary>
