@@ -79,6 +79,7 @@ namespace Layout.UI
 
         private long _tickId;
         private bool _subscribed;
+        private bool _comatoseDraft;
 
         // The HUD's copy of the Current Shape chip (0.1.16): which "-current" glyph is composed right
         // now, or null when hidden (non-Create modes). A change recomposes the HUD (rare — shape picks).
@@ -103,6 +104,7 @@ namespace Layout.UI
         private static readonly double[] CreatingColor = { 1.0, 0.88, 0.15, 1.0 };
         private static readonly double[] ModifyingColor = { 0.28, 0.82, 1.0, 1.0 };
         private static readonly double[] DeletingColor = { 1.0, 0.28, 0.22, 1.0 };
+        private static readonly double[] PausedColor = { 0.62, 0.62, 0.62, 0.24 };
 
         public GuideHud(ICoreClientAPI capi, DraftManager tool, ClientNetworkHandler net) : base(capi)
         {
@@ -207,13 +209,22 @@ namespace Layout.UI
             RefreshText();
         }
 
+        /// <summary>Keeps an unequipped active draft visible as a faint, desaturated reminder.</summary>
+        public void SetComatoseDraft(bool comatose)
+        {
+            if (_comatoseDraft == comatose) return;
+            _comatoseDraft = comatose;
+            if (SingleComposer != null) SetupHud();
+            RefreshText();
+        }
+
         // ---------------------------------------------------------------------------------
         //  Composition (once)
         // ---------------------------------------------------------------------------------
         private void SetupHud()
         {
-            CairoFont font = HudFont();
-            CairoFont labelFont = HudLabelFont();
+            CairoFont font = HudFont(_comatoseDraft);
+            CairoFont labelFont = HudLabelFont(_comatoseDraft);
 
             const double panelW = 200;
             const double lineH   = 20;
@@ -224,8 +235,8 @@ namespace Layout.UI
             (_tileIcon, _tileCaption) = TilePresentation(_composedState);
             _showClientOnlyIndicator = ShouldShowPrivateIndicator();
 
-            double[] accent = AccentColor(_composedState);
-            CairoFont statusFont = HudFont();
+            double[] accent = _comatoseDraft ? PausedColor : AccentColor(_composedState);
+            CairoFont statusFont = HudFont(_comatoseDraft);
             statusFont.Orientation = EnumTextOrientation.Center;
             if (accent != null)
             {
@@ -260,8 +271,12 @@ namespace Layout.UI
             }
 
             ElementBounds tileBounds = ElementBounds.Fixed(tileX, tileY, tile, tile);
+            string tileFace = _comatoseDraft
+                ? _tileIcon + LayoutToolIcons.PausedSuffix
+                : _tileIcon;
             var tileButton = new GuiElementToggleButton(
-                capi, _tileIcon, "", font, OnChipToggled, tileBounds, toggleable: true);
+                capi, tileFace, "", font, OnChipToggled, tileBounds, toggleable: true)
+            { Enabled = !_comatoseDraft };
             c.AddInteractiveElement(tileButton, "hudcurshape");
 
             double narrowW = tileX - 6;
@@ -278,7 +293,7 @@ namespace Layout.UI
             y += lineH + gap;
 
             const double dimensionLabelW = 20;
-            CairoFont dimensionLabelFont = HudLabelFont();
+            CairoFont dimensionLabelFont = HudLabelFont(_comatoseDraft);
             dimensionLabelFont.Orientation = EnumTextOrientation.Center;
             c.AddDynamicText("", dimensionLabelFont,
                 ElementBounds.Fixed(0, y, dimensionLabelW, lineH), "ctx1label");
@@ -357,7 +372,7 @@ namespace Layout.UI
                 if (SingleComposer == null) return;
             }
 
-            SetText("status", StatusText(_composedState)
+            SetText("status", (_comatoseDraft ? "Creating - Paused" : StatusText(_composedState))
                 + (_showClientOnlyIndicator ? " · Private" : ""));
             GuideData settingsGuide = _tool.Mode == ToolMode.Edit ? ResolveSelectedGuide() : null;
             int scale = settingsGuide?.VoxelScale ?? _tool.Scale;
@@ -384,7 +399,7 @@ namespace Layout.UI
                 }
                 else
                 {
-                    string calculating = CalculatingText();
+                    string calculating = _comatoseDraft ? "Paused" : CalculatingText();
                     SetText("ctx1", calculating);
                     SetText("ctx2", calculating);
                     SetText("ctx3", calculating);
@@ -599,12 +614,19 @@ namespace Layout.UI
             SingleComposer?.GetDynamicText(key)?.SetNewText(text ?? "");
         }
 
-        private static CairoFont HudFont() => CairoFont.WhiteSmallText();
-
-        private static CairoFont HudLabelFont()
+        private static CairoFont HudFont(bool paused = false)
         {
-            CairoFont font = HudFont();
-            font.Color = new double[] { 1, 1, 1, 0.58 };
+            CairoFont font = CairoFont.WhiteSmallText();
+            if (paused) font.Color = new double[] { 0.68, 0.68, 0.68, 0.24 };
+            return font;
+        }
+
+        private static CairoFont HudLabelFont(bool paused = false)
+        {
+            CairoFont font = HudFont(paused);
+            font.Color = paused
+                ? new double[] { 0.62, 0.62, 0.62, 0.18 }
+                : new double[] { 1, 1, 1, 0.58 };
             return font;
         }
 

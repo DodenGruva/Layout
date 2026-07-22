@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Text;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
@@ -70,6 +72,7 @@ namespace Layout.Network
         private readonly GuideManager _guides;
         private readonly GuideLockManager _locks;
         private readonly UndoManager _undo;
+        private readonly LayoutAdminPolicyManager _policies;
 
         // Server-config policy (Module 7). Empty/null privilege = everyone may use the tool.
         private readonly string _requiredPrivilege;
@@ -123,6 +126,7 @@ namespace Layout.Network
             GuideManager guideManager,
             GuideLockManager lockManager,
             UndoManager undoManager,
+            LayoutAdminPolicyManager adminPolicies,
             string requiredPrivilege = null,
             bool adminCanOverrideLocks = true,
             bool allowClientOnlyMode = false,
@@ -132,6 +136,7 @@ namespace Layout.Network
             _guides = guideManager ?? throw new ArgumentNullException(nameof(guideManager));
             _locks = lockManager ?? throw new ArgumentNullException(nameof(lockManager));
             _undo = undoManager ?? throw new ArgumentNullException(nameof(undoManager));
+            _policies = adminPolicies ?? throw new ArgumentNullException(nameof(adminPolicies));
             _requiredPrivilege = string.IsNullOrWhiteSpace(requiredPrivilege) ? null : requiredPrivilege.Trim();
             _adminCanOverrideLocks = adminCanOverrideLocks;
             _allowClientOnlyMode = allowClientOnlyMode;
@@ -141,31 +146,31 @@ namespace Layout.Network
             LayoutPackets.RegisterMessageTypes(_channel);
 
             _channel
-                .SetMessageHandler<GuideCreateRequestPacket>(OnCreateRequest)
+                .SetMessageHandler<GuideCreateRequestPacket>((p, x) => WithPlayerVoxelCap(p, () => OnCreateRequest(p, x)))
                 .SetMessageHandler<ChalkChargePacket>(OnChalkCharge)
                 .SetMessageHandler<ChalkInventoryRefillPacket>(OnInventoryChalkRefill)
                 .SetMessageHandler<ChalkRefillPrefsPacket>(OnChalkRefillPrefs)
-                .SetMessageHandler<GuideGrabPacket>(OnGrab)
-                .SetMessageHandler<GuideReleasePacket>(OnRelease)
-                .SetMessageHandler<GuideCancelGrabPacket>(OnCancelGrab)
-                .SetMessageHandler<GuideUpdatePacket>(OnUpdate)
-                .SetMessageHandler<GuideInsertPointPacket>(OnInsert)
-                .SetMessageHandler<GuideDeletePacket>(OnDelete)
-                .SetMessageHandler<GuideHidePacket>(OnHide)
-                .SetMessageHandler<GuideLockPointPacket>(OnLockPoint)
-                .SetMessageHandler<GuideRescalePacket>(OnRescale)
-                .SetMessageHandler<GuideSetProjectionPacket>(OnSetProjection)
-                .SetMessageHandler<GuideSetFilledPacket>(OnSetFilled)
-                .SetMessageHandler<GuideSetWireframePacket>(OnSetWireframe)
-                .SetMessageHandler<GuideSetDivisionsPacket>(OnSetDivisions)
-                .SetMessageHandler<GuideSetSidesPacket>(OnSetSides)
-                .SetMessageHandler<GuideSpringBackPacket>(OnSpringBack)
+                .SetMessageHandler<GuideGrabPacket>((p, x) => WithPlayerVoxelCap(p, () => OnGrab(p, x)))
+                .SetMessageHandler<GuideReleasePacket>((p, x) => WithPlayerVoxelCap(p, () => OnRelease(p, x)))
+                .SetMessageHandler<GuideCancelGrabPacket>((p, x) => WithPlayerVoxelCap(p, () => OnCancelGrab(p, x)))
+                .SetMessageHandler<GuideUpdatePacket>((p, x) => WithPlayerVoxelCap(p, () => OnUpdate(p, x)))
+                .SetMessageHandler<GuideInsertPointPacket>((p, x) => WithPlayerVoxelCap(p, () => OnInsert(p, x)))
+                .SetMessageHandler<GuideDeletePacket>((p, x) => WithPlayerVoxelCap(p, () => OnDelete(p, x)))
+                .SetMessageHandler<GuideHidePacket>((p, x) => WithPlayerVoxelCap(p, () => OnHide(p, x)))
+                .SetMessageHandler<GuideLockPointPacket>((p, x) => WithPlayerVoxelCap(p, () => OnLockPoint(p, x)))
+                .SetMessageHandler<GuideRescalePacket>((p, x) => WithPlayerVoxelCap(p, () => OnRescale(p, x)))
+                .SetMessageHandler<GuideSetProjectionPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetProjection(p, x)))
+                .SetMessageHandler<GuideSetFilledPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetFilled(p, x)))
+                .SetMessageHandler<GuideSetWireframePacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetWireframe(p, x)))
+                .SetMessageHandler<GuideSetDivisionsPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetDivisions(p, x)))
+                .SetMessageHandler<GuideSetSidesPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetSides(p, x)))
+                .SetMessageHandler<GuideSpringBackPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSpringBack(p, x)))
                 .SetMessageHandler<DraftStartPacket>(OnDraftStart)
                 .SetMessageHandler<DraftCancelPacket>(OnDraftCancel)
-                .SetMessageHandler<UndoRequestPacket>(OnUndo)
-                .SetMessageHandler<RedoRequestPacket>(OnRedo)
+                .SetMessageHandler<UndoRequestPacket>((p, x) => WithPlayerVoxelCap(p, () => OnUndo(p, x)))
+                .SetMessageHandler<RedoRequestPacket>((p, x) => WithPlayerVoxelCap(p, () => OnRedo(p, x)))
                 .SetMessageHandler<ClientPlacementModeRequestPacket>(OnClientPlacementModeRequest)
-                .SetMessageHandler<ClientGuidePushPacket>(OnClientGuidePush);
+                .SetMessageHandler<ClientGuidePushPacket>((p, x) => WithPlayerVoxelCap(p, () => OnClientGuidePush(p, x)));
 
             _sapi.Event.PlayerNowPlaying += OnPlayerNowPlaying;
             _sapi.Event.PlayerDisconnect += OnPlayerDisconnect;
@@ -186,10 +191,51 @@ namespace Layout.Network
                 .WithDescription("Layout guide and placement-mode commands.")
                 .RequiresPrivilege(Privilege.chat)
                 .BeginSubCommand("dispel")
-                    .WithDescription("Dispel guides. 'all' clears the whole world; a number clears within that chunk radius of you.")
+                    .WithDescription("Dispel by world, radius, player, or guide id.")
                     .RequiresPrivilege(Privilege.controlserver)
-                    .WithArgs(parsers.Word("all-or-radius"))
+                    .WithArgs(parsers.Word("target"), parsers.OptionalWord("value"))
                     .HandleWith(OnDispelCommand)
+                .EndSubCommand()
+                .BeginSubCommand("jail")
+                    .WithDescription("Suspend a player from every public Layout mutation.")
+                    .RequiresPrivilege(Privilege.controlserver)
+                    .WithArgs(parsers.Word("player"))
+                    .HandleWith(OnJailCommand)
+                .EndSubCommand()
+                .BeginSubCommand("free")
+                    .WithDescription("Remove a player's public Layout suspension.")
+                    .RequiresPrivilege(Privilege.controlserver)
+                    .WithArgs(parsers.Word("player"))
+                    .HandleWith(OnFreeCommand)
+                .EndSubCommand()
+                .BeginSubCommand("limit")
+                    .WithDescription("Set a player's concurrent public-guide limit; 0 restores the server default.")
+                    .RequiresPrivilege(Privilege.controlserver)
+                    .WithArgs(parsers.Word("player"), parsers.Int("number"))
+                    .HandleWith(OnLimitCommand)
+                .EndSubCommand()
+                .BeginSubCommand("voxelcap")
+                    .WithDescription("Set a player's per-guide voxel cap; 0 restores the server default.")
+                    .RequiresPrivilege(Privilege.controlserver)
+                    .WithArgs(parsers.Word("player"), parsers.Int("number"))
+                    .HandleWith(OnVoxelCapCommand)
+                .EndSubCommand()
+                .BeginSubCommand("info")
+                    .WithDescription("Show Layout server or player usage and policy information.")
+                    .RequiresPrivilege(Privilege.controlserver)
+                    .WithArgs(parsers.OptionalWord("player"))
+                    .HandleWith(OnInfoCommand)
+                .EndSubCommand()
+                .BeginSubCommand("jailroster")
+                    .WithDescription("List every player currently jailed from public Layout mutations.")
+                    .RequiresPrivilege(Privilege.controlserver)
+                    .HandleWith(OnJailRosterCommand)
+                .EndSubCommand()
+                .BeginSubCommand("top")
+                    .WithDescription("Show the largest guides or highest-usage players.")
+                    .RequiresPrivilege(Privilege.controlserver)
+                    .WithArgs(parsers.Word("guides-or-players"))
+                    .HandleWith(OnTopCommand)
                 .EndSubCommand()
                 .BeginSubCommand("private")
                     .WithDescription("Place new guides privately on this client when the server permits it.")
@@ -216,6 +262,113 @@ namespace Layout.Network
                         .HandleWith(OnClientPushCommand)
                     .EndSubCommand()
                 .EndSubCommand();
+        }
+
+        private TextCommandResult OnJailCommand(TextCommandCallingArgs args)
+        {
+            if (!TryResolvePlayer(args[0] as string, out PlayerIdentity target, out string error))
+                return TextCommandResult.Error(error);
+
+            bool changed = _policies.SetJailed(target.Uid, target.Name, true);
+            if (target.Online != null)
+            {
+                WithPlayerVoxelCap(target.Online, () => CancelPlayerPublicActivity(target.Online));
+                SendPlayerPolicy(target.Online);
+                target.Online.SendIngameError("layout-jailed",
+                    "An administrator suspended your access to public Layout guides.");
+            }
+            else
+            {
+                _undo.ClearPlayer(target.Uid);
+                ClearPlayerSessionState(target.Uid);
+            }
+
+            return TextCommandResult.Success(changed
+                ? $"Jailed {target.Name}: all public Layout mutations are now blocked."
+                : $"{target.Name} is already jailed.");
+        }
+
+        private TextCommandResult OnFreeCommand(TextCommandCallingArgs args)
+        {
+            if (!TryResolvePlayer(args[0] as string, out PlayerIdentity target, out string error))
+                return TextCommandResult.Error(error);
+            bool changed = _policies.SetJailed(target.Uid, target.Name, false);
+            if (target.Online != null) SendPlayerPolicy(target.Online);
+            return TextCommandResult.Success(changed
+                ? $"Freed {target.Name}: public Layout access is restored. Personal cap overrides were kept."
+                : $"{target.Name} was not jailed. Personal cap overrides were not changed.");
+        }
+
+        private TextCommandResult OnLimitCommand(TextCommandCallingArgs args)
+        {
+            if (!TryResolvePlayer(args[0] as string, out PlayerIdentity target, out string error))
+                return TextCommandResult.Error(error);
+            int limit = args[1] is int n ? n : -1;
+            if (limit < 0) return TextCommandResult.Error("The guide limit must be 0 or greater.");
+
+            _policies.SetGuideLimit(target.Uid, target.Name, limit);
+            int effective = _policies.EffectiveGuideLimit(target.Uid, _guides.MaxGuidesPerPlayer);
+            int current = _guides.CountGuidesBy(target.Uid);
+            return TextCommandResult.Success(limit == 0
+                ? $"Removed {target.Name}'s custom guide limit. Effective limit: {FormatCap(effective)}; currently {current}."
+                : $"Set {target.Name}'s concurrent guide limit to {limit}; currently {current}. Existing guides were not removed.");
+        }
+
+        private TextCommandResult OnVoxelCapCommand(TextCommandCallingArgs args)
+        {
+            if (!TryResolvePlayer(args[0] as string, out PlayerIdentity target, out string error))
+                return TextCommandResult.Error(error);
+            int cap = args[1] is int n ? n : -1;
+            if (cap < 0) return TextCommandResult.Error("The voxel cap must be 0 or greater.");
+            if (cap > GuideManager.HardVoxelCeiling)
+                return TextCommandResult.Error($"The absolute safety ceiling is {GuideManager.HardVoxelCeiling:n0} voxels per guide.");
+
+            _policies.SetVoxelCap(target.Uid, target.Name, cap);
+            int effective = _policies.EffectiveVoxelCap(target.Uid, _guides.PerGuideVoxelCap);
+            if (target.Online != null) SendPlayerPolicy(target.Online);
+            return TextCommandResult.Success(cap == 0
+                ? $"Removed {target.Name}'s custom voxel cap. Effective per-guide cap: {FormatCap(effective)}."
+                : $"Set {target.Name}'s per-guide voxel cap to {cap:n0}. World and absolute safety caps still apply.");
+        }
+
+        private TextCommandResult OnInfoCommand(TextCommandCallingArgs args)
+        {
+            string playerName = args[0] as string;
+            if (string.IsNullOrWhiteSpace(playerName)) return TextCommandResult.Success(ServerInfoText());
+            if (!TryResolvePlayer(playerName, out PlayerIdentity target, out string error))
+                return TextCommandResult.Error(error);
+            return TextCommandResult.Success(PlayerInfoText(target));
+        }
+
+        private TextCommandResult OnJailRosterCommand(TextCommandCallingArgs args)
+        {
+            List<PlayerPolicy> jailed = _policies.Policies
+                .Where(policy => policy.Jailed)
+                .OrderBy(policy => policy.LastKnownName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (jailed.Count == 0) return TextCommandResult.Success("The Layout jail roster is empty.");
+
+            var text = new StringBuilder($"Layout jail roster ({jailed.Count}):");
+            for (int i = 0; i < jailed.Count; i++)
+            {
+                PlayerPolicy policy = jailed[i];
+                bool online = _sapi.World.AllOnlinePlayers.OfType<IServerPlayer>()
+                    .Any(player => player.PlayerUID == policy.PlayerUid);
+                text.Append('\n').Append(i + 1).Append(". ")
+                    .Append(string.IsNullOrWhiteSpace(policy.LastKnownName) ? "Unknown" : policy.LastKnownName)
+                    .Append(online ? " — online" : " — offline")
+                    .Append(" — ").Append(_guides.CountGuidesBy(policy.PlayerUid).ToString("n0"))
+                    .Append(" public guide(s)");
+            }
+            return TextCommandResult.Success(text.ToString());
+        }
+
+        private TextCommandResult OnTopCommand(TextCommandCallingArgs args)
+        {
+            string kind = (args[0] as string)?.Trim().ToLowerInvariant();
+            if (kind == "guides") return TextCommandResult.Success(TopGuidesText());
+            if (kind == "players") return TextCommandResult.Success(TopPlayersText());
+            return TextCommandResult.Error("Usage: /layout top guides   OR   /layout top players");
         }
 
         private TextCommandResult OnWhoCommand(TextCommandCallingArgs args)
@@ -258,6 +411,8 @@ namespace Layout.Network
                 return TextCommandResult.Error("This command must be run by a player.");
             string argument = (args[0] as string)?.Trim().ToLowerInvariant();
             if (argument != "all") return TextCommandResult.Error("Usage: /layout client push all");
+            if (_policies.IsJailed(player.PlayerUID))
+                return TextCommandResult.Error("An administrator suspended your access to public Layout guides.");
             if (_clientOnlyPlayers.Contains(player.PlayerUID))
                 return TextCommandResult.Error("Switch to public mode first with /layout public.");
 
@@ -268,11 +423,31 @@ namespace Layout.Network
         private TextCommandResult OnDispelCommand(TextCommandCallingArgs args)
         {
             string arg = (args[0] as string)?.Trim().ToLowerInvariant();
+            string value = (args[1] as string)?.Trim();
 
             if (arg == "all")
             {
                 int n = DispelGuides(null, 0);
                 return TextCommandResult.Success($"Dispelled all {n} Layout guide(s) in the world.");
+            }
+
+            if (arg == "player")
+            {
+                if (!TryResolvePlayer(value, out PlayerIdentity target, out string error))
+                    return TextCommandResult.Error(error);
+                int n = DispelGuidesByCreator(target.Uid);
+                return TextCommandResult.Success($"Dispelled {n} guide(s) created by {target.Name}.");
+            }
+
+            if (arg == "guide")
+            {
+                if (!TryResolveGuide(value, out Guid id, out string error))
+                    return TextCommandResult.Error(error);
+                GuideData guide = _guides.AllGuides[id];
+                string description = $"{guide.ShapeType} {ShortId(id)} at {FormatAnchor(guide)}";
+                return DeleteGuideAdministratively(id)
+                    ? TextCommandResult.Success($"Dispelled {description}.")
+                    : TextCommandResult.Error("That guide no longer exists.");
             }
 
             if (int.TryParse(arg, out int radius) && radius >= 0)
@@ -283,7 +458,8 @@ namespace Layout.Network
                 return TextCommandResult.Success($"Dispelled {n} Layout guide(s) within {radius} chunk(s).");
             }
 
-            return TextCommandResult.Error("Usage: /layout dispel all   OR   /layout dispel <chunk radius>");
+            return TextCommandResult.Error(
+                "Usage: /layout dispel all | <chunk radius> | player <name> | guide <id>");
         }
 
         // Dispels guides, force-freeing their locks and broadcasting the removals. A null player dispels
@@ -312,12 +488,31 @@ namespace Layout.Network
             int removed = 0;
             foreach (Guid id in targets)
             {
-                if (_guides.DeleteGuide(id).Status != GuideOpStatus.Success) continue;
-                _locks.ClearLock(id);                             // force-free any editor's lock; it's gone
-                _channel.BroadcastPacket(new GuideDeletePacket(id));
-                removed++;
+                if (DeleteGuideAdministratively(id)) removed++;
             }
             return removed;
+        }
+
+        private int DispelGuidesByCreator(string playerUid)
+        {
+            var targets = _guides.AllGuides.Values
+                .Where(g => g.CreatorUid == playerUid)
+                .Select(g => g.Id)
+                .ToList();
+            int removed = 0;
+            foreach (Guid id in targets)
+                if (DeleteGuideAdministratively(id)) removed++;
+            return removed;
+        }
+
+        private bool DeleteGuideAdministratively(Guid id)
+        {
+            if (_guides.DeleteGuide(id).Status != GuideOpStatus.Success) return false;
+            _locks.ClearLock(id);
+            foreach (string uid in _drags.Where(p => p.Value.GuideId == id).Select(p => p.Key).ToList())
+                _drags.Remove(uid);
+            _channel.BroadcastPacket(new GuideDeletePacket(id));
+            return true;
         }
 
         private static Vec3d FirstAnchorPos(GuideData g)
@@ -334,15 +529,19 @@ namespace Layout.Network
 
         private void OnPlayerNowPlaying(IServerPlayer player)
         {
+            _policies.RememberName(player.PlayerUID, PlayerDisplayName(player));
             // 1) Bulk sync: every guide + the caps the server actually enforces.
             var all = new List<GuideDataDto>(_guides.AllGuides.Count);
             foreach (var g in _guides.AllGuides.Values) all.Add(GuideDataDto.From(g));
             // The two trailing refill flags are DEAD as of v0.2.22 (the channel became a client preference);
             // they are still sent as false because packet fields are append-only and must not be renumbered.
             _channel.SendPacket(
-                new GuideBulkSyncPacket(all.ToArray(), _guides.PerGuideVoxelCap, _guides.TotalVoxelCap,
+                new GuideBulkSyncPacket(all.ToArray(),
+                    _policies.EffectiveVoxelCap(player.PlayerUID, _guides.PerGuideVoxelCap),
+                    _guides.TotalVoxelCap,
                     _allowClientOnlyMode),
                 player);
+            SendPlayerPolicy(player);
 
             // 2) Current lock state of any locked guide, so the joiner sees what is being edited.
             foreach (var id in _guides.AllGuides.Keys)
@@ -427,12 +626,13 @@ namespace Layout.Network
             {
                 _channel.SendPacket(new ClientGuidePushResultPacket(
                     Array.Empty<byte[]>(), packet?.Guides?.Length ?? 0,
-                    "You lack the privilege required to publish Layout guides."), player);
+                    "Your access to public Layout guides is restricted."), player);
                 return;
             }
 
             ClientGuidePushDto[] incoming = packet?.Guides ?? Array.Empty<ClientGuidePushDto>();
             var accepted = new List<byte[]>();
+            BlockPos firstClaimDenied = null;
             int rejected = Math.Max(0, incoming.Length - MaxGuidesPerPush);
             int count = Math.Min(incoming.Length, MaxGuidesPerPush);
 
@@ -457,6 +657,8 @@ namespace Layout.Network
                     GuideOperationResult result = _guides.RestoreGuide(candidate);
                     if (!result.IsSuccess)
                     {
+                        if (result.Status == GuideOpStatus.RejectedClaimAccess && firstClaimDenied == null)
+                            firstClaimDenied = result.DeniedPosition;
                         rejected++;
                         continue;
                     }
@@ -477,6 +679,7 @@ namespace Layout.Network
 
             string summary = $"Published {accepted.Count} private guide(s); {rejected} rejected.";
             _channel.SendPacket(new ClientGuidePushResultPacket(accepted.ToArray(), rejected, summary), player);
+            if (firstClaimDenied != null) SendClaimDenied(player, firstClaimDenied);
         }
 
         // ==========================================================================================
@@ -557,6 +760,12 @@ namespace Layout.Network
                         fromPlayer.SendIngameError("layout-toolarge",
                             "That guide is too large to render ({0:n0} voxels). Make it smaller or use a coarser scale.",
                             result.VoxelCount);
+                    else if (_policies.EffectiveVoxelCap(fromPlayer.PlayerUID, _guides.PerGuideVoxelCap) > 0
+                        && result.CapLimit == _policies.EffectiveVoxelCap(
+                            fromPlayer.PlayerUID, _guides.PerGuideVoxelCap))
+                        fromPlayer.SendIngameError("layout-overcap",
+                            "That guide exceeds your per-guide limit of {0:n0} voxels. Make it smaller or use a coarser scale.",
+                            result.CapLimit);
                     else
                         fromPlayer.SendIngameError("layout-overcap",
                             "World voxel budget reached: {0:n0} more would pass the {1:n0} limit. Dispel some guides ('/layout dispel'), coarsen the scale, or raise totalVoxelCap.",
@@ -572,6 +781,10 @@ namespace Layout.Network
                     fromPlayer.SendIngameError("layout-guidecountcap",
                         "Guide limit reached ({0} of {1}). Dispel a guide before placing another.",
                         result.VoxelCount, result.CapLimit);
+                    break;
+
+                case GuideOpStatus.RejectedClaimAccess:
+                    SendClaimDenied(fromPlayer, result.DeniedPosition);
                     break;
 
                 // InvalidArgument: malformed input — ignore.
@@ -674,6 +887,16 @@ namespace Layout.Network
         {
             if (DeniedByPrivilege(fromPlayer)) return;
             if (p?.Start == null) return;
+            if (!fromPlayer.HasPrivilege(Privilege.controlserver))
+            {
+                GuideMutationAccessResult access =
+                    new GuideClaimAccessValidator(_sapi, fromPlayer).ValidateAnchor(p.Start.ToVec3d());
+                if (!access.Allowed)
+                {
+                    SendClaimDenied(fromPlayer, access.DeniedPosition);
+                    return;
+                }
+            }
             string uid = fromPlayer.PlayerUID;
 
             _draftAnchors[uid] = p.Start.ToVec3d();
@@ -719,6 +942,14 @@ namespace Layout.Network
         }
 
         private void OnRelease(IServerPlayer fromPlayer, GuideReleasePacket p)
+        {
+            // Releasing/cancelling an in-flight gesture is cleanup. It must remain possible if a claim was
+            // created during the drag, or the player would be unable to restore/remove the transient edit.
+            using (_guides.UseMutationAccessValidator(null))
+                OnReleaseWithoutClaimChecks(fromPlayer, p);
+        }
+
+        private void OnReleaseWithoutClaimChecks(IServerPlayer fromPlayer, GuideReleasePacket p)
         {
             Guid id = p.GuideId();
             string uid = fromPlayer.PlayerUID;
@@ -801,7 +1032,17 @@ namespace Layout.Network
         // on removal and self-cleans via the validate-then-apply discard, per the settled undo model.
         private void OnCancelGrab(IServerPlayer fromPlayer, GuideCancelGrabPacket p)
         {
-            Guid id = p.GuideId();
+            CancelGrabSession(fromPlayer, p.GuideId());
+        }
+
+        private void CancelGrabSession(IServerPlayer fromPlayer, Guid id)
+        {
+            using (_guides.UseMutationAccessValidator(null))
+                CancelGrabSessionWithoutClaimChecks(fromPlayer, id);
+        }
+
+        private void CancelGrabSessionWithoutClaimChecks(IServerPlayer fromPlayer, Guid id)
+        {
             string uid = fromPlayer.PlayerUID;
 
             // Only the lock holder has a grab to cancel; anyone else just gets the truth restated.
@@ -892,10 +1133,16 @@ namespace Layout.Network
                 {
                     if (!shape.WouldBreakOnMove(p.Edits[i].Index)) continue;
                     var breakCmd = new BreakConstraintCommand(id, g.Constraint, g.ControlPoints);
-                    if (_guides.BreakConstraint(id).Status == GuideOpStatus.Success)
+                    GuideOperationResult breakResult = _guides.BreakConstraint(id);
+                    if (breakResult.Status == GuideOpStatus.Success)
                     {
                         _undo.Record(uid, breakCmd);
                         broke = true;
+                    }
+                    else
+                    {
+                        HandleNonSuccessToggle(fromPlayer, id, breakResult, g);
+                        return;
                     }
                 }
             }
@@ -963,6 +1210,11 @@ namespace Layout.Network
                     SendResync(fromPlayer, g);
                     break;
 
+                case GuideOpStatus.RejectedClaimAccess:
+                    SendClaimDenied(fromPlayer, result.DeniedPosition);
+                    ResyncOrDrop(fromPlayer, id);
+                    break;
+
                 case GuideOpStatus.RejectedPointLocked:
                 case GuideOpStatus.InvalidArgument:
                     SendResync(fromPlayer, g);
@@ -1016,10 +1268,18 @@ namespace Layout.Network
             if (_guides.TryGetGuide(id, out GuideData gPre) && gPre.Constraint != ShapeConstraint.None)
             {
                 var breakCmd = new BreakConstraintCommand(id, gPre.Constraint, gPre.ControlPoints);
-                if (_guides.BreakConstraint(id).Status == GuideOpStatus.Success)
+                GuideOperationResult breakResult = _guides.BreakConstraint(id);
+                if (breakResult.Status == GuideOpStatus.Success)
                 {
                     _undo.Record(uid, breakCmd);
                     broke = true;
+                }
+                else
+                {
+                    if (lockOutcome.Status == LockAcquireStatus.Acquired && _locks.ReleaseLock(id, uid))
+                        _channel.BroadcastPacket(new GuideLockStatePacket(id, null));
+                    HandleNonSuccessToggle(fromPlayer, id, breakResult, gPre);
+                    return;
                 }
             }
 
@@ -1054,6 +1314,8 @@ namespace Layout.Network
                     if (ins.Status == GuideOpStatus.RejectedOverCap)
                         _channel.SendPacket(
                             new VoxelCapWarningPacket(id, ins.VoxelCount, ins.CapLimit), fromPlayer);
+                    else if (ins.Status == GuideOpStatus.RejectedClaimAccess)
+                        SendClaimDenied(fromPlayer, ins.DeniedPosition);
                     if (_guides.TryGetGuide(id, out GuideData gNow)) SendResync(fromPlayer, gNow);
                 }
 
@@ -1095,6 +1357,8 @@ namespace Layout.Network
                 if (result.Status == GuideOpStatus.RejectedOverCap)
                     _channel.SendPacket(
                         new VoxelCapWarningPacket(id, result.VoxelCount, result.CapLimit), fromPlayer);
+                else if (result.Status == GuideOpStatus.RejectedClaimAccess)
+                    SendClaimDenied(fromPlayer, result.DeniedPosition);
 
                 if (_guides.TryGetGuide(id, out GuideData g)) SendResync(fromPlayer, g);
             }
@@ -1404,6 +1668,11 @@ namespace Layout.Network
                                 blockedResult.VoxelCount, blockedResult.CapLimit);
                             break;
 
+                        case GuideOpStatus.RejectedClaimAccess:
+                            SendClaimDenied(fromPlayer, blockedResult.DeniedPosition,
+                                "Can't undo/redo that guide because it would enter protected land");
+                            break;
+
                         default:   // over a voxel cap — the classic Blocked case
                             if (blockedResult.Guide != null)
                                 _channel.SendPacket(
@@ -1422,6 +1691,233 @@ namespace Layout.Network
         //  Helpers
         // ==========================================================================================
 
+        private void WithPlayerVoxelCap(IServerPlayer player, Action action)
+        {
+            int cap = _policies.EffectiveVoxelCap(player?.PlayerUID, _guides.PerGuideVoxelCap);
+            GuideMutationAccessValidator accessValidator = null;
+            if (player != null && !player.HasPrivilege(Privilege.controlserver))
+                accessValidator = new GuideClaimAccessValidator(_sapi, player).Validate;
+
+            using (_guides.UsePerGuideVoxelCap(cap))
+            using (_guides.UseMutationAccessValidator(accessValidator))
+                action();
+        }
+
+        private void SendPlayerPolicy(IServerPlayer player)
+        {
+            if (player == null) return;
+            _channel.SendPacket(new PlayerGuidePolicyPacket(
+                _policies.EffectiveVoxelCap(player.PlayerUID, _guides.PerGuideVoxelCap),
+                _policies.IsJailed(player.PlayerUID)), player);
+        }
+
+        private void CancelPlayerPublicActivity(IServerPlayer player)
+        {
+            if (player == null) return;
+            string uid = player.PlayerUID;
+            if (_drags.TryGetValue(uid, out DragSession session))
+                CancelGrabSession(player, session.GuideId);
+            ClearPlayerSessionState(uid);
+            _undo.ClearPlayer(uid);
+        }
+
+        private void ClearPlayerSessionState(string playerUid)
+        {
+            IReadOnlyList<Guid> freed = _locks.ReleaseAllLocksForPlayer(playerUid);
+            foreach (Guid id in freed)
+                _channel.BroadcastPacket(new GuideLockStatePacket(id, null));
+            _drags.Remove(playerUid);
+            if (_draftAnchors.Remove(playerUid))
+                _channel.BroadcastPacket(new DraftAnchorRemovePacket(playerUid));
+        }
+
+        private string ServerInfoText()
+        {
+            GuideData largest = _guides.AllGuides.Values
+                .OrderByDescending(g => g.CachedVoxelCount)
+                .FirstOrDefault();
+            var lines = new List<string>
+            {
+                "Layout server status",
+                $"Public guides: {_guides.GuideCount:n0} / {FormatCap(_guides.MaxGuidesWorldWide)}",
+                $"Guide voxels: {_guides.TotalVoxelCount:n0} / {FormatCap(_guides.TotalVoxelCap)}",
+                $"Per-guide voxel cap: {FormatCap(_guides.PerGuideVoxelCap)} (absolute ceiling {GuideManager.HardVoxelCeiling:n0})",
+                $"Default per-player guide limit: {FormatCap(_guides.MaxGuidesPerPlayer)}",
+                $"Jailed players: {_policies.JailedCount}; custom guide limits: {_policies.CustomGuideLimitCount}; custom voxel caps: {_policies.CustomVoxelCapCount}",
+                $"Active edit locks: {_locks.ActiveLockCount}"
+            };
+            if (largest != null)
+                lines.Add($"Largest guide: {largest.ShapeType}, {largest.CachedVoxelCount:n0} voxels, {FormatAnchor(largest)}, ID {ShortId(largest.Id)}");
+            return string.Join("\n", lines);
+        }
+
+        private string PlayerInfoText(PlayerIdentity target)
+        {
+            List<GuideData> guides = _guides.AllGuides.Values
+                .Where(g => g.CreatorUid == target.Uid).ToList();
+            long voxels = guides.Sum(g => (long)Math.Max(0, g.CachedVoxelCount));
+            int customGuideLimit = _policies.GuideLimitOverride(target.Uid);
+            int customVoxelCap = _policies.VoxelCapOverride(target.Uid);
+            int effectiveGuideLimit = _policies.EffectiveGuideLimit(target.Uid, _guides.MaxGuidesPerPlayer);
+            int effectiveVoxelCap = _policies.EffectiveVoxelCap(target.Uid, _guides.PerGuideVoxelCap);
+            return string.Join("\n", new[]
+            {
+                $"Layout player status: {target.Name}",
+                $"Public access: {(_policies.IsJailed(target.Uid) ? "jailed" : "allowed")}",
+                $"Public guides: {guides.Count:n0} / {FormatCap(effectiveGuideLimit)}; attributed voxels: {voxels:n0}",
+                $"Guide-limit override: {(customGuideLimit > 0 ? customGuideLimit.ToString("n0") : "none (server default)")}",
+                $"Per-guide voxel cap: {FormatCap(effectiveVoxelCap)}; override: {(customVoxelCap > 0 ? customVoxelCap.ToString("n0") : "none (server default)")}",
+                $"Connection: {(target.Online != null ? "online" : "offline")}"
+            });
+        }
+
+        private string TopGuidesText()
+        {
+            List<GuideData> guides = _guides.AllGuides.Values
+                .OrderByDescending(g => g.CachedVoxelCount)
+                .ThenBy(g => g.Id)
+                .Take(10)
+                .ToList();
+            if (guides.Count == 0) return "There are no public Layout guides.";
+            var text = new StringBuilder("Largest public Layout guides:");
+            for (int i = 0; i < guides.Count; i++)
+            {
+                GuideData g = guides[i];
+                text.Append('\n').Append(i + 1).Append(". ")
+                    .Append(g.ShapeType).Append(" — ").Append(g.CachedVoxelCount.ToString("n0"))
+                    .Append(" voxels — ").Append(string.IsNullOrWhiteSpace(g.CreatorName) ? "Unknown" : g.CreatorName)
+                    .Append(" — ").Append(FormatAnchor(g)).Append(" — ID ").Append(ShortId(g.Id));
+            }
+            return text.ToString();
+        }
+
+        private string TopPlayersText()
+        {
+            var players = _guides.AllGuides.Values
+                .GroupBy(g => g.CreatorUid ?? "")
+                .Select(group => new
+                {
+                    Uid = group.Key,
+                    Name = group.Select(g => g.CreatorName).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n)) ?? "Unknown",
+                    Guides = group.Count(),
+                    Voxels = group.Sum(g => (long)Math.Max(0, g.CachedVoxelCount))
+                })
+                .OrderByDescending(p => p.Voxels)
+                .ThenByDescending(p => p.Guides)
+                .Take(10)
+                .ToList();
+            if (players.Count == 0) return "There are no public Layout guides.";
+            var text = new StringBuilder("Highest public Layout usage by creator:");
+            for (int i = 0; i < players.Count; i++)
+                text.Append('\n').Append(i + 1).Append(". ").Append(players[i].Name)
+                    .Append(" — ").Append(players[i].Guides.ToString("n0")).Append(" guides — ")
+                    .Append(players[i].Voxels.ToString("n0")).Append(" voxels")
+                    .Append(_policies.IsJailed(players[i].Uid) ? " — jailed" : "");
+            return text.ToString();
+        }
+
+        private bool TryResolvePlayer(string name, out PlayerIdentity identity, out string error)
+        {
+            identity = default;
+            error = null;
+            string wanted = name?.Trim();
+            if (string.IsNullOrWhiteSpace(wanted))
+            {
+                error = "A player name is required.";
+                return false;
+            }
+
+            IServerPlayer online = _sapi.World.AllOnlinePlayers.OfType<IServerPlayer>()
+                .FirstOrDefault(p => string.Equals(p.PlayerName, wanted, StringComparison.OrdinalIgnoreCase));
+            if (online != null)
+            {
+                identity = new PlayerIdentity(online.PlayerUID, PlayerDisplayName(online), online);
+                return true;
+            }
+
+            var saved = _sapi.PlayerData.GetPlayerDataByLastKnownName(wanted);
+            if (saved != null && !string.IsNullOrWhiteSpace(saved.PlayerUID))
+            {
+                identity = new PlayerIdentity(saved.PlayerUID,
+                    string.IsNullOrWhiteSpace(saved.LastKnownPlayername) ? wanted : saved.LastKnownPlayername,
+                    null);
+                return true;
+            }
+
+            PlayerPolicy policy = _policies.Policies.FirstOrDefault(p =>
+                string.Equals(p.LastKnownName, wanted, StringComparison.OrdinalIgnoreCase));
+            if (policy != null)
+            {
+                identity = new PlayerIdentity(policy.PlayerUid, policy.LastKnownName, null);
+                return true;
+            }
+
+            GuideData authored = _guides.AllGuides.Values.FirstOrDefault(g =>
+                string.Equals(g.CreatorName, wanted, StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(g.CreatorUid));
+            if (authored != null)
+            {
+                identity = new PlayerIdentity(authored.CreatorUid, authored.CreatorName, null);
+                return true;
+            }
+
+            error = $"No known player named '{wanted}' was found.";
+            return false;
+        }
+
+        private bool TryResolveGuide(string token, out Guid id, out string error)
+        {
+            id = Guid.Empty;
+            error = null;
+            string wanted = token?.Trim();
+            if (string.IsNullOrWhiteSpace(wanted) || wanted.Length < 4)
+            {
+                error = "Provide at least four characters of the guide ID shown by '/layout top guides'.";
+                return false;
+            }
+            if (Guid.TryParse(wanted, out Guid exact) && _guides.HasGuide(exact))
+            {
+                id = exact;
+                return true;
+            }
+            List<Guid> matches = _guides.AllGuides.Keys
+                .Where(candidate => candidate.ToString("N").StartsWith(wanted, StringComparison.OrdinalIgnoreCase))
+                .Take(2)
+                .ToList();
+            if (matches.Count == 1)
+            {
+                id = matches[0];
+                return true;
+            }
+            error = matches.Count > 1
+                ? $"Guide ID prefix '{wanted}' is ambiguous; provide more characters."
+                : $"No public guide with ID '{wanted}' exists.";
+            return false;
+        }
+
+        private static string FormatCap(long cap) => cap > 0 ? cap.ToString("n0") : "unlimited";
+        private static string ShortId(Guid id) => id.ToString("N").Substring(0, 8);
+        private static string FormatAnchor(GuideData guide)
+        {
+            Vec3d anchor = FirstAnchorPos(guide);
+            return anchor == null
+                ? "anchor unknown"
+                : $"anchor ({anchor.X:0.#}, {anchor.Y:0.#}, {anchor.Z:0.#})";
+        }
+
+        private readonly struct PlayerIdentity
+        {
+            public string Uid { get; }
+            public string Name { get; }
+            public IServerPlayer Online { get; }
+            public PlayerIdentity(string uid, string name, IServerPlayer online)
+            {
+                Uid = uid;
+                Name = string.IsNullOrWhiteSpace(name) ? "Unknown" : name.Trim();
+                Online = online;
+            }
+        }
+
         private void StampLastSculptor(IServerPlayer player, GuideData guide, bool broadcastIncremental = true)
         {
             if (player == null || guide == null) return;
@@ -1438,12 +1934,32 @@ namespace Layout.Network
         // strand a lock or a draft anchor.
         private bool DeniedByPrivilege(IServerPlayer fromPlayer)
         {
+            if (_policies.IsJailed(fromPlayer?.PlayerUID))
+            {
+                fromPlayer.SendIngameError("layout-jailed",
+                    "An administrator suspended your access to public Layout guides.");
+                return true;
+            }
             if (_requiredPrivilege == null) return false;
             if (fromPlayer.HasPrivilege(_requiredPrivilege)) return false;
 
             fromPlayer.SendIngameError("layout-noprivilege",
                 "You lack the privilege required to use the Layout tool on this server.");
             return true;
+        }
+
+        private static void SendClaimDenied(IServerPlayer player, BlockPos position,
+            string message = "Guide crosses protected land; you do not have build permission there")
+        {
+            if (player == null) return;
+            if (position == null)
+            {
+                player.SendIngameError("layout-claimdenied", message + ".");
+                return;
+            }
+
+            player.SendIngameError("layout-claimdenied",
+                message + " at {0}, {1}, {2}.", position.X, position.Y, position.Z);
         }
 
         // Full-exclusivity gate (Module 7): true = reject, because the guide is edit-locked by someone else.
@@ -1471,13 +1987,17 @@ namespace Layout.Network
                 case GuideOpStatus.RejectedOverCap:
                     _channel.SendPacket(
                         new VoxelCapWarningPacket(id, result.VoxelCount, result.CapLimit), fromPlayer);
-                    SendResync(fromPlayer, live);
+                    SendResync(fromPlayer, result.Guide ?? live);
+                    break;
+                case GuideOpStatus.RejectedClaimAccess:
+                    SendClaimDenied(fromPlayer, result.DeniedPosition);
+                    SendResync(fromPlayer, result.Guide ?? live);
                     break;
                 case GuideOpStatus.GuideNotFound:
                     _channel.SendPacket(new GuideDeletePacket(id), fromPlayer);
                     break;
                 default:
-                    SendResync(fromPlayer, live);
+                    SendResync(fromPlayer, result.Guide ?? live);
                     break;
             }
         }

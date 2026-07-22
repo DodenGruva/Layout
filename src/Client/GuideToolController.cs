@@ -466,6 +466,7 @@ namespace Layout.Client
             if (held)
             {
                 _modifierHelpInitialised = false;
+                _hud.SetComatoseDraft(false);
                 _hud.TryOpen();
                 ResumeGrabIfStillValid();
                 _lastMode = _draft.Mode;
@@ -475,10 +476,21 @@ namespace Layout.Client
                 // Suspend, don't end: the draft keeps its anchor, the grab keeps its lock (comatose).
                 if (_grab != null) _grab.Suspended = true;
 
-                _hud.ClearDraftAim();
                 _hud.SetExaminedGuide(null);
                 _currentTargetGuide = null;
-                _hud.TryClose();
+                if (_draft.HasActiveDraft)
+                {
+                    // Preserve the last settled readout as a faint reminder while the draft and its
+                    // world-space preview are suspended. Re-equipping restores normal HUD styling.
+                    _hud.SetComatoseDraft(true);
+                    _hud.TryOpen();
+                }
+                else
+                {
+                    _hud.ClearDraftAim();
+                    _hud.SetComatoseDraft(false);
+                    _hud.TryClose();
+                }
                 if (_gui.IsOpened()) _gui.TryClose();
                 ResetDraftVisualState();
                 _renderer.ClearDraftPreview();       // the DRAFT survives the swap; the live ghost does not
@@ -1831,6 +1843,33 @@ namespace Layout.Client
             _hud.SetExaminedGuide(null);
             _currentTargetGuide = null;
             _renderer.ClearDraftPreview();
+            _hud.SetComatoseDraft(false);
+            if (!_toolHeld) _hud.TryClose();
+        }
+
+        /// <summary>Immediately dissolves public interaction state when an administrator jails this player.</summary>
+        public void OnPublicGuidePolicyChanged(bool jailed)
+        {
+            if (!jailed) return;
+            if (_grab != null && !_net.IsLocalGuide(_grab.GuideId)) CancelGrab();
+            if (_draft.HasActiveDraft && _net.AuthorityMode == ClientAuthorityMode.Networked)
+            {
+                _net.SendDraftCancel();
+                _draft.ClearDraft();
+                _rimAimArmed = false;
+                _rimAwaitingRelease = false;
+                ResetDraftVisualState();
+                _lastDraftClampCheckMs = 0;
+                _hud.ClearDraftAim();
+                _renderer.ClearDraftPreview();
+            }
+            if (_draft.SelectedGuideId.HasValue && !_net.IsLocalGuide(_draft.SelectedGuideId.Value))
+                _draft.ClearSelection();
+            if (!_draft.HasActiveDraft && !_toolHeld)
+            {
+                _hud.SetComatoseDraft(false);
+                _hud.TryClose();
+            }
         }
 
         private void OnGuideRemoved(Guid guideId)

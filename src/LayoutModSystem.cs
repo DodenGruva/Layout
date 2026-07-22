@@ -50,6 +50,7 @@ namespace Layout
         private ICoreServerAPI _sapi;
         public LayoutServerConfig ServerConfig { get; private set; }
         public GuideManager Guides { get; private set; }
+        public LayoutAdminPolicyManager AdminPolicies { get; private set; }
         public GuideLockManager Locks { get; private set; }
         public UndoManager Undo { get; private set; }
         public ServerNetworkHandler ServerNet { get; private set; }
@@ -115,25 +116,31 @@ namespace Layout
 
             ServerConfig = LoadServerConfig(sapi);
 
+            var serverPersistence = new ServerGuidePersistence(sapi);
+            AdminPolicies = new LayoutAdminPolicyManager(serverPersistence, sapi.Logger);
+
             Guides = new GuideManager(
-                new ServerGuidePersistence(sapi),
+                serverPersistence,
                 new BlockAccessorGuideProbe(() => sapi.World?.BlockAccessor),
                 sapi.Logger,
                 ServerConfig.PerGuideVoxelCap,
                 ServerConfig.TotalVoxelCap,
                 ServerConfig.MaxGuidesPerPlayer,
-                ServerConfig.MaxGuidesWorldWide);
+                ServerConfig.MaxGuidesWorldWide,
+                uid => AdminPolicies.EffectiveGuideLimit(uid, ServerConfig.MaxGuidesPerPlayer));
 
             // Server save/load event ownership stays in the server composition root. GuideManager itself is
             // now side-neutral and can also back an intentionally transient client-only authority.
+            sapi.Event.SaveGameLoaded += AdminPolicies.Load;
             sapi.Event.SaveGameLoaded += Guides.Load;
+            sapi.Event.GameWorldSave += AdminPolicies.Persist;
             sapi.Event.GameWorldSave += Guides.Persist;
 
             Locks = new GuideLockManager();
             Undo = new UndoManager(Guides, ServerConfig.UndoHistoryDepth, Locks);
 
             ServerNet = new ServerNetworkHandler(
-                sapi, Guides, Locks, Undo,
+                sapi, Guides, Locks, Undo, AdminPolicies,
                 ServerConfig.RequiredPrivilege,
                 ServerConfig.AdminCanOverrideLocks,
                 ServerConfig.AllowClientOnlyMode,
@@ -213,6 +220,7 @@ namespace Layout
             ClientNet = new ClientNetworkHandler(capi);
             ClientNet.ResetAuthorityMode(ClientConfig.ForceClientOnly);
             ClientNet.GuidesBulkSynced += OnGuidesBulkSynced;
+            ClientNet.PublicGuidePolicyChanged += OnPublicGuidePolicyChanged;
             ClientNet.AuthorityModeChanged += OnAuthorityModeChanged;
             ClientNet.ForceClientOnlyPreferenceChanged += OnForceClientOnlyPreferenceChanged;
 
@@ -238,6 +246,7 @@ namespace Layout
             // The aim-controller: per-tick raycast + click routing while the tool is held. It (not the
             // ModSystem, not the item) owns all interaction state, including comatose grab sessions.
             Controller = new GuideToolController(capi, Draft, ClientNet, Renderer, ToolGui, Hud);
+            if (ClientNet.PublicGuideAccessJailed) Controller.OnPublicGuidePolicyChanged(true);
 
             // Hotkeys — all rebindable in the vanilla controls screen, all gated to the held tool by the
             // controller (they fall through to other handlers otherwise, so Ctrl+Z stays safe elsewhere).
@@ -371,6 +380,12 @@ namespace Layout
                 ClientConfig?.AllowInventoryChalkRefill ?? false);
         }
 
+        private void OnPublicGuidePolicyChanged(bool jailed)
+        {
+            Draft.SetPerGuideVoxelCap(ClientNet.PerGuideVoxelCap);
+            Controller?.OnPublicGuidePolicyChanged(jailed);
+        }
+
         private static LayoutClientConfig LoadClientConfig(ICoreClientAPI capi)
         {
             LayoutClientConfig cfg = null;
@@ -443,6 +458,7 @@ namespace Layout
                 if (ClientNet != null)
                 {
                     ClientNet.GuidesBulkSynced -= OnGuidesBulkSynced;
+                    ClientNet.PublicGuidePolicyChanged -= OnPublicGuidePolicyChanged;
                     ClientNet.AuthorityModeChanged -= OnAuthorityModeChanged;
                     ClientNet.ForceClientOnlyPreferenceChanged -= OnForceClientOnlyPreferenceChanged;
                 }

@@ -66,6 +66,7 @@ namespace Layout.UI
         public const string StarSuffix = "-star";
         public const string CurrentSuffix = "-current";
         public const string GhostSuffix = "-ghost";
+        public const string PausedSuffix = "-paused";
 
         public const string ModeCreate = "layout-mode-create";
         public const string ModeEdit = "layout-mode-edit";
@@ -154,6 +155,12 @@ namespace Layout.UI
                     double a = rgba != null && rgba.Length >= 4 ? rgba[3] : 1.0;
                     baseDrawer(ctx, x, y, w, h, new[] { 1.0, 0.88, 0.15, a });
                 };
+                reg[shapeName + CurrentSuffix + PausedSuffix] = (ctx, x, y, w, h, rgba) =>
+                {
+                    // The comatose-draft HUD must desaturate the actual glyph, not merely its button chrome.
+                    double a = rgba != null && rgba.Length >= 4 ? rgba[3] * 0.24 : 0.24;
+                    baseDrawer(ctx, x, y, w, h, new[] { 0.62, 0.62, 0.62, a });
+                };
             }
 
             reg[ModeCreate] = DrawModeCreate;
@@ -189,7 +196,8 @@ namespace Layout.UI
             // full set; filtered to our prefix (CustomIcons is a shared, cross-mod dictionary).
             foreach (string name in new List<string>(reg.Keys))
             {
-                if (!name.StartsWith("layout-") || name.EndsWith(GhostSuffix)) continue;
+                if (!name.StartsWith("layout-") || name.EndsWith(GhostSuffix)
+                    || name.EndsWith(PausedSuffix)) continue;
                 var baseDrawer = reg[name];
                 reg[name + GhostSuffix] = (ctx, x, y, w, h, rgba) =>
                 {

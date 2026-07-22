@@ -72,6 +72,7 @@ namespace Layout.Network
         public ClientAuthorityMode AuthorityMode { get; private set; } = ClientAuthorityMode.Detecting;
         public bool ServerLayoutAvailable => _serverLayoutAvailable;
         public bool ServerAllowsClientOnlyMode => _serverAllowsClientOnlyMode;
+        public bool PublicGuideAccessJailed { get; private set; }
 
         // -- Read-only views for the renderer / HUD / tool ----------------------------------------
 
@@ -134,6 +135,9 @@ namespace Layout.Network
         /// <summary>Raised when the server-side /layout who command asks this client to inspect its target.</summary>
         public event Action GuideWhoRequested;
 
+        /// <summary>The server changed this player's effective per-guide cap at runtime.</summary>
+        public event Action<bool> PublicGuidePolicyChanged;
+
         public ClientNetworkHandler(ICoreClientAPI capi)
         {
             _capi = capi ?? throw new ArgumentNullException(nameof(capi));
@@ -165,7 +169,16 @@ namespace Layout.Network
                 .SetMessageHandler<ClientPlacementModePacket>(OnPlacementMode)
                 .SetMessageHandler<ClientGuidePushRequestPacket>(OnGuidePushRequest)
                 .SetMessageHandler<ClientGuidePushResultPacket>(OnGuidePushResult)
-                .SetMessageHandler<GuideWhoQueryPacket>(_ => GuideWhoRequested?.Invoke());
+                .SetMessageHandler<GuideWhoQueryPacket>(_ => GuideWhoRequested?.Invoke())
+                .SetMessageHandler<PlayerGuidePolicyPacket>(OnPlayerGuidePolicy);
+        }
+
+        private void OnPlayerGuidePolicy(PlayerGuidePolicyPacket packet)
+        {
+            if (packet == null) return;
+            _perGuideVoxelCap = Math.Max(0, packet.PerGuideVoxelCap);
+            PublicGuideAccessJailed = packet.Jailed;
+            PublicGuidePolicyChanged?.Invoke(packet.Jailed);
         }
 
         /// <summary>
@@ -224,6 +237,7 @@ namespace Layout.Network
         public void ResetAuthorityMode(bool forceClientOnly = false)
         {
             _preferClientOnly = forceClientOnly;
+            PublicGuideAccessJailed = false;
             SetAuthorityMode(ClientAuthorityMode.Detecting);
         }
 

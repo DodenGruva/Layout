@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 13;
+        public const int ProtocolVersion = 14;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -920,6 +920,21 @@ namespace Layout.Network
         public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
     }
 
+    /// <summary>S→C. Refreshes the invoking player's effective per-guide cap after an admin change.</summary>
+    [ProtoContract]
+    public class PlayerGuidePolicyPacket
+    {
+        [ProtoMember(1)] public int PerGuideVoxelCap;
+        [ProtoMember(2)] public bool Jailed;
+
+        public PlayerGuidePolicyPacket() { }
+        public PlayerGuidePolicyPacket(int perGuideVoxelCap, bool jailed)
+        {
+            PerGuideVoxelCap = perGuideVoxelCap;
+            Jailed = jailed;
+        }
+    }
+
     /// <summary>Both directions. Select a 3D guide's persistent shell or structural wireframe.</summary>
     [ProtoContract]
     public class GuideSetWireframePacket
@@ -1067,7 +1082,9 @@ namespace Layout.Network
             // 0.3.9: creator / last-sculptor HUD attribution (protocol 12)
             typeof(GuideHudMetadataPacket),
             // 0.3.13: /layout who asks the invoking client to inspect its current target (protocol 13)
-            typeof(GuideWhoQueryPacket)
+            typeof(GuideWhoQueryPacket),
+            // 0.3.22: live refresh for per-player per-guide cap overrides (protocol 14)
+            typeof(PlayerGuidePolicyPacket)
         };
     }
 }

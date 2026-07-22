@@ -37,7 +37,12 @@ namespace Layout.Systems
         /// rule). Produced by the undo path (<see cref="UndoManager"/>); direct operations are gated in the
         /// network handler before they ever reach this manager.
         /// </summary>
-        RejectedGuideLocked
+        RejectedGuideLocked,
+        /// <summary>
+        /// Rejected because the resulting public guide would occupy a block where the acting player does
+        /// not have build permission. The attempted mutation has already been rolled back.
+        /// </summary>
+        RejectedClaimAccess
     }
 
     /// <summary>
@@ -70,13 +75,18 @@ namespace Layout.Systems
         /// </summary>
         public int ControlPointIndex { get; }
 
-        private GuideOperationResult(GuideOpStatus status, GuideData guide, int voxelCount, int capLimit, int controlPointIndex)
+        /// <summary>The first protected block found for a claim-access rejection; otherwise null.</summary>
+        public BlockPos DeniedPosition { get; }
+
+        private GuideOperationResult(GuideOpStatus status, GuideData guide, int voxelCount, int capLimit,
+            int controlPointIndex, BlockPos deniedPosition = null)
         {
             Status = status;
             Guide = guide;
             VoxelCount = voxelCount;
             CapLimit = capLimit;
             ControlPointIndex = controlPointIndex;
+            DeniedPosition = deniedPosition;
         }
 
         public bool IsSuccess => Status == GuideOpStatus.Success;
@@ -104,9 +114,13 @@ namespace Layout.Systems
         public static GuideOperationResult LockedByOtherPlayer(GuideData guide) =>
             new GuideOperationResult(GuideOpStatus.RejectedGuideLocked, guide, 0, 0, -1);
 
+        public static GuideOperationResult ClaimDenied(GuideData guide, BlockPos position) =>
+            new GuideOperationResult(GuideOpStatus.RejectedClaimAccess, guide, 0, 0, -1,
+                position);
+
         public override string ToString() =>
             $"GuideOperationResult({Status}, guide={(Guide != null ? Guide.Id.ToString() : "none")}, " +
-            $"voxels={VoxelCount}, cap={CapLimit}, cpIndex={ControlPointIndex})";
+            $"voxels={VoxelCount}, cap={CapLimit}, cpIndex={ControlPointIndex}, denied={DeniedPosition})";
     }
 
     /// <summary>
@@ -187,6 +201,11 @@ namespace Layout.Systems
         private readonly int _totalVoxelCap;
         private readonly int _maxGuidesPerPlayer;
         private readonly int _maxGuidesWorldWide;
+        private readonly System.Func<string, int> _playerGuideLimitResolver;
+        // Server-main-thread operation scope. The network authority sets this around one player's mutation
+        // so a personal per-guide cap can replace the server default without contaminating client authority.
+        private int? _operationPerGuideVoxelCap;
+        private GuideMutationAccessValidator _operationAccessValidator;
 
         private readonly Dictionary<Guid, GuideData> _guides = new Dictionary<Guid, GuideData>();
         private readonly Dictionary<Guid, IGuideShape> _shapes = new Dictionary<Guid, IGuideShape>();
@@ -251,7 +270,8 @@ namespace Layout.Systems
             int perGuideVoxelCap = 25000,
             int totalVoxelCap = 250000,
             int maxGuidesPerPlayer = 0,
-            int maxGuidesWorldWide = 0)
+            int maxGuidesWorldWide = 0,
+            System.Func<string, int> playerGuideLimitResolver = null)
         {
             _persistence = persistence ?? throw new ArgumentNullException(nameof(persistence));
             _blockProbe = blockProbe ?? throw new ArgumentNullException(nameof(blockProbe));
@@ -260,6 +280,51 @@ namespace Layout.Systems
             _totalVoxelCap = totalVoxelCap > 0 ? totalVoxelCap : 0;
             _maxGuidesPerPlayer = maxGuidesPerPlayer > 0 ? maxGuidesPerPlayer : 0;
             _maxGuidesWorldWide = maxGuidesWorldWide > 0 ? maxGuidesWorldWide : 0;
+            _playerGuideLimitResolver = playerGuideLimitResolver;
+        }
+
+        /// <summary>
+        /// Temporarily replaces the configurable per-guide cap for one synchronous authority operation.
+        /// The absolute hard ceiling and world-total cap are never replaced. Main-thread use only.
+        /// </summary>
+        public IDisposable UsePerGuideVoxelCap(int cap)
+        {
+            int? previous = _operationPerGuideVoxelCap;
+            _operationPerGuideVoxelCap = cap > 0 ? cap : 0;
+            return new ActionOnDispose(() => _operationPerGuideVoxelCap = previous);
+        }
+
+        /// <summary>
+        /// Installs the acting player's build-access validator for one synchronous server operation.
+        /// Passing null deliberately suppresses claim checks for cleanup/administrative rollback paths.
+        /// </summary>
+        public IDisposable UseMutationAccessValidator(GuideMutationAccessValidator validator)
+        {
+            GuideMutationAccessValidator previous = _operationAccessValidator;
+            _operationAccessValidator = validator;
+            return new ActionOnDispose(() => _operationAccessValidator = previous);
+        }
+
+        private int EffectivePerGuideVoxelCap => _operationPerGuideVoxelCap ?? _perGuideVoxelCap;
+
+        private GuideData AccessSnapshot(GuideData guide) =>
+            _operationAccessValidator == null || guide == null ? null : guide.DeepClone();
+
+        private bool AccessDenied(GuideData before, GuideData after, IGuideShape afterShape,
+            out BlockPos deniedPosition)
+        {
+            deniedPosition = null;
+            if (_operationAccessValidator == null) return false;
+            GuideMutationAccessResult result = _operationAccessValidator(before, after, afterShape);
+            deniedPosition = result.DeniedPosition;
+            return !result.Allowed;
+        }
+
+        private int EffectivePlayerGuideLimit(string playerUid)
+        {
+            if (string.IsNullOrEmpty(playerUid)) return 0;
+            int resolved = _playerGuideLimitResolver?.Invoke(playerUid) ?? _maxGuidesPerPlayer;
+            return Math.Max(0, resolved);
         }
 
         // --- Lookups ------------------------------------------------------------------------------
@@ -315,8 +380,9 @@ namespace Layout.Systems
             // Guide-COUNT caps first — cheap, and nothing has been built yet (Guide is null in the result).
             if (_maxGuidesWorldWide > 0 && _guides.Count >= _maxGuidesWorldWide)
                 return GuideOperationResult.OverGuideCount(null, _guides.Count, _maxGuidesWorldWide);
-            if (_maxGuidesPerPlayer > 0 && creatorUid != null && CountGuidesBy(creatorUid) >= _maxGuidesPerPlayer)
-                return GuideOperationResult.OverGuideCount(null, CountGuidesBy(creatorUid), _maxGuidesPerPlayer);
+            int playerGuideLimit = EffectivePlayerGuideLimit(creatorUid);
+            if (playerGuideLimit > 0 && CountGuidesBy(creatorUid) >= playerGuideLimit)
+                return GuideOperationResult.OverGuideCount(null, CountGuidesBy(creatorUid), playerGuideLimit);
 
             IGuideShape shape = ShapeFactory.Create(shapeType, constraint, shapePlaneAxis, start, end,
                 inverted, sides, chain, closed, flatSideAligned);
@@ -349,10 +415,14 @@ namespace Layout.Systems
             int count = CountForCaps(data.Id, shape, data.VoxelScale, data.IsFilled, data.IsWireframe);
             if (count > HardVoxelCeiling)                        // scan-guard sentinel — too big to render
                 return GuideOperationResult.OverCap(data, count, HardVoxelCeiling);
-            if (_perGuideVoxelCap > 0 && count > _perGuideVoxelCap)
-                return GuideOperationResult.OverCap(data, count, _perGuideVoxelCap);
+            int perGuideCap = EffectivePerGuideVoxelCap;
+            if (perGuideCap > 0 && count > perGuideCap)
+                return GuideOperationResult.OverCap(data, count, perGuideCap);
             if (_totalVoxelCap > 0 && _totalVoxels + count > _totalVoxelCap)
                 return GuideOperationResult.OverCap(data, count, _totalVoxelCap);
+
+            if (AccessDenied(null, data, shape, out BlockPos deniedPosition))
+                return GuideOperationResult.ClaimDenied(data, deniedPosition);
 
             _guides[data.Id] = data;
             _shapes[data.Id] = shape;
@@ -405,8 +475,9 @@ namespace Layout.Systems
             // hitting one yields the same push-back-and-warn Blocked path as a voxel-cap rejection would.
             if (_maxGuidesWorldWide > 0 && _guides.Count >= _maxGuidesWorldWide)
                 return GuideOperationResult.OverGuideCount(live, _guides.Count, _maxGuidesWorldWide);
-            if (_maxGuidesPerPlayer > 0 && live.CreatorUid != null && CountGuidesBy(live.CreatorUid) >= _maxGuidesPerPlayer)
-                return GuideOperationResult.OverGuideCount(live, CountGuidesBy(live.CreatorUid), _maxGuidesPerPlayer);
+            int playerGuideLimit = EffectivePlayerGuideLimit(live.CreatorUid);
+            if (playerGuideLimit > 0 && CountGuidesBy(live.CreatorUid) >= playerGuideLimit)
+                return GuideOperationResult.OverGuideCount(live, CountGuidesBy(live.CreatorUid), playerGuideLimit);
 
             int count = CountForCaps(live.Id, shape, live.VoxelScale, live.IsFilled, live.IsWireframe);
             // Restore is also the import seam used by client-only "push". Keep the absolute rendering
@@ -414,10 +485,14 @@ namespace Layout.Systems
             // per-guide and world caps; otherwise a client-supplied snapshot could bypass the ceiling.
             if (count > HardVoxelCeiling)
                 return GuideOperationResult.OverCap(live, count, HardVoxelCeiling);
-            if (_perGuideVoxelCap > 0 && count > _perGuideVoxelCap)
-                return GuideOperationResult.OverCap(live, count, _perGuideVoxelCap);
+            int perGuideCap = EffectivePerGuideVoxelCap;
+            if (perGuideCap > 0 && count > perGuideCap)
+                return GuideOperationResult.OverCap(live, count, perGuideCap);
             if (_totalVoxelCap > 0 && _totalVoxels + count > _totalVoxelCap)
                 return GuideOperationResult.OverCap(live, count, _totalVoxelCap);
+
+            if (AccessDenied(null, live, shape, out BlockPos deniedPosition))
+                return GuideOperationResult.ClaimDenied(live, deniedPosition);
 
             _guides[live.Id] = live;
             _shapes[live.Id] = shape;
@@ -439,6 +514,7 @@ namespace Layout.Systems
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             if (edits == null || edits.Count == 0) return GuideOperationResult.Invalid(g);
             var shape = _shapes[id];
+            GuideData accessBefore = AccessSnapshot(g);
 
             // Validate every target before mutating anything.
             for (int i = 0; i < edits.Count; i++)
@@ -464,6 +540,11 @@ namespace Layout.Systems
                 RestorePoints(id, snapshot);
                 return GuideOperationResult.OverCap(g, count, cap);
             }
+            if (AccessDenied(accessBefore, g, shape, out BlockPos deniedPosition))
+            {
+                RestorePoints(id, snapshot);
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
+            }
 
             StoreCount(id, count);
             Persist();
@@ -487,6 +568,7 @@ namespace Layout.Systems
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             if (position == null) return GuideOperationResult.Invalid(g);
             var shape = _shapes[id];
+            GuideData accessBefore = AccessSnapshot(g);
 
             var snapshot = SnapshotPoints(g);
             int insertedIndex;
@@ -503,6 +585,11 @@ namespace Layout.Systems
             {
                 RestorePoints(id, snapshot);
                 return GuideOperationResult.OverCap(g, count, cap);
+            }
+            if (AccessDenied(accessBefore, g, shape, out BlockPos deniedPosition))
+            {
+                RestorePoints(id, snapshot);
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
 
             StoreCount(id, count);
@@ -535,6 +622,8 @@ namespace Layout.Systems
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             if (index < 0 || index >= g.ControlPoints.Count) return GuideOperationResult.Invalid(g);
             var shape = _shapes[id];
+            GuideData accessBefore = AccessSnapshot(g);
+            List<ControlPoint> snapshot = SnapshotPoints(g);
 
             ControlPoint cp = g.ControlPoints[index];
             if (cp.IsPhantom || cp.IsAnchor || cp.IsPrimary) return GuideOperationResult.Invalid(g);
@@ -543,6 +632,11 @@ namespace Layout.Systems
             shape.RecalculatePhantomPoints();    // restore validity after an external list change
 
             int count = ExactVoxelCount(id, shape, g.VoxelScale, g.IsFilled);
+            if (AccessDenied(accessBefore, g, shape, out BlockPos deniedPosition))
+            {
+                RestorePoints(id, snapshot);
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
+            }
             StoreCount(id, count);
             Persist();
             return GuideOperationResult.Success(g, count);
@@ -607,6 +701,7 @@ namespace Layout.Systems
             if (GuideShapeTypes.IsVolume(g.ShapeType) && mode == ProjectionMode.Surface)
                 return GuideOperationResult.Invalid(g);
             var shape = _shapes[id];
+            GuideData accessBefore = AccessSnapshot(g);
 
             ProjectionMode oldMode = g.Projection;
             ProjectionPlane oldPlane = g.Plane;
@@ -657,6 +752,13 @@ namespace Layout.Systems
                 if (bakeRollback != null) RestorePoints(id, bakeRollback);
                 return GuideOperationResult.OverCap(g, count, cap);
             }
+            if (AccessDenied(accessBefore, g, shape, out BlockPos deniedPosition))
+            {
+                g.Projection = oldMode;
+                g.Plane = oldPlane;
+                if (bakeRollback != null) RestorePoints(id, bakeRollback);
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
+            }
 
             StoreCount(id, count);
             Persist();
@@ -702,6 +804,7 @@ namespace Layout.Systems
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             if (!GuideShapeTypes.UsesSides(g.ShapeType)) return GuideOperationResult.Invalid(g);
+            GuideData accessBefore = AccessSnapshot(g);
 
             int oldSides = g.Sides;
             int clamped = Shapes.PolygonShape.ClampSides(sides);
@@ -727,6 +830,15 @@ namespace Layout.Systems
                 _shapes[id] = ShapeFactory.Adopt(g);
                 StoreCount(id, ExactVoxelCount(id, _shapes[id], g.VoxelScale, g.IsFilled));
                 return GuideOperationResult.OverCap(g, count, cap);
+            }
+            if (AccessDenied(accessBefore, g, shape, out BlockPos deniedPosition))
+            {
+                g.Sides = oldSides;
+                g.ControlPoints.Clear();
+                foreach (ControlPoint point in oldPoints) g.ControlPoints.Add(point.Clone());
+                _shapes[id] = ShapeFactory.Adopt(g);
+                StoreCount(id, ExactVoxelCount(id, _shapes[id], g.VoxelScale, g.IsFilled));
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
 
             StoreCount(id, count);
@@ -755,14 +867,32 @@ namespace Layout.Systems
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             if (pointsSnapshot == null) return GuideOperationResult.Invalid(g);
+            GuideData accessBefore = AccessSnapshot(g);
 
+            List<ControlPoint> before = SnapshotPoints(g);
             g.ControlPoints.Clear();
             foreach (var cp in pointsSnapshot) g.ControlPoints.Add(cp.Clone());
             IGuideShape shape = ShapeFactory.Adopt(g);
             _shapes[id] = shape;
             shape.RecalculatePhantomPoints();
 
-            int count = ExactVoxelCount(id, shape, g.VoxelScale, g.IsFilled);
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled, g.IsWireframe);
+            if (WouldExceedCaps(id, count, out int cap))
+            {
+                g.ControlPoints.Clear();
+                foreach (ControlPoint cp in before) g.ControlPoints.Add(cp.Clone());
+                _shapes[id] = ShapeFactory.Adopt(g);
+                _shapes[id].RecalculatePhantomPoints();
+                return GuideOperationResult.OverCap(g, count, cap);
+            }
+            if (AccessDenied(accessBefore, g, shape, out BlockPos deniedPosition))
+            {
+                g.ControlPoints.Clear();
+                foreach (ControlPoint cp in before) g.ControlPoints.Add(cp.Clone());
+                _shapes[id] = ShapeFactory.Adopt(g);
+                _shapes[id].RecalculatePhantomPoints();
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
+            }
             StoreCount(id, count);
             Persist();
             return GuideOperationResult.Success(g, count);
@@ -780,12 +910,33 @@ namespace Layout.Systems
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             var shape = _shapes[id];
+            GuideData accessBefore = AccessSnapshot(g);
+            List<ControlPoint> before = SnapshotPoints(g);
+            ShapeConstraint constraintBefore = g.Constraint;
 
             if (!shape.BreakConstraint())
                 return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var c0) ? c0 : 0);
 
             g.Constraint = ShapeConstraint.None;
-            int count = ExactVoxelCount(id, shape, g.VoxelScale, g.IsFilled);
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled, g.IsWireframe);
+            if (WouldExceedCaps(id, count, out int cap))
+            {
+                g.ControlPoints.Clear();
+                foreach (ControlPoint cp in before) g.ControlPoints.Add(cp.Clone());
+                g.Constraint = constraintBefore;
+                _shapes[id] = ShapeFactory.Adopt(g);
+                _shapes[id].RecalculatePhantomPoints();
+                return GuideOperationResult.OverCap(g, count, cap);
+            }
+            if (AccessDenied(accessBefore, g, shape, out BlockPos deniedPosition))
+            {
+                g.ControlPoints.Clear();
+                foreach (ControlPoint cp in before) g.ControlPoints.Add(cp.Clone());
+                g.Constraint = constraintBefore;
+                _shapes[id] = ShapeFactory.Adopt(g);
+                _shapes[id].RecalculatePhantomPoints();
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
+            }
             StoreCount(id, count);
             Persist();
             return GuideOperationResult.Success(g, count);
@@ -801,7 +952,10 @@ namespace Layout.Systems
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             if (pointsSnapshot == null) return GuideOperationResult.Invalid();
+            GuideData accessBefore = AccessSnapshot(g);
 
+            List<ControlPoint> before = SnapshotPoints(g);
+            ShapeConstraint constraintBefore = g.Constraint;
             g.ControlPoints.Clear();
             foreach (var cp in pointsSnapshot) g.ControlPoints.Add(cp.Clone());
             g.Constraint = constraint;
@@ -813,7 +967,27 @@ namespace Layout.Systems
             // start. Reuse it instead of rescanning a behemoth; undo and other callers still recount.
             int count = knownVoxelCount >= 0
                 ? knownVoxelCount
-                : ExactVoxelCount(id, shape, g.VoxelScale, g.IsFilled);
+                : CountForCaps(id, shape, g.VoxelScale, g.IsFilled, g.IsWireframe);
+            // A known count means gesture cancellation: restoring the exact authoritative origin must never
+            // be blocked by a cap changed during the drag. Ordinary undo/spring-back restores are rechecked.
+            if (knownVoxelCount < 0 && WouldExceedCaps(id, count, out int cap))
+            {
+                g.ControlPoints.Clear();
+                foreach (ControlPoint cp in before) g.ControlPoints.Add(cp.Clone());
+                g.Constraint = constraintBefore;
+                _shapes[id] = ShapeFactory.Adopt(g);
+                _shapes[id].RecalculatePhantomPoints();
+                return GuideOperationResult.OverCap(g, count, cap);
+            }
+            if (AccessDenied(accessBefore, g, shape, out BlockPos deniedPosition))
+            {
+                g.ControlPoints.Clear();
+                foreach (ControlPoint cp in before) g.ControlPoints.Add(cp.Clone());
+                g.Constraint = constraintBefore;
+                _shapes[id] = ShapeFactory.Adopt(g);
+                _shapes[id].RecalculatePhantomPoints();
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
+            }
             StoreCount(id, count);
             Persist();
             return GuideOperationResult.Success(g, count);
@@ -843,6 +1017,7 @@ namespace Layout.Systems
             // this is the server-side gate against a stale packet.
             if (GuideShapeTypes.IsVolume(g.ShapeType)) return GuideOperationResult.Invalid(g);
             var shape = _shapes[id];
+            GuideData accessBefore = AccessSnapshot(g);
 
             bool oldFilled = g.IsFilled;
             g.IsFilled = filled;
@@ -852,6 +1027,11 @@ namespace Layout.Systems
             {
                 g.IsFilled = oldFilled;
                 return GuideOperationResult.OverCap(g, count, cap);
+            }
+            if (AccessDenied(accessBefore, g, shape, out BlockPos deniedPosition))
+            {
+                g.IsFilled = oldFilled;
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
 
             StoreCount(id, count);
@@ -868,6 +1048,7 @@ namespace Layout.Systems
                     _voxelCounts.TryGetValue(id, out int existing) ? existing : 0);
 
             IGuideShape shape = _shapes[id];
+            GuideData accessBefore = AccessSnapshot(g);
             bool oldWireframe = g.IsWireframe;
             g.IsWireframe = wireframe;
             int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled);
@@ -875,6 +1056,11 @@ namespace Layout.Systems
             {
                 g.IsWireframe = oldWireframe;
                 return GuideOperationResult.OverCap(g, count, cap);
+            }
+            if (AccessDenied(accessBefore, g, shape, out BlockPos deniedPosition))
+            {
+                g.IsWireframe = oldWireframe;
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
 
             StoreCount(id, count);
@@ -891,6 +1077,7 @@ namespace Layout.Systems
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             if (!GuideData.IsValidVoxelScale(newScale)) return GuideOperationResult.Invalid(g);
             var shape = _shapes[id];
+            GuideData accessBefore = AccessSnapshot(g);
 
             int oldScale = g.VoxelScale;
             g.VoxelScale = newScale;
@@ -900,6 +1087,11 @@ namespace Layout.Systems
             {
                 g.VoxelScale = oldScale;
                 return GuideOperationResult.OverCap(g, count, cap);
+            }
+            if (AccessDenied(accessBefore, g, shape, out BlockPos deniedPosition))
+            {
+                g.VoxelScale = oldScale;
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
 
             StoreCount(id, count);
@@ -918,7 +1110,13 @@ namespace Layout.Systems
             if (wireframe || (_guides.TryGetValue(id, out GuideData guide) && guide.IsWireframe))
                 return ShapeWireframe.GetVoxelCount(shape, scale);
             int limit = HardVoxelCeiling;
-            if (_perGuideVoxelCap > 0) limit = Math.Min(limit, _perGuideVoxelCap);
+            int perGuideCap = EffectivePerGuideVoxelCap;
+            bool existingExceedsActorCap = perGuideCap > 0
+                && _voxelCounts.TryGetValue(id, out int existingCount)
+                && existingCount > perGuideCap;
+            // A lower-cap actor is allowed to preserve or shrink a trusted player's oversized guide. In
+            // that case an early stop at actorCap+1 would not be the real count and could corrupt totals.
+            if (perGuideCap > 0 && !existingExceedsActorCap) limit = Math.Min(limit, perGuideCap);
 
             if (_totalVoxelCap > 0)
             {
@@ -945,9 +1143,16 @@ namespace Layout.Systems
         {
             // Hard ceiling first, ALWAYS (even with caps disabled): a scan-guard sentinel count means the
             // guide is too big to voxelise/render — never let an edit (rescale, fill, drag) grow into one.
-            if (newCount > HardVoxelCeiling) { cap = HardVoxelCeiling; return true; }
-            if (_perGuideVoxelCap > 0 && newCount > _perGuideVoxelCap) { cap = _perGuideVoxelCap; return true; }
             int currentForId = _voxelCounts.TryGetValue(id, out var c) ? c : 0;
+            if (newCount > HardVoxelCeiling) { cap = HardVoxelCeiling; return true; }
+            int perGuideCap = EffectivePerGuideVoxelCap;
+            // An actor without the elevated cap may still preserve or shrink a legitimately oversized guide.
+            // Only growth above that actor's cap is rejected.
+            if (perGuideCap > 0 && newCount > perGuideCap && newCount > currentForId)
+            {
+                cap = perGuideCap;
+                return true;
+            }
             long projectedTotal = _totalVoxels - currentForId + newCount;
             if (_totalVoxelCap > 0 && projectedTotal > _totalVoxelCap) { cap = _totalVoxelCap; return true; }
             cap = 0;
@@ -1138,6 +1343,18 @@ namespace Layout.Systems
         {
             public int Version { get; set; }
             public List<GuideData> Guides { get; set; }
+        }
+
+        private sealed class ActionOnDispose : IDisposable
+        {
+            private Action _action;
+            public ActionOnDispose(Action action) { _action = action; }
+            public void Dispose()
+            {
+                Action action = _action;
+                _action = null;
+                action?.Invoke();
+            }
         }
     }
 
