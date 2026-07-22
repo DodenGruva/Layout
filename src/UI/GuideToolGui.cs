@@ -366,18 +366,16 @@ namespace Layout.UI
                     CairoFont.WhiteDetailText(), 260, chipB.FlatCopy(), "curshape:ht");
             }
 
-            if (editMode)
+            if (editMode && selected != null)
             {
-                // A compact guide-info line + Deselect stands in for the shape picker / favorites. With
-                // nothing selected it carries the mode's second instruction line (0.1.18 wording).
-                string gh = selected != null ? BuildSelectedHeaderText(selected)
-                    : "Edit the selected guide using the settings below.";
-                c.AddDynamicText(gh, font, ElementBounds.Fixed(0, y + 2, contentW - 80, headerH), "gheader");
-                if (selected != null)
-                    c.AddSmallButton("Deselect", OnDeselectClicked, ElementBounds.Fixed(contentW - 76, y, 76, 22));
+                // Once selected, the compact guide-info line and Deselect button replace the shape picker.
+                c.AddDynamicText(BuildSelectedHeaderText(selected), font,
+                    ElementBounds.Fixed(0, y + 2, contentW - 80, headerH), "gheader");
+                c.AddSmallButton("Deselect", OnDeselectClicked,
+                    ElementBounds.Fixed(contentW - 76, y, 76, 22));
                 y += headerH + rowGap;
             }
-            else
+            else if (!editMode)
             {
                 // ---- Shape picker (Session 11 rework): 3 pinned favorite slots + a ▾ expand tile that
                 // unfolds the full catalog. Starring (right-click) a catalog tile pins it into slot 1.
@@ -757,7 +755,7 @@ namespace Layout.UI
             // they sat a few pixels left of the tiles above): its label takes exactly the one tile slot
             // between the groups, and the tiles start on the next slot boundary.
             double x2 = labelW + pad + (codes1.Length + 1) * (tile + tileGap);
-            c.AddStaticText(label2, labelFont2,
+            c.AddStaticText(label2, Centered(labelFont2),
                 ElementBounds.Fixed(x + 2, y + (tile - 16) / 2, x2 - x - 6, 20));
 
             int s2 = ClampIndex(sel2, codes2.Length);
@@ -1146,6 +1144,12 @@ namespace Layout.UI
             _tool.ClearSelection();
             DeferRecompose();       // the section folds away; main rows are untouched
             return true;
+        }
+
+        /// <summary>Refreshes the selected-guide section after an in-world Edit-mode deselect.</summary>
+        public void RefreshSelection()
+        {
+            if (IsOpened()) DeferRecompose();
         }
 
         // ---------------------------------------------------------------------------------

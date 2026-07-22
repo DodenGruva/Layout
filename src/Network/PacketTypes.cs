@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 11;
+        public const int ProtocolVersion = 13;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -150,6 +150,8 @@ namespace Layout.Network
         [ProtoMember(21)] public int CachedBlockWidth;
         [ProtoMember(22)] public int CachedBlockHeight;
         [ProtoMember(23)] public bool IsWireframe;
+        [ProtoMember(24)] public string CreatorName;
+        [ProtoMember(25)] public string LastSculptorName;
         // (The as-placed spring-back snapshot deliberately does NOT cross the wire: the server executes
         //  spring-back; clients only ever request it by guide id.)
 
@@ -185,7 +187,9 @@ namespace Layout.Network
                 CachedVoxelHeight = g.CachedVoxelHeight,
                 CachedBlockWidth = g.CachedBlockWidth,
                 CachedBlockHeight = g.CachedBlockHeight,
-                IsWireframe = g.IsWireframe
+                IsWireframe = g.IsWireframe,
+                CreatorName = g.CreatorName,
+                LastSculptorName = g.LastSculptorName
             };
         }
 
@@ -228,9 +232,40 @@ namespace Layout.Network
                 CachedVoxelHeight = CachedVoxelHeight,
                 CachedBlockWidth = CachedBlockWidth,
                 CachedBlockHeight = CachedBlockHeight,
-                IsWireframe = IsWireframe
+                IsWireframe = IsWireframe,
+                CreatorName = CreatorName,
+                LastSculptorName = LastSculptorName
             };
         }
+    }
+
+    /// <summary>S→C. Lightweight HUD metadata refresh following a successful persistent visible mutation.
+    /// Creator is immutable and travels in the full guide DTO; Last Sculptor and cached measurements change.</summary>
+    [ProtoContract]
+    public class GuideHudMetadataPacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public string LastSculptorName;
+        [ProtoMember(3)] public int CachedVoxelCount;
+        [ProtoMember(4)] public int CachedVoxelWidth;
+        [ProtoMember(5)] public int CachedVoxelHeight;
+        [ProtoMember(6)] public int CachedBlockWidth;
+        [ProtoMember(7)] public int CachedBlockHeight;
+
+        public GuideHudMetadataPacket() { }
+
+        public GuideHudMetadataPacket(GuideData guide)
+        {
+            GuideIdBytes = NetIds.ToBytes(guide?.Id ?? Guid.Empty);
+            LastSculptorName = guide?.LastSculptorName;
+            CachedVoxelCount = guide?.CachedVoxelCount ?? 0;
+            CachedVoxelWidth = guide?.CachedVoxelWidth ?? 0;
+            CachedVoxelHeight = guide?.CachedVoxelHeight ?? 0;
+            CachedBlockWidth = guide?.CachedBlockWidth ?? 0;
+            CachedBlockHeight = guide?.CachedBlockHeight ?? 0;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
     }
 
     /// <summary>The render settings carried in a create request. Maps to <see cref="GuideRenderSettings"/>.</summary>
@@ -942,6 +977,12 @@ namespace Layout.Network
         }
     }
 
+    /// <summary>S→C. A player invoked /layout who; the client resolves its selected/aimed guide locally.</summary>
+    [ProtoContract]
+    public class GuideWhoQueryPacket
+    {
+    }
+
     // ----------------------------------------------------------------------------------------------
     //  Registration — the single source of truth for type order on BOTH sides
     // ----------------------------------------------------------------------------------------------
@@ -1022,7 +1063,11 @@ namespace Layout.Network
             // F5 refill channels became a client preference (protocol 6)
             typeof(ChalkRefillPrefsPacket),
             // 0.3.7: persistent 3D shell/wireframe mode (protocol 11)
-            typeof(GuideSetWireframePacket)
+            typeof(GuideSetWireframePacket),
+            // 0.3.9: creator / last-sculptor HUD attribution (protocol 12)
+            typeof(GuideHudMetadataPacket),
+            // 0.3.13: /layout who asks the invoking client to inspect its current target (protocol 13)
+            typeof(GuideWhoQueryPacket)
         };
     }
 }

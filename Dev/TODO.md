@@ -1,11 +1,11 @@
-# Layout — TODO / Outstanding Items (current: v0.3.8)
+# Layout — TODO / Outstanding Items (current: v0.3.21)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.3.8 → next)
+## ⭐ Top of the list (v0.3.21 → next)
 
 > **Session-16 playtest results (human-confirmed):** the v0.2.21 **inventory refill and hotbar refill both
 > work** — the MouseDown-hook ordering and the `InventoryID` round-trip both hold, closing `SESSION_16.md` §8.
@@ -102,8 +102,30 @@
 8. ~~**3D Form borrowed the Hollow/Filled icons.**~~ **FIXED (v0.3.8).** Dedicated faced-skin Shell and open
    corner-strutted Wireframe Cairo glyphs.
 
-**Next playtest focus:** Shell↔Wireframe before/after placement; oversized Cylinder/Cone/Box; giant-grab
-cancel; polygon corner-wire count; placement sound across small/large/behemoth guides.
+### A4. Session-22 action HUD, attribution, and sculpting parity (v0.3.9–v0.3.21) — full detail in `SESSION_22.md`
+
+1. ~~**Make drafting/targeting state legible without expanding the HUD.**~~ **DONE (v0.3.9–v0.3.21).**
+   Fixed-footprint Create/Sculpt/Creating/Sculpting/Edit/Editing/Delete/Deleting heading; contextual 42-pixel
+   shape tile with outside active-state accent; compact Scale, projection/form, split dimensions, Total Voxels,
+   and cap rows; cycling calculation dots; final label-width/alignment cleanup.
+2. ~~**Track who created and last visibly changed a guide.**~~ **DONE (v0.3.9, DataVersion/protocol 12).**
+   Creator is immutable. Last Sculptor covers committed geometry/settings/visibility/undo/redo changes under
+   public or local authority, but not hover, selection, cancellation, rejection, or no-op operations.
+3. ~~**Keep attribution out of the permanent HUD.**~~ **DONE (v0.3.13, protocol 13).** `/layout who` resolves
+   the selected Edit guide, then grabbed/aimed guide and reports exact shape, private status, Creator, and
+   Last Sculptor.
+4. ~~**Bring large-guide sculpting up to placement feel.**~~ **DONE (v0.3.14–v0.3.15).** Expensive Shell
+   grabs use bounded motion wireframes, then selected-scale background refinement and batched materialization;
+   tapered rim CTRL/SHIFT constraints match placement; Edit right-click deselects without mutation.
+5. ~~**Surface→Volumetric mid-draft could lose Arch/Half-Circle anchors.**~~ **FIXED (v0.3.16).** All placed
+   draft points move by the signed half-voxel convention offset when projection changes.
+6. ~~**GUI/HUD accumulated clipped or redundant text.**~~ **FIXED (v0.3.16–v0.3.21).** Fill is centered,
+   Surface omits plane descriptors, the empty Edit instruction is gone, label punctuation no longer wraps,
+   arrows align, and `Volumetric · Wireframe` uses the below-tile full width.
+
+**Next playtest focus:** every HUD state transition; `/layout who` under public/private/local authority;
+large sculpt settle/cancel; tapered-rim SHIFT flare; Edit right-click deselect; Surface↔Volumetric switches
+at different Arch/Half-Circle draft stages.
 
 ### A. Human backlog — queued at Session-16 end — ✅ ALL SEVEN DELIVERED (v0.2.22–v0.2.23)
 
@@ -572,8 +594,8 @@ the inventory refill remains (Top of the list).
 ## Next session — start here
 
 **The agenda is "⭐ Top of the list" at the top of this file** — it is not repeated here. Current state:
-the v0.3.8 adaptive large-guide/form arc is complete, documented, built, and packaged locally (`main` last
-pushed through v0.2.47); collect the focused v0.3.8 field reports above and revisit performance only from a
+the v0.3.21 HUD/attribution/sculpting arc is complete, documented, built, packaged, and pushed on `main`;
+collect the focused v0.3.21 field reports above and revisit performance only from a
 measured remaining bottleneck.
 
 **Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;

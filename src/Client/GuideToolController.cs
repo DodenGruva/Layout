@@ -102,6 +102,7 @@ namespace Layout.Client
 
         private long _tickId;
         private bool _toolHeld;
+        private Guid? _currentTargetGuide;
         private bool _springBackAvailable;
         private bool _modifierHelpInitialised;
         private bool _modifierHelpRefreshUnavailable;
@@ -179,9 +180,13 @@ namespace Layout.Client
 
                 if (_grab != null && !_grab.Suspended
                     && _net.Guides.TryGetValue(_grab.GuideId, out GuideData guide)
-                    && _grab.PointIndex >= 0 && _grab.PointIndex < guide.ControlPoints.Count
-                    && guide.ControlPoints[_grab.PointIndex].IsAnchor)
-                    return ShapeModifierHelp.CtrlCardinal;
+                    && _grab.PointIndex >= 0 && _grab.PointIndex < guide.ControlPoints.Count)
+                {
+                    if (_grab.PointIndex == 3 && IsTaperedVolume(guide.ShapeType))
+                        return ShapeModifierHelp.CtrlCloseRim | ShapeModifierHelp.ShiftAllowFlare;
+                    if (guide.ControlPoints[_grab.PointIndex].IsAnchor)
+                        return ShapeModifierHelp.CtrlCardinal;
+                }
 
                 return _springBackAvailable ? ShapeModifierHelp.ShiftRestore : ShapeModifierHelp.None;
             }
@@ -227,6 +232,7 @@ namespace Layout.Client
             _net.GuideRemoved += OnGuideRemoved;
             _net.GuideAddedOrUpdated += OnGuideAddedOrUpdated;
             _net.AuthorityModeChanged += OnAuthorityModeChanged;
+            _net.GuideWhoRequested += OnGuideWhoRequested;
             _renderer.DraftPreviewCompleted += OnDraftPreviewCompleted;
             _capi.Input.InWorldAction += OnInWorldAction;
             _capi.Event.MouseDown += OnMouseDown;      // F5 inventory refill (independent of the tool)
@@ -471,6 +477,7 @@ namespace Layout.Client
 
                 _hud.ClearDraftAim();
                 _hud.SetExaminedGuide(null);
+                _currentTargetGuide = null;
                 _hud.TryClose();
                 if (_gui.IsOpened()) _gui.TryClose();
                 ResetDraftVisualState();
@@ -511,6 +518,7 @@ namespace Layout.Client
 
             // 1) Guide under the crosshair → HUD examine seam (id, lock status, count, cap bar).
             TargetHit hit = FindTarget(includeLockedPoints: true);
+            _currentTargetGuide = hit.Found ? hit.GuideId : (Guid?)null;
             _springBackAvailable = hit.Found && !LockedByOther(hit.GuideId);
             _hud.SetExaminedGuide(hit.Found ? hit.GuideId : (Guid?)null);
 
@@ -640,6 +648,11 @@ namespace Layout.Client
                     eye.Y + dir.Y * _grab.Depth,
                     eye.Z + dir.Z * _grab.Depth);
             }
+
+            // Match the fourth placement stage when re-sculpting a tapered rim: the top cannot widen
+            // beyond the base by accident, SHIFT deliberately permits a flare, and CTRL closes to a cone.
+            if (_grab.PointIndex == 3 && IsTaperedVolume(g.ShapeType))
+                target = ConstrainSculptRim(g, target);
 
             // The mirror preview normally runs ahead of the authority. Without a local cap check it can
             // therefore cross the server's per-guide limit, get corrected by a resync, and cross it again
@@ -1232,7 +1245,21 @@ namespace Layout.Client
         /// geometry edits (lock, lock-in-place) live in Create; Edit is settings-only and Delete dispels.</summary>
         public void OnSecondaryClick(BlockSelection blockSel)
         {
-            if (!_toolHeld || _draft.Mode != ToolMode.Create) return;
+            if (!_toolHeld) return;
+
+            // Edit selection is client-side UI state. Right-click returns to an unselected Edit tool
+            // without mutating the guide, matching the cancel/backtrack gesture used in Create.
+            if (_draft.Mode == ToolMode.Edit)
+            {
+                if (_draft.SelectedGuideId != null)
+                {
+                    _draft.ClearSelection();
+                    _gui.RefreshSelection();
+                }
+                return;
+            }
+
+            if (_draft.Mode != ToolMode.Create) return;
 
             // 1. Grabbing → cancel (restore origin, or remove the freshly-inserted point).
             if (_grab != null && !_grab.Suspended)
@@ -1576,6 +1603,48 @@ namespace Layout.Client
             return new Vec3d(lid.X + rx * factor, lid.Y + ry * factor, lid.Z + rz * factor);
         }
 
+        private static bool IsTaperedVolume(GuideShapeType shape) =>
+            shape == GuideShapeType.TaperedCylinder
+            || shape == GuideShapeType.TaperedPolygonalPrism;
+
+        private Vec3d ConstrainSculptRim(GuideData guide, Vec3d aim)
+        {
+            if (guide?.ControlPoints == null || guide.ControlPoints.Count < 4 || aim == null) return aim;
+
+            Vec3d a = guide.ControlPoints[0]?.WorldPosition;
+            Vec3d b = guide.ControlPoints[1]?.WorldPosition;
+            Vec3d lid = guide.ControlPoints[2]?.WorldPosition;
+            if (a == null || b == null || lid == null) return aim;
+            if (CtrlHeld()) return new Vec3d(lid.X, lid.Y, lid.Z);
+            if (ShiftHeld()) return aim;
+
+            if (!ShapeGeometry.TryGetFrame(a, b, guide.ShapePlaneAxis,
+                out Vec3d radial, out _, out double baseLength)) return aim;
+            Vec3d axis = ShapeGeometry.BaseNormal(radial, guide.ShapePlaneAxis);
+            if (axis == null) return aim;
+
+            bool polygonal = guide.ShapeType == GuideShapeType.TaperedPolygonalPrism;
+            int sides = PolygonShape.ClampSides(guide.Sides);
+            double apothemRatio = Math.Cos(Math.PI / sides);
+            double near = polygonal && guide.FlatSideAligned ? apothemRatio : 1.0;
+            double far = !polygonal ? 1.0
+                : guide.FlatSideAligned
+                    ? (sides % 2 == 0 ? apothemRatio : 1.0)
+                    : (sides % 2 == 0 ? 1.0 : apothemRatio);
+            double baseRadius = baseLength / (near + far);
+
+            double px = aim.X - lid.X, py = aim.Y - lid.Y, pz = aim.Z - lid.Z;
+            double axial = px * axis.X + py * axis.Y + pz * axis.Z;
+            double rx = px - axis.X * axial;
+            double ry = py - axis.Y * axial;
+            double rz = pz - axis.Z * axial;
+            double radius = Math.Sqrt(rx * rx + ry * ry + rz * rz);
+            if (radius <= baseRadius || radius < 1e-9) return aim;
+
+            double factor = baseRadius / radius;
+            return new Vec3d(lid.X + rx * factor, lid.Y + ry * factor, lid.Z + rz * factor);
+        }
+
         // A 45-degree slope in the nearest north/south or east/west vertical plane. Averaging the
         // horizontal and vertical reaches avoids an abrupt size jump when the modifier is pressed.
         private static Vec3d ConstrainDiagonal(Vec3d reference, Vec3d aim)
@@ -1760,6 +1829,7 @@ namespace Layout.Client
             _pendingInsertOriginPoints = null;
             _hud.ClearDraftAim();
             _hud.SetExaminedGuide(null);
+            _currentTargetGuide = null;
             _renderer.ClearDraftPreview();
         }
 
@@ -1767,11 +1837,45 @@ namespace Layout.Client
         {
             if (_grab != null && _grab.GuideId == guideId) DropGrabLocally();
             if (_draft.SelectedGuideId == guideId) _draft.ClearSelection();
+            if (_currentTargetGuide == guideId) _currentTargetGuide = null;
             if (_hasPendingInsert && _pendingInsertGuide == guideId)
             {
                 _hasPendingInsert = false;
                 _pendingInsertOriginPoints = null;
             }
+        }
+
+        private void OnGuideWhoRequested()
+        {
+            string description = DescribeCurrentGuide(out _);
+            _capi.ShowChatMessage("[Layout] " + description);
+        }
+
+        /// <summary>Describes the selected Edit guide first, then a grabbed or crosshair-targeted guide.</summary>
+        public string DescribeCurrentGuide(out bool found)
+        {
+            Guid? guideId = null;
+            if (_draft.Mode == ToolMode.Edit && _draft.SelectedGuideId != null
+                && _net.Guides.ContainsKey(_draft.SelectedGuideId.Value))
+                guideId = _draft.SelectedGuideId;
+            else if (_grab != null && _net.Guides.ContainsKey(_grab.GuideId))
+                guideId = _grab.GuideId;
+            else if (_currentTargetGuide != null && _net.Guides.ContainsKey(_currentTargetGuide.Value))
+                guideId = _currentTargetGuide;
+
+            if (guideId == null || !_net.Guides.TryGetValue(guideId.Value, out GuideData guide))
+            {
+                found = false;
+                return "Select a guide in Edit mode or aim at one with the Chalking Kit equipped.";
+            }
+
+            found = true;
+            string shape = GuideToolGui.ShapeDisplayName(guide.ShapeType, guide.Constraint);
+            string privacy = _net.IsLocalGuide(guide.Id) ? " (Private)" : "";
+            string creator = string.IsNullOrWhiteSpace(guide.CreatorName) ? "Unknown" : guide.CreatorName;
+            string sculptor = string.IsNullOrWhiteSpace(guide.LastSculptorName)
+                ? "Unknown" : guide.LastSculptorName;
+            return shape + privacy + " — Creator: " + creator + "; Last Sculptor: " + sculptor + ".";
         }
 
         // Adopt a freshly-inserted point as a grab: the server gave us the lock as part of the insert, so
@@ -2553,6 +2657,7 @@ namespace Layout.Client
             _net.GuideRemoved -= OnGuideRemoved;
             _net.GuideAddedOrUpdated -= OnGuideAddedOrUpdated;
             _net.AuthorityModeChanged -= OnAuthorityModeChanged;
+            _net.GuideWhoRequested -= OnGuideWhoRequested;
             _renderer.DraftPreviewCompleted -= OnDraftPreviewCompleted;
             _capi.Input.InWorldAction -= OnInWorldAction;
             _capi.Event.MouseDown -= OnMouseDown;

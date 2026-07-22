@@ -281,13 +281,15 @@ namespace Layout.Systems
         /// the shape), validates against the caps, and on success stores and persists it. The server is the one
         /// that builds the guide — clients only ever send the two points plus settings.
         /// <paramref name="creatorUid"/> is stamped onto the guide for the per-player guide-count cap only
-        /// (bookkeeping, not ownership); pass null when there is no acting player.
+        /// (bookkeeping, not ownership); <paramref name="creatorName"/> is its display-only HUD snapshot.
+        /// Pass null when there is no acting player.
         /// </summary>
         public GuideOperationResult CreateGuide(Vec3d start, Vec3d end, GuideRenderSettings settings,
             GuideShapeType shapeType = GuideShapeType.Arch,
             ShapeConstraint constraint = ShapeConstraint.None,
             PlaneAxis shapePlaneAxis = PlaneAxis.Y,
             string creatorUid = null,
+            string creatorName = null,
             Vec3d thirdPoint = null,
             bool inverted = false,
             int sides = 0,
@@ -340,6 +342,9 @@ namespace Layout.Systems
                 GuideShapeTypes.UsesSides(shapeType) && flatSideAligned,
                 GuideShapeTypes.IsVolume(shapeType) && settings.Wireframe);
             data.CreatorUid = creatorUid;
+            data.CreatorName = CleanPlayerName(creatorName);
+            data.LastSculptorUid = creatorUid;
+            data.LastSculptorName = data.CreatorName;
 
             int count = CountForCaps(data.Id, shape, data.VoxelScale, data.IsFilled, data.IsWireframe);
             if (count > HardVoxelCeiling)                        // scan-guard sentinel — too big to render
@@ -355,6 +360,24 @@ namespace Layout.Systems
             Persist();
             return GuideOperationResult.Success(data, count);
         }
+
+        /// <summary>Records the player behind the latest committed visible change. Selection, hover,
+        /// rejected/no-op operations, and cancelled grabs never call this seam.</summary>
+        public bool StampLastSculptor(Guid id, string playerUid, string playerName)
+        {
+            if (!_guides.TryGetValue(id, out GuideData guide)) return false;
+
+            string cleanName = CleanPlayerName(playerName);
+            bool changed = guide.LastSculptorUid != playerUid || guide.LastSculptorName != cleanName;
+            guide.LastSculptorUid = playerUid;
+            guide.LastSculptorName = cleanName;
+            guide.DataVersion = GuideData.CurrentDataVersion;
+            if (changed) Persist();
+            return true;
+        }
+
+        private static string CleanPlayerName(string playerName) =>
+            string.IsNullOrWhiteSpace(playerName) ? "Unknown" : playerName.Trim();
 
         /// <summary>
         /// Re-inserts a previously-deleted guide EXACTLY as it was, preserving its id — the undo path for a

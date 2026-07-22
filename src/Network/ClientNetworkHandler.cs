@@ -104,6 +104,9 @@ namespace Layout.Network
         /// <summary>A guide appeared or changed; the argument is the live mirror record. Rebuild its mesh.</summary>
         public event Action<GuideData> GuideAddedOrUpdated;
 
+        /// <summary>Display-only Last Sculptor/count/dimension metadata changed; no mesh rebuild is needed.</summary>
+        public event Action<Guid> GuideHudMetadataChanged;
+
         /// <summary>A guide was removed; the argument is its id. Drop its mesh.</summary>
         public event Action<Guid> GuideRemoved;
 
@@ -128,6 +131,9 @@ namespace Layout.Network
         /// <summary>Raised when an explicit server command changes the persisted client preference.</summary>
         public event Action<bool> ForceClientOnlyPreferenceChanged;
 
+        /// <summary>Raised when the server-side /layout who command asks this client to inspect its target.</summary>
+        public event Action GuideWhoRequested;
+
         public ClientNetworkHandler(ICoreClientAPI capi)
         {
             _capi = capi ?? throw new ArgumentNullException(nameof(capi));
@@ -150,13 +156,16 @@ namespace Layout.Network
                 .SetMessageHandler<GuideSetSidesPacket>(p => ApplyServerGuidePacket(p.GuideId(), p, OnSetSides))
                 .SetMessageHandler<GuideSetWireframePacket>(
                     p => ApplyServerGuidePacket(p.GuideId(), p, OnSetWireframe))
+                .SetMessageHandler<GuideHudMetadataPacket>(
+                    p => ApplyServerGuidePacket(p.GuideId(), p, OnHudMetadata))
                 .SetMessageHandler<GuideLockStatePacket>(OnLockState)
                 .SetMessageHandler<DraftAnchorBroadcastPacket>(OnDraftAnchorBroadcast)
                 .SetMessageHandler<DraftAnchorRemovePacket>(OnDraftAnchorRemove)
                 .SetMessageHandler<VoxelCapWarningPacket>(OnCapWarning)
                 .SetMessageHandler<ClientPlacementModePacket>(OnPlacementMode)
                 .SetMessageHandler<ClientGuidePushRequestPacket>(OnGuidePushRequest)
-                .SetMessageHandler<ClientGuidePushResultPacket>(OnGuidePushResult);
+                .SetMessageHandler<ClientGuidePushResultPacket>(OnGuidePushResult)
+                .SetMessageHandler<GuideWhoQueryPacket>(_ => GuideWhoRequested?.Invoke());
         }
 
         /// <summary>
@@ -255,7 +264,7 @@ namespace Layout.Network
                 _capi,
                 OnLocalCreate, OnLocalDelete, OnHide, OnLockPoint, OnRescale,
                 OnSetProjection, OnSetFilled, OnSetWireframe, OnSetDivisions, OnSetSides,
-                OnLockState, OnCapWarning);
+                OnHudMetadata, OnLockState, OnCapWarning);
             OnLocalBulkSync(_local.CreateBulkSyncPacket());
         }
 
@@ -594,6 +603,18 @@ namespace Layout.Network
                     g.FlatSideAligned);
             g.Sides = p.Sides;
             GuideAddedOrUpdated?.Invoke(g);   // polygon geometry re-derives on the rebuild
+        }
+
+        private void OnHudMetadata(GuideHudMetadataPacket p)
+        {
+            if (!_guides.TryGetValue(p.GuideId(), out GuideData g)) return;
+            g.LastSculptorName = p.LastSculptorName;
+            g.CachedVoxelCount = p.CachedVoxelCount;
+            g.CachedVoxelWidth = p.CachedVoxelWidth;
+            g.CachedVoxelHeight = p.CachedVoxelHeight;
+            g.CachedBlockWidth = p.CachedBlockWidth;
+            g.CachedBlockHeight = p.CachedBlockHeight;
+            GuideHudMetadataChanged?.Invoke(g.Id);
         }
 
         // ==========================================================================================

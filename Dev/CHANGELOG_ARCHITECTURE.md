@@ -1,12 +1,30 @@
 # Layout — Architecture Changelog (document-version history)
 
 > **Split out of `ARCHITECTURE.md` to keep the orientation read cheap.** These are the per-revision deltas
-> for the architecture document itself, v2.5 → v3.7. **Nothing here is unique:** each delta is already folded
+> for the architecture document itself, v2.5 → v3.9. **Nothing here is unique:** each delta is already folded
 > in place into `ARCHITECTURE.md`'s body (Settled Decisions Register, file tree, module map, persistence,
 > edge cases), and each has a fuller narrative in its `SESSION_*.md` record. Kept as the audit trail — read
 > it when you need to know *when* something changed, not *what* the current state is.
 
 ---
+
+## Changelog — v3.8 → v3.9 (action HUD + attribution + sculpting parity, v0.3.9 → v0.3.21; full record in `SESSION_22.md`)
+
+- **Action-aware fixed HUD:** contextual Create/Sculpt/Edit/Delete headings and shape tile, active-state
+  typography/outside tile accents, compact split dimensions, Total Voxels, exact cap percentage, selected
+  Edit settings, fixed footprint, and the final typography/alignment cleanup.
+- **Creator / Last Sculptor (DataVersion/protocol 12):** persisted friendly attribution with identical public
+  and local-authority rules. Last Sculptor changes only for committed perceptible mutations; lightweight
+  metadata broadcasts avoid unnecessary full-guide rebroadcasts.
+- **On-demand attribution (protocol 13):** `/layout who` resolves selected, grabbed, then aimed guides on the
+  invoking client. Attribution was deliberately removed from the always-visible HUD.
+- **Large-guide sculpt refinement:** moving Shell grabs remain bounded wireframes, then settle into exact
+  selected-scale geometry through fingerprinted background work and batched materialization. Tapered rims
+  restore the placement-time flare/close constraints while sculpting.
+- **Projection-transition correctness:** active Surface↔Volumetric changes translate all placed draft points
+  by the signed half-voxel convention difference, fixing Arch/Half-Circle anchor loss.
+- **GUI cleanup:** Edit right-click deselect, contextual selected settings, centered Fill label, and removal of
+  the unused empty Edit instruction row.
 
 ## Changelog — v3.7 → v3.8 (adaptive large guides + structural form, v0.3.0 → v0.3.8; full record in `SESSION_21.md`)
 

@@ -1,6 +1,6 @@
 # Layout — Project Status & Handoff
 
-**Checkpoint: Layout v0.3.8 built and packaged locally; `main` last pushed through v0.2.47** (the `ClientOnlyFallback` branch merged via
+**Checkpoint: Layout v0.3.21 built, packaged, documented, and pushed on `main`** (the `ClientOnlyFallback` branch merged via
 PR #1). **F4** is
 implemented and playtested: automatic client-only authority on servers without Layout; opt-in private
 overlays on Layout servers; per-world/per-UID client persistence; placement/reshape/settings/undo parity;
@@ -15,13 +15,13 @@ v0.3 adaptive interaction pass now uses motion wireframes, selected-scale cursor
 refinement/materialization, cached hover metadata, and retained-mesh cancel safety.** Filled 3D interiors are
 retired; volumes may persist as Shell or structural Wireframe. Targets **all of VS
 1.22.x**; the repo is publication-clean (no personal paths/usernames tracked).
-**DataVersion 11; protocol 11; 74 source files; 15 shape types / 21 picker tiles.** Release zips:
-`..\Layout Zips\` (through `Layout0.3.8.zip`). **Top tasks:** collect v0.3.8 field reports; retain the two
+**DataVersion 12; protocol 13; 74 source files; 15 shape types / 21 picker tiles.** Release zips:
+`..\Layout Zips\` (through `Layout0.3.21.zip`). **Top tasks:** collect v0.3.21 field reports; retain the two
 verification debts (32-chalk ceiling vs xskills, and VS 1.22.0/1.22.1 support); revisit the deferred streamed
 pipeline or mesh Stage B/C only when measured need remains. **B-S9-1 closed in v0.2.36.** Standing rule: ship
-a zip per code iteration; update docs / commit ONLY on the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_21.md`**,
+a zip per code iteration; update docs / commit ONLY on the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_22.md`**,
 `PLAN_CLIENT_ONLY.md`, `PLAN_CHALKING_KIT.md`, and `TODO.md`; the authoritative plan is
-**`ARCHITECTURE.md`** (v3.8).
+**`ARCHITECTURE.md`** (v3.9).
 
 ---
 
@@ -29,7 +29,7 @@ a zip per code iteration; update docs / commit ONLY on the human's say-so. Detai
 
 The doc set (now a Claude Code repo):
 
-1. **`ARCHITECTURE.md`** — the authoritative plan (v3.8); Settled Decisions Register updated through v0.3.8.
+1. **`ARCHITECTURE.md`** — the authoritative plan (v3.9); Settled Decisions Register updated through v0.3.21.
 2. **The code** — `src/` (**74 files**: 70 through Session 20, plus Session 21’s `DraftPreviewSpec`,
    `ShapeWireframe`, `LargeVolumeShellFallback`, and `SetWireframeCommand`; historical breakdown: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
    RectangleShape, ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 Session-10 — LayoutToolIcons;
@@ -42,13 +42,13 @@ The doc set (now a Claude Code repo):
    Session-20 — PolygonalPrismShape),
    `assets/layout/`, `modinfo.json`, `modicon.png`, `Layout.csproj`, `BUILD_INSTRUCTIONS.txt`.
 3. **`TODO.md`** — the live punch-list (renamed from `OUTSTANDING_ITEMS.md`).
-4. **`SESSION_9.md`** … **`SESSION_21.md`** — standalone records (SESSION_12 runs through v0.1.45;
+4. **`SESSION_9.md`** … **`SESSION_22.md`** — standalone records (SESSION_12 runs through v0.1.45;
    SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 shell/mesh handoff; SESSION_15 is the
    v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc; SESSION_17 is the
    v0.2.22–v0.2.23 seven-item backlog; SESSION_18 is the v0.2.24–v0.2.28 Tapered Cylinder arc;
    SESSION_19 is the v0.2.29–v0.2.35 stabilization/effects arc; SESSION_20 is the
    v0.2.36–v0.2.47 polygonal-volume/modifier arc; SESSION_21 is the v0.3.0–v0.3.8 adaptive large-guide and
-   persistent structural-wireframe arc).
+   persistent structural-wireframe arc; SESSION_22 is the v0.3.9–v0.3.21 HUD/attribution/sculpting arc).
 5. **`HANDOFF.md`** (repo root) — the consolidated current-state brief for external AI analysis
    (scope / status / direction / performance characteristics).
 6. **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix.
@@ -228,7 +228,12 @@ The doc set (now a Claude Code repo):
   grab cancel retains/restores the settled mesh safely, wire topology gained shape-appropriate ribs, and 3D
   guides can persist as Shell or Wireframe. Size-weighted placement sound, dedicated form icons, and
   surface-proportional oversized Cylinder/Cone/Box fallback shipped. DataVersion/protocol 11.
-- **IN REAL PLAY:** save-compatibility matters — DataVersion **11** saves (v11: `IsWireframe`; v10: cached
+- **Session 22 — action HUD/attribution/sculpting parity (v0.3.9–v0.3.21): DELIVERED and playtested.**
+  Fixed-footprint action-aware HUD and contextual tile; Creator/Last Sculptor with `/layout who`; Edit
+  right-click deselect and selected-setting display; selected-scale settled materialization while sculpting;
+  tapered-rim flare parity; active Surface↔Volumetric anchor translation; final GUI/HUD typography cleanup.
+  DataVersion 12; protocol 13.
+- **IN REAL PLAY:** save-compatibility matters — DataVersion **12** saves (v12: attribution; v11: `IsWireframe`; v10: cached
   display/count/dimensions; v9: polygon
   `FlatSideAligned`; v8: passive `IsLockMarker`; v7:
   IsClosed; v6: Sides + the
@@ -244,11 +249,11 @@ The doc set (now a Claude Code repo):
 | # | Module | Effort | Status |
 |---|--------|--------|--------|
 | 1 | Pure math layer | **Max** | COMPLETE (+ 2D catalog; + 3D volumes including tapered cylinder and straight/tapered polygonal prisms; + exact hollow Sphere/Dome scanner) |
-| 2 | Data model | Low | COMPLETE (DataVersion **11**: persistent form + cached metadata; v9 polygon orientation; earlier passive markers/Sides/snapshot/IsClosed) |
+| 2 | Data model | Low | COMPLETE (DataVersion **12**: attribution + persistent form + cached metadata; v9 polygon orientation; earlier passive markers/Sides/snapshot/IsClosed) |
 | 3 | Systems + undo | High | COMPLETE (+ public/private `SetWireframe`; canonical form counts; adaptive draft state; cancel quarantine) |
-| 4 | Networking | **Max** | COMPLETE (protocol **11**; appended cached metadata/form state and wireframe operation; prior public/private/chalk/polygon fields retained) |
-| 5 | Rendering | High | FUNCTIONAL and playtest-successful for behemoth interaction: exposed faces + adaptive motion wireframes + selected-scale cursor precision + background refinement/materialization; spatial Stage B/C remains optional for steady rendering |
-| 6 | UI | Medium | COMPLETE (21-tile catalog, favorites fold-out, stage-aware help, contextual 2D Fill / 3D Form icons, calculating glyphs) |
+| 4 | Networking | **Max** | COMPLETE (protocol **13**; appended attribution metadata and targeted who query; prior form/public/private/chalk/polygon fields retained) |
+| 5 | Rendering | High | FUNCTIONAL and playtest-successful for behemoth interaction: exposed faces + adaptive motion/sculpt wireframes + selected-scale cursor precision + background refinement/materialization; spatial Stage B/C remains optional for steady rendering |
+| 6 | UI | Medium | COMPLETE (21-tile catalog, favorites fold-out, stage-aware help, fixed action HUD, contextual shape/setting display, calculating dots) |
 | 7 | Integration | High | COMPLETE (+ CTRL/SHIFT stage modifiers, 2/3/4-click routing; + F4 authority, private persistence/commands, mixed-mode HUD) |
 
 Namespaces match folders: `Layout`, `Layout.Guide`, `Layout.Shapes`, `Layout.Systems`, `Layout.Network`,
@@ -330,8 +335,8 @@ the scale-icon/tile-proportion calls; Session-9 adds the regime split, triangle'
 no-break-gesture for Right/Isosceles/Square, rectangle corners as markers, magenta division color, the
 per-keystroke divisions field; Session-8's list still stands. Full list + rationale in `TODO.md`.
 
-**Open — real-play agenda:** collect v0.3.8 field reports on persistent form switching, oversized
-Cylinder/Cone/Box placement, giant cancel, and weighted placement audio. Revisit performance only from a
+**Open — real-play agenda:** collect v0.3.21 field reports on HUD state transitions, `/layout who`, large
+sculpt settle/cancel, tapered-rim flare, and active projection switching. Revisit performance only from a
 measured remaining bottleneck. The v0.2.35 public/private multiplayer release check passed, so broader
 regression coverage can follow field reports rather than block release.
 
@@ -339,11 +344,11 @@ regression coverage can follow field reports rather than block release.
 
 ## 7. Next session — start here
 
-**The current checkpoint is v0.3.8 built and packaged locally; `main` was last pushed through v0.2.47.**
-Read `SESSION_21.md` first for current large-guide behavior, then `SESSION_14.md` for the optional mesh plan.
+**The current checkpoint is v0.3.21 built, packaged, documented, and pushed on `main`.**
+Read `SESSION_22.md` first for current HUD/sculpt behavior, then `SESSION_21.md` and `SESSION_14.md` for the optional mesh plan.
 
-1. **Field-test v0.3.8.** Exercise Shell↔Wireframe both before and after placement, polygon-corner wire counts,
-   oversized Cylinder/Cone/Box Shell placement, giant-grab right-click cancel, and sound heft across sizes.
+1. **Field-test v0.3.21.** Exercise every HUD transition, public/private `/layout who`, selected Edit settings,
+   large sculpt settle/cancel, tapered-rim SHIFT flare, and Surface↔Volumetric switching mid-draft.
 2. **Performance only from evidence.** If calculate-first materialization still leaves background pressure,
    revisit the deferred cancellable producer/consumer pipeline in `SESSION_21.md`. If steady rendering is the
    issue, use Stage B/C from `SESSION_14.md`; these solve different bottlenecks.

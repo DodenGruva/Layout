@@ -2,12 +2,12 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-20 against the local built/package checkpoint
-> **v0.3.8** (`main` was last pushed through v0.2.47). Where this file and the code disagree, **the code wins** — treat this as a map, then
+> and the performance-relevant mechanics. Updated 2026-07-21 against the built/package/pushed checkpoint
+> **v0.3.21**. Where this file and the code disagree, **the code wins** — treat this as a map, then
 > read the `.cs` files it points at.
 >
-> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.8),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/21.md` (per-session
+> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.9),
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/22.md` (per-session
 > history), `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
 
@@ -21,17 +21,18 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.3.8 built and packaged locally; `main` was last pushed through v0.2.47. The v0.3 arc is
+- **Status:** v0.3.21 built, packaged, documented, and pushed on `main`. The v0.3 arc is
   playtest-driven and successful: behemoth drafting stays responsive, selected-scale detail materializes
   after settling, giant grabs/cancels no longer rebuild catastrophically, and persistent Shell/Wireframe
-  mode works. v0.3.8 removes the remaining Cylinder/Cone/Box scan-wall and adds dedicated form icons.
+  mode works. The HUD is fixed-size and action-aware; guide attribution is available through `/layout who`;
+  large sculpted Shells settle into selected-scale detail; active projection switches preserve anchors.
   F4 (client-only / private guides) and F5 (**the Chalking Kit**: finite chalk
   durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
   **mesh pass Stage A (exposed-face meshing) has shipped** and filled 3D interiors are retired. Volumes may
   persist as their hollow **Shell** or canonical structural **Wireframe**.
 - **Size:** **74 source files** (`src/`), ~one asset tree, one `.csproj`.
-- **Data schema:** **DataVersion 11** (`IsWireframe`; v10 cached display/count/dimensions; v9 flat-side alignment).
-- **Wire protocol:** **11** (persistent wireframe state/operation; v10 cached placed-guide metadata;
+- **Data schema:** **DataVersion 12** (creator/Last Sculptor attribution; v11 `IsWireframe`; v10 cached metadata).
+- **Wire protocol:** **13** (`/layout who` query; v12 attribution metadata; v11 wireframe state;
   protocol 9 polygon orientation; earlier append-only fields remain compatible with matching builds).
 - **Catalog:** **15 shape types**, shown as **21 picker tiles** — a full 2D family plus an eight-volume 3D family.
 - **The tool:** the **Chalking Kit** — 32-chalk durability (2D −1 / 3D −2, completed placements only; no
@@ -47,10 +48,10 @@ guides on servers without Layout and, when server policy permits, alongside publ
 - **Closed in v0.2.36:** B-S9-1 adjacent-lock targeting. Exact rendered-cell ownership prevents a formerly
   locked marker from shadowing its neighbor. Two unrelated verification debts remain: xskills itself and a
   VS 1.22.0/1.22.1 smoke test.
-- **Current performance state:** interaction-side large-guide work was rebuilt in v0.3.0–v0.3.8. Motion
+- **Current performance state:** interaction-side large-guide work was rebuilt in v0.3.0–v0.3.15. Motion
   uses bounded/adaptive wireframes, the cursor keeps selected-scale precision, exact shells calculate once
-  after settling and materialize in batches, and placed hover uses cached metadata. Stage B/C remain only
-  for a future settled-rendering bottleneck. See §9 and `dev/SESSION_21.md`.
+  after settling and materialize in batches during drafting and large sculpting, and placed hover uses cached
+  metadata. Stage B/C remain only for a future settled-rendering bottleneck. See §9 and `dev/SESSION_21.md`–`SESSION_22.md`.
 - **Design philosophy (standing rule): correctness over performance** unless told otherwise. Several
   deliberate un-optimized paths exist by choice; see §9.
 
@@ -83,10 +84,10 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── HANDOFF.md                  ← THIS FILE
 ├── Layout.csproj  modinfo.json  modicon.png
 ├── assets/layout/              ← itemtypes, textures, lang
-├── src/                        ← all 70 .cs files (see §6)
+├── src/                        ← all 74 .cs files (see §6)
 └── dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
-    ├── SESSION_9.md … SESSION_18.md  SESSION_19.md  SESSION_20.md  SESSION_21.md
+    ├── SESSION_9.md … SESSION_18.md  SESSION_19.md  SESSION_20.md  SESSION_21.md  SESSION_22.md
     ├── CHANGELOG_ARCHITECTURE.md   ← ARCHITECTURE.md's per-revision deltas (archive)
     ├── PLAN_CLIENT_ONLY.md  PLAN_CHALKING_KIT.md  BUILD_INSTRUCTIONS.txt
 ```
@@ -112,7 +113,9 @@ in a versioned subfolder).
   selection/collision/entity backing), so they never interfere with the blocks underneath.
 - **Three tool modes** (`ToolMode`, client-only, never wired): **Create** owns ALL geometry (place, grab &
   reshape, insert, lock; right-click = cancel / lock-in-place). **Edit** is settings-only: left-click
-  **selects** a guide and the GUI's setting rows then act on THAT guide (no reshaping). **Delete** dispels.
+  **selects** a guide and the GUI's setting rows then act on THAT guide (no reshaping); right-click deselects.
+  **Delete** dispels. The fixed HUD names the current action, uses a contextual shape tile, and shows exact
+  settings/dimensions/count/cap without resizing. `/layout who` reports Creator and Last Sculptor on demand.
 - **Placement** is **two clicks for most shapes**, with deliberately-reopened exceptions: free/right/
   isosceles triangles and Cylinder/Polygonal Prism/Cone/Box take **three clicks** (base + height);
   Tapered Cylinder and Tapered Polygonal Prism take a **fourth** click for the top radius; the
@@ -202,7 +205,7 @@ mode decides only where a new guide is created.
 - **Voxels are NEVER stored.** A guide is fully defined by control points + settings; the voxel set is always
   **derived on demand** by the shape layer. Caps are enforced by *counting via the shape*, never a field.
 - **Pinned, append-only enums** anywhere a value crosses wire or disk. **Default-driven migration** via
-  `DataVersion` (11: `IsWireframe`; 10: cached display/count/dimensions; 9: `FlatSideAligned`; 8:
+  `DataVersion` (12: creator/Last Sculptor attribution; 11: `IsWireframe`; 10: cached display/count/dimensions; 9: `FlatSideAligned`; 8:
   `ControlPoint.IsLockMarker`; 7: `IsClosed`; 6: `Sides` + the never-wired as-placed spring-back snapshot; 5: `Divisions`;
   4: `Constraint`/`ShapePlaneAxis`; 3: `CreatorUid`; 2: `Projection`/`Plane`/`IsFilled`).
 - **Save format ≠ wire format.** JSON (Newtonsoft, custom `Vec3d` converter) is the **save**; protobuf DTOs
@@ -420,8 +423,8 @@ cell; an adjacent first-hit body cell now receives a distinct passive marker. Hu
    (a) the hard 32-chalk ceiling is verified by an offline harness but **never tested against xskills
    itself**; (b) **1.22.x support is declared, not tested** — the code was built against 1.22.3, so nothing
    confirms every API used exists in 1.22.0.
-2. **Collect v0.3.8 field reports.** Focus on Shell↔Wireframe edits, oversized Cylinder/Cone/Box placement,
-   giant-grab cancel, and whether the size-weighted placement sound needs tuning.
+2. **Collect v0.3.21 field reports.** Focus on HUD action transitions, `/layout who`, selected Edit settings,
+   large sculpt settle/cancel, tapered-rim flare, and active Surface↔Volumetric switching.
 3. **Mesh pass Stage B/C** (§9 / `SESSION_14.md`) only if settled rendering—not drafting calculation—becomes
    the next measured bottleneck. Preserve true selected-scale semantics.
 4. **Keep the broader multiplayer matrix as future regression coverage.** The v0.2.35 public/private pass
@@ -445,12 +448,13 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   `GuideShapeType` / `ShapeConstraint` / projection enums, which are pinned append-only).
 - **`UndoManager` folder ≠ namespace:** it lives in `src/Systems/` but is `Layout.Systems.UndoManager` —
   the one file where folder and namespace diverge.
-- **The Session docs are historical.** `SESSION_9`…`SESSION_21.md` are point-in-time narratives (SESSION_12
+- **The Session docs are historical.** `SESSION_9`…`SESSION_22.md` are point-in-time narratives (SESSION_12
   covers F4 through v0.1.45; SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 mesh handoff;
   SESSION_15 is the v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc;
   SESSION_17 is the v0.2.22–v0.2.23 seven-item backlog; SESSION_18/19 cover the Tapered Cylinder and dust;
   SESSION_20 covers v0.2.36–v0.2.47 polygonal volumes/modifiers; SESSION_21 covers the v0.3.0–v0.3.8
-  adaptive large-guide and persistent-wireframe arc). For
+  adaptive large-guide and persistent-wireframe arc; SESSION_22 covers the v0.3.9–v0.3.21 HUD,
+  attribution, sculpting-parity, and projection-transition arc). For
   current state, trust `HANDOFF.md` / `ARCHITECTURE.md` / the code, not a mid-session checklist inside a
   session record.
 - **`dev/BUILD_INSTRUCTIONS.txt`** is the original v0.1.0 first-build doc; its build/run steps are still

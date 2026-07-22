@@ -304,7 +304,22 @@ namespace Layout
                     .WithDescription("Dispel private guides locally.")
                     .WithArgs(parsers.Word("all-or-radius"))
                     .HandleWith(OnClientDispelCommand)
+                .EndSubCommand()
+                .BeginSubCommand("who")
+                    .WithDescription("Show the creator and last sculptor of your selected or targeted guide.")
+                    .HandleWith(OnClientWhoCommand)
                 .EndSubCommand();
+        }
+
+        private TextCommandResult OnClientWhoCommand(TextCommandCallingArgs args)
+        {
+            if (Controller == null)
+                return TextCommandResult.Error("Enter a world before inspecting a Layout guide.");
+
+            string description = Controller.DescribeCurrentGuide(out bool found);
+            return found
+                ? TextCommandResult.Success(description)
+                : TextCommandResult.Error(description);
         }
 
         private TextCommandResult OnClientDispelCommand(TextCommandCallingArgs args)

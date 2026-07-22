@@ -201,6 +201,11 @@ namespace Layout.Network
                     .RequiresPrivilege(Privilege.chat)
                     .HandleWith(OnPublicModeCommand)
                 .EndSubCommand()
+                .BeginSubCommand("who")
+                    .WithDescription("Show the creator and last sculptor of your selected or targeted guide.")
+                    .RequiresPrivilege(Privilege.chat)
+                    .HandleWith(OnWhoCommand)
+                .EndSubCommand()
                 .BeginSubCommand("client")
                     .WithDescription("Private-guide publication commands.")
                     .RequiresPrivilege(Privilege.chat)
@@ -211,6 +216,15 @@ namespace Layout.Network
                         .HandleWith(OnClientPushCommand)
                     .EndSubCommand()
                 .EndSubCommand();
+        }
+
+        private TextCommandResult OnWhoCommand(TextCommandCallingArgs args)
+        {
+            if (args.Caller.Player is not IServerPlayer player)
+                return TextCommandResult.Error("This command must be run by a player.");
+
+            _channel.SendPacket(new GuideWhoQueryPacket(), player);
+            return TextCommandResult.Success();
         }
 
         private TextCommandResult OnPrivateModeCommand(TextCommandCallingArgs args)
@@ -436,6 +450,9 @@ namespace Layout.Network
 
                     candidate.Id = Guid.NewGuid();
                     candidate.CreatorUid = player.PlayerUID;
+                    candidate.CreatorName = PlayerDisplayName(player);
+                    candidate.LastSculptorUid = player.PlayerUID;
+                    candidate.LastSculptorName = candidate.CreatorName;
                     candidate.DataVersion = GuideData.CurrentDataVersion;
                     GuideOperationResult result = _guides.RestoreGuide(candidate);
                     if (!result.IsSuccess)
@@ -503,7 +520,8 @@ namespace Layout.Network
             }
 
             GuideOperationResult result = _guides.CreateGuide(
-                start, end, settings, shapeType, constraint, planeAxis, fromPlayer.PlayerUID,
+                start, end, settings, shapeType, constraint, planeAxis,
+                fromPlayer.PlayerUID, PlayerDisplayName(fromPlayer),
                 p.Apex?.ToVec3d(), p.Inverted, p.Sides, chain, p.Closed, p.Rim?.ToVec3d(),
                 p.FlatSideAligned);
             switch (result.Status)
@@ -704,6 +722,7 @@ namespace Layout.Network
         {
             Guid id = p.GuideId();
             string uid = fromPlayer.PlayerUID;
+            bool visibleChange = false;
 
             // Commit the drag as a single undo entry: origin -> final for each point that actually moved.
             if (_drags.TryGetValue(uid, out DragSession session) && session.GuideId == id)
@@ -738,6 +757,7 @@ namespace Layout.Network
                     {
                         bool promotedMarker = HasPromotedMarker(
                             session.OriginPoints, g.ControlPoints);
+                        visibleChange = promotedMarker || session.OriginConstraint != g.Constraint;
                         if (promotedMarker)
                         {
                             _undo.Record(uid, new SpringBackCommand(
@@ -751,12 +771,19 @@ namespace Layout.Network
                             if (idx < 0 || idx >= g.ControlPoints.Count) continue;
                             Vec3d current = g.ControlPoints[idx].WorldPosition;
                             if (!SamePosition(current, origin))
+                            {
+                                visibleChange = true;
                                 _undo.Record(uid, new MoveControlPointCommand(id, idx, origin, current));
+                            }
                         }
                     }
+                    visibleChange |= session.OriginConstraint != g.Constraint;
                 }
                 _drags.Remove(uid);
             }
+
+            if (visibleChange && _guides.TryGetGuide(id, out GuideData changedGuide))
+                StampLastSculptor(fromPlayer, changedGuide);
 
             if (_locks.ReleaseLock(id, uid))
                 _channel.BroadcastPacket(new GuideLockStatePacket(id, null));
@@ -1017,7 +1044,10 @@ namespace Layout.Network
                     _undo.Record(uid, new LockPointCommand(id, idx, false, true));
                     // One full-state broadcast carries the new point AND its locked flag together.
                     if (_guides.TryGetGuide(id, out GuideData withLock))
+                    {
+                        StampLastSculptor(fromPlayer, withLock, broadcastIncremental: false);
                         _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(withLock)));
+                    }
                 }
                 else
                 {
@@ -1113,6 +1143,7 @@ namespace Layout.Network
             if (result.Status == GuideOpStatus.Success)
             {
                 _undo.Record(fromPlayer.PlayerUID, new HideGuideCommand(id, oldHidden, p.Hidden));
+                if (oldHidden != result.Guide.IsHidden) StampLastSculptor(fromPlayer, result.Guide);
                 _channel.BroadcastPacket(new GuideHidePacket(id, p.Hidden));
             }
             else HandleNonSuccessToggle(fromPlayer, id, result, g);
@@ -1134,6 +1165,7 @@ namespace Layout.Network
                 if (removed.Status == GuideOpStatus.Success)
                 {
                     _undo.Record(fromPlayer.PlayerUID, command);
+                    StampLastSculptor(fromPlayer, removed.Guide, broadcastIncremental: false);
                     _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(removed.Guide)));
                 }
                 else HandleNonSuccessToggle(fromPlayer, id, removed, g);
@@ -1145,6 +1177,8 @@ namespace Layout.Network
             if (result.Status == GuideOpStatus.Success)
             {
                 _undo.Record(fromPlayer.PlayerUID, new LockPointCommand(id, p.Index, before, p.Locked));
+                if (before != result.Guide.ControlPoints[p.Index].IsLocked)
+                    StampLastSculptor(fromPlayer, result.Guide);
                 _channel.BroadcastPacket(new GuideLockPointPacket(id, p.Index, p.Locked));
             }
             else HandleNonSuccessToggle(fromPlayer, id, result, g);
@@ -1162,6 +1196,7 @@ namespace Layout.Network
             if (result.Status == GuideOpStatus.Success)
             {
                 _undo.Record(fromPlayer.PlayerUID, new RescaleGuideCommand(id, oldScale, p.Scale));
+                if (oldScale != result.Guide.VoxelScale) StampLastSculptor(fromPlayer, result.Guide);
                 _channel.BroadcastPacket(new GuideRescalePacket(id, p.Scale));
             }
             else HandleNonSuccessToggle(fromPlayer, id, result, g);
@@ -1195,6 +1230,10 @@ namespace Layout.Network
             {
                 _undo.Record(fromPlayer.PlayerUID,
                     new SetProjectionCommand(id, oldMode, oldPlane, newMode, newPlane, pointsBefore));
+                bool changed = oldMode != result.Guide.Projection
+                    || oldPlane.FlattenedAxis != result.Guide.Plane.FlattenedAxis
+                    || oldPlane.PlaneOffset != result.Guide.Plane.PlaneOffset;
+                if (changed) StampLastSculptor(fromPlayer, result.Guide, broadcastIncremental: !bakes);
                 if (bakes)
                     _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
                 else
@@ -1215,6 +1254,7 @@ namespace Layout.Network
             if (result.Status == GuideOpStatus.Success)
             {
                 _undo.Record(fromPlayer.PlayerUID, new SetFilledCommand(id, oldFilled, p.Filled));
+                if (oldFilled != result.Guide.IsFilled) StampLastSculptor(fromPlayer, result.Guide);
                 _channel.BroadcastPacket(new GuideSetFilledPacket(id, p.Filled));
             }
             else HandleNonSuccessToggle(fromPlayer, id, result, g);
@@ -1237,6 +1277,7 @@ namespace Layout.Network
             {
                 _undo.Record(fromPlayer.PlayerUID,
                     new SetWireframeCommand(id, oldWireframe, result.Guide.IsWireframe));
+                if (oldWireframe != result.Guide.IsWireframe) StampLastSculptor(fromPlayer, result.Guide);
                 _channel.BroadcastPacket(new GuideSetWireframePacket(id, result.Guide.IsWireframe));
             }
             else HandleNonSuccessToggle(fromPlayer, id, result, g);
@@ -1254,6 +1295,7 @@ namespace Layout.Network
             if (result.Status == GuideOpStatus.Success)
             {
                 _undo.Record(fromPlayer.PlayerUID, new SetDivisionsCommand(id, oldDivisions, result.Guide.Divisions));
+                if (oldDivisions != result.Guide.Divisions) StampLastSculptor(fromPlayer, result.Guide);
                 _channel.BroadcastPacket(new GuideSetDivisionsPacket(id, result.Guide.Divisions));
             }
             else HandleNonSuccessToggle(fromPlayer, id, result, g);
@@ -1273,6 +1315,7 @@ namespace Layout.Network
                 if (result.Guide.Sides != oldSides)
                 {
                     _undo.Record(fromPlayer.PlayerUID, new SetSidesCommand(id, oldSides, result.Guide.Sides));
+                    StampLastSculptor(fromPlayer, result.Guide);
                     _channel.BroadcastPacket(new GuideSetSidesPacket(id, result.Guide.Sides));
                 }
             }
@@ -1307,6 +1350,7 @@ namespace Layout.Network
                 _undo.Record(fromPlayer.PlayerUID, new SpringBackCommand(
                     id, beforeConstraint, beforePoints,
                     result.Guide.Constraint, result.Guide.ControlPoints));
+                StampLastSculptor(fromPlayer, result.Guide, broadcastIncremental: false);
                 _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
             }
             else HandleNonSuccessToggle(fromPlayer, id, result, g);
@@ -1337,7 +1381,10 @@ namespace Layout.Network
                     if (affected == null) break;
                     // One rule for every command type: present guide -> full state; absent -> delete.
                     if (_guides.HasGuide(affected.Id))
+                    {
+                        StampLastSculptor(fromPlayer, affected, broadcastIncremental: false);
                         _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(affected)));
+                    }
                     else
                         _channel.BroadcastPacket(new GuideDeletePacket(affected.Id));
                     break;
@@ -1374,6 +1421,17 @@ namespace Layout.Network
         // ==========================================================================================
         //  Helpers
         // ==========================================================================================
+
+        private void StampLastSculptor(IServerPlayer player, GuideData guide, bool broadcastIncremental = true)
+        {
+            if (player == null || guide == null) return;
+            _guides.StampLastSculptor(guide.Id, player.PlayerUID, PlayerDisplayName(player));
+            if (broadcastIncremental)
+                _channel.BroadcastPacket(new GuideHudMetadataPacket(guide));
+        }
+
+        private static string PlayerDisplayName(IServerPlayer player) =>
+            string.IsNullOrWhiteSpace(player?.PlayerName) ? "Unknown" : player.PlayerName.Trim();
 
         // Privilege guard (Module 7): true = reject. Applied at the top of every state-changing handler;
         // deliberately NOT applied to cleanup paths (release, draft-cancel) so a revoked privilege can never

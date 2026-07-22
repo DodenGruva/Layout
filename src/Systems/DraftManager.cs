@@ -166,7 +166,40 @@ namespace Layout.Systems
         // --- Tool state: projection + plane override --------------------------------------------
 
         public ProjectionMode Projection => _projection;
-        public void SetProjection(ProjectionMode projection) => _projection = projection;
+        public void SetProjection(ProjectionMode projection)
+        {
+            if (_projection == projection) return;
+
+            // Surface anchors sit directly on the clicked face; volumetric anchors sit at the centre
+            // of the first voxel outside that face. Keep every point already placed in an active draft
+            // on the same coordinate convention as the live cursor when projection changes mid-draft.
+            // Without this translation, an Arch/Half-Circle's first anchor can share a cell with (or
+            // appear to be replaced by) the newly generated volumetric body.
+            if (_hasDraft)
+            {
+                double direction = _draftPlaneNegative ? -1.0 : 1.0;
+                double offset = direction * _scale / 32.0;
+                if (projection == ProjectionMode.Surface) offset = -offset;
+
+                ShiftDraftPoint(_draftStart, offset);
+                ShiftDraftPoint(_draftSecond, offset);
+                ShiftDraftPoint(_draftThird, offset);
+                foreach (Vec3d point in _draftChain) ShiftDraftPoint(point, offset);
+            }
+
+            _projection = projection;
+        }
+
+        private void ShiftDraftPoint(Vec3d point, double offset)
+        {
+            if (point == null) return;
+            switch (_draftPlaneAxis)
+            {
+                case PlaneAxis.X: point.X += offset; break;
+                case PlaneAxis.Y: point.Y += offset; break;
+                case PlaneAxis.Z: point.Z += offset; break;
+            }
+        }
 
         /// <summary>The forced plane orientation in Surface mode, or null to auto-select from the clicked face.</summary>
         public PlaneAxis? PlaneOverride => _planeOverride;

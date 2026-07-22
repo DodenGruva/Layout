@@ -62,6 +62,7 @@ namespace Layout.Systems
         private const int MaterializationMinimumBatches = 8;
         private const int MaterializationMaximumBatches = 64;
         private const int MaterializationUploadIntervalMs = 30;
+        private const int GrabSettleDelayMs = 180;
 
         // Remote draft-anchor marker: a small blue cube (a fraction of a block) centred on the anchor.
         private const int DraftMarkerScale = 4;                          // 1/16 units → 0.25-block cube
@@ -110,6 +111,20 @@ namespace Layout.Systems
         private readonly List<MeshRef> _draftMaterializationMeshes = new List<MeshRef>();
         private Queue<MeshData> _pendingDraftMaterialization;
         private long _lastDraftMaterializationUploadMs;
+
+        // Large-guide sculpting follows the same motion/settle rhythm as initial placement: a cheap
+        // wireframe while the handle moves, then an exact selected-scale shell built off-thread and
+        // revealed in bounded batches after the pose rests.
+        private readonly object _grabWorkGate = new object();
+        private bool _grabWorkBusy;
+        private int _grabGeneration;
+        private ulong _grabPoseFingerprint;
+        private ulong _grabRefinedFingerprint;
+        private long _grabLastMotionMs;
+        private Guid _grabMaterializationGuide = Guid.Empty;
+        private Vec3d _grabMaterializationOrigin;
+        private Queue<MeshData> _pendingGrabMaterialization;
+        private long _lastGrabMaterializationUploadMs;
 
         public event EventHandler<DraftPreviewCompletedEventArgs> DraftPreviewCompleted;
 
@@ -192,6 +207,8 @@ namespace Layout.Systems
             double frameMs = Math.Max(1.0, Math.Min(250.0, deltaTime * 1000.0));
             _smoothedFrameMilliseconds += (frameMs - _smoothedFrameMilliseconds) * 0.08;
             AdvanceDraftMaterialization();
+            AdvanceGrabMaterialization();
+            RequestSettledGrabRefinement();
             if (_guideMeshes.Count == 0 && _remoteAnchors.Count == 0 && _draftPreviewMesh == null
                 && _draftPrecisionMeshes.Count == 0 && _draftMaterializationMeshes.Count == 0) return;
 
@@ -361,6 +378,7 @@ namespace Layout.Systems
             Guid previous = _grabbedGuide;
             if (previous != guideId)
             {
+                ResetGrabRefinementState();
                 _grabAdaptiveScale = 0;
                 _grabHealthyUpdates = 0;
                 _grabBaselineFrameMilliseconds = Math.Max(1.0, _smoothedFrameMilliseconds);
@@ -382,6 +400,7 @@ namespace Layout.Systems
             _grabAdaptiveScale = 0;
             _grabHealthyUpdates = 0;
             _grabExtent = GuideExtent.Empty;
+            ResetGrabRefinementState();
             RebuildGuideById(was);
             DeleteGrabMeshes(was);
         }
@@ -400,6 +419,7 @@ namespace Layout.Systems
             _grabAdaptiveScale = 0;
             _grabHealthyUpdates = 0;
             _grabExtent = GuideExtent.Empty;
+            ResetGrabRefinementState();
 
             bool canRestoreRetained = _guideMeshes.TryGetValue(was, out GuideMesh mesh)
                 && mesh.Ref != null && mesh.GrabRef != null;
@@ -429,6 +449,21 @@ namespace Layout.Systems
             public IGuideShape Shape;
             public List<VoxelPosition> Voxels;
             public List<MeshData> MaterializationMeshes;
+            public Vec3d Origin;
+            public Exception Error;
+        }
+
+        private sealed class GrabBuildResult
+        {
+            public int Generation;
+            public ulong Fingerprint;
+            public Guid GuideId;
+            public int GrabbedIndex;
+            public GuideData Guide;
+            public IGuideShape Shape;
+            public List<VoxelPosition> Voxels;
+            public List<MeshData> MaterializationMeshes;
+            public GuideExtent Extent;
             public Vec3d Origin;
             public Exception Error;
         }
@@ -1432,6 +1467,17 @@ namespace Layout.Systems
             bool locallyGrabbed = guide.Id == _grabbedGuide;
             if (locallyGrabbed)
             {
+                ulong poseFingerprint = RenderFingerprint(guide);
+                if (poseFingerprint != _grabPoseFingerprint)
+                {
+                    _grabGeneration++;
+                    _grabPoseFingerprint = poseFingerprint;
+                    _grabRefinedFingerprint = 0;
+                    _grabLastMotionMs = _capi.World?.ElapsedMilliseconds ?? 0;
+                    _pendingGrabMaterialization = null;
+                    _grabMaterializationGuide = Guid.Empty;
+                    _lastGrabMaterializationUploadMs = 0;
+                }
                 _grabExtent = GuideMeshBuilder.MeasureShapeExtent(shape, guide.VoxelScale);
                 if (guide.CachedVoxelCount > PreviewFullResVoxelCap)
                 {
@@ -1618,6 +1664,267 @@ namespace Layout.Systems
             _grabHealthyUpdates = 0;
             _grabAdaptiveScale = NextFinerScale(
                 _grabAdaptiveScale > 0 ? _grabAdaptiveScale : selectedScale, selectedScale);
+        }
+
+        private void RequestSettledGrabRefinement()
+        {
+            if (_disposed || _grabbedGuide == Guid.Empty || _grabPoseFingerprint == 0
+                || _grabRefinedFingerprint == _grabPoseFingerprint
+                || _pendingGrabMaterialization != null) return;
+            long now = _capi.World?.ElapsedMilliseconds ?? 0;
+            if (now - _grabLastMotionMs < GrabSettleDelayMs) return;
+            if (!_network.Guides.TryGetValue(_grabbedGuide, out GuideData live) || live == null
+                || live.CachedVoxelCount <= PreviewFullResVoxelCap) return;
+
+            lock (_grabWorkGate)
+            {
+                if (_grabWorkBusy) return;
+                _grabWorkBusy = true;
+            }
+
+            int generation = _grabGeneration;
+            ulong fingerprint = _grabPoseFingerprint;
+            int grabbedIndex = _grabbedIndex;
+            GuideData snapshot = live.DeepClone();
+            bool privateAnchors = _network.ServerLayoutAvailable && _network.IsLocalGuide(live.Id);
+
+            Task.Run(() => BuildGrabRefinement(
+                    snapshot, grabbedIndex, generation, fingerprint, privateAnchors))
+                .ContinueWith(task =>
+                {
+                    GrabBuildResult result = task.Status == TaskStatus.RanToCompletion
+                        ? task.Result
+                        : new GrabBuildResult
+                        {
+                            Generation = generation,
+                            Fingerprint = fingerprint,
+                            GuideId = snapshot.Id,
+                            GrabbedIndex = grabbedIndex,
+                            Guide = snapshot,
+                            Error = task.Exception?.GetBaseException()
+                        };
+                    try
+                    {
+                        _capi.Event.EnqueueMainThreadTask(
+                            () => FinishGrabRefinement(result), "layout-grab-refinement");
+                    }
+                    catch
+                    {
+                        lock (_grabWorkGate) _grabWorkBusy = false;
+                    }
+                });
+        }
+
+        private static GrabBuildResult BuildGrabRefinement(
+            GuideData guide, int grabbedIndex, int generation, ulong fingerprint, bool privateAnchors)
+        {
+            var result = new GrabBuildResult
+            {
+                Generation = generation,
+                Fingerprint = fingerprint,
+                GuideId = guide.Id,
+                GrabbedIndex = grabbedIndex,
+                Guide = guide
+            };
+            try
+            {
+                IGuideShape shape = ShapeFactory.Adopt(guide);
+                shape.RecalculatePhantomPoints();
+                int scale = guide.VoxelScale;
+                List<VoxelPosition> voxels = guide.IsWireframe
+                    ? ShapeWireframe.GetVoxelPositions(shape, scale)
+                    : shape.GetVoxelPositions(scale, guide.IsFilled);
+                if (guide.Divisions > 1)
+                    DivisionMarks.Apply(voxels, shape.SampleCurve(128), guide.Divisions, scale);
+
+                result.Shape = shape;
+                result.Extent = GuideMeshBuilder.MeasureExtent(voxels, scale);
+                result.Origin = ComputeOrigin(shape.ControlPoints);
+                if (guide.Projection == ProjectionMode.Volumetric)
+                {
+                    result.MaterializationMeshes = BuildGrabMaterializationMeshes(
+                        guide, shape, voxels, grabbedIndex, result.Origin, privateAnchors);
+                }
+                else
+                {
+                    result.Voxels = voxels;
+                }
+            }
+            catch (Exception e)
+            {
+                result.Error = e;
+            }
+            return result;
+        }
+
+        private static List<MeshData> BuildGrabMaterializationMeshes(
+            GuideData guide, IGuideShape shape, List<VoxelPosition> voxels,
+            int grabbedIndex, Vec3d origin, bool privateAnchors)
+        {
+            int batchCount = Math.Max(MaterializationMinimumBatches,
+                (voxels.Count + MaterializationTargetVoxelsPerBatch - 1)
+                    / MaterializationTargetVoxelsPerBatch);
+            batchCount = Math.Min(MaterializationMaximumBatches, Math.Max(1, batchCount));
+            var batches = new List<VoxelPosition>[batchCount];
+            for (int i = 0; i < batchCount; i++) batches[i] = new List<VoxelPosition>();
+
+            Vec3d grabbed = grabbedIndex >= 0 && grabbedIndex < shape.ControlPoints.Count
+                ? shape.ControlPoints[grabbedIndex]?.WorldPosition : null;
+            double aimRadius = guide.VoxelScale * 4.0 / 16.0;
+            double aimRadius2 = aimRadius * aimRadius;
+            double half = guide.VoxelScale / 32.0;
+            for (int i = 0; i < voxels.Count; i++)
+            {
+                VoxelPosition voxel = voxels[i];
+                bool nearGrab = false;
+                if (grabbed != null)
+                {
+                    double dx = voxel.X / 16.0 + half - grabbed.X;
+                    double dy = voxel.Y / 16.0 + half - grabbed.Y;
+                    double dz = voxel.Z / 16.0 + half - grabbed.Z;
+                    nearGrab = dx * dx + dy * dy + dz * dz <= aimRadius2;
+                }
+                int bucket = voxel.Type != VoxelRenderType.Normal || nearGrab
+                    ? 0
+                    : (int)(MaterializationHash(voxel.X, voxel.Y, voxel.Z) % (uint)batchCount);
+                batches[bucket].Add(voxel);
+            }
+
+            var occupancy = new HashSet<(int, int, int)>(voxels.Count);
+            for (int i = 0; i < voxels.Count; i++)
+                occupancy.Add((voxels[i].X, voxels[i].Y, voxels[i].Z));
+
+            var meshes = new List<MeshData>(batchCount);
+            for (int i = 0; i < batches.Length; i++)
+            {
+                if (batches[i].Count == 0) continue;
+                var options = new GuideMeshOptions
+                {
+                    Scale = guide.VoxelScale,
+                    Mode = ProjectionMode.Volumetric,
+                    Plane = guide.Plane,
+                    Origin = origin,
+                    Hidden = guide.IsHidden,
+                    GrabbedPoint = grabbed,
+                    PrivateAnchors = privateAnchors,
+                    Occupancy = occupancy,
+                    IsNeighborSolid = (_, _, _) => false
+                };
+                AssignAnchors(shape.ControlPoints, options);
+                meshes.Add(GuideMeshBuilder.Build(batches[i], options));
+            }
+            return meshes;
+        }
+
+        private void FinishGrabRefinement(GrabBuildResult result)
+        {
+            lock (_grabWorkGate) _grabWorkBusy = false;
+            if (_disposed || result == null) return;
+            if (result.Error != null)
+            {
+                _capi.Logger.Warning("[Layout] Grab refinement failed: {0}", result.Error.Message);
+                return;
+            }
+            if (result.Generation != _grabGeneration || result.GuideId != _grabbedGuide
+                || result.Fingerprint != _grabPoseFingerprint) return;
+
+            _grabExtent = result.Extent;
+            if (result.MaterializationMeshes != null)
+            {
+                StartGrabMaterialization(result.GuideId, result.MaterializationMeshes, result.Origin);
+            }
+            else
+            {
+                List<VoxelPosition> voxels = result.Voxels ?? new List<VoxelPosition>();
+                int slabSide = 0;
+                voxels = FlattenToPlaneLayer(voxels, result.Guide.Plane,
+                    result.Guide.VoxelScale, out slabSide, out _);
+                Vec3d grabbed = result.GrabbedIndex >= 0
+                    && result.GrabbedIndex < result.Shape.ControlPoints.Count
+                    ? result.Shape.ControlPoints[result.GrabbedIndex]?.WorldPosition : null;
+                var options = new GuideMeshOptions
+                {
+                    Scale = result.Guide.VoxelScale,
+                    Mode = ProjectionMode.Volumetric,
+                    Plane = result.Guide.Plane,
+                    Origin = result.Origin,
+                    Hidden = result.Guide.IsHidden,
+                    PlaneInset = SurfacePlaneInset,
+                    SurfaceSlabThickness = SurfaceSlabThicknessWorld,
+                    SurfaceSlabSide = slabSide,
+                    GrabbedPoint = grabbed,
+                    PrivateAnchors = _network.ServerLayoutAvailable
+                        && _network.IsLocalGuide(result.GuideId),
+                    IsNeighborSolid = NeighborSolidProbe
+                };
+                AssignAnchors(result.Shape.ControlPoints, options);
+                UploadOrReplaceGrab(result.GuideId,
+                    GuideMeshBuilder.Build(voxels, options), result.Origin);
+            }
+            _grabRefinedFingerprint = result.Fingerprint;
+        }
+
+        private void StartGrabMaterialization(Guid guideId, List<MeshData> batches, Vec3d origin)
+        {
+            if (!_guideMeshes.TryGetValue(guideId, out GuideMesh mesh))
+            {
+                mesh = new GuideMesh();
+                _guideMeshes[guideId] = mesh;
+            }
+            DeleteGrabMeshes(mesh);
+            _grabMaterializationGuide = guideId;
+            _grabMaterializationOrigin = origin;
+            _pendingGrabMaterialization = new Queue<MeshData>(batches ?? new List<MeshData>());
+            _lastGrabMaterializationUploadMs = 0;
+            AdvanceGrabMaterialization(force: true);
+        }
+
+        private void AdvanceGrabMaterialization(bool force = false)
+        {
+            if (_pendingGrabMaterialization == null || _pendingGrabMaterialization.Count == 0)
+            {
+                _pendingGrabMaterialization = null;
+                return;
+            }
+            if (_grabMaterializationGuide == Guid.Empty
+                || _grabMaterializationGuide != _grabbedGuide
+                || !_guideMeshes.TryGetValue(_grabMaterializationGuide, out GuideMesh mesh))
+            {
+                _pendingGrabMaterialization = null;
+                return;
+            }
+
+            long now = _capi.World?.ElapsedMilliseconds ?? 0;
+            int interval = MaterializationUploadIntervalMs;
+            if (_smoothedFrameMilliseconds > 22.0) interval *= 2;
+            if (_smoothedFrameMilliseconds > 32.0) interval *= 2;
+            if (!force && _lastGrabMaterializationUploadMs != 0
+                && now - _lastGrabMaterializationUploadMs < interval) return;
+
+            MeshRef uploaded = _capi.Render.UploadMesh(_pendingGrabMaterialization.Dequeue());
+            if (mesh.GrabRef == null)
+            {
+                mesh.GrabRef = uploaded;
+                mesh.GrabOrigin = _grabMaterializationOrigin;
+            }
+            else
+            {
+                mesh.GrabAuxiliary.Add(uploaded);
+            }
+            _lastGrabMaterializationUploadMs = now;
+            if (_pendingGrabMaterialization.Count == 0) _pendingGrabMaterialization = null;
+        }
+
+        private void ResetGrabRefinementState()
+        {
+            _grabGeneration++;
+            _grabPoseFingerprint = 0;
+            _grabRefinedFingerprint = 0;
+            _grabLastMotionMs = 0;
+            _grabMaterializationGuide = Guid.Empty;
+            _grabMaterializationOrigin = null;
+            _pendingGrabMaterialization = null;
+            _lastGrabMaterializationUploadMs = 0;
         }
 
         private static int NextCoarserScale(int scale)

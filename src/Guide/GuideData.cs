@@ -60,8 +60,10 @@ namespace Layout.Guide
         /// <see cref="ControlPoint.IsLockMarker"/> role used by non-deforming Arch lock markers. Version 9
         /// added <see cref="FlatSideAligned"/> for polygon-based guides (default false preserves old guides).
         /// Version 10 stores lightweight display dimensions/count so merely hovering a large guide never
-        /// has to regenerate its voxel shell.
-        public const int CurrentDataVersion = 11;
+        /// has to regenerate its voxel shell. Version 11 added persistent Shell/Wireframe form. Version 12
+        /// adds friendly creator and last-sculptor attribution for the HUD; older records simply display
+        /// unknown attribution until a player next changes them.
+        public const int CurrentDataVersion = 12;
 
         /// <summary>The voxel edge lengths a guide may use, in 1/16-block units (1 → 1/16 block, 16 → 1 block).</summary>
         public static readonly int[] ValidVoxelScales = { 1, 2, 4, 8, 16 };
@@ -127,6 +129,17 @@ namespace Layout.Guide
         /// (clients have no use for it).
         /// </summary>
         public string CreatorUid { get; set; }
+
+        /// <summary>Friendly player-name snapshot captured when the guide was created. Unlike the UID this
+        /// is display-only, crosses the wire, and grants no ownership or permissions.</summary>
+        public string CreatorName { get; set; }
+
+        /// <summary>UID of the player responsible for the most recent committed, persistent visible change.
+        /// Server bookkeeping only; the friendly name is what clients receive and display.</summary>
+        public string LastSculptorUid { get; set; }
+
+        /// <summary>Friendly player-name snapshot for the guide's most recent visible mutation.</summary>
+        public string LastSculptorName { get; set; }
 
         /// <summary>
         /// The guide's spine. The SAME list instance the shape mutates (see type remarks). Never null.
@@ -194,6 +207,9 @@ namespace Layout.Guide
             IsWireframe = false;
             DisplayName = null;
             CachedVoxelCount = 0;
+            CreatorName = null;
+            LastSculptorUid = null;
+            LastSculptorName = null;
             DataVersion = 0;
         }
 
@@ -317,6 +333,9 @@ namespace Layout.Guide
                 CachedBlockWidth = CachedBlockWidth,
                 CachedBlockHeight = CachedBlockHeight,
                 CreatorUid = CreatorUid,
+                CreatorName = CreatorName,
+                LastSculptorUid = LastSculptorUid,
+                LastSculptorName = LastSculptorName,
                 DataVersion = DataVersion
             };
         }

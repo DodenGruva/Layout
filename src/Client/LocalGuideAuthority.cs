@@ -32,6 +32,7 @@ namespace Layout.Client
         private readonly Action<GuideSetWireframePacket> _applyWireframe;
         private readonly Action<GuideSetDivisionsPacket> _applyDivisions;
         private readonly Action<GuideSetSidesPacket> _applySides;
+        private readonly Action<GuideHudMetadataPacket> _applyHudMetadata;
         private readonly Action<GuideLockStatePacket> _applyLockState;
         private readonly Action<VoxelCapWarningPacket> _applyCapWarning;
 
@@ -54,6 +55,8 @@ namespace Layout.Client
         private DragSession _drag;
 
         private string PlayerUid => _capi.World?.Player?.PlayerUID ?? "layout-local-player";
+        private string PlayerName => string.IsNullOrWhiteSpace(_capi.World?.Player?.PlayerName)
+            ? "Unknown" : _capi.World.Player.PlayerName;
 
         public LocalGuideAuthority(
             ICoreClientAPI capi,
@@ -67,6 +70,7 @@ namespace Layout.Client
             Action<GuideSetWireframePacket> applyWireframe,
             Action<GuideSetDivisionsPacket> applyDivisions,
             Action<GuideSetSidesPacket> applySides,
+            Action<GuideHudMetadataPacket> applyHudMetadata,
             Action<GuideLockStatePacket> applyLockState,
             Action<VoxelCapWarningPacket> applyCapWarning)
         {
@@ -81,6 +85,7 @@ namespace Layout.Client
             _applyWireframe = applyWireframe ?? throw new ArgumentNullException(nameof(applyWireframe));
             _applyDivisions = applyDivisions ?? throw new ArgumentNullException(nameof(applyDivisions));
             _applySides = applySides ?? throw new ArgumentNullException(nameof(applySides));
+            _applyHudMetadata = applyHudMetadata ?? throw new ArgumentNullException(nameof(applyHudMetadata));
             _applyLockState = applyLockState ?? throw new ArgumentNullException(nameof(applyLockState));
             _applyCapWarning = applyCapWarning ?? throw new ArgumentNullException(nameof(applyCapWarning));
 
@@ -198,7 +203,7 @@ namespace Layout.Client
             Vec3d rim = null, bool flatSideAligned = false)
         {
             GuideOperationResult result = _guides.CreateGuide(
-                start, end, settings, shapeType, constraint, shapePlaneAxis, PlayerUid,
+                start, end, settings, shapeType, constraint, shapePlaneAxis, PlayerUid, PlayerName,
                 apex, inverted, sides, chain, closed, rim, flatSideAligned);
 
             if (result.IsSuccess)
@@ -231,6 +236,8 @@ namespace Layout.Client
         {
             if (_heldGuideId != id) return;
 
+            bool visibleChange = false;
+
             if (_drag != null && _drag.GuideId == id && _guides.TryGetGuide(id, out GuideData guide))
             {
                 bool removedInsert = false;
@@ -250,6 +257,7 @@ namespace Layout.Client
                 {
                     bool promotedMarker = HasPromotedMarker(
                         _drag.OriginPoints, guide.ControlPoints);
+                    visibleChange = promotedMarker || _drag.OriginConstraint != guide.Constraint;
                     if (promotedMarker)
                     {
                         _undo.Record(PlayerUid, new SpringBackCommand(
@@ -262,17 +270,25 @@ namespace Layout.Client
                         if (index < 0 || index >= guide.ControlPoints.Count) continue;
                         Vec3d current = guide.ControlPoints[index].WorldPosition;
                         if (!SamePosition(current, pair.Value))
+                        {
+                            visibleChange = true;
                             _undo.Record(PlayerUid,
                                 new MoveControlPointCommand(id, index, pair.Value, current));
+                        }
                     }
                 }
+                visibleChange |= _drag.OriginConstraint != guide.Constraint;
             }
 
             _drag = null;
             // The client preview writes directly to its mirror while the local GuideManager remains
             // authoritative. Always restate that authoritative state when the gesture ends, including
             // after an over-cap final move was rejected.
-            if (_guides.TryGetGuide(id, out GuideData authoritative)) ApplyFull(authoritative);
+            if (_guides.TryGetGuide(id, out GuideData authoritative))
+            {
+                if (visibleChange) StampLastSculptor(authoritative, publishIncremental: false);
+                ApplyFull(authoritative);
+            }
             ReleaseHeldGuide(id);
         }
 
@@ -410,6 +426,7 @@ namespace Layout.Client
                         _undo.Record(PlayerUid,
                             new InsertControlPointCommand(id, index, insertPosition, marker));
                         _undo.Record(PlayerUid, new LockPointCommand(id, index, false, true));
+                        StampLastSculptor(lockResult.Guide, publishIncremental: false);
                         ApplyFull(lockResult.Guide);
                     }
                     else HandleFailure(id, lockResult);
@@ -467,6 +484,7 @@ namespace Layout.Client
             if (result.IsSuccess)
             {
                 _undo.Record(PlayerUid, new HideGuideCommand(id, before, result.Guide.IsHidden));
+                if (before != result.Guide.IsHidden) StampLastSculptor(result.Guide);
                 _applyHide(new GuideHidePacket(id, result.Guide.IsHidden));
             }
             else HandleFailure(id, result);
@@ -485,6 +503,7 @@ namespace Layout.Client
                 if (removed.IsSuccess)
                 {
                     _undo.Record(PlayerUid, command);
+                    StampLastSculptor(removed.Guide, publishIncremental: false);
                     ApplyFull(removed.Guide);
                 }
                 else HandleFailure(id, removed);
@@ -496,6 +515,7 @@ namespace Layout.Client
             if (result.IsSuccess)
             {
                 _undo.Record(PlayerUid, new LockPointCommand(id, index, before, result.Guide.ControlPoints[index].IsLocked));
+                if (before != result.Guide.ControlPoints[index].IsLocked) StampLastSculptor(result.Guide);
                 _applyLockPoint(new GuideLockPointPacket(id, index, result.Guide.ControlPoints[index].IsLocked));
             }
             else HandleFailure(id, result);
@@ -509,6 +529,7 @@ namespace Layout.Client
             if (result.IsSuccess)
             {
                 _undo.Record(PlayerUid, new RescaleGuideCommand(id, before, result.Guide.VoxelScale));
+                if (before != result.Guide.VoxelScale) StampLastSculptor(result.Guide);
                 _applyRescale(new GuideRescalePacket(id, result.Guide.VoxelScale));
             }
             else HandleFailure(id, result);
@@ -527,6 +548,10 @@ namespace Layout.Client
             {
                 _undo.Record(PlayerUid,
                     new SetProjectionCommand(id, beforeMode, beforePlane, mode, plane, pointsBefore));
+                bool changed = beforeMode != result.Guide.Projection
+                    || beforePlane.FlattenedAxis != result.Guide.Plane.FlattenedAxis
+                    || beforePlane.PlaneOffset != result.Guide.Plane.PlaneOffset;
+                if (changed) StampLastSculptor(result.Guide, publishIncremental: !bakes);
                 if (bakes) ApplyFull(result.Guide);
                 else _applyProjection(new GuideSetProjectionPacket(
                     id, (int)result.Guide.Projection, (int)result.Guide.Plane.FlattenedAxis,
@@ -543,6 +568,7 @@ namespace Layout.Client
             if (result.IsSuccess)
             {
                 _undo.Record(PlayerUid, new SetFilledCommand(id, before, result.Guide.IsFilled));
+                if (before != result.Guide.IsFilled) StampLastSculptor(result.Guide);
                 _applyFilled(new GuideSetFilledPacket(id, result.Guide.IsFilled));
             }
             else HandleFailure(id, result);
@@ -556,6 +582,7 @@ namespace Layout.Client
             if (result.IsSuccess)
             {
                 _undo.Record(PlayerUid, new SetWireframeCommand(id, before, result.Guide.IsWireframe));
+                if (before != result.Guide.IsWireframe) StampLastSculptor(result.Guide);
                 _applyWireframe(new GuideSetWireframePacket(id, result.Guide.IsWireframe));
             }
             else HandleFailure(id, result);
@@ -569,6 +596,7 @@ namespace Layout.Client
             if (result.IsSuccess)
             {
                 _undo.Record(PlayerUid, new SetDivisionsCommand(id, before, result.Guide.Divisions));
+                if (before != result.Guide.Divisions) StampLastSculptor(result.Guide);
                 _applyDivisions(new GuideSetDivisionsPacket(id, result.Guide.Divisions));
             }
             else HandleFailure(id, result);
@@ -583,6 +611,7 @@ namespace Layout.Client
             if (result.Guide.Sides == before) return;
 
             _undo.Record(PlayerUid, new SetSidesCommand(id, before, result.Guide.Sides));
+            StampLastSculptor(result.Guide);
             _applySides(new GuideSetSidesPacket(id, result.Guide.Sides));
         }
 
@@ -603,6 +632,7 @@ namespace Layout.Client
                 _undo.Record(PlayerUid, new SpringBackCommand(
                     id, beforeConstraint, beforePoints,
                     result.Guide.Constraint, result.Guide.ControlPoints));
+                StampLastSculptor(result.Guide, publishIncremental: false);
                 ApplyFull(result.Guide);
             }
             else HandleFailure(id, result);
@@ -621,8 +651,20 @@ namespace Layout.Client
             }
 
             GuideData guide = outcome.Result.Guide;
-            if (guide != null && _guides.HasGuide(guide.Id)) ApplyFull(guide);
+            if (guide != null && _guides.HasGuide(guide.Id))
+            {
+                StampLastSculptor(guide, publishIncremental: false);
+                ApplyFull(guide);
+            }
             else if (guide != null) _applyDelete(new GuideDeletePacket(guide.Id));
+        }
+
+        private void StampLastSculptor(GuideData guide, bool publishIncremental = true)
+        {
+            if (guide == null) return;
+            _guides.StampLastSculptor(guide.Id, PlayerUid, PlayerName);
+            if (publishIncremental)
+                _applyHudMetadata(new GuideHudMetadataPacket(guide));
         }
 
         private bool TryGet(Guid id, out GuideData guide)
