@@ -128,7 +128,9 @@ namespace Layout
                 ServerConfig.PerPlayerTotalVoxelCap,
                 ServerConfig.MaxGuidesPerPlayer,
                 ServerConfig.MaxGuidesWorldWide,
-                uid => AdminPolicies.EffectiveGuideLimit(uid, ServerConfig.MaxGuidesPerPlayer));
+                uid => AdminPolicies.EffectiveGuideLimit(uid, ServerConfig.MaxGuidesPerPlayer),
+                uid => AdminPolicies.EffectivePlayerTotalVoxelCap(
+                    uid, ServerConfig.PerPlayerTotalVoxelCap));
 
             // Server save/load event ownership stays in the server composition root. GuideManager itself is
             // now side-neutral and can also back an intentionally transient client-only authority.

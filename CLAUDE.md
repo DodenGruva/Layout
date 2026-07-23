@@ -14,7 +14,7 @@ on servers without Layout and, when permitted, alongside public guides. The tool
 (SESSION_21), on top of exposed-face meshing (SESSION_16, Stage A). 3D volumes can persist as either a
 hollow **Shell** or a structural **Wireframe**.
 The catalog is **15 shape types / 21 picker tiles** (SESSION_20 added straight/tapered Polygonal Prisms).
-Status: **v0.3.52, in real play.**
+Status: **v0.3.53 final release, in real play.**
 
 ## Build & run
 - **Build:** `dotnet build` from the repo root (the folder with `Layout.csproj`).
@@ -32,7 +32,7 @@ Status: **v0.3.52, in real play.**
 - **Versioning rule (standing, human-set):** EVERY revision bumps `modinfo.json` and ships as a NEW
   `Layout<version>.zip` in **`..\LayoutZips\`** (the sibling folder of this repo — human-directed location;
   holds 0.1.10–0.1.27 + the 0.2.x line; the 0.1.28–0.1.53 zips live in `Documents\ChatGPT\LayoutZips\`) —
-  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.3.52.**
+  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.3.53.**
 - **Git:** `main` is the mainline, published at **github.com/DodenGruva/Layout** (the
   `ClientOnlyFallback` branch was merged via PR #1). **The repo is published at release** — no personal
   paths, no personal usernames in tracked files. Commit/push ONLY when the human instructs.
@@ -40,7 +40,7 @@ Status: **v0.3.52, in real play.**
 ## The documents (read these before large work)
 - **`HANDOFF.md`** (repo root) — the consolidated current-state brief (scope · status · direction ·
   performance characteristics), written for external analysis; the fastest way to get oriented.
-- **`ARCHITECTURE.md`** (in `dev/`, v3.13) — the authoritative plan. Its **Settled Decisions Register** lists
+- **`ARCHITECTURE.md`** (in `dev/`, v3.14) — the authoritative plan. Its **Settled Decisions Register** lists
   locked-in design choices; **do not reopen those without the human explicitly asking.** Its per-revision
   deltas live in **`CHANGELOG_ARCHITECTURE.md`** (an archive — rarely needed).
 - **`TODO.md`** — the live punch-list: open bug, deferred requests, flagged decisions, future features.
@@ -48,7 +48,7 @@ Status: **v0.3.52, in real play.**
 - **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix (candidate for 0.2.0).
 - **`PLAN_CHALKING_KIT.md`** — the F5 chalking-kit design rationale, now marked ✅ implemented with its
   plan-vs-shipped deltas up top.
-- **`SESSION_9.md` … `SESSION_26.md`** — standalone per-session records; SESSION_12 covers **v0.1.28–v0.1.45
+- **`SESSION_9.md` … `SESSION_27.md`** — standalone per-session records; SESSION_12 covers **v0.1.28–v0.1.45
   ClientOnlyFallback**, SESSION_13 the **v0.1.46–v0.1.52 optimization and interaction pass**, SESSION_14 the
   **v0.1.53 hollow-shell + mesh optimization handoff** (read before continuing performance work), SESSION_15
   the **v0.2.0–v0.2.9 Chalking Kit arc**, SESSION_16 the **v0.2.10–v0.2.21 mesh + polish arc** (Stage-A
@@ -67,11 +67,12 @@ Status: **v0.3.52, in real play.**
   SESSION_24 the **v0.3.35–v0.3.40 materialization-completion, shell-transition, and HUD-dimension arc**, and
   SESSION_25 the **v0.3.41–v0.3.43 measured frustum/spatial-culling experiment**, and SESSION_26 the
   **v0.3.44–v0.3.52 meshing experiments, renderer rollback, persistent visibility, cumulative creator cap,
-  and off-state Chalking Kit lockout**.
+  and off-state Chalking Kit lockout**, and SESSION_27 the **v0.3.53 per-player cumulative-cap override and
+  final release**.
 
-## ✅ Docs verified & consolidated to v0.3.52 (2026-07-23)
-The authoritative prose docs are consistent with **v0.3.52, DataVersion 12, protocol 16, 77 source files,
-15 shape types / 21 tiles**. `ARCHITECTURE.md` is **v3.13**; `SESSION_26.md` is the latest record
+## ✅ Docs verified & consolidated to v0.3.53 final release (2026-07-23)
+The authoritative prose docs are consistent with **v0.3.53, DataVersion 12, protocol 16, 77 source files,
+15 shape types / 21 tiles**. `ARCHITECTURE.md` is **v3.14**; `SESSION_27.md` is the latest record
 (mesh: `SESSION_16.md`, F5: `SESSION_15.md`); `HANDOFF.md` is the consolidated brief. Prefer source for exact
 identifiers, but no from-scratch doc audit is needed before ordinary work.
 
@@ -98,7 +99,7 @@ settings-only: left-click **selects** a guide and the GUI's setting rows then ac
 reshaping — geometry stays in Create); this replaced the old panel-expanding "selected-guide section".
 **Delete** dispels. `ToolMode` is client-only (never wired), so it's safe to reorder.
 
-## Current priorities (detail in TODO.md; renderer decision in SESSION_26.md)
+## Current priorities (detail in TODO.md; final-release record in SESSION_27.md)
 F4 (client-only/private guides) and F5 (Chalking Kit durability) are both feature-complete. Public/private
 multiplayer was release-tested successfully at **v0.2.35**, the fired-jug/raw-jug recipe behavior is
 playtest-confirmed, and B-S9-1 adjacent-lock targeting was closed and playtest-approved in **v0.2.36**.
@@ -110,8 +111,9 @@ Mesh **Stage A** shipped and filled 3D volumes were retired. Normal public multi
 2. **Protect the v0.3.42 renderer baseline restored in v0.3.49.** Whole-guide distance/frustum culling and
    render statistics remain; spatial final meshes and greedy merging were rejected after real-play seams,
    fidelity defects, and an approximately 140→80 FPS regression. See `SESSION_26.md`.
-3. **Field-soak v0.3.50–v0.3.52 policy/UI behavior.** Verify saved `/layout off|on` state across reconnects,
-   cumulative creator budgets during multiplayer editing/undo, and the off-state Chalking Kit lockout.
+3. **Field-soak the v0.3.53 final release.** Verify saved `/layout off|on` state across reconnects,
+   cumulative creator budgets and `/layout totalvoxelcap` during multiplayer editing/undo, and the off-state
+   Chalking Kit lockout.
 4. **Performance follow-up only from a new measured bottleneck and a fidelity-preserving design.** Immense
    placement/sculpt work still uses one below-normal worker plus bounded claim ticks; do not assume spatial
    subdivision or greedy merging is the next step.

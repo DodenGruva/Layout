@@ -225,6 +225,7 @@ namespace Layout.Systems
         private readonly int _maxGuidesPerPlayer;
         private readonly int _maxGuidesWorldWide;
         private readonly System.Func<string, int> _playerGuideLimitResolver;
+        private readonly System.Func<string, int> _playerTotalVoxelCapResolver;
         // Server-main-thread operation scope. The network authority sets this around one player's mutation
         // so a personal per-guide cap can replace the server default without contaminating client authority.
         private int? _operationPerGuideVoxelCap;
@@ -301,7 +302,8 @@ namespace Layout.Systems
             int perPlayerTotalVoxelCap = 1000000,
             int maxGuidesPerPlayer = 0,
             int maxGuidesWorldWide = 0,
-            System.Func<string, int> playerGuideLimitResolver = null)
+            System.Func<string, int> playerGuideLimitResolver = null,
+            System.Func<string, int> playerTotalVoxelCapResolver = null)
         {
             _persistence = persistence ?? throw new ArgumentNullException(nameof(persistence));
             _blockProbe = blockProbe ?? throw new ArgumentNullException(nameof(blockProbe));
@@ -313,6 +315,7 @@ namespace Layout.Systems
             _maxGuidesPerPlayer = maxGuidesPerPlayer > 0 ? maxGuidesPerPlayer : 0;
             _maxGuidesWorldWide = maxGuidesWorldWide > 0 ? maxGuidesWorldWide : 0;
             _playerGuideLimitResolver = playerGuideLimitResolver;
+            _playerTotalVoxelCapResolver = playerTotalVoxelCapResolver;
         }
 
         /// <summary>
@@ -338,6 +341,19 @@ namespace Layout.Systems
         }
 
         private int EffectivePerGuideVoxelCap => _operationPerGuideVoxelCap ?? _perGuideVoxelCap;
+
+        /// <summary>
+        /// Returns the cumulative cap currently effective for one original creator. The server may supply
+        /// a persistent per-player override resolver; local/client authority falls back to its configured
+        /// default. 0 means unlimited.
+        /// </summary>
+        public int EffectivePerPlayerTotalVoxelCap(string playerUid)
+        {
+            int resolved = _playerTotalVoxelCapResolver != null
+                ? _playerTotalVoxelCapResolver(playerUid)
+                : _perPlayerTotalVoxelCap;
+            return resolved > 0 ? resolved : 0;
+        }
 
         private GuideData AccessSnapshot(GuideData guide) =>
             _operationAccessValidator == null || guide == null ? null : guide.DeepClone();
@@ -451,8 +467,9 @@ namespace Layout.Systems
             int perGuideCap = EffectivePerGuideVoxelCap;
             if (perGuideCap > 0 && count > perGuideCap)
                 return GuideOperationResult.OverCap(data, count, perGuideCap);
-            if (WouldExceedPlayerTotal(data.CreatorUid, data.Id, count))
-                return GuideOperationResult.OverCap(data, count, _perPlayerTotalVoxelCap);
+            if (WouldExceedPlayerTotal(
+                data.CreatorUid, data.Id, count, out int playerTotalCap))
+                return GuideOperationResult.OverCap(data, count, playerTotalCap);
             if (_totalVoxelCap > 0 && _totalVoxels + count > _totalVoxelCap)
                 return GuideOperationResult.OverCap(data, count, _totalVoxelCap);
 
@@ -560,9 +577,10 @@ namespace Layout.Systems
             int perGuideCap = EffectivePerGuideVoxelCap;
             if (perGuideCap > 0 && exactCount > perGuideCap)
                 return GuideOperationResult.OverCap(data, exactCount, perGuideCap);
-            if (WouldExceedPlayerTotal(data.CreatorUid, data.Id, exactCount))
+            if (WouldExceedPlayerTotal(
+                data.CreatorUid, data.Id, exactCount, out int playerTotalCap))
                 return GuideOperationResult.OverCap(
-                    data, exactCount, _perPlayerTotalVoxelCap);
+                    data, exactCount, playerTotalCap);
             if (_totalVoxelCap > 0 && _totalVoxels + exactCount > _totalVoxelCap)
                 return GuideOperationResult.OverCap(data, exactCount, _totalVoxelCap);
 
@@ -654,8 +672,9 @@ namespace Layout.Systems
             int perGuideCap = EffectivePerGuideVoxelCap;
             if (perGuideCap > 0 && count > perGuideCap)
                 return GuideOperationResult.OverCap(live, count, perGuideCap);
-            if (WouldExceedPlayerTotal(live.CreatorUid, live.Id, count))
-                return GuideOperationResult.OverCap(live, count, _perPlayerTotalVoxelCap);
+            if (WouldExceedPlayerTotal(
+                live.CreatorUid, live.Id, count, out int playerTotalCap))
+                return GuideOperationResult.OverCap(live, count, playerTotalCap);
             if (_totalVoxelCap > 0 && _totalVoxels + count > _totalVoxelCap)
                 return GuideOperationResult.OverCap(live, count, _totalVoxelCap);
 
@@ -1312,7 +1331,8 @@ namespace Layout.Systems
             if (perGuideCap > 0 && !existingExceedsActorCap) limit = Math.Min(limit, perGuideCap);
 
             string attributedCreator = creatorUid ?? guide?.CreatorUid;
-            if (_perPlayerTotalVoxelCap > 0 && !string.IsNullOrEmpty(attributedCreator))
+            int playerTotalCap = EffectivePerPlayerTotalVoxelCap(attributedCreator);
+            if (playerTotalCap > 0 && !string.IsNullOrEmpty(attributedCreator))
             {
                 long playerTotal = VoxelCountBy(attributedCreator);
                 int currentForId = guide?.CreatorUid == attributedCreator
@@ -1320,10 +1340,10 @@ namespace Layout.Systems
                     ? currentPlayerGuide : 0;
                 // If persisted state already exceeds a newly lowered cap, count exactly so a shrink can be
                 // accepted. Otherwise stop as soon as this guide would pass the creator's remaining budget.
-                if (playerTotal <= _perPlayerTotalVoxelCap)
+                if (playerTotal <= playerTotalCap)
                 {
                     long available =
-                        (long)_perPlayerTotalVoxelCap - (playerTotal - currentForId);
+                        (long)playerTotalCap - (playerTotal - currentForId);
                     int playerLimit = available <= 0 ? 0
                         : available >= int.MaxValue ? int.MaxValue
                         : (int)available;
@@ -1368,9 +1388,10 @@ namespace Layout.Systems
                 return true;
             }
             if (_guides.TryGetValue(id, out GuideData guide)
-                && WouldExceedPlayerTotal(guide.CreatorUid, id, newCount))
+                && WouldExceedPlayerTotal(
+                    guide.CreatorUid, id, newCount, out int playerTotalCap))
             {
-                cap = _perPlayerTotalVoxelCap;
+                cap = playerTotalCap;
                 return true;
             }
             long projectedTotal = _totalVoxels - currentForId + newCount;
@@ -1411,9 +1432,11 @@ namespace Layout.Systems
             return total;
         }
 
-        private bool WouldExceedPlayerTotal(string playerUid, Guid id, int newCount)
+        private bool WouldExceedPlayerTotal(
+            string playerUid, Guid id, int newCount, out int effectiveCap)
         {
-            if (_perPlayerTotalVoxelCap <= 0 || string.IsNullOrEmpty(playerUid)) return false;
+            effectiveCap = EffectivePerPlayerTotalVoxelCap(playerUid);
+            if (effectiveCap <= 0 || string.IsNullOrEmpty(playerUid)) return false;
             long currentTotal = VoxelCountBy(playerUid);
             int currentForId = _guides.TryGetValue(id, out GuideData guide)
                 && guide?.CreatorUid == playerUid
@@ -1421,7 +1444,7 @@ namespace Layout.Systems
                 ? count : 0;
             long projected = currentTotal - currentForId + Math.Max(0, newCount);
             // Loading never ejects old state, and lowering a cap must not prevent a player from shrinking it.
-            return projected > _perPlayerTotalVoxelCap && projected > currentTotal;
+            return projected > effectiveCap && projected > currentTotal;
         }
 
         // Records a guide's voxel count, keeping the running total in step.

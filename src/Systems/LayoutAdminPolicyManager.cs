@@ -11,7 +11,7 @@ namespace Layout.Systems
     public sealed class LayoutAdminPolicyManager
     {
         public const string StorageKey = "layout:adminpolicies";
-        private const int CurrentVersion = 1;
+        private const int CurrentVersion = 2;
 
         private readonly IGuidePersistence _persistence;
         private readonly ILogger _logger;
@@ -28,6 +28,8 @@ namespace Layout.Systems
         public int JailedCount => _policies.Values.Count(p => p.Jailed);
         public int CustomGuideLimitCount => _policies.Values.Count(p => p.GuideLimit > 0);
         public int CustomVoxelCapCount => _policies.Values.Count(p => p.PerGuideVoxelCap > 0);
+        public int CustomPlayerTotalVoxelCapCount =>
+            _policies.Values.Count(p => p.PerPlayerTotalVoxelCap > 0);
 
         public bool IsJailed(string playerUid) =>
             !string.IsNullOrEmpty(playerUid)
@@ -40,6 +42,9 @@ namespace Layout.Systems
         public int VoxelCapOverride(string playerUid) =>
             TryGet(playerUid, out PlayerPolicy policy) ? policy.PerGuideVoxelCap : 0;
 
+        public int PlayerTotalVoxelCapOverride(string playerUid) =>
+            TryGet(playerUid, out PlayerPolicy policy) ? policy.PerPlayerTotalVoxelCap : 0;
+
         public int EffectiveGuideLimit(string playerUid, int serverDefault)
         {
             int custom = GuideLimitOverride(playerUid);
@@ -49,6 +54,12 @@ namespace Layout.Systems
         public int EffectiveVoxelCap(string playerUid, int serverDefault)
         {
             int custom = VoxelCapOverride(playerUid);
+            return custom > 0 ? custom : Math.Max(0, serverDefault);
+        }
+
+        public int EffectivePlayerTotalVoxelCap(string playerUid, int serverDefault)
+        {
+            int custom = PlayerTotalVoxelCapOverride(playerUid);
             return custom > 0 ? custom : Math.Max(0, serverDefault);
         }
 
@@ -90,6 +101,18 @@ namespace Layout.Systems
             return changed;
         }
 
+        public bool SetPlayerTotalVoxelCap(string playerUid, string playerName, int cap)
+        {
+            PlayerPolicy policy = GetOrCreate(playerUid, playerName);
+            int normalized = Math.Max(0, cap);
+            bool changed = policy.PerPlayerTotalVoxelCap != normalized;
+            policy.PerPlayerTotalVoxelCap = normalized;
+            TouchName(policy, playerName);
+            RemoveIfEmpty(policy);
+            if (changed) Persist();
+            return changed;
+        }
+
         public void RememberName(string playerUid, string playerName)
         {
             if (!_policies.TryGetValue(playerUid ?? "", out PlayerPolicy policy)) return;
@@ -114,6 +137,7 @@ namespace Layout.Systems
                     policy.LastKnownName = CleanName(policy.LastKnownName);
                     policy.GuideLimit = Math.Max(0, policy.GuideLimit);
                     policy.PerGuideVoxelCap = Math.Max(0, policy.PerGuideVoxelCap);
+                    policy.PerPlayerTotalVoxelCap = Math.Max(0, policy.PerPlayerTotalVoxelCap);
                     if (!policy.IsEmpty) _policies[policy.PlayerUid] = policy;
                 }
                 _logger.Notification("[Layout] Loaded {0} player moderation polic{1}.",
@@ -193,8 +217,10 @@ namespace Layout.Systems
         public bool Jailed { get; set; }
         public int GuideLimit { get; set; }
         public int PerGuideVoxelCap { get; set; }
+        public int PerPlayerTotalVoxelCap { get; set; }
 
         [JsonIgnore]
-        public bool IsEmpty => !Jailed && GuideLimit <= 0 && PerGuideVoxelCap <= 0;
+        public bool IsEmpty =>
+            !Jailed && GuideLimit <= 0 && PerGuideVoxelCap <= 0 && PerPlayerTotalVoxelCap <= 0;
     }
 }

@@ -3,11 +3,11 @@
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
 > and the performance-relevant mechanics. Updated 2026-07-23 against the built/package checkpoint
-> **v0.3.52**. Where this file and the code disagree, **the code wins** — treat this as a map, then
+> **v0.3.53 final release**. Where this file and the code disagree, **the code wins** — treat this as a map, then
 > read the `.cs` files it points at.
 >
-> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.13),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/26.md` (per-session
+> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.14),
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/27.md` (per-session
 > history), `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
 
@@ -21,7 +21,7 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.3.52 built, packaged, and playtest-approved. The v0.3 arc is playtest-driven: behemoth motion stays
+- **Status:** v0.3.53 final release built, packaged, and documented. The v0.3 arc is playtest-driven: behemoth motion stays
   wireframe-cheap; immense placement and final sculpt validation use a single low-priority server lane;
   selected-scale shells stream to the client in bounded, organic neighbour-growth batches; old GPU batches
   retire across frames; and persistent Shell/Wireframe mode works. The HUD is fixed-size and action-aware;
@@ -58,7 +58,7 @@ guides on servers without Layout and, when server policy permits, alongside publ
   hover uses cached metadata and whole guides outside view distance/frustum are not drawn. v0.3.43's spatial
   meshes and v0.3.44–v0.3.48's greedy/depth experiments were rejected after visible seams, fidelity defects,
   and an approximately 140→80 FPS real-play regression; v0.3.49 restored the v0.3.42 renderer. See §9 and
-  `dev/SESSION_21.md`–`SESSION_26.md`.
+  `dev/SESSION_21.md`–`SESSION_27.md`.
 - **Design philosophy (standing rule): correctness over performance** unless told otherwise. Several
   deliberate un-optimized paths exist by choice; see §9.
 
@@ -94,7 +94,7 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── src/                        ← all 77 .cs files (see §6)
 └── dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
-    ├── SESSION_9.md … SESSION_19.md  SESSION_20.md  SESSION_21.md  SESSION_22.md  SESSION_23.md  SESSION_24.md  SESSION_25.md  SESSION_26.md
+    ├── SESSION_9.md … SESSION_19.md  SESSION_20.md  SESSION_21.md  SESSION_22.md  SESSION_23.md  SESSION_24.md  SESSION_25.md  SESSION_26.md  SESSION_27.md
     ├── CHANGELOG_ARCHITECTURE.md   ← ARCHITECTURE.md's per-revision deltas (archive)
     ├── PLAN_CLIENT_ONLY.md  PLAN_CHALKING_KIT.md  BUILD_INSTRUCTIONS.txt
 ```
@@ -396,7 +396,8 @@ and real-play frame rate. Do not begin by raising `HardVoxelCeiling`.
   command skip and a `Blocked` outcome for cap-rejected-but-valid commands. **One drag = one undo entry.**
   Ctrl+Z/Y follows the most recently mutated authority; mode or selection changes do not redirect it.
 - **Admin/moderation commands:** the original `/layout dispel all|<chunk radius>` plus v0.3.22–v0.3.23
-  `/layout jail|free|limit|voxelcap|info|jailroster|top` and targeted player/guide dispel. Policies persist
+  `/layout jail|free|limit|voxelcap|info|jailroster|top`, v0.3.53 `/layout totalvoxelcap`, and targeted
+  player/guide dispel. Policies persist
   per world and online changes refresh the affected client immediately.
 - **Personal visibility:** `/layout off|on` (or `.layout off|on` in client-only fallback) disables/enables
   the entire render pass for only the invoking player and persists in `layout-client.json`. On login, chat
@@ -428,6 +429,11 @@ and real-play frame rate. Do not begin by raising `HardVoxelCeiling`.
 | `enableChalkDurability` | true |
 | `allowHotbarChalkRefill` | false (ground-storage refill is always allowed; this opts in the hotbar shortcut) |
 | `allowInventoryChalkRefill` | false (opts in cursor-onto-inventory-slot refill) |
+
+**Per-player administrative overrides:** `/layout voxelcap <player> <number>` replaces the per-guide
+default for the acting player; `/layout totalvoxelcap <player> <number>` replaces the cumulative allowance
+for guides attributed to that original creator. A positive number persists in the world policy; `0` removes
+it and restores the matching server default. Existing over-cap state is retained but cannot grow.
 
 **Hard-coded limits (in code, not config):** `HardVoxelCeiling` 10M · legacy `MaxScanCells` 4M selects the
 surface-only fallback for oversized Cylinder/Cone/Box rather than rejecting them (Tapered Cylinder already
@@ -474,8 +480,8 @@ cell; an adjacent first-hit body cell now receives a distinct passive marker. Hu
    confirms every API used exists in 1.22.0.
 2. **Protect the v0.3.42 renderer baseline restored in v0.3.49.** Spatial chunks and greedy merging were
    deliberately rejected; read `SESSION_26.md` before proposing more renderer work.
-3. **Field-soak v0.3.50–v0.3.52.** Cover persistent visibility across reconnect/restart, per-creator
-   cumulative budgets during multiplayer mutation/undo/delete, and the off-state Chalking Kit lockout.
+3. **Field-soak the v0.3.53 final release.** Cover persistent visibility across reconnect/restart,
+   `/layout totalvoxelcap` during multiplayer mutation/undo/delete, and the off-state Chalking Kit lockout.
 4. **Keep the broader multiplayer matrix as future regression coverage.** The v0.2.35 public/private pass
    succeeded and is not a release blocker.
 5. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill (fill is currently inert on Free-Shapes);
@@ -497,7 +503,7 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   `GuideShapeType` / `ShapeConstraint` / projection enums, which are pinned append-only).
 - **`UndoManager` folder ≠ namespace:** it lives in `src/Systems/` but is `Layout.Systems.UndoManager` —
   the one file where folder and namespace diverge.
-- **The Session docs are historical.** `SESSION_9`…`SESSION_26.md` are point-in-time narratives (SESSION_12
+- **The Session docs are historical.** `SESSION_9`…`SESSION_27.md` are point-in-time narratives (SESSION_12
   covers F4 through v0.1.45; SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 mesh handoff;
   SESSION_15 is the v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc;
   SESSION_17 is the v0.2.22–v0.2.23 seven-item backlog; SESSION_18/19 cover the Tapered Cylinder and dust;
@@ -508,7 +514,7 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   covers v0.3.35–v0.3.40 materialization completion, clean-shell transitions, timing, polygonal scan
   optimization, and intrinsic HUD dimensions; SESSION_25 covers the v0.3.41–v0.3.43 spatial experiment;
   SESSION_26 records v0.3.44–v0.3.52, the renderer rollback, persistent visibility, cumulative creator caps,
-  and the off-state tool lockout). For
+  and the off-state tool lockout; SESSION_27 records v0.3.53's cumulative-cap override and final release). For
   current state, trust `HANDOFF.md` / `ARCHITECTURE.md` / the code, not a mid-session checklist inside a
   session record.
 - **`dev/BUILD_INSTRUCTIONS.txt`** is the original v0.1.0 first-build doc; its build/run steps are still

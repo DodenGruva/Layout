@@ -1,7 +1,7 @@
-# Layout — Architecture Document (v3.13)
+# Layout — Architecture Document (v3.14)
 
-**Supersedes v3.12 — experimental meshing rollback, persistent personal visibility, cumulative creator
-budgets, and off-state tool gating (v0.3.44–v0.3.52).** v2.5 consolidated five
+**Supersedes v3.13 — persistent per-player cumulative-cap overrides and the final release
+(v0.3.53).** v2.5 consolidated five
 revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
 catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
 surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
@@ -38,7 +38,7 @@ makes tapered-rim flare opt-in. **v3.8 adds motion-sensitive structural previews
 precision, generation-safe background refinement and batched materialization, cached placed-guide metadata,
 retained-mesh cancel quarantine, canonical/persistent Shell↔Wireframe form, size-weighted placement sound,
 and surface-proportional oversized Cylinder/Cone/Box fallback generation.** The register, file tree, module
-map, persistence, and edge cases below are updated in place to the v0.3.52 / DataVersion 12 / protocol-16 /
+map, persistence, and edge cases below are updated in place to the v0.3.53 / DataVersion 12 / protocol-16 /
 77-file state; the per-revision deltas live
 in **`CHANGELOG_ARCHITECTURE.md`** (indexed below).
 
@@ -67,7 +67,11 @@ the v0.3.42 renderer after spatial seams, fidelity defects, and worse real-play 
 render state; a 500,000 per-guide default and 1,000,000 cumulative original-creator cap; a narrowly migrated
 unlimited world default; and login/tool/HUD guidance while rendering is off.**
 
-**Where the project stands:** Layout **v0.3.52** is built, packaged, documented, and playtest-approved.
+**v3.14 folds in Session 27 (v0.3.53): persistent `/layout totalvoxelcap` overrides for one original
+creator's cumulative public-guide allowance, effective-cap enforcement across every ordinary/immense/
+restore path, expanded administrator reporting, and the final release package.**
+
+**Where the project stands:** Layout **v0.3.53 final release** is built, packaged, and documented.
 All seven modules, the complete 2D/3D catalog, normal public multiplayer, vanilla-server local
 fallback, mixed public/private operation, and the full F5 chalk system run against **VS 1.22.x** / .NET 10.
 The catalog is **15 shape types / 21 picker tiles**, **DataVersion 12**, **protocol 16**, and **77 source
@@ -78,7 +82,7 @@ structural Wireframe. Whole guides outside view distance/frustum are culled; spa
 face merging are not part of the accepted renderer.
 The Session-16 backlog is fully delivered. Public/private multiplayer passed the v0.2.35 release test,
 fired-jug/raw-jug crafting is confirmed, and B-S9-1 closed with a human-approved v0.2.36 playtest. Remaining:
-field soak for v0.3.50–v0.3.52 visibility persistence, creator budgets, and off-state tool gating.
+field soak for v0.3.53 visibility persistence, creator-budget overrides, and off-state tool gating.
 Two items carry
 verification debt — the chalk ceiling has not been tested against xskills itself, and 1.22.0 support is
 declared but untested. See `TODO.md` and `SESSION_17.md`.
@@ -119,13 +123,14 @@ declared but untested. See `TODO.md` and `SESSION_17.md`.
 
 ## Document changelog — index
 
-Per-revision deltas for THIS document (v2.5 → v3.13) now live in **`CHANGELOG_ARCHITECTURE.md`**. They are
+Per-revision deltas for THIS document (v2.5 → v3.14) now live in **`CHANGELOG_ARCHITECTURE.md`**. They are
 not repeated here: every delta is already folded in place into the register / file tree / module map /
 persistence / edge cases below, and each has a fuller narrative in its session record. Use this table to find
 *when* something changed; read the body below for *what is true now*.
 
 | Doc rev | Mod versions | Theme | Session record |
 |---|---|---|---|
+| v3.14 | v0.3.53 | Per-player cumulative-cap override; final release | `SESSION_27.md` |
 | v3.13 | v0.3.44 → v0.3.52 | Meshing rollback; persistent visibility; cumulative creator cap; off-state tool lockout | `SESSION_26.md` |
 | v3.12 | v0.3.41 → v0.3.43 | Whole-guide frustum culling; render stats; 32-block spatial settled meshes | `SESSION_25.md` |
 | v3.11 | v0.3.35 → v0.3.40 | Materialization completion; clean-shell transitions; intrinsic HUD dimensions | `SESSION_24.md` |
@@ -454,6 +459,10 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   (0/negative = unlimited; **construction-time injection — edits need a server restart**). Caps sync to
   clients on join so the pre-check matches enforcement. Existing exact historical generated defaults migrate
   to 500,000 per guide and an unlimited world total; other administrator-selected values are preserved.
+  `/layout voxelcap <player> <number>` persistently overrides only the acting player's per-guide limit;
+  `/layout totalvoxelcap <player> <number>` persistently overrides the named original creator's cumulative
+  allowance. `0` removes either override and restores its server default. Lowering a cumulative allowance
+  never deletes existing guides; they may remain or shrink but cannot grow while still over cap.
   **The two chalk refill-channel flags left this file in v0.2.22** — they are player preferences now, in
   `layout-client.json`; stale keys in an existing `layout.json` are ignored. **The running total is a `long`** (v0.1.27) so a
   caps-off server can't overflow it negative. A **hard voxel ceiling** (`GuideManager.HardVoxelCeiling`,
@@ -1084,8 +1093,8 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
 
 ---
 
-This v3.13 document is the authoritative architecture, consolidated to current state: **Layout v0.3.52 built,
-packaged, documented, and playtest-approved**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
+This v3.14 document is the authoritative architecture, consolidated to current state: **Layout v0.3.53 final
+release built, packaged, and documented**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
 (+ right/equilateral/isosceles), rectangles (+ square), polygons, and Free-Shapes — plus the **3D volume
 family** (spheres, domes, cylinders, tapered cylinders, straight/tapered polygonal prisms, cones, boxes)
 place, preview, reshape, fill/form, lock/unlock, divide, and
@@ -1097,4 +1106,5 @@ history in `SESSION_12.md`, the interaction checkpoint in `SESSION_13.md`, the m
 `SESSION_14.md`, the adaptive large-guide record in `SESSION_21.md`, the HUD/attribution/sculpting record in
 `SESSION_22.md`, the moderation/claims/immense-guide record in `SESSION_23.md`, the materialization-completion/
 HUD-dimension record in `SESSION_24.md`, the superseded spatial experiment in `SESSION_25.md`, and the
-current renderer/policy record in `SESSION_26.md`.
+renderer/policy rollback record in `SESSION_26.md`, and final cumulative-cap override record in
+`SESSION_27.md`.

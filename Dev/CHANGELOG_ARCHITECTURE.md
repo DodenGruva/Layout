@@ -1,12 +1,29 @@
 # Layout — Architecture Changelog (document-version history)
 
 > **Split out of `ARCHITECTURE.md` to keep the orientation read cheap.** These are the per-revision deltas
-> for the architecture document itself, v2.5 → v3.13. **Nothing here is unique:** each delta is already folded
+> for the architecture document itself, v2.5 → v3.14. **Nothing here is unique:** each delta is already folded
 > in place into `ARCHITECTURE.md`'s body (Settled Decisions Register, file tree, module map, persistence,
 > edge cases), and each has a fuller narrative in its `SESSION_*.md` record. Kept as the audit trail — read
 > it when you need to know *when* something changed, not *what* the current state is.
 
 ---
+
+## Changelog — v3.13 → v3.14 (per-player cumulative-cap override + final release, v0.3.53; full record in `SESSION_27.md`)
+
+- **Complementary administrator command:** `/layout totalvoxelcap <player> <number>` persistently overrides
+  one original creator's cumulative public-guide voxel allowance; `0` restores the
+  `perPlayerTotalVoxelCap` server default.
+- **Attribution and safety:** `/layout voxelcap` remains the acting player's per-guide limit, while the new
+  command follows original creator attribution. Lowering a cumulative cap never deletes guides; over-cap
+  state may remain or shrink but cannot grow.
+- **Complete enforcement:** ordinary and prepared immense creation, restore/push/redo, ordinary mutation,
+  count-limited generation, and prepared immense sculpt commits resolve the effective creator cap.
+- **Administrator visibility:** `/layout info` shows effective cumulative usage/limit and the explicit
+  override; server status counts custom cumulative policies.
+- **Compatibility:** world-scoped admin-policy JSON advances additively to version 2. Guide DataVersion 12
+  and network protocol 16 are unchanged.
+- **Final package:** v0.3.53 built with 0 warnings/errors and packaged as `Layout0.3.53.zip` with 40 entries
+  and 37 assets.
 
 ## Changelog — v3.12 → v3.13 (renderer rollback + persistent visibility + creator budgets, v0.3.44 → v0.3.52; full record in `SESSION_26.md`)
 

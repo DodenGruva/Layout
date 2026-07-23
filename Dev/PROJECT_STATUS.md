@@ -1,6 +1,6 @@
 # Layout — Project Status & Handoff
 
-**Checkpoint: Layout v0.3.52 built, packaged, documented, and playtest-approved** (the `ClientOnlyFallback` branch merged via
+**Checkpoint: Layout v0.3.53 final release built, packaged, and documented** (the `ClientOnlyFallback` branch merged via
 PR #1). **F4** is
 implemented and playtested: automatic client-only authority on servers without Layout; opt-in private
 overlays on Layout servers; per-world/per-UID client persistence; placement/reshape/settings/undo parity;
@@ -19,13 +19,13 @@ explains `/layout on` in chat, warnings, and the HUD. Filled 3D interiors are
 retired; volumes may persist as Shell or structural Wireframe. Targets **all of VS
 1.22.x**; the repo is publication-clean (no personal paths/usernames tracked).
 **DataVersion 12; protocol 16; 77 source files; 15 shape types / 21 picker tiles.** Release zips:
-`..\LayoutZips\` (through `Layout0.3.52.zip`). **Top tasks:** field-soak v0.3.50–v0.3.52 persistence,
-cumulative creator budgets, and off-state tool gating; retain the two verification debts (32-chalk ceiling
+`..\LayoutZips\` (through `Layout0.3.53.zip`). **Top tasks:** field-soak v0.3.53 persistence,
+cumulative creator-budget overrides, and off-state tool gating; retain the two verification debts (32-chalk ceiling
 vs xskills, and VS 1.22.0/1.22.1 support). Spatial meshes and greedy merging were rejected and rolled back.
 **B-S9-1 closed in v0.2.36.** Standing rule: ship a zip per code iteration; update docs / commit ONLY on the
-human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_26.md`**,
+human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_27.md`**,
 `PLAN_CLIENT_ONLY.md`, `PLAN_CHALKING_KIT.md`, and `TODO.md`; the authoritative plan is
-**`ARCHITECTURE.md`** (v3.13).
+**`ARCHITECTURE.md`** (v3.14).
 
 ---
 
@@ -33,7 +33,7 @@ human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_26.md`**,
 
 The doc set (now a Claude Code repo):
 
-1. **`ARCHITECTURE.md`** — the authoritative plan (v3.13); Settled Decisions Register updated through v0.3.52.
+1. **`ARCHITECTURE.md`** — the authoritative plan (v3.14); Settled Decisions Register updated through v0.3.53.
 2. **The code** — `src/` (**77 files**: 74 through Session 22, plus Session 23’s
    `ProgressiveVoxelGeneration`, `GuideClaimAccessValidator`, and `LayoutAdminPolicyManager`; historical
    breakdown: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
@@ -47,7 +47,7 @@ The doc set (now a Claude Code repo):
    Session-20 — PolygonalPrismShape),
    `assets/layout/`, `modinfo.json`, `modicon.png`, `Layout.csproj`, `BUILD_INSTRUCTIONS.txt`.
 3. **`TODO.md`** — the live punch-list (renamed from `OUTSTANDING_ITEMS.md`).
-4. **`SESSION_9.md`** … **`SESSION_26.md`** — standalone records (SESSION_12 runs through v0.1.45;
+4. **`SESSION_9.md`** … **`SESSION_27.md`** — standalone records (SESSION_12 runs through v0.1.45;
    SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 shell/mesh handoff; SESSION_15 is the
    v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc; SESSION_17 is the
    v0.2.22–v0.2.23 seven-item backlog; SESSION_18 is the v0.2.24–v0.2.28 Tapered Cylinder arc;
@@ -57,7 +57,8 @@ The doc set (now a Claude Code repo):
    SESSION_23 is the v0.3.22–v0.3.34 moderation/claims/immense-guide/materialization arc; SESSION_24 is the
    v0.3.35–v0.3.40 materialization-completion, clean-shell-transition, and HUD-dimension arc; SESSION_25 is
    the v0.3.41–v0.3.43 spatial experiment; SESSION_26 records v0.3.44–v0.3.52, the renderer rollback,
-   persistent visibility, cumulative creator cap, and off-state Chalking Kit lockout).
+   persistent visibility, cumulative creator cap, and off-state Chalking Kit lockout; SESSION_27 records
+   v0.3.53's per-player cumulative-cap override and final release).
 5. **`HANDOFF.md`** (repo root) — the consolidated current-state brief for external AI analysis
    (scope / status / direction / performance characteristics).
 6. **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix.
@@ -268,6 +269,11 @@ The doc set (now a Claude Code repo):
   original-creator cap, and makes the default world total unlimited with narrow config migration. v0.3.51
   adds the saved-off login reminder; v0.3.52 blocks Chalking Kit guide actions/settings/undo/redo while off
   and explains recovery in warnings and the HUD.
+- **Session 27 — cumulative-cap override and final release (v0.3.53): DELIVERED and verified.**
+  `/layout totalvoxelcap <player> <number>` persistently overrides one original creator's cumulative
+  public-guide allowance; `0` restores the server default. Every ordinary/immense/restore path resolves the
+  effective creator cap, `/layout info` exposes usage/effective/override state, and the additive admin-policy
+  format advances to version 2 without changing DataVersion 12 or protocol 16.
 - **IN REAL PLAY:** save-compatibility matters — DataVersion **12** saves (v12: attribution; v11: `IsWireframe`; v10: cached
   display/count/dimensions; v9: polygon
   `FlatSideAligned`; v8: passive `IsLockMarker`; v7:
@@ -350,7 +356,7 @@ config. (The build-hiccup note about the packet class once being omitted is now 
 
 ## 5. Tuning backlog
 
-Full annotated list in `TODO.md`. Headlines: v0.3.50–v0.3.52 multiplayer/persistence field soak; the
+Full annotated list in `TODO.md`. Headlines: v0.3.53 final-release multiplayer/persistence field soak; the
 xskills and oldest-1.22.x verification debts; filled 2D recount per drag; division-mark recolor; carried
 Session-7 cosmetic items. The cancellable streamed immense pipeline and selected-scale Shell/Wireframe
 semantics are delivered.
@@ -381,14 +387,14 @@ reports rather than block release.
 
 ## 7. Next session — start here
 
-**The current checkpoint is v0.3.52 built, packaged, documented, and playtest-approved.**
-Read `SESSION_26.md` first for the current renderer/policy state, then `SESSION_25.md`, `SESSION_24.md`,
+**The current checkpoint is v0.3.53 final release built, packaged, and documented.**
+Read `SESSION_27.md` first for the final capacity-policy state, then `SESSION_26.md`, `SESSION_25.md`, `SESSION_24.md`,
 `SESSION_23.md`, `SESSION_21.md`, and
 `SESSION_14.md` for
 the historical adaptive path and optional mesh plan.
 
-1. **Field-soak v0.3.50–v0.3.52.** Exercise saved rendering state in public/private/fallback modes,
-   cumulative creator caps through create/edit/delete/undo, and every blocked Chalking Kit input while off.
+1. **Field-soak v0.3.53.** Exercise saved rendering state in public/private/fallback modes,
+   `/layout totalvoxelcap` through create/edit/delete/undo, and every blocked Chalking Kit input while off.
 2. **Performance only from new evidence.** The v0.3.43–v0.3.48 spatial/greedy path was rejected. Preserve
    the v0.3.42 renderer's appearance and compare real FPS, not only mesh counters, in any future proposal.
 3. **Preserve the settled invariants.** Input and server ticks remain responsive; final-click scaffolds do

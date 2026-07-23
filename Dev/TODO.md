@@ -1,11 +1,11 @@
-# Layout — TODO / Outstanding Items (current: v0.3.52)
+# Layout — TODO / Outstanding Items (current: v0.3.53 final release)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.3.52 → next)
+## ⭐ Top of the list (v0.3.53 final release → field reports)
 
 > **Session-16 playtest results (human-confirmed):** the v0.2.21 **inventory refill and hotbar refill both
 > work** — the MouseDown-hook ordering and the `InventoryID` round-trip both hold, closing `SESSION_16.md` §8.
@@ -215,6 +215,21 @@ reports intuitive block dimensions.
 6. **Field-soak next:** verify saved off/on state across public, mixed, and fallback sessions; exercise
    cumulative creator accounting through multiplayer edits, deletes, and undo/restore; confirm every blocked
    Chalking Kit input gives clear feedback.
+
+### A9. Session-27 cumulative-cap override and final release (v0.3.53) — full detail in `SESSION_27.md`
+
+1. ~~**Give administrators a per-player cumulative-cap override.**~~ **DONE.**
+   `/layout totalvoxelcap <player> <number>` sets a persistent original-creator cumulative allowance; `0`
+   removes it and restores `perPlayerTotalVoxelCap`.
+2. ~~**Keep per-guide and cumulative semantics distinct.**~~ **DONE.** `/layout voxelcap` still controls the
+   acting player's one-guide limit. Collaborating on another creator's guide cannot bypass that creator's
+   effective cumulative cap.
+3. ~~**Cover every authority path.**~~ **DONE.** Ordinary and immense creation, restore/push/redo, ordinary
+   mutation, early count limits, and immense sculpt commits all resolve the effective creator allowance.
+4. ~~**Expose and persist the policy.**~~ **DONE.** `/layout info` reports usage/effective/override state;
+   world-scoped admin-policy JSON advances additively to version 2. DataVersion 12 and protocol 16 remain.
+5. ~~**Verify and package the final release.**~~ **DONE.** Focused cumulative-cap smoke test passed; Release
+   build has 0 warnings/errors; `Layout0.3.53.zip` has 40 entries and 37 assets.
 
 ### A. Human backlog — queued at Session-16 end — ✅ ALL SEVEN DELIVERED (v0.2.22–v0.2.23)
 
@@ -691,8 +706,9 @@ the inventory refill remains (Top of the list).
 ## Next session — start here
 
 **The agenda is "⭐ Top of the list" at the top of this file** — it is not repeated here. Current state:
-v0.3.52 is built, packaged, documented, and playtest-approved. The v0.3.42 renderer baseline is restored;
-field-soak persistent visibility, cumulative creator budgets, and the off-state Chalking Kit lockout.
+v0.3.53 is the built, packaged, and documented final release. The v0.3.42 renderer baseline is restored;
+field-soak persistent visibility, `/layout totalvoxelcap`, and the off-state Chalking Kit lockout, then
+respond to field reports or explicit new feature requests.
 
 **Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\LayoutZips\`;
 docs are updated ONLY when the human says so; commits/pushes only when the human instructs. `main` is the
