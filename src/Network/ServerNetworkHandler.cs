@@ -1163,7 +1163,8 @@ namespace Layout.Network
                 _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
                 if (_draftAnchors.Remove(player.PlayerUID))
                     _channel.BroadcastPacket(new DraftAnchorRemovePacket(player.PlayerUID), player);
-                ChalkEffects.PlacementEffects(_sapi.World, result.Guide);
+                // Immense placements finish at a client-specific upload cadence. The placing client's
+                // renderer emits feedback only after authority arrives and the clean shell is visible.
                 if (ChalkApplies(player, out ItemSlot chargeSlot))
                     Items.ItemGuideTool.ConsumeChalk(chargeSlot,
                         GuideShapeTypes.IsVolume(result.Guide.ShapeType)

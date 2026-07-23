@@ -1,6 +1,6 @@
 # Layout — Project Status & Handoff
 
-**Checkpoint: Layout v0.3.34 built, packaged, documented, and pushed on `main`** (the `ClientOnlyFallback` branch merged via
+**Checkpoint: Layout v0.3.40 built, packaged, documented, and pushed on `main`** (the `ClientOnlyFallback` branch merged via
 PR #1). **F4** is
 implemented and playtested: automatic client-only authority on servers without Layout; opt-in private
 overlays on Layout servers; per-world/per-UID client persistence; placement/reshape/settings/undo parity;
@@ -18,13 +18,14 @@ and `/layout off|on` prevent unwanted draws. Filled 3D interiors are
 retired; volumes may persist as Shell or structural Wireframe. Targets **all of VS
 1.22.x**; the repo is publication-clean (no personal paths/usernames tracked).
 **DataVersion 12; protocol 16; 77 source files; 15 shape types / 21 picker tiles.** Release zips:
-`..\LayoutZips\` (through `Layout0.3.34.zip`). **Top tasks:** collect v0.3.34 field reports on immense
-placement/sculpt, organic reveal, claims, and render culling; retain the two verification debts (32-chalk
+`..\LayoutZips\` (through `Layout0.3.40.zip`). **Top tasks:** field-test v0.3.40 materialization timing,
+clean-shell swaps, Wireframe→Shell transitions, repeated sculpt resize/release, polygonal-prism startup,
+and intrinsic HUD dimensions; retain the two verification debts (32-chalk
 ceiling vs xskills, and VS 1.22.0/1.22.1 support); consider mesh Stage B/C only when measured in-range draw
 cost remains. **B-S9-1 closed in v0.2.36.** Standing rule: ship
-a zip per code iteration; update docs / commit ONLY on the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_23.md`**,
+a zip per code iteration; update docs / commit ONLY on the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_24.md`**,
 `PLAN_CLIENT_ONLY.md`, `PLAN_CHALKING_KIT.md`, and `TODO.md`; the authoritative plan is
-**`ARCHITECTURE.md`** (v3.10).
+**`ARCHITECTURE.md`** (v3.11).
 
 ---
 
@@ -32,7 +33,7 @@ a zip per code iteration; update docs / commit ONLY on the human's say-so. Detai
 
 The doc set (now a Claude Code repo):
 
-1. **`ARCHITECTURE.md`** — the authoritative plan (v3.10); Settled Decisions Register updated through v0.3.34.
+1. **`ARCHITECTURE.md`** — the authoritative plan (v3.11); Settled Decisions Register updated through v0.3.40.
 2. **The code** — `src/` (**77 files**: 74 through Session 22, plus Session 23’s
    `ProgressiveVoxelGeneration`, `GuideClaimAccessValidator`, and `LayoutAdminPolicyManager`; historical
    breakdown: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
@@ -46,14 +47,15 @@ The doc set (now a Claude Code repo):
    Session-20 — PolygonalPrismShape),
    `assets/layout/`, `modinfo.json`, `modicon.png`, `Layout.csproj`, `BUILD_INSTRUCTIONS.txt`.
 3. **`TODO.md`** — the live punch-list (renamed from `OUTSTANDING_ITEMS.md`).
-4. **`SESSION_9.md`** … **`SESSION_23.md`** — standalone records (SESSION_12 runs through v0.1.45;
+4. **`SESSION_9.md`** … **`SESSION_24.md`** — standalone records (SESSION_12 runs through v0.1.45;
    SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 shell/mesh handoff; SESSION_15 is the
    v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc; SESSION_17 is the
    v0.2.22–v0.2.23 seven-item backlog; SESSION_18 is the v0.2.24–v0.2.28 Tapered Cylinder arc;
    SESSION_19 is the v0.2.29–v0.2.35 stabilization/effects arc; SESSION_20 is the
    v0.2.36–v0.2.47 polygonal-volume/modifier arc; SESSION_21 is the v0.3.0–v0.3.8 adaptive large-guide and
    persistent structural-wireframe arc; SESSION_22 is the v0.3.9–v0.3.21 HUD/attribution/sculpting arc;
-   SESSION_23 is the v0.3.22–v0.3.34 moderation/claims/immense-guide/materialization arc).
+   SESSION_23 is the v0.3.22–v0.3.34 moderation/claims/immense-guide/materialization arc; SESSION_24 is the
+   v0.3.35–v0.3.40 materialization-completion, clean-shell-transition, and HUD-dimension arc).
 5. **`HANDOFF.md`** (repo root) — the consolidated current-state brief for external AI analysis
    (scope / status / direction / performance characteristics).
 6. **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix.
@@ -243,6 +245,14 @@ The doc set (now a Claude Code repo):
   immense server validation; cancellable progressive shape scans; retained placement/sculpt scaffolds;
   exact organic multi-seed materialization; frame-spread mesh retirement; live view-distance culling; and
   personal `/layout off|on` rendering control. DataVersion remains 12; protocol 16.
+- **Session 24 — materialization completion and intrinsic dimensions (v0.3.35–v0.3.40): DELIVERED; field test next.**
+  Base-plus-proportional nucleation, size-aware upload cadence, a full-growth 200 ms hold, and a separately
+  generated uniform final shell complete the organic reveal. Scaffolds vanish at the first growth batch;
+  placement effects wait for both final authority and the clean-shell swap. Wireframe→Shell Edit changes use
+  the same cancellable materialization chain, below-threshold sculpt releases no longer leave the immense
+  operation latch set, polygonal prism scans reject safe non-wall regions early, and round/polygonal volume
+  HUD dimensions now use intrinsic width/height rather than a world-AABB diagonal. DataVersion remains 12;
+  protocol remains 16.
 - **IN REAL PLAY:** save-compatibility matters — DataVersion **12** saves (v12: attribution; v11: `IsWireframe`; v10: cached
   display/count/dimensions; v9: polygon
   `FlatSideAligned`; v8: passive `IsLockMarker`; v7:
@@ -325,7 +335,7 @@ config. (The build-hiccup note about the packet class once being omitted is now 
 
 ## 5. Tuning backlog
 
-Full annotated list in `TODO.md`. Headlines: v0.3.34 field-testing and tuning; filled 2D recount per drag;
+Full annotated list in `TODO.md`. Headlines: v0.3.40 field-testing and tuning; filled 2D recount per drag;
 division-mark recolor; optional spatial Stage B/C if settled in-range draw cost remains; carried Session-7
 cosmetic items. The cancellable streamed immense pipeline and selected-scale Shell/Wireframe semantics are
 delivered.
@@ -346,9 +356,10 @@ the scale-icon/tile-proportion calls; Session-9 adds the regime split, triangle'
 no-break-gesture for Right/Isosceles/Square, rectangle corners as markers, magenta division color, the
 per-keystroke divisions field; Session-8's list still stands. Full list + rationale in `TODO.md`.
 
-**Open — real-play agenda:** collect v0.3.34 field reports on immense final-click responsiveness, server
-tick health during claim validation, organic reveal quality/cadence, immense sculpt release, distance
-culling, and `/layout off|on`. Revisit Stage B/C only from measured settled in-range rendering cost. The
+**Open — real-play agenda:** field-test v0.3.40 organic reveal cadence from small to immense, full-growth
+hold and clean-shell swap, placement-effect gating, Wireframe→Shell Edit, repeated sculpt resizing,
+polygonal-prism startup, intrinsic HUD dimensions, distance culling, and `/layout off|on`. Revisit Stage B/C
+only from measured settled in-range rendering cost. The
 v0.2.35 public/private multiplayer release check passed, so broader regression coverage can follow field
 reports rather than block release.
 
@@ -356,12 +367,14 @@ reports rather than block release.
 
 ## 7. Next session — start here
 
-**The current checkpoint is v0.3.34 built, packaged, documented, and pushed on `main`.**
-Read `SESSION_23.md` first for current immense-guide behavior, then `SESSION_21.md` and `SESSION_14.md` for
+**The current checkpoint is v0.3.40 built, packaged, documented, and pushed on `main`.**
+Read `SESSION_24.md` first for current immense-guide behavior, then `SESSION_23.md`, `SESSION_21.md`, and
+`SESSION_14.md` for
 the historical adaptive path and optional mesh plan.
 
-1. **Field-test v0.3.34.** Exercise small instant placement; immense placement and sculpt release; a denied
-   claim; competing immense operations; organic reveal from start to finish; distance culling; and
+1. **Field-test v0.3.40.** Exercise small and immense materialization; complete growth through the clean
+   swap; final-placement effect timing; Wireframe→Shell Edit transitions; repeated large→small sculpt
+   releases; straight/tapered polygonal prisms; intrinsic width/height HUD values; distance culling; and
    `/layout off|on` in public, private, and vanilla-fallback modes.
 2. **Performance only from evidence.** The streamed producer/consumer and bounded server lane are delivered.
    If settled guides still cost too much while actually in range, continue Stage B/C from `SESSION_14.md`.

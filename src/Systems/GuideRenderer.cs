@@ -64,7 +64,10 @@ namespace Layout.Systems
         private const int MaterializationMinimumBatches = 8;
         private const int MaterializationMaximumBatches = 128;
         private const int ProgressiveMaximumPreviewBatches = 128;
-        private const int MaterializationUploadIntervalMs = 45;
+        private const int SmallMaterializationUploadIntervalMs = 18;
+        private const int LargeMaterializationUploadIntervalMs = 45;
+        private const int LargeMaterializationIntervalVoxelCount = 120000;
+        private const int MaterializationCleanSwapDelayMs = 200;
         private const int MaterializationReadyBatchCapacity = 3;
         private const int RetiredMaterializationDeletesPerFrame = 4;
         private const int PendingPlacementVisualTimeoutMs = 300000;
@@ -119,7 +122,8 @@ namespace Layout.Systems
         private long _lastDraftMaterializationUploadMs;
         private DraftBuildResult _activeDraftBuild;
         private bool _draftMaterializationStarted;
-        private bool _draftMaterializationClean;
+        private bool _draftMaterializationFinal;
+        private long _draftCleanSwapReadyMs = -1;
         private bool _draftPreviewWasWireframe;
         private ulong _draftVisualFingerprint;
         private readonly Queue<MeshRef> _retiredMaterializationMeshes = new Queue<MeshRef>();
@@ -145,10 +149,38 @@ namespace Layout.Systems
             public Guid AdoptedGuideId;
             public bool RefinementFinished;
             public bool RefinementFailed;
-            public bool MeshesAreClean;
+            public bool MeshesAreFinal;
+            public bool PlacementEffectsRaised;
+            public long CleanSwapReadyMs = -1;
         }
 
         private PendingPlacementVisual _pendingPlacementVisual;
+
+        // A placed volume changing from Wireframe to Shell keeps its inexpensive wireframe as a scaffold
+        // while the exact shell is generated off-thread, then follows the same organic/clean handoff as
+        // draft placement and sculpting. Builds are keyed per guide so unrelated setting packets cannot
+        // strand another guide on its old scaffold.
+        private sealed class SettledMaterializationBuild
+        {
+            public Guid GuideId;
+            public ulong Fingerprint;
+            public GuideData Guide;
+            public IGuideShape Shape;
+            public BlockingCollection<MeshData> ReadyMeshes;
+            public BlockingCollection<MeshData> CleanReadyMeshes;
+            public CancellationTokenSource Cancellation;
+            public Vec3d Origin;
+            public Exception Error;
+            public int VoxelCount;
+            public long LastUploadMs;
+            public long CleanSwapReadyMs = -1;
+            public volatile bool MetadataReady;
+            public volatile bool Completed;
+            public bool CompletionHandled;
+        }
+
+        private readonly Dictionary<Guid, SettledMaterializationBuild> _settledMaterializations =
+            new Dictionary<Guid, SettledMaterializationBuild>();
 
         // Large-guide sculpting follows the same motion/settle rhythm as initial placement: a cheap
         // wireframe while the handle moves, then an exact selected-scale shell built off-thread and
@@ -164,12 +196,14 @@ namespace Layout.Systems
         private GrabBuildResult _activeGrabBuild;
         private bool _grabMaterializationStarted;
         private long _lastGrabMaterializationUploadMs;
+        private long _grabCleanSwapReadyMs = -1;
         private bool _releasedGrabPending;
         private bool _releasedGrabAuthorityConfirmed;
         private bool _releasedGrabVisualComplete;
         private ulong _releasedGrabFingerprint;
 
         public event EventHandler<DraftPreviewCompletedEventArgs> DraftPreviewCompleted;
+        public event Action<GuideData> PlacementMaterializationCompleted;
 
         /// <summary>Smoothed render-frame time used by the draft scheduler as a secondary pressure signal.</summary>
         public double SmoothedFrameMilliseconds => _smoothedFrameMilliseconds;
@@ -180,10 +214,11 @@ namespace Layout.Systems
         }
 
         /// <summary>
-        /// True while a retained immense placement is still waiting for authority or finishing its clean
+        /// True while a retained immense placement is still waiting for authority or finishing its final
         /// materialization. A second placement must not replace this renderer-owned handoff visual.
         /// </summary>
-        public bool PlacementMaterializationBusy => _pendingPlacementVisual != null;
+        public bool PlacementMaterializationBusy =>
+            _pendingPlacementVisual != null || _settledMaterializations.Count > 0;
 
         /// <summary>
         /// True while a released immense sculpt is being validated and materialized. Its cheap working
@@ -230,6 +265,14 @@ namespace Layout.Systems
             public MeshRef GrabRef;
             public Vec3d GrabOrigin;
             public readonly List<MeshRef> GrabAuxiliary = new List<MeshRef>();
+            public MeshRef GrabCleanRef;
+            public readonly List<MeshRef> GrabCleanAuxiliary = new List<MeshRef>();
+            public MeshRef TransitionRef;
+            public Vec3d TransitionOrigin;
+            public readonly List<MeshRef> TransitionAuxiliary = new List<MeshRef>();
+            public MeshRef TransitionCleanRef;
+            public readonly List<MeshRef> TransitionCleanAuxiliary = new List<MeshRef>();
+            public bool RenderedWireframe;
         }
 
         public GuideRenderer(ICoreClientAPI capi, ClientNetworkHandler network)
@@ -272,6 +315,7 @@ namespace Layout.Systems
             AdvanceRetiredMaterializationDeletes();
             AdvanceDraftMaterialization();
             AdvancePendingPlacementMaterialization();
+            AdvanceSettledMaterializations();
             AdvanceGrabMaterialization();
             RequestSettledGrabRefinement();
             if (_guideMeshes.Count == 0 && _remoteAnchors.Count == 0 && _draftPreviewMesh == null
@@ -317,15 +361,17 @@ namespace Layout.Systems
 
             foreach (GuideMesh gm in _guideMeshes.Values)
             {
-                MeshRef primary = gm.GrabRef ?? gm.Ref;
-                Vec3d origin = gm.GrabRef != null ? gm.GrabOrigin : gm.Origin;
+                MeshRef primary = gm.GrabRef ?? gm.TransitionRef ?? gm.Ref;
+                Vec3d origin = gm.GrabRef != null ? gm.GrabOrigin
+                    : gm.TransitionRef != null ? gm.TransitionOrigin : gm.Origin;
                 if (primary == null || origin == null) continue;
                 if (!WithinViewDistance(
                     camPos, gm.CullCenter ?? origin, gm.CullRadius, viewDistance)) continue;
                 SetModelMatrix(origin.X - camPos.X, origin.Y - camPos.Y, origin.Z - camPos.Z);
                 prog.ModelMatrix = _modelMat;
                 rpi.RenderMesh(primary);
-                List<MeshRef> auxiliary = gm.GrabRef != null ? gm.GrabAuxiliary : gm.Auxiliary;
+                List<MeshRef> auxiliary = gm.GrabRef != null ? gm.GrabAuxiliary
+                    : gm.TransitionRef != null ? gm.TransitionAuxiliary : gm.Auxiliary;
                 for (int i = 0; i < auxiliary.Count; i++)
                     if (auxiliary[i] != null) rpi.RenderMesh(auxiliary[i]);
             }
@@ -465,6 +511,16 @@ namespace Layout.Systems
             // synchronous full-shell rebuild below.
             if (_releasedGrabPending && guide.Id == _grabbedGuide)
             {
+                // A guide can cross below the immense threshold during the released sculpt. The release path
+                // was selected from the pre-authority count, but the immense refinement scheduler correctly
+                // refuses the now-small result. Finish it through the safe immediate path instead of leaving
+                // _releasedGrabPending latched forever.
+                if (guide.CachedVoxelCount <= PreviewFullResVoxelCap)
+                {
+                    CompleteReleasedGrabAsOrdinary(guide);
+                    return;
+                }
+
                 ulong authorityFingerprint = RenderFingerprint(guide);
                 if (authorityFingerprint != _releasedGrabFingerprint)
                 {
@@ -487,11 +543,13 @@ namespace Layout.Systems
                 if (fingerprint == _cancelRestoreFingerprint) return;
             }
 
+            if (TryStartSettledShellMaterialization(guide)) return;
             RebuildGuide(guide);
         }
 
         private void OnGuideRemoved(Guid id)
         {
+            CancelSettledMaterialization(id);
             if (_pendingPlacementVisual != null
                 && _pendingPlacementVisual.AdoptedGuideId == id)
                 DiscardPendingPlacementVisual();
@@ -501,11 +559,19 @@ namespace Layout.Systems
                 _activeGrabBuild = null;
                 _grabMaterializationStarted = false;
             }
+            if (_releasedGrabPending && id == _grabbedGuide)
+            {
+                _grabbedGuide = Guid.Empty;
+                _grabbedIndex = -1;
+                _grabExtent = GuideExtent.Empty;
+                ResetGrabRefinementState();
+            }
             RemoveGuideMesh(id);
         }
 
         private void OnGuidesBulkSynced()
         {
+            CancelAllSettledMaterializations();
             DiscardPendingPlacementVisual();
             RebuildAll();
         }
@@ -654,7 +720,9 @@ namespace Layout.Systems
             public GuideData Guide;
             public IGuideShape Shape;
             public List<VoxelPosition> Voxels;
+            public int VoxelCount;
             public BlockingCollection<MeshData> ReadyMeshes;
+            public BlockingCollection<MeshData> CleanReadyMeshes;
             public CancellationTokenSource Cancellation;
             public GuideExtent Extent;
             public Vec3d Origin;
@@ -714,7 +782,8 @@ namespace Layout.Systems
                         : shape.GetVoxelPositions(selectedScale, spec.Settings.Filled);
                     if (spec.Settings.Divisions > 1)
                         DivisionMarks.Apply(shell, curve, spec.Settings.Divisions, selectedScale);
-                    GuideExtent extent = GuideMeshBuilder.MeasureExtent(shell, selectedScale);
+                    GuideExtent extent =
+                        GuideMeshBuilder.MeasureShapeExtent(shape, selectedScale);
                     UploadPreviewVoxels(shape, shell, spec.Settings, selectedScale);
                     _draftVisualFingerprint = spec.Fingerprint();
                     timer.Stop();
@@ -1098,7 +1167,8 @@ namespace Layout.Systems
                         result.Spec.Settings.Divisions, result.RenderScale);
 
                 result.VoxelCount = voxels.Count;
-                result.Extent = GuideMeshBuilder.MeasureExtent(voxels, result.RenderScale);
+                result.Extent =
+                    GuideMeshBuilder.MeasureShapeExtent(shape, result.RenderScale);
                 result.MetadataReady = true;
 
                 if (result.IsMaterialization)
@@ -1106,12 +1176,15 @@ namespace Layout.Systems
                     if (!result.Spec.Settings.Wireframe)
                         ProduceMaterializationMeshes(
                             shape, voxels, result.Spec, result.RenderScale, result.Origin,
-                            privateAnchors, result.ReadyMeshes, token);
+                            privateAnchors, result.ReadyMeshes, result.CleanReadyMeshes, token);
+                    else
+                        ProduceCleanMaterializationMeshes(
+                            shape, voxels, result.Spec, result.RenderScale, result.Origin,
+                            privateAnchors, result.CleanReadyMeshes, token);
                     if (!result.ReadyMeshes.IsAddingCompleted)
                         result.ReadyMeshes.CompleteAdding();
-                    ProduceCleanMaterializationMeshes(
-                        shape, voxels, result.Spec, result.RenderScale, result.Origin,
-                        privateAnchors, result.CleanReadyMeshes, token);
+                    if (!result.CleanReadyMeshes.IsAddingCompleted)
+                        result.CleanReadyMeshes.CompleteAdding();
                 }
                 else
                 {
@@ -1171,14 +1244,28 @@ namespace Layout.Systems
         private static void ProduceMaterializationMeshes(
             IGuideShape shape, List<VoxelPosition> voxels, DraftPreviewSpec spec,
             int renderScale, Vec3d origin, bool privateAnchors,
-            BlockingCollection<MeshData> readyMeshes, CancellationToken token)
+            BlockingCollection<MeshData> readyMeshes,
+            BlockingCollection<MeshData> cleanMeshes, CancellationToken token)
         {
             var occupancy = new HashSet<(int, int, int)>(voxels.Count);
+            int minimumY = int.MaxValue;
             for (int i = 0; i < voxels.Count; i++)
             {
                 if ((i & 1023) == 0) token.ThrowIfCancellationRequested();
-                occupancy.Add((voxels[i].X, voxels[i].Y, voxels[i].Z));
+                VoxelPosition voxel = voxels[i];
+                occupancy.Add((voxel.X, voxel.Y, voxel.Z));
+                if (voxel.Y < minimumY) minimumY = voxel.Y;
             }
+
+            var ordered = new List<VoxelPosition>(voxels);
+            ordered.Sort((a, b) =>
+            {
+                int byX = a.X.CompareTo(b.X);
+                if (byX != 0) return byX;
+                int byY = a.Y.CompareTo(b.Y);
+                return byY != 0 ? byY : a.Z.CompareTo(b.Z);
+            });
+            int cleanCursor = 0;
 
             OrganicVoxelGrowth.GrowBatches(
                 voxels, renderScale, MaterializationTargetVoxelsPerBatch,
@@ -1187,7 +1274,14 @@ namespace Layout.Systems
             {
                 token.ThrowIfCancellationRequested();
                 if (batch == null || batch.Count == 0) return;
-                var options = new GuideMeshOptions
+
+                // Build and enqueue the corresponding final partition first. The renderer uploads this mesh
+                // invisibly alongside the organic preview, so the complete uniform shell is ready at the exact
+                // cadence point where the final growth batch arrives.
+                int cleanCount = Math.Min(batch.Count, ordered.Count - cleanCursor);
+                var cleanBatch = ordered.GetRange(cleanCursor, cleanCount);
+                cleanCursor += cleanCount;
+                var cleanOptions = new GuideMeshOptions
                 {
                     Scale = renderScale,
                     Mode = ProjectionMode.Volumetric,
@@ -1197,12 +1291,26 @@ namespace Layout.Systems
                     GrabbedPoint = null,
                     PrivateAnchors = privateAnchors,
                     Occupancy = occupancy,
-                    // Never consult the live world from a worker. The camera nudge still protects the
-                    // transient ghost; settled guides retain the full solidity-aware placed pipeline.
+                    MinimumVoxelY = minimumY,
                     IsNeighborSolid = (_, _, _) => false
                 };
-                AssignAnchors(shape.ControlPoints, options);
-                readyMeshes.Add(GuideMeshBuilder.Build(batch, options), token);
+                AssignAnchors(shape.ControlPoints, cleanOptions);
+                cleanMeshes.Add(GuideMeshBuilder.Build(cleanBatch, cleanOptions), token);
+
+                var previewOptions = new GuideMeshOptions
+                {
+                    Scale = renderScale,
+                    Mode = ProjectionMode.Volumetric,
+                    Plane = spec.Settings.Plane,
+                    Origin = origin,
+                    Hidden = false,
+                    GrabbedPoint = null,
+                    PrivateAnchors = privateAnchors,
+                    Occupancy = occupancy,
+                    IsNeighborSolid = (_, _, _) => false
+                };
+                AssignAnchors(shape.ControlPoints, previewOptions);
+                readyMeshes.Add(GuideMeshBuilder.Build(batch, previewOptions), token);
             });
         }
 
@@ -1214,7 +1322,7 @@ namespace Layout.Systems
             token.ThrowIfCancellationRequested();
             if (voxels == null || voxels.Count == 0) return;
 
-            List<VoxelPosition> ordered = voxels;
+            var ordered = new List<VoxelPosition>(voxels);
             ordered.Sort((a, b) =>
             {
                 int byX = a.X.CompareTo(b.X);
@@ -1418,8 +1526,9 @@ namespace Layout.Systems
 
             _draftPreviewOrigin = build.Origin;
             _lastDraftMaterializationUploadMs = 0;
+            _draftCleanSwapReadyMs = -1;
             _draftMaterializationStarted = true;
-            _draftMaterializationClean = false;
+            _draftMaterializationFinal = false;
         }
 
         private void AdvanceDraftMaterialization(bool force = false)
@@ -1448,9 +1557,18 @@ namespace Layout.Systems
             }
 
             long now = _capi.World?.ElapsedMilliseconds ?? 0;
-            int interval = MaterializationUploadIntervalMs;
-            if (_smoothedFrameMilliseconds > 22.0) interval *= 2;
-            if (_smoothedFrameMilliseconds > 32.0) interval *= 2;
+            if (build.Completed && build.CompletionHandled
+                && scaffoldReady.IsCompleted && scaffoldReady.Count == 0 && ready.IsCompleted
+                && ready.Count == 0 && cleanReady.IsCompleted && cleanReady.Count == 0)
+            {
+                if (!CleanSwapDelayElapsed(ref _draftCleanSwapReadyMs, now)) return;
+                ActivateDraftFinalMaterialization();
+                _activeDraftBuild = null;
+                _draftMaterializationStarted = false;
+                return;
+            }
+
+            int interval = MaterializationUploadInterval(build.VoxelCount);
             if (!force && _lastDraftMaterializationUploadMs != 0
                 && now - _lastDraftMaterializationUploadMs < interval) return;
 
@@ -1470,16 +1588,20 @@ namespace Layout.Systems
             // The selected-scale wireframe is a visual stage of its own. Never let shell pieces overtake it.
             if (!scaffoldReady.IsCompleted) return;
 
-            if (ready.TryTake(out MeshData previewData))
-            {
-                _draftMaterializationMeshes.Add(_capi.Render.UploadMesh(previewData));
-                _lastDraftMaterializationUploadMs = now;
-                return;
-            }
-
-            if (ready.IsCompleted && cleanReady.TryTake(out MeshData cleanData))
+            bool uploaded = false;
+            if (cleanReady.TryTake(out MeshData cleanData))
             {
                 _draftCleanMaterializationMeshes.Add(_capi.Render.UploadMesh(cleanData));
+                uploaded = true;
+            }
+            if (ready.TryTake(out MeshData previewData))
+            {
+                RemoveDraftScaffoldForOrganicGrowth(build);
+                _draftMaterializationMeshes.Add(_capi.Render.UploadMesh(previewData));
+                uploaded = true;
+            }
+            if (uploaded)
+            {
                 _lastDraftMaterializationUploadMs = now;
                 return;
             }
@@ -1488,13 +1610,46 @@ namespace Layout.Systems
                 && scaffoldReady.IsCompleted
                 && ready.IsCompleted && cleanReady.IsCompleted)
             {
-                ActivateDraftCleanMaterialization();
+                if (!CleanSwapDelayElapsed(ref _draftCleanSwapReadyMs, now)) return;
+                ActivateDraftFinalMaterialization();
                 _activeDraftBuild = null;
                 _draftMaterializationStarted = false;
             }
         }
 
-        private void ActivateDraftCleanMaterialization()
+        private static bool CleanSwapDelayElapsed(ref long readyMs, long now)
+        {
+            if (readyMs < 0) readyMs = now;
+            return now - readyMs >= MaterializationCleanSwapDelayMs;
+        }
+
+        private int MaterializationUploadInterval(int voxelCount)
+        {
+            double span = Math.Max(1,
+                LargeMaterializationIntervalVoxelCount - PreviewFullResVoxelCap);
+            double position = Math.Max(0.0, Math.Min(1.0,
+                (voxelCount - PreviewFullResVoxelCap) / span));
+            int interval = (int)Math.Round(
+                SmallMaterializationUploadIntervalMs
+                + (LargeMaterializationUploadIntervalMs
+                    - SmallMaterializationUploadIntervalMs) * Math.Sqrt(position));
+            if (_smoothedFrameMilliseconds > 22.0) interval *= 2;
+            if (_smoothedFrameMilliseconds > 32.0) interval *= 2;
+            return interval;
+        }
+
+        private void RemoveDraftScaffoldForOrganicGrowth(DraftBuildResult build)
+        {
+            if (build?.Spec?.Settings.Wireframe == true) return;
+            if (_draftPreviewMesh != null)
+            {
+                _retiredMaterializationMeshes.Enqueue(_draftPreviewMesh);
+                _draftPreviewMesh = null;
+            }
+            RetireMeshList(_draftPrecisionMeshes);
+        }
+
+        private void ActivateDraftFinalMaterialization()
         {
             if (_draftCleanMaterializationMeshes.Count == 0) return;
             RetireMeshList(_draftMaterializationMeshes);
@@ -1506,7 +1661,7 @@ namespace Layout.Systems
             RetireMeshList(_draftPrecisionMeshes);
             _draftMaterializationMeshes.AddRange(_draftCleanMaterializationMeshes);
             _draftCleanMaterializationMeshes.Clear();
-            _draftMaterializationClean = true;
+            _draftMaterializationFinal = true;
         }
 
         private void ClearDraftPrecisionMeshes()
@@ -1519,9 +1674,10 @@ namespace Layout.Systems
         private void ClearDraftMaterialization()
         {
             _lastDraftMaterializationUploadMs = 0;
+            _draftCleanSwapReadyMs = -1;
             DeleteMeshList(_draftMaterializationMeshes);
             DeleteMeshList(_draftCleanMaterializationMeshes);
-            _draftMaterializationClean = false;
+            _draftMaterializationFinal = false;
         }
 
         /// <summary>
@@ -1560,7 +1716,8 @@ namespace Layout.Systems
             }
 
             bool immense = (visualMatches && _draftPreviewWasWireframe) || !visualMatches
-                || matchingBuild || _draftMaterializationMeshes.Count > 0;
+                || matchingBuild || _draftMaterializationMeshes.Count > 0
+                || _draftCleanMaterializationMeshes.Count > 0;
             if (!immense) return false;
 
             if (_pendingPlacementVisual != null) return false;
@@ -1579,8 +1736,9 @@ namespace Layout.Systems
                 PrivateAnchors = _network.ServerLayoutAvailable
                     && _network.AuthorityMode == ClientAuthorityMode.Local,
                 Build = matchingBuild ? activeBuild : null,
-                RefinementFinished = !matchingBuild && _draftMaterializationClean,
-                MeshesAreClean = _draftMaterializationClean
+                RefinementFinished = !matchingBuild && _draftMaterializationFinal,
+                MeshesAreFinal = _draftMaterializationFinal,
+                CleanSwapReadyMs = _draftCleanSwapReadyMs
             };
             pending.Meshes.AddRange(_draftMaterializationMeshes);
             pending.CleanMeshes.AddRange(_draftCleanMaterializationMeshes);
@@ -1591,13 +1749,14 @@ namespace Layout.Systems
             }
             pending.ProvisionalMeshes.AddRange(_draftPrecisionMeshes);
             _draftPrecisionMeshes.Clear();
-            if (pending.MeshesAreClean) DeletePendingProvisionalMeshes(pending);
+            if (pending.MeshesAreFinal) DeletePendingProvisionalMeshes(pending);
 
             _draftMaterializationMeshes.Clear();
             _draftCleanMaterializationMeshes.Clear();
             _lastDraftMaterializationUploadMs = 0;
+            _draftCleanSwapReadyMs = -1;
             _draftMaterializationStarted = false;
-            _draftMaterializationClean = false;
+            _draftMaterializationFinal = false;
             if (matchingBuild) _activeDraftBuild = null;
             _hasPreviewKey = false;
             _draftVisualFingerprint = 0;
@@ -1678,9 +1837,7 @@ namespace Layout.Systems
             DraftBuildResult build = pending.Build;
             if (build == null)
             {
-                if (pending.AdoptedGuideId != Guid.Empty && pending.RefinementFinished
-                    && pending.MeshesAreClean)
-                    _pendingPlacementVisual = null;
+                TryFinishPendingPlacementVisual(pending);
                 return;
             }
 
@@ -1703,9 +1860,20 @@ namespace Layout.Systems
             BlockingCollection<MeshData> scaffoldReady = build.ScaffoldReadyMeshes;
             if (ready == null || cleanReady == null || scaffoldReady == null) return;
 
-            int interval = MaterializationUploadIntervalMs;
-            if (_smoothedFrameMilliseconds > 22.0) interval *= 2;
-            if (_smoothedFrameMilliseconds > 32.0) interval *= 2;
+            if (build.Completed && scaffoldReady.IsCompleted && scaffoldReady.Count == 0
+                && ready.IsCompleted
+                && ready.Count == 0 && cleanReady.IsCompleted && cleanReady.Count == 0)
+            {
+                if (!CleanSwapDelayElapsed(ref pending.CleanSwapReadyMs, now)) return;
+                if (!ActivatePendingFinalMaterialization(pending))
+                    pending.RefinementFailed = true;
+                pending.RefinementFinished = true;
+                pending.Build = null;
+                TryFinishPendingPlacementVisual(pending);
+                return;
+            }
+
+            int interval = MaterializationUploadInterval(build.VoxelCount);
             if (pending.LastUploadMs != 0 && now - pending.LastUploadMs < interval) return;
 
             if (scaffoldReady.TryTake(out MeshData scaffoldData))
@@ -1721,17 +1889,22 @@ namespace Layout.Systems
             // Preserve the promised order even if shell generation has already filled its producer queue.
             if (!scaffoldReady.IsCompleted) return;
 
-            if (ready.TryTake(out MeshData previewData))
-            {
-                MeshRef uploadedPreview = _capi.Render.UploadMesh(previewData);
-                pending.Meshes.Add(uploadedPreview);
-                pending.LastUploadMs = now;
-                return;
-            }
-
-            if (ready.IsCompleted && cleanReady.TryTake(out MeshData cleanData))
+            bool uploadedPending = false;
+            if (cleanReady.TryTake(out MeshData cleanData))
             {
                 pending.CleanMeshes.Add(_capi.Render.UploadMesh(cleanData));
+                uploadedPending = true;
+            }
+            if (ready.TryTake(out MeshData previewData))
+            {
+                if (build.Spec?.Settings.Wireframe != true)
+                    DeletePendingProvisionalMeshes(pending);
+                MeshRef uploadedPreview = _capi.Render.UploadMesh(previewData);
+                pending.Meshes.Add(uploadedPreview);
+                uploadedPending = true;
+            }
+            if (uploadedPending)
+            {
                 pending.LastUploadMs = now;
                 return;
             }
@@ -1739,31 +1912,31 @@ namespace Layout.Systems
             if (build.Completed && scaffoldReady.IsCompleted
                 && ready.IsCompleted && cleanReady.IsCompleted)
             {
-                if (!ActivatePendingCleanMaterialization(pending))
+                if (!CleanSwapDelayElapsed(ref pending.CleanSwapReadyMs, now)) return;
+                if (!ActivatePendingFinalMaterialization(pending))
                     pending.RefinementFailed = true;
                 pending.RefinementFinished = true;
                 pending.Build = null;
-                if (pending.AdoptedGuideId != Guid.Empty && pending.MeshesAreClean)
-                    _pendingPlacementVisual = null;
+                TryFinishPendingPlacementVisual(pending);
             }
         }
 
-        private bool ActivatePendingCleanMaterialization(PendingPlacementVisual pending)
+        private bool ActivatePendingFinalMaterialization(PendingPlacementVisual pending)
         {
             if (pending == null || pending.CleanMeshes.Count == 0) return false;
             RetireMeshList(pending.Meshes);
             DeletePendingProvisionalMeshes(pending);
             pending.Meshes.AddRange(pending.CleanMeshes);
             pending.CleanMeshes.Clear();
-            pending.MeshesAreClean = true;
+            pending.MeshesAreFinal = true;
             if (pending.AdoptedGuideId != Guid.Empty)
-                return TransferPendingCleanMeshesToGuide(pending);
+                return TransferPendingFinalMeshesToGuide(pending);
             return true;
         }
 
-        private bool TransferPendingCleanMeshesToGuide(PendingPlacementVisual pending)
+        private bool TransferPendingFinalMeshesToGuide(PendingPlacementVisual pending)
         {
-            if (pending == null || !pending.MeshesAreClean || pending.Meshes.Count == 0
+            if (pending == null || !pending.MeshesAreFinal || pending.Meshes.Count == 0
                 || pending.AdoptedGuideId == Guid.Empty
                 || !_guideMeshes.TryGetValue(pending.AdoptedGuideId, out GuideMesh guideMesh))
                 return false;
@@ -1798,19 +1971,37 @@ namespace Layout.Systems
             {
                 Origin = pending.Origin,
                 CullCenter = pending.CullCenter,
-                CullRadius = pending.CullRadius
+                CullRadius = pending.CullRadius,
+                RenderedWireframe = false
             };
             _guideMeshes[guide.Id] = mesh;
             pending.AdoptedGuideId = guide.Id;
-            if (pending.MeshesAreClean && !TransferPendingCleanMeshesToGuide(pending))
+            if (pending.MeshesAreFinal && !TransferPendingFinalMeshesToGuide(pending))
             {
                 DiscardPendingPlacementVisual();
                 return false;
             }
 
-            if (pending.Build == null && pending.RefinementFinished && pending.MeshesAreClean)
-                _pendingPlacementVisual = null;
+            if (pending.Build == null && pending.RefinementFinished && pending.MeshesAreFinal)
+                TryFinishPendingPlacementVisual(pending);
             return true;
+        }
+
+        private void TryFinishPendingPlacementVisual(PendingPlacementVisual pending)
+        {
+            if (pending == null || !ReferenceEquals(_pendingPlacementVisual, pending)
+                || pending.AdoptedGuideId == Guid.Empty || pending.Build != null
+                || !pending.RefinementFinished || !pending.MeshesAreFinal)
+                return;
+
+            if (!pending.PlacementEffectsRaised
+                && _network.Guides.TryGetValue(pending.AdoptedGuideId, out GuideData guide)
+                && guide != null)
+            {
+                pending.PlacementEffectsRaised = true;
+                PlacementMaterializationCompleted?.Invoke(guide);
+            }
+            _pendingPlacementVisual = null;
         }
 
         private void DeletePendingProvisionalMeshes(PendingPlacementVisual pending)
@@ -2196,6 +2387,262 @@ namespace Layout.Systems
             if (_network.Guides.TryGetValue(id, out GuideData guide) && guide != null) RebuildGuide(guide);
         }
 
+        private bool TryStartSettledShellMaterialization(GuideData guide)
+        {
+            if (guide == null) return false;
+            ulong fingerprint = RenderFingerprint(guide);
+            if (_settledMaterializations.TryGetValue(
+                guide.Id, out SettledMaterializationBuild existing))
+            {
+                if (!guide.IsWireframe && existing.Fingerprint == fingerprint) return true;
+                CancelSettledMaterialization(guide.Id);
+            }
+
+            if (guide.IsWireframe || guide.Projection != ProjectionMode.Volumetric
+                || !GuideShapeTypes.IsVolume(guide.ShapeType)
+                || !_guideMeshes.TryGetValue(guide.Id, out GuideMesh mesh)
+                || !mesh.RenderedWireframe)
+                return false;
+
+            GuideData snapshot = guide.DeepClone();
+            var build = new SettledMaterializationBuild
+            {
+                GuideId = snapshot.Id,
+                Fingerprint = fingerprint,
+                Guide = snapshot,
+                ReadyMeshes = new BlockingCollection<MeshData>(
+                    new ConcurrentQueue<MeshData>(), MaterializationReadyBatchCapacity),
+                CleanReadyMeshes = new BlockingCollection<MeshData>(
+                    new ConcurrentQueue<MeshData>(), MaterializationReadyBatchCapacity),
+                Cancellation = new CancellationTokenSource()
+            };
+            _settledMaterializations[guide.Id] = build;
+            bool privateAnchors = _network.ServerLayoutAvailable
+                && _network.IsLocalGuide(guide.Id);
+
+            Task.Factory.StartNew(
+                    () => BuildSettledShellMaterialization(build, privateAnchors),
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default)
+                .ContinueWith(task =>
+                {
+                    if (task.IsFaulted && build.Error == null)
+                        build.Error = task.Exception?.GetBaseException();
+                    try
+                    {
+                        _capi.Event.EnqueueMainThreadTask(
+                            () => FinishSettledShellMaterialization(build),
+                            "layout-settled-shell-materialization");
+                    }
+                    catch
+                    {
+                        build.Cancellation.Cancel();
+                    }
+                });
+            return true;
+        }
+
+        private static void BuildSettledShellMaterialization(
+            SettledMaterializationBuild build, bool privateAnchors)
+        {
+            Thread thread = Thread.CurrentThread;
+            ThreadPriority originalPriority = ThreadPriority.Normal;
+            bool priorityChanged = false;
+            try
+            {
+                try
+                {
+                    originalPriority = thread.Priority;
+                    thread.Priority = ThreadPriority.BelowNormal;
+                    priorityChanged = true;
+                }
+                catch (Exception) { }
+
+                CancellationToken token = build.Cancellation.Token;
+                token.ThrowIfCancellationRequested();
+                GuideData guide = build.Guide;
+                IGuideShape shape = ShapeFactory.Adopt(guide);
+                shape.RecalculatePhantomPoints();
+                int scale = guide.VoxelScale;
+                List<VoxelPosition> voxels = shape is IProgressiveVoxelShape progressive
+                    ? progressive.GetVoxelPositionsProgressively(
+                        scale, guide.IsFilled, MaterializationTargetVoxelsPerBatch, token, null)
+                    : shape.GetVoxelPositions(scale, guide.IsFilled);
+                token.ThrowIfCancellationRequested();
+                if (guide.Divisions > 1)
+                    DivisionMarks.Apply(
+                        voxels, shape.SampleCurve(128), guide.Divisions, scale);
+
+                build.Shape = shape;
+                build.Origin = ComputeOrigin(shape.ControlPoints);
+                build.VoxelCount = voxels.Count;
+                build.MetadataReady = true;
+                ProduceGrabMaterializationMeshes(
+                    guide, shape, voxels, -1, build.Origin, privateAnchors,
+                    build.ReadyMeshes, build.CleanReadyMeshes, token);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception e)
+            {
+                build.Error = e;
+            }
+            finally
+            {
+                if (!build.ReadyMeshes.IsAddingCompleted)
+                    build.ReadyMeshes.CompleteAdding();
+                if (!build.CleanReadyMeshes.IsAddingCompleted)
+                    build.CleanReadyMeshes.CompleteAdding();
+                build.Completed = true;
+                if (priorityChanged)
+                {
+                    try { thread.Priority = originalPriority; }
+                    catch (Exception) { }
+                }
+            }
+        }
+
+        private void FinishSettledShellMaterialization(SettledMaterializationBuild build)
+        {
+            if (_disposed || build == null) return;
+            build.CompletionHandled = true;
+            if (!_settledMaterializations.TryGetValue(build.GuideId, out var active)
+                || !ReferenceEquals(active, build))
+                return;
+
+            if (build.Error == null
+                && build.Cancellation?.IsCancellationRequested != true)
+                return;
+
+            if (build.Error != null)
+                _capi.Logger.Warning(
+                    "[Layout] Settled shell materialization failed: {0}", build.Error.Message);
+            CancelSettledMaterialization(build.GuideId);
+            if (_network.Guides.TryGetValue(build.GuideId, out GuideData live) && live != null)
+            {
+                if (_guideMeshes.TryGetValue(build.GuideId, out GuideMesh mesh))
+                    mesh.RenderedWireframe = false;
+                RebuildGuide(live);
+            }
+        }
+
+        private void AdvanceSettledMaterializations()
+        {
+            if (_settledMaterializations.Count == 0) return;
+            var ids = new List<Guid>(_settledMaterializations.Keys);
+            long now = _capi.World?.ElapsedMilliseconds ?? 0;
+            for (int i = 0; i < ids.Count; i++)
+            {
+                Guid id = ids[i];
+                if (!_settledMaterializations.TryGetValue(
+                    id, out SettledMaterializationBuild build))
+                    continue;
+                if (build.Cancellation?.IsCancellationRequested == true)
+                {
+                    CancelSettledMaterialization(id);
+                    continue;
+                }
+                if (!_network.Guides.TryGetValue(id, out GuideData live) || live == null
+                    || RenderFingerprint(live) != build.Fingerprint)
+                {
+                    CancelSettledMaterialization(id);
+                    continue;
+                }
+                if (!_guideMeshes.TryGetValue(id, out GuideMesh mesh)) continue;
+
+                BlockingCollection<MeshData> ready = build.ReadyMeshes;
+                BlockingCollection<MeshData> cleanReady = build.CleanReadyMeshes;
+                bool drained = build.Completed && build.CompletionHandled
+                    && ready.IsCompleted && ready.Count == 0
+                    && cleanReady.IsCompleted && cleanReady.Count == 0;
+                if (drained)
+                {
+                    if (!CleanSwapDelayElapsed(ref build.CleanSwapReadyMs, now)) continue;
+                    CompleteSettledShellMaterialization(build, mesh);
+                    continue;
+                }
+
+                int interval = MaterializationUploadInterval(build.VoxelCount);
+                if (build.LastUploadMs != 0 && now - build.LastUploadMs < interval) continue;
+
+                bool uploaded = false;
+                if (cleanReady.TryTake(out MeshData cleanData))
+                {
+                    MeshRef clean = _capi.Render.UploadMesh(cleanData);
+                    if (mesh.TransitionCleanRef == null)
+                        mesh.TransitionCleanRef = clean;
+                    else
+                        mesh.TransitionCleanAuxiliary.Add(clean);
+                    uploaded = true;
+                }
+                if (ready.TryTake(out MeshData previewData))
+                {
+                    MeshRef preview = _capi.Render.UploadMesh(previewData);
+                    if (mesh.TransitionRef == null)
+                    {
+                        mesh.TransitionRef = preview;
+                        mesh.TransitionOrigin = build.Origin;
+                    }
+                    else
+                    {
+                        mesh.TransitionAuxiliary.Add(preview);
+                    }
+                    uploaded = true;
+                }
+                if (uploaded) build.LastUploadMs = now;
+            }
+        }
+
+        private void CompleteSettledShellMaterialization(
+            SettledMaterializationBuild build, GuideMesh mesh)
+        {
+            if (build == null || mesh == null) return;
+            if (mesh.TransitionCleanRef == null)
+            {
+                _settledMaterializations.Remove(build.GuideId);
+                DeleteTransitionMeshes(mesh);
+                mesh.RenderedWireframe = false;
+                RebuildGuideById(build.GuideId);
+                return;
+            }
+            if (mesh.Ref != null) _retiredMaterializationMeshes.Enqueue(mesh.Ref);
+            RetireMeshList(mesh.Auxiliary);
+            if (mesh.TransitionRef != null)
+                _retiredMaterializationMeshes.Enqueue(mesh.TransitionRef);
+            RetireMeshList(mesh.TransitionAuxiliary);
+
+            mesh.Ref = mesh.TransitionCleanRef;
+            mesh.Origin = build.Origin;
+            mesh.Auxiliary.AddRange(mesh.TransitionCleanAuxiliary);
+            mesh.TransitionRef = null;
+            mesh.TransitionOrigin = null;
+            mesh.TransitionCleanRef = null;
+            mesh.TransitionCleanAuxiliary.Clear();
+            mesh.RenderedWireframe = false;
+            _settledMaterializations.Remove(build.GuideId);
+        }
+
+        private void CancelSettledMaterialization(Guid id)
+        {
+            if (_settledMaterializations.TryGetValue(id, out SettledMaterializationBuild build))
+            {
+                build.Cancellation?.Cancel();
+                _settledMaterializations.Remove(id);
+            }
+            if (_guideMeshes.TryGetValue(id, out GuideMesh mesh))
+                DeleteTransitionMeshes(mesh);
+        }
+
+        private void CancelAllSettledMaterializations()
+        {
+            if (_settledMaterializations.Count == 0) return;
+            var ids = new List<Guid>(_settledMaterializations.Keys);
+            for (int i = 0; i < ids.Count; i++)
+                CancelSettledMaterialization(ids[i]);
+        }
+
         private void RebuildGuide(GuideData guide)
         {
             if (_disposed) return;
@@ -2299,6 +2746,8 @@ namespace Layout.Systems
             MeshData data = GuideMeshBuilder.Build(voxels, options);
             if (locallyGrabbed) UploadOrReplaceGrab(guide.Id, data, origin);
             else UploadOrReplace(guide.Id, data, origin);
+            if (_guideMeshes.TryGetValue(guide.Id, out GuideMesh rendered))
+                rendered.RenderedWireframe = guide.IsWireframe;
             SetGuideCullBounds(guide.Id, cullCenter, cullRadius);
         }
 
@@ -2456,8 +2905,12 @@ namespace Layout.Systems
                 Cancellation = new CancellationTokenSource()
             };
             if (result.IsMaterialization)
+            {
                 result.ReadyMeshes = new BlockingCollection<MeshData>(
                     new ConcurrentQueue<MeshData>(), MaterializationReadyBatchCapacity);
+                result.CleanReadyMeshes = new BlockingCollection<MeshData>(
+                    new ConcurrentQueue<MeshData>(), MaterializationReadyBatchCapacity);
+            }
             _activeGrabBuild = result;
             _grabMaterializationStarted = false;
 
@@ -2512,14 +2965,15 @@ namespace Layout.Systems
                     DivisionMarks.Apply(voxels, shape.SampleCurve(128), guide.Divisions, scale);
 
                 result.Shape = shape;
-                result.Extent = GuideMeshBuilder.MeasureExtent(voxels, scale);
+                result.VoxelCount = voxels.Count;
+                result.Extent = GuideMeshBuilder.MeasureShapeExtent(shape, scale);
                 result.Origin = ComputeOrigin(shape.ControlPoints);
                 result.MetadataReady = true;
                 if (result.IsMaterialization)
                 {
                     ProduceGrabMaterializationMeshes(
                         guide, shape, voxels, result.GrabbedIndex, result.Origin,
-                        privateAnchors, result.ReadyMeshes, token);
+                        privateAnchors, result.ReadyMeshes, result.CleanReadyMeshes, token);
                 }
                 else
                 {
@@ -2537,6 +2991,8 @@ namespace Layout.Systems
             {
                 if (result.ReadyMeshes != null && !result.ReadyMeshes.IsAddingCompleted)
                     result.ReadyMeshes.CompleteAdding();
+                if (result.CleanReadyMeshes != null && !result.CleanReadyMeshes.IsAddingCompleted)
+                    result.CleanReadyMeshes.CompleteAdding();
                 result.Completed = true;
                 if (priorityChanged)
                 {
@@ -2549,16 +3005,30 @@ namespace Layout.Systems
         private static void ProduceGrabMaterializationMeshes(
             GuideData guide, IGuideShape shape, List<VoxelPosition> voxels,
             int grabbedIndex, Vec3d origin, bool privateAnchors,
-            BlockingCollection<MeshData> readyMeshes, CancellationToken token)
+            BlockingCollection<MeshData> readyMeshes,
+            BlockingCollection<MeshData> cleanMeshes, CancellationToken token)
         {
             Vec3d grabbed = grabbedIndex >= 0 && grabbedIndex < shape.ControlPoints.Count
                 ? shape.ControlPoints[grabbedIndex]?.WorldPosition : null;
             var occupancy = new HashSet<(int, int, int)>(voxels.Count);
+            int minimumY = int.MaxValue;
             for (int i = 0; i < voxels.Count; i++)
             {
                 if ((i & 1023) == 0) token.ThrowIfCancellationRequested();
-                occupancy.Add((voxels[i].X, voxels[i].Y, voxels[i].Z));
+                VoxelPosition voxel = voxels[i];
+                occupancy.Add((voxel.X, voxel.Y, voxel.Z));
+                if (voxel.Y < minimumY) minimumY = voxel.Y;
             }
+
+            var ordered = new List<VoxelPosition>(voxels);
+            ordered.Sort((a, b) =>
+            {
+                int byX = a.X.CompareTo(b.X);
+                if (byX != 0) return byX;
+                int byY = a.Y.CompareTo(b.Y);
+                return byY != 0 ? byY : a.Z.CompareTo(b.Z);
+            });
+            int cleanCursor = 0;
 
             OrganicVoxelGrowth.GrowBatches(
                 voxels, guide.VoxelScale, MaterializationTargetVoxelsPerBatch,
@@ -2567,7 +3037,27 @@ namespace Layout.Systems
             {
                 token.ThrowIfCancellationRequested();
                 if (batch == null || batch.Count == 0) return;
-                var options = new GuideMeshOptions
+
+                int cleanCount = Math.Min(batch.Count, ordered.Count - cleanCursor);
+                var cleanBatch = ordered.GetRange(cleanCursor, cleanCount);
+                cleanCursor += cleanCount;
+                var cleanOptions = new GuideMeshOptions
+                {
+                    Scale = guide.VoxelScale,
+                    Mode = ProjectionMode.Volumetric,
+                    Plane = guide.Plane,
+                    Origin = origin,
+                    Hidden = guide.IsHidden,
+                    GrabbedPoint = grabbed,
+                    PrivateAnchors = privateAnchors,
+                    Occupancy = occupancy,
+                    MinimumVoxelY = minimumY,
+                    IsNeighborSolid = (_, _, _) => false
+                };
+                AssignAnchors(shape.ControlPoints, cleanOptions);
+                cleanMeshes.Add(GuideMeshBuilder.Build(cleanBatch, cleanOptions), token);
+
+                var previewOptions = new GuideMeshOptions
                 {
                     Scale = guide.VoxelScale,
                     Mode = ProjectionMode.Volumetric,
@@ -2579,8 +3069,8 @@ namespace Layout.Systems
                     Occupancy = occupancy,
                     IsNeighborSolid = (_, _, _) => false
                 };
-                AssignAnchors(shape.ControlPoints, options);
-                readyMeshes.Add(GuideMeshBuilder.Build(batch, options), token);
+                AssignAnchors(shape.ControlPoints, previewOptions);
+                readyMeshes.Add(GuideMeshBuilder.Build(batch, previewOptions), token);
             });
         }
 
@@ -2661,6 +3151,7 @@ namespace Layout.Systems
             _grabMaterializationGuide = build.GuideId;
             _grabMaterializationOrigin = build.Origin;
             _lastGrabMaterializationUploadMs = 0;
+            _grabCleanSwapReadyMs = -1;
             _grabMaterializationStarted = true;
             return true;
         }
@@ -2680,12 +3171,14 @@ namespace Layout.Systems
             }
 
             BlockingCollection<MeshData> ready = build.ReadyMeshes;
-            if (ready == null) return;
+            BlockingCollection<MeshData> cleanReady = build.CleanReadyMeshes;
+            if (ready == null || cleanReady == null) return;
             if (!_grabMaterializationStarted)
             {
                 if (!build.MetadataReady || ready.Count == 0)
                 {
-                    if (build.Completed && build.CompletionHandled && ready.IsCompleted)
+                    if (build.Completed && build.CompletionHandled
+                        && ready.IsCompleted && cleanReady.IsCompleted)
                         _activeGrabBuild = null;
                     return;
                 }
@@ -2705,48 +3198,96 @@ namespace Layout.Systems
             }
 
             long now = _capi.World?.ElapsedMilliseconds ?? 0;
-            int interval = MaterializationUploadIntervalMs;
-            if (_smoothedFrameMilliseconds > 22.0) interval *= 2;
-            if (_smoothedFrameMilliseconds > 32.0) interval *= 2;
+            if (build.Completed && build.CompletionHandled
+                && ready.IsCompleted && ready.Count == 0
+                && cleanReady.IsCompleted && cleanReady.Count == 0)
+            {
+                if (!CleanSwapDelayElapsed(ref _grabCleanSwapReadyMs, now)) return;
+                CompleteGrabMaterialization(mesh);
+                return;
+            }
+
+            int interval = MaterializationUploadInterval(build.VoxelCount);
             if (!force && _lastGrabMaterializationUploadMs != 0
                 && now - _lastGrabMaterializationUploadMs < interval) return;
 
-            if (!ready.TryTake(out MeshData next))
+            bool uploadedAny = false;
+            if (cleanReady.TryTake(out MeshData cleanData))
             {
-                if (build.Completed && build.CompletionHandled && ready.IsCompleted)
+                MeshRef uploadedClean = _capi.Render.UploadMesh(cleanData);
+                if (mesh.GrabCleanRef == null)
+                    mesh.GrabCleanRef = uploadedClean;
+                else
+                    mesh.GrabCleanAuxiliary.Add(uploadedClean);
+                uploadedAny = true;
+            }
+            if (ready.TryTake(out MeshData next))
+            {
+                MeshRef uploaded = _capi.Render.UploadMesh(next);
+                if (mesh.GrabRef == null)
                 {
-                    if (_releasedGrabPending)
-                    {
-                        _releasedGrabVisualComplete = true;
-                        TryFinalizeReleasedGrab();
-                    }
-                    _activeGrabBuild = null;
-                    _grabMaterializationStarted = false;
+                    mesh.GrabRef = uploaded;
+                    mesh.GrabOrigin = _grabMaterializationOrigin;
+                }
+                else
+                {
+                    mesh.GrabAuxiliary.Add(uploaded);
+                }
+                uploadedAny = true;
+            }
+            if (!uploadedAny)
+            {
+                if (build.Completed && build.CompletionHandled
+                    && ready.IsCompleted && cleanReady.IsCompleted)
+                {
+                    if (!CleanSwapDelayElapsed(ref _grabCleanSwapReadyMs, now)) return;
+                    CompleteGrabMaterialization(mesh);
                 }
                 return;
             }
 
-            MeshRef uploaded = _capi.Render.UploadMesh(next);
-            if (mesh.GrabRef == null)
-            {
-                mesh.GrabRef = uploaded;
-                mesh.GrabOrigin = _grabMaterializationOrigin;
-            }
-            else
-            {
-                mesh.GrabAuxiliary.Add(uploaded);
-            }
             _lastGrabMaterializationUploadMs = now;
-            if (build.Completed && build.CompletionHandled && ready.IsCompleted)
+            if (build.Completed && build.CompletionHandled
+                && ready.IsCompleted && ready.Count == 0
+                && cleanReady.IsCompleted && cleanReady.Count == 0)
             {
-                if (_releasedGrabPending)
-                {
-                    _releasedGrabVisualComplete = true;
-                    TryFinalizeReleasedGrab();
-                }
-                _activeGrabBuild = null;
-                _grabMaterializationStarted = false;
+                if (!CleanSwapDelayElapsed(ref _grabCleanSwapReadyMs, now)) return;
+                CompleteGrabMaterialization(mesh);
             }
+        }
+
+        private void CompleteGrabMaterialization(GuideMesh mesh)
+        {
+            if (mesh?.GrabCleanRef == null) return;
+            if (mesh.GrabRef != null) _retiredMaterializationMeshes.Enqueue(mesh.GrabRef);
+            RetireMeshList(mesh.GrabAuxiliary);
+            mesh.GrabRef = mesh.GrabCleanRef;
+            mesh.GrabCleanRef = null;
+            mesh.GrabOrigin = _grabMaterializationOrigin;
+            mesh.GrabAuxiliary.AddRange(mesh.GrabCleanAuxiliary);
+            mesh.GrabCleanAuxiliary.Clear();
+
+            if (_releasedGrabPending)
+            {
+                _releasedGrabVisualComplete = true;
+                TryFinalizeReleasedGrab();
+            }
+            _activeGrabBuild = null;
+            _grabMaterializationStarted = false;
+            _grabCleanSwapReadyMs = -1;
+        }
+
+        private void CompleteReleasedGrabAsOrdinary(GuideData guide)
+        {
+            Guid id = _grabbedGuide;
+            _grabbedGuide = Guid.Empty;
+            _grabbedIndex = -1;
+            _grabAdaptiveScale = 0;
+            _grabHealthyUpdates = 0;
+            _grabExtent = GuideExtent.Empty;
+            ResetGrabRefinementState();
+            DeleteGrabMeshes(id);
+            RebuildGuide(guide);
         }
 
         /// <summary>
@@ -2781,6 +3322,7 @@ namespace Layout.Systems
             _grabMaterializationOrigin = null;
             _grabMaterializationStarted = false;
             _lastGrabMaterializationUploadMs = 0;
+            _grabCleanSwapReadyMs = -1;
             _releasedGrabPending = false;
             _releasedGrabAuthorityConfirmed = false;
             _releasedGrabVisualComplete = false;
@@ -2799,6 +3341,7 @@ namespace Layout.Systems
             _grabMaterializationOrigin = null;
             _grabMaterializationStarted = false;
             _lastGrabMaterializationUploadMs = 0;
+            _grabCleanSwapReadyMs = -1;
             _releasedGrabPending = false;
             _releasedGrabAuthorityConfirmed = false;
             _releasedGrabVisualComplete = false;
@@ -2954,6 +3497,9 @@ namespace Layout.Systems
             MeshRef replacement = _capi.Render.UploadMesh(data);
             if (mesh.GrabRef != null) _capi.Render.DeleteMesh(mesh.GrabRef);
             DeleteMeshList(mesh.GrabAuxiliary);
+            if (mesh.GrabCleanRef != null) _capi.Render.DeleteMesh(mesh.GrabCleanRef);
+            mesh.GrabCleanRef = null;
+            DeleteMeshList(mesh.GrabCleanAuxiliary);
             mesh.GrabRef = replacement;
             mesh.GrabOrigin = origin;
         }
@@ -2961,11 +3507,17 @@ namespace Layout.Systems
         private void RemoveGuideMesh(Guid id)
         {
             _deferredSurface.Remove(id);
+            if (_settledMaterializations.TryGetValue(id, out SettledMaterializationBuild build))
+            {
+                build.Cancellation?.Cancel();
+                _settledMaterializations.Remove(id);
+            }
             if (_guideMeshes.TryGetValue(id, out GuideMesh gm))
             {
                 if (gm.Ref != null) _capi.Render.DeleteMesh(gm.Ref);
                 DeleteAuxiliaryMeshes(gm);
                 DeleteGrabMeshes(gm);
+                DeleteTransitionMeshes(gm);
                 _guideMeshes.Remove(id);
             }
         }
@@ -2980,8 +3532,24 @@ namespace Layout.Systems
             if (mesh == null) return;
             if (mesh.GrabRef != null) _capi.Render.DeleteMesh(mesh.GrabRef);
             mesh.GrabRef = null;
+            if (mesh.GrabCleanRef != null) _capi.Render.DeleteMesh(mesh.GrabCleanRef);
+            mesh.GrabCleanRef = null;
             mesh.GrabOrigin = null;
             DeleteMeshList(mesh.GrabAuxiliary);
+            DeleteMeshList(mesh.GrabCleanAuxiliary);
+        }
+
+        private void DeleteTransitionMeshes(GuideMesh mesh)
+        {
+            if (mesh == null) return;
+            if (mesh.TransitionRef != null) _capi.Render.DeleteMesh(mesh.TransitionRef);
+            mesh.TransitionRef = null;
+            if (mesh.TransitionCleanRef != null)
+                _capi.Render.DeleteMesh(mesh.TransitionCleanRef);
+            mesh.TransitionCleanRef = null;
+            mesh.TransitionOrigin = null;
+            DeleteMeshList(mesh.TransitionAuxiliary);
+            DeleteMeshList(mesh.TransitionCleanAuxiliary);
         }
 
         private void DeleteAuxiliaryMeshes(GuideMesh mesh)
@@ -3139,6 +3707,7 @@ namespace Layout.Systems
             _activeDraftBuild = null;
             _activeGrabBuild?.Cancellation?.Cancel();
             _activeGrabBuild = null;
+            CancelAllSettledMaterializations();
             ClearDraftPrecisionMeshes();
             ClearDraftMaterialization();
             DiscardPendingPlacementVisual();
@@ -3148,6 +3717,7 @@ namespace Layout.Systems
                 if (gm.Ref != null) _capi.Render.DeleteMesh(gm.Ref);
                 DeleteAuxiliaryMeshes(gm);
                 DeleteGrabMeshes(gm);
+                DeleteTransitionMeshes(gm);
             }
             _guideMeshes.Clear();
             while (_retiredMaterializationMeshes.Count > 0)

@@ -235,6 +235,7 @@ namespace Layout.Client
             _net.AuthorityModeChanged += OnAuthorityModeChanged;
             _net.GuideWhoRequested += OnGuideWhoRequested;
             _renderer.DraftPreviewCompleted += OnDraftPreviewCompleted;
+            _renderer.PlacementMaterializationCompleted += OnPlacementMaterializationCompleted;
             _capi.Input.InWorldAction += OnInWorldAction;
             _capi.Event.MouseDown += OnMouseDown;      // F5 inventory refill (independent of the tool)
             _capi.Event.MouseUp += OnMouseUp;          // release-to-rearm between height and rim clicks
@@ -1087,6 +1088,11 @@ namespace Layout.Client
                 _hud.SetDraftMeasurement(e.Extent, e.VoxelCount);
         }
 
+        private void OnPlacementMaterializationCompleted(GuideData guide)
+        {
+            ChalkEffects.PlacementEffects(_capi.World, guide);
+        }
+
         private void ResetDraftVisualState()
         {
             _draftGeneration++;
@@ -1566,7 +1572,8 @@ namespace Layout.Client
                 _net.SendCreateRequest(completion.Start, completion.End, placementSettings,
                     _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
                     inverted, _draft.Sides, completion.Apex, rim: completion.Rim,
-                    flatSideAligned: completion.FlatSideAligned);
+                    flatSideAligned: completion.FlatSideAligned,
+                    deferPlacementEffects: retainedExactPreview);
                 _draft.ClearDraft();
                 _rimAimArmed = false;
                 _rimAwaitingRelease = false;
@@ -2748,6 +2755,7 @@ namespace Layout.Client
             _net.AuthorityModeChanged -= OnAuthorityModeChanged;
             _net.GuideWhoRequested -= OnGuideWhoRequested;
             _renderer.DraftPreviewCompleted -= OnDraftPreviewCompleted;
+            _renderer.PlacementMaterializationCompleted -= OnPlacementMaterializationCompleted;
             _capi.Input.InWorldAction -= OnInWorldAction;
             _capi.Event.MouseDown -= OnMouseDown;
             _capi.Event.MouseUp -= OnMouseUp;

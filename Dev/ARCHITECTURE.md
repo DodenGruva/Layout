@@ -1,7 +1,7 @@
-# Layout — Architecture Document (v3.10)
+# Layout — Architecture Document (v3.11)
 
-**Supersedes v3.9 — immense-guide execution, organic materialization, moderation, and render control
-(v0.3.22–v0.3.34).** v2.5 consolidated five
+**Supersedes v3.10 — materialization completion, clean-shell transitions, and intrinsic HUD dimensions
+(v0.3.35–v0.3.40).** v2.5 consolidated five
 revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
 catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
 surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
@@ -38,7 +38,7 @@ makes tapered-rim flare opt-in. **v3.8 adds motion-sensitive structural previews
 precision, generation-safe background refinement and batched materialization, cached placed-guide metadata,
 retained-mesh cancel quarantine, canonical/persistent Shell↔Wireframe form, size-weighted placement sound,
 and surface-proportional oversized Cylinder/Cone/Box fallback generation.** The register, file tree, module
-map, persistence, and edge cases below are updated in place to the v0.3.34 / DataVersion 12 / protocol-16 /
+map, persistence, and edge cases below are updated in place to the v0.3.40 / DataVersion 12 / protocol-16 /
 77-file state; the per-revision deltas live
 in **`CHANGELOG_ARCHITECTURE.md`** (indexed below).
 
@@ -53,7 +53,12 @@ validation lane with bounded claim ticks; retained placement/sculpt visual hando
 shape scans; organic neighbour-growth materialization; whole-guide view-distance culling; and personal
 `/layout off|on` rendering control.**
 
-**Where the project stands:** Layout **v0.3.34** is built, packaged, documented, and pushed on `main`.
+**v3.11 folds in Session 24 (v0.3.35–v0.3.40): base-plus-proportional nucleation and size-aware reveal
+cadence; a complete-growth hold followed by an atomic clean-shell swap; scaffold and placement-effect
+gating; cancellable Wireframe→Shell materialization; below-threshold sculpt-latch closure; polygonal-prism
+scan rejection; and shape-intrinsic HUD dimensions.**
+
+**Where the project stands:** Layout **v0.3.40** is built, packaged, documented, and pushed on `main`.
 All seven modules, the complete 2D/3D catalog, normal public multiplayer, vanilla-server local
 fallback, mixed public/private operation, and the full F5 chalk system run against **VS 1.22.x** / .NET 10.
 The catalog is **15 shape types / 21 picker tiles**, **DataVersion 12**, **protocol 16**, and **77 source
@@ -63,7 +68,7 @@ and server pipelines. Filled 3D interiors are retired; volumes persist as a holl
 structural Wireframe.
 The Session-16 backlog is fully delivered. Public/private multiplayer passed the v0.2.35 release test,
 fired-jug/raw-jug crafting is confirmed, and B-S9-1 closed with a human-approved v0.2.36 playtest. Remaining:
-ordinary v0.3.34 field soak and mesh Stage B (spatial chunks + per-chunk culling) only if settled in-range
+ordinary v0.3.40 field soak and mesh Stage B (spatial chunks + per-chunk culling) only if settled in-range
 rendering—not calculation/validation—proves insufficient.
 Two items carry
 verification debt — the chalk ceiling has not been tested against xskills itself, and 1.22.0 support is
@@ -105,13 +110,14 @@ declared but untested. See `TODO.md` and `SESSION_17.md`.
 
 ## Document changelog — index
 
-Per-revision deltas for THIS document (v2.5 → v3.10) now live in **`CHANGELOG_ARCHITECTURE.md`**. They are
+Per-revision deltas for THIS document (v2.5 → v3.11) now live in **`CHANGELOG_ARCHITECTURE.md`**. They are
 not repeated here: every delta is already folded in place into the register / file tree / module map /
 persistence / edge cases below, and each has a fuller narrative in its session record. Use this table to find
 *when* something changed; read the body below for *what is true now*.
 
 | Doc rev | Mod versions | Theme | Session record |
 |---|---|---|---|
+| v3.11 | v0.3.35 → v0.3.40 | Materialization completion; clean-shell transitions; intrinsic HUD dimensions | `SESSION_24.md` |
 | v3.10 | v0.3.22 → v0.3.34 | Moderation/claims; bounded immense validation; organic materialization; render controls | `SESSION_23.md` |
 | v3.9 | v0.3.9 → v0.3.21 | Action-aware HUD; attribution; sculpt parity; projection-transition fix | `SESSION_22.md` |
 | v3.8 | v0.3.0 → v0.3.8 | Adaptive draft/materialization; cached hover; safe cancel; persistent Shell/Wireframe | `SESSION_21.md` |
@@ -325,7 +331,7 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   cell). **Division marks share that even-span pairing** (Session 10, `ShapeGeometry.ClaimMarkerPaired`): a
   boundary landing between two voxels claims both, so the equal parts read even; boundaries on a cell centre
   stay single.
-- **Adaptive large-guide drafting and sculpting (v0.3–v0.3.34):** cheap poses render their normal
+- **Adaptive large-guide drafting and sculpting (v0.3–v0.3.40):** cheap poses render their normal
   selected-scale shell. Expensive moving 3D poses use a structural wireframe under work/frame-pressure
   hysteresis; at least four selected-scale voxels around the cursor remain precise, stepping outward across
   roughly two blocks. Generation-tagged, cancellable progressive scans produce the exact selected-scale
@@ -333,12 +339,22 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   while server authority validates; an immense sculpt retains its old settled mesh plus the moving
   wireframe until replacement batches are ready. Pending draft/grab measurements show animated calculation
   dots rather than blocking input.
-- **Organic materialization (v0.3.34):** exact voxels are reordered—not approximated—by deterministic
-  multi-seed 26-neighbour growth. Six to 28 well-separated seeds, two smooth noise scales, and fine grain
-  create torn/frayed fronts that spread across the guide instead of planar bands or square chunks. The
-  producer streams bounded batches into a capacity-three queue; the client consumes about 750 voxels per
-  batch (bounded 8–128 batches, nominal 45 ms upload spacing) and backs off under frame pressure. The final
-  union is byte-for-byte the shape generator's exact occupancy.
+- **Organic materialization (v0.3.34–v0.3.40):** exact voxels are reordered—not approximated—by
+  deterministic multi-seed 26-neighbour growth. A six-site base plus one site per 500 voxels establishes
+  enough fronts for small guides while scaling with immense shells. Two smooth noise scales and fine grain
+  create torn/frayed fronts instead of planar bands or square chunks. The producer streams bounded batches
+  into a capacity-three queue; the client consumes about 750 voxels per batch (bounded 8–128 batches), with
+  upload spacing that scales from about 18 ms for small guides to 45 ms by 120,000 voxels and backs off under
+  frame pressure. The wire scaffold disappears at the first organic batch. Once the full exact occupancy is
+  visible, it holds for 200 ms before an independently generated, clean uniform shell swaps in atomically.
+  Placement particles and sound wait for both final placement authority and that clean-shell swap.
+- **Settled form materialization (v0.3.39):** Edit-mode Wireframe→Shell changes enter the same
+  generation-tagged, cancellable materialization chain instead of synchronously rebuilding the full shell.
+  The existing wireframe is retained only until the first organic batch. Replacing or cancelling a
+  transition quarantines stale workers by guide fingerprint.
+- **Intrinsic volume dimensions (v0.3.40):** sphere, dome, cylinder, cone, tapered cylinder, and polygonal
+  prism families expose shape-local width and axial height to the HUD/cache layer. Displayed dimensions no
+  longer derive width from the diagonal of a rotated world-axis footprint AABB.
 - **Placed behemoth safeguards (v0.3.3–v0.3.34):** display name/count/dimensions are cached; placed hover
   never voxelizes. Placement and reshape authority echoes adopt the retained work visual instead of
   triggering a synchronous full-shell rebuild. Old meshes retire incrementally across frames. Cancel reveals
@@ -1050,7 +1066,7 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
 
 ---
 
-This v3.10 document is the authoritative architecture, consolidated to current state: **Layout v0.3.34 built,
+This v3.11 document is the authoritative architecture, consolidated to current state: **Layout v0.3.40 built,
 packaged, documented, and pushed on `main`**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
 (+ right/equilateral/isosceles), rectangles (+ square), polygons, and Free-Shapes — plus the **3D volume
 family** (spheres, domes, cylinders, tapered cylinders, straight/tapered polygonal prisms, cones, boxes)
@@ -1061,4 +1077,5 @@ punch-list live in `PROJECT_STATUS.md` and `TODO.md`; the current-state brief fo
 `HANDOFF.md` at the repo root; F4's final behavior record lives in `PLAN_CLIENT_ONLY.md`, its implementation
 history in `SESSION_12.md`, the interaction checkpoint in `SESSION_13.md`, the mesh resume plan in
 `SESSION_14.md`, the adaptive large-guide record in `SESSION_21.md`, the HUD/attribution/sculpting record in
-`SESSION_22.md`, and the current moderation/claims/immense-guide/materialization record in `SESSION_23.md`.
+`SESSION_22.md`, the moderation/claims/immense-guide record in `SESSION_23.md`, and the current
+materialization-completion/HUD-dimension record in `SESSION_24.md`.

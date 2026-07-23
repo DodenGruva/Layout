@@ -17,7 +17,8 @@ namespace Layout.Shapes
     /// <see cref="CylinderShape"/> for the reasoning. The cone's band compares the cell centre's radial
     /// distance against the LOCAL radius at its axial station.
     /// </remarks>
-    public sealed class ConeShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape
+    public sealed class ConeShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape,
+        IIntrinsicGuideExtent
     {
         private const double MinRadius = 0.05;
         private const double MinHeight = 0.05;
@@ -78,6 +79,17 @@ namespace Layout.Shapes
             Vec3d p = _controlPoints[2].WorldPosition;
             h = (p.X - c.X) * n.X + (p.Y - c.Y) * n.Y + (p.Z - c.Z) * n.Z;
             if (Math.Abs(h) < MinHeight) h = h < 0 ? -MinHeight : MinHeight;
+            return true;
+        }
+
+        public bool TryGetIntrinsicDimensions(out double width, out double height)
+        {
+            width = height = 0;
+            if (!TryGetFull(
+                out _, out double radius, out _, out _, out _, out double axialHeight))
+                return false;
+            width = radius * 2.0;
+            height = Math.Abs(axialHeight);
             return true;
         }
 

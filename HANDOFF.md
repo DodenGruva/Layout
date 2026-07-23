@@ -3,11 +3,11 @@
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
 > and the performance-relevant mechanics. Updated 2026-07-23 against the built/package checkpoint
-> **v0.3.34**. Where this file and the code disagree, **the code wins** — treat this as a map, then
+> **v0.3.40**. Where this file and the code disagree, **the code wins** — treat this as a map, then
 > read the `.cs` files it points at.
 >
-> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.10),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/23.md` (per-session
+> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.11),
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/24.md` (per-session
 > history), `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
 
@@ -21,7 +21,7 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.3.34 built, packaged, documented, and pushed on `main`. The v0.3 arc is playtest-driven: behemoth motion stays
+- **Status:** v0.3.40 built, packaged, documented, and pushed on `main`. The v0.3 arc is playtest-driven: behemoth motion stays
   wireframe-cheap; immense placement and final sculpt validation use a single low-priority server lane;
   selected-scale shells stream to the client in bounded, organic neighbour-growth batches; old GPU batches
   retire across frames; and persistent Shell/Wireframe mode works. The HUD is fixed-size and action-aware;
@@ -50,12 +50,12 @@ guides on servers without Layout and, when server policy permits, alongside publ
 - **Closed in v0.2.36:** B-S9-1 adjacent-lock targeting. Exact rendered-cell ownership prevents a formerly
   locked marker from shadowing its neighbor. Two unrelated verification debts remain: xskills itself and a
   VS 1.22.0/1.22.1 smoke test.
-- **Current performance state:** interaction-side large-guide work was rebuilt in v0.3.0–v0.3.34. Motion
+- **Current performance state:** interaction-side large-guide work was rebuilt in v0.3.0–v0.3.40. Motion
   uses bounded/adaptive wireframes, the cursor keeps selected-scale precision, exact occupancy calculates
   off-thread, and connected mold-like splotches stream through bounded queues. Public immense count/footprint
   work is isolated from the server tick; claim checks consume at most 128 blocks / about 1 ms per tick. Placed
   hover uses cached metadata and out-of-range guides are not drawn. Stage B/C remain only for a future
-  in-range settled-rendering bottleneck. See §9 and `dev/SESSION_21.md`–`SESSION_23.md`.
+  in-range settled-rendering bottleneck. See §9 and `dev/SESSION_21.md`–`SESSION_24.md`.
 - **Design philosophy (standing rule): correctness over performance** unless told otherwise. Several
   deliberate un-optimized paths exist by choice; see §9.
 
@@ -91,7 +91,7 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── src/                        ← all 77 .cs files (see §6)
 └── dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
-    ├── SESSION_9.md … SESSION_18.md  SESSION_19.md  SESSION_20.md  SESSION_21.md  SESSION_22.md  SESSION_23.md
+    ├── SESSION_9.md … SESSION_19.md  SESSION_20.md  SESSION_21.md  SESSION_22.md  SESSION_23.md  SESSION_24.md
     ├── CHANGELOG_ARCHITECTURE.md   ← ARCHITECTURE.md's per-revision deltas (archive)
     ├── PLAN_CLIENT_ONLY.md  PLAN_CHALKING_KIT.md  BUILD_INSTRUCTIONS.txt
 ```
@@ -276,7 +276,7 @@ path.
 ## 9. Performance characteristics & deliberate trade-offs
 
 **The interaction and authority spikes have dedicated immense-guide paths.** Stage A reduced steady mesh cost;
-v0.3 removed repeated full shape/HUD calculations from motion, then v0.3.26–v0.3.34 moved public immense
+v0.3 removed repeated full shape/HUD calculations from motion, then v0.3.26–v0.3.40 moved public immense
 count/footprint work off the server tick and made placement/sculpt visuals stream through bounded queues.
 Standing rule is **input smoothness first for this path**: exact visuals and numbers may settle later, but
 cursor/input responsiveness and the server tick must not wait on them. Stage B/C remain available for a
@@ -291,9 +291,19 @@ distinct future in-range settled-rendering bottleneck.
   worker for isolated exact count + claim-footprint generation. Claim API calls remain on the server thread
   and stop after 128 blocks or about 1 ms per 20 ms tick. Small candidates (≤8,000 voxels) retain the immediate
   path.
-- **Organic materialization (v0.3.34)** — exact occupancy feeds deterministic multi-seed 26-neighbour growth.
-  Broad/detail smooth noise and fine grain deform the front; batches stream as traversal proceeds. Uploads
-  target 750 voxels, cap at 128 batches, normally advance every 45 ms, and slow further when frame time rises.
+- **Organic materialization (v0.3.34–v0.3.40)** — exact occupancy feeds deterministic multi-seed
+  26-neighbour growth. Seed count is `6 + ceil(voxels / 500)` (bounded by occupancy), so both small and
+  immense shells establish enough independent fronts. Uploads target 750 voxels, cap at 128 batches, and
+  scale from about 18 ms for small guides to 45 ms by 120,000 voxels, with additional frame-pressure
+  backoff. The scaffold disappears with the first organic batch; complete growth holds for 200 ms before a
+  separately built clean, uniform shell replaces it. Placement particles/sound wait for both that clean
+  swap and final placement authority.
+- **Settled form transitions (v0.3.39)** — Edit-mode Wireframe→Shell changes use the same cancellable
+  off-thread materialization path instead of synchronously building the full shell. The wireframe remains
+  only until the first organic batch.
+- **Intrinsic HUD dimensions (v0.3.40)** — round and polygonal volumes report their local defining width and
+  axial height rather than the diagonal of a rotated world-axis AABB. An 83-block dome therefore reports
+  83 blocks wide, not 117.
 - **Mesh rebuild** — a full `MeshData` rebuild for a guide on every change event. The cube path now emits
   **only exposed faces** (4 verts / 6 indices each, no interior/shared faces), pre-counted and exactly
   allocated. Settled guides mesh at **true scale, never coarsened** (see below).
@@ -447,8 +457,9 @@ cell; an adjacent first-hit body cell now receives a distinct passive marker. Hu
    (a) the hard 32-chalk ceiling is verified by an offline harness but **never tested against xskills
    itself**; (b) **1.22.x support is declared, not tested** — the code was built against 1.22.3, so nothing
    confirms every API used exists in 1.22.0.
-2. **Collect v0.3.34 field reports.** Focus on immense placement/final-sculpt smoothness, organic-growth
-   silhouette and cadence, rejected/cancelled validation, view-range transitions, and `/layout off|on`.
+2. **Field-test v0.3.40.** Focus on small/immense materialization cadence, the complete-growth pause and clean
+   shell swap, particle timing after final placement, Wireframe→Shell Edit transitions, repeated sculpt
+   resizing, polygonal-prism startup, and intrinsic HUD dimensions.
 3. **Mesh pass Stage B/C** (§9 / `SESSION_14.md`) only if settled in-range rendering—not calculation,
    validation, or out-of-range guides—becomes the next measured bottleneck. Preserve true selected-scale semantics.
 4. **Keep the broader multiplayer matrix as future regression coverage.** The v0.2.35 public/private pass
@@ -472,14 +483,16 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   `GuideShapeType` / `ShapeConstraint` / projection enums, which are pinned append-only).
 - **`UndoManager` folder ≠ namespace:** it lives in `src/Systems/` but is `Layout.Systems.UndoManager` —
   the one file where folder and namespace diverge.
-- **The Session docs are historical.** `SESSION_9`…`SESSION_23.md` are point-in-time narratives (SESSION_12
+- **The Session docs are historical.** `SESSION_9`…`SESSION_24.md` are point-in-time narratives (SESSION_12
   covers F4 through v0.1.45; SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 mesh handoff;
   SESSION_15 is the v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc;
   SESSION_17 is the v0.2.22–v0.2.23 seven-item backlog; SESSION_18/19 cover the Tapered Cylinder and dust;
   SESSION_20 covers v0.2.36–v0.2.47 polygonal volumes/modifiers; SESSION_21 covers the v0.3.0–v0.3.8
   adaptive large-guide and persistent-wireframe arc; SESSION_22 covers the v0.3.9–v0.3.21 HUD,
   attribution, sculpting-parity, and projection-transition arc; SESSION_23 covers v0.3.22–v0.3.34
-  moderation, claims, bounded immense validation, organic materialization, and render controls). For
+  moderation, claims, bounded immense validation, organic materialization, and render controls; SESSION_24
+  covers v0.3.35–v0.3.40 materialization completion, clean-shell transitions, timing, polygonal scan
+  optimization, and intrinsic HUD dimensions). For
   current state, trust `HANDOFF.md` / `ARCHITECTURE.md` / the code, not a mid-session checklist inside a
   session record.
 - **`dev/BUILD_INSTRUCTIONS.txt`** is the original v0.1.0 first-build doc; its build/run steps are still

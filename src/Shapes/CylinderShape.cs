@@ -20,7 +20,8 @@ namespace Layout.Shapes
     /// the accepted v1 trade. Solid is the matching fattened disc column, a strict superset of the shell.
     /// Same scan guard scheme as the sphere.
     /// </remarks>
-    public sealed class CylinderShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape
+    public sealed class CylinderShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape,
+        IIntrinsicGuideExtent
     {
         private const double MinRadius = 0.05;
         private const double MinHeight = 0.05;
@@ -83,6 +84,17 @@ namespace Layout.Shapes
             Vec3d p = _controlPoints[2].WorldPosition;
             h = (p.X - c.X) * n.X + (p.Y - c.Y) * n.Y + (p.Z - c.Z) * n.Z;
             if (Math.Abs(h) < MinHeight) h = h < 0 ? -MinHeight : MinHeight;
+            return true;
+        }
+
+        public bool TryGetIntrinsicDimensions(out double width, out double height)
+        {
+            width = height = 0;
+            if (!TryGetFull(
+                out _, out double radius, out _, out _, out _, out double axialHeight))
+                return false;
+            width = radius * 2.0;
+            height = Math.Abs(axialHeight);
             return true;
         }
 

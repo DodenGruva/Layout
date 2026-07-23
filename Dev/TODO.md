@@ -1,11 +1,11 @@
-# Layout — TODO / Outstanding Items (current: v0.3.34)
+# Layout — TODO / Outstanding Items (current: v0.3.40)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.3.34 → next)
+## ⭐ Top of the list (v0.3.40 → next)
 
 > **Session-16 playtest results (human-confirmed):** the v0.2.21 **inventory refill and hotbar refill both
 > work** — the MouseDown-hook ordering and the `InventoryID` round-trip both hold, closing `SESSION_16.md` §8.
@@ -149,6 +149,31 @@
 disappears; server tick health during allowed/denied claim checks; organic reveal stays torn from beginning
 to end; immense sculpt release; overlapping-operation gate; distance culling; and `/layout off|on` in public,
 private, and vanilla-fallback contexts.
+
+### A6. Session-24 materialization completion and HUD dimensions (v0.3.35–v0.3.40) — full detail in `SESSION_24.md`
+
+1. ~~**Scale nucleation with guide size and align growth with readiness.**~~ **DONE.** Site count is a
+   six-site base plus one per 500 voxels, while upload cadence scales from about 18 ms for small guides to
+   45 ms by 120,000 voxels and backs off under frame pressure.
+2. ~~**Restore a completely clean final shell.**~~ **DONE.** Organic growth and the uniform final shell are
+   separate lockstep mesh sets. After every exact voxel has appeared, growth remains visible for 200 ms,
+   then swaps atomically to the clean shell.
+3. ~~**Remove scaffold overlap and gate placement effects.**~~ **DONE.** The wireframe disappears with the
+   first organic batch. Particles and sound wait until both final placement authority and the clean-shell
+   swap, including drafts allowed to finish materializing before their last click.
+4. ~~**Prevent sculpt lockout after resizing an immense guide below threshold.**~~ **DONE.** The ordinary
+   settled rebuild now closes the retained immense transaction and clears its latch.
+5. ~~**Materialize Wireframe→Shell Edit changes.**~~ **DONE.** A settled form change uses the cancellable,
+   off-thread organic pipeline instead of synchronously generating the complete clean shell.
+6. ~~**Remove polygonal-prism startup stalls.**~~ **DONE.** Side normals are precomputed and safe
+   inner/outer annulus rejection avoids expensive edge tests across empty bounding-box regions.
+7. ~~**Correct round-volume HUD dimensions.**~~ **DONE.** Shape-provided intrinsic width/axial height
+   replaces the diagonal of the world-axis XZ bounds; an 83-block dome now displays 83 blocks wide.
+
+**Next playtest focus:** verify the entire growth surface is visible before the 200 ms hold and clean swap;
+particles occur only after final placement; small/large timing feels proportional; Wireframe→Shell edits and
+repeated large→small sculpt releases remain responsive; polygonal prisms start promptly; and every 3D family
+reports intuitive block dimensions.
 
 ### A. Human backlog — queued at Session-16 end — ✅ ALL SEVEN DELIVERED (v0.2.22–v0.2.23)
 
@@ -624,8 +649,9 @@ the inventory refill remains (Top of the list).
 ## Next session — start here
 
 **The agenda is "⭐ Top of the list" at the top of this file** — it is not repeated here. Current state:
-the v0.3.34 moderation/claims/immense-guide arc is complete, documented, built, packaged, and pushed on `main`;
-collect the focused v0.3.34 field reports above and revisit performance only from a measured remaining
+the v0.3.40 materialization-completion/HUD-dimension arc is complete, documented, built, packaged, and
+pushed on `main`;
+collect the focused v0.3.40 field reports above and revisit performance only from a measured remaining
 bottleneck.
 
 **Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\LayoutZips\`;

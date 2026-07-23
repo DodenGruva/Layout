@@ -1,12 +1,31 @@
 # Layout — Architecture Changelog (document-version history)
 
 > **Split out of `ARCHITECTURE.md` to keep the orientation read cheap.** These are the per-revision deltas
-> for the architecture document itself, v2.5 → v3.10. **Nothing here is unique:** each delta is already folded
+> for the architecture document itself, v2.5 → v3.11. **Nothing here is unique:** each delta is already folded
 > in place into `ARCHITECTURE.md`'s body (Settled Decisions Register, file tree, module map, persistence,
 > edge cases), and each has a fuller narrative in its `SESSION_*.md` record. Kept as the audit trail — read
 > it when you need to know *when* something changed, not *what* the current state is.
 
 ---
+
+## Changelog — v3.10 → v3.11 (materialization completion + intrinsic HUD dimensions, v0.3.35 → v0.3.40; full record in `SESSION_24.md`)
+
+- **Size-aware nucleation and cadence:** organic growth uses a six-site base plus one seed per 500 voxels,
+  selected with deterministic spatial buckets. Batch cadence scales from about 18 ms for small guides to
+  45 ms by 120,000 voxels and still yields under frame pressure.
+- **Clean completion contract:** organic growth reaches the complete exact shell, remains visible for
+  200 ms, then swaps atomically to a separately built clean uniform shell. The placement/sculpt scaffold
+  disappears with the first growth batch.
+- **Authority-aware effects:** placement particles and sound require both the final placement click/authority
+  and the completed clean-shell swap, including previews that finish before placement.
+- **Settled form changes:** Edit-mode Wireframe→Shell transitions use the cancellable off-thread
+  materialization pipeline instead of a synchronous full-shell mesh build. A sculpt resized below the
+  immense threshold now completes and clears the retained-operation latch.
+- **Polygonal volume startup:** straight and tapered polygonal prisms precompute side normals and reject safe
+  inner/outer annulus regions before expensive edge tests.
+- **Intrinsic HUD dimensions:** sphere, dome, cylinder, cone, tapered-cylinder, and polygonal-prism families
+  report local width and axial height instead of a rotated world-AABB footprint diagonal. No persistence or
+  wire changes; DataVersion remains 12 and protocol remains 16.
 
 ## Changelog — v3.9 → v3.10 (moderation + bounded immense guides + organic materialization, v0.3.22 → v0.3.34; full record in `SESSION_23.md`)
 

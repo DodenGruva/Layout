@@ -11,7 +11,8 @@ namespace Layout.Shapes
     /// The base gesture is identical to <see cref="PolygonShape"/>: the first click is a vertex and the
     /// second is the opposite vertex (even N) or opposite edge midpoint (odd N).
     /// </summary>
-    public sealed class PolygonalPrismShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape
+    public sealed class PolygonalPrismShape : IGuideShape, IThresholdVoxelCounter,
+        IProgressiveVoxelShape, IIntrinsicGuideExtent
     {
         private const double MinRadius = 0.05;
         private const double MinHeight = 0.05;
@@ -22,6 +23,9 @@ namespace Layout.Shapes
         private readonly int _sides;
         private readonly bool _tapered;
         private readonly bool _flatSideAligned;
+        private readonly double _apothemRatio;
+        private readonly double[] _edgeNormalX;
+        private readonly double[] _edgeNormalY;
 
         public List<ControlPoint> ControlPoints => _controlPoints;
         public ShapeConstraint Constraint => ShapeConstraint.None;
@@ -33,6 +37,9 @@ namespace Layout.Shapes
             _sides = PolygonShape.ClampSides(sides);
             _tapered = tapered;
             _flatSideAligned = flatSideAligned;
+            _apothemRatio = Math.Cos(Math.PI / _sides);
+            BuildEdgeNormals(_sides, _flatSideAligned,
+                out _edgeNormalX, out _edgeNormalY);
             _controlPoints = new List<ControlPoint>
             {
                 new ControlPoint(new Vec3d(a.X, a.Y, a.Z), isAnchor: true),
@@ -57,6 +64,9 @@ namespace Layout.Shapes
             _sides = PolygonShape.ClampSides(sides);
             _tapered = tapered;
             _flatSideAligned = flatSideAligned;
+            _apothemRatio = Math.Cos(Math.PI / _sides);
+            BuildEdgeNormals(_sides, _flatSideAligned,
+                out _edgeNormalX, out _edgeNormalY);
         }
 
         private static bool TryBaseFrame(List<ControlPoint> points, PlaneAxis axis, int sides,
@@ -103,6 +113,17 @@ namespace Layout.Shapes
             return true;
         }
 
+        public bool TryGetIntrinsicDimensions(out double width, out double height)
+        {
+            width = height = 0;
+            if (!TryGetFull(out _, out double baseRadius, out _, out _, out _,
+                out double axialHeight, out double topRadius))
+                return false;
+            width = Math.Max(baseRadius, topRadius) * 2.0;
+            height = Math.Abs(axialHeight);
+            return true;
+        }
+
         private static double RadialDistance(Vec3d p, Vec3d c, Vec3d n)
         {
             double px = p.X - c.X, py = p.Y - c.Y, pz = p.Z - c.Z;
@@ -135,18 +156,40 @@ namespace Layout.Shapes
             return result;
         }
 
-        // Exact inside-distance to a regular polygon's nearest supporting edge. Outside corners use the
-        // same half-diagonal tolerance as the cylinder family, producing a stable one-cell shell.
+        private static void BuildEdgeNormals(
+            int sides, bool flatSideAligned, out double[] normalX, out double[] normalY)
+        {
+            normalX = new double[sides];
+            normalY = new double[sides];
+            for (int k = 0; k < sides; k++)
+            {
+                double angle = Math.PI
+                    + (2.0 * k + (flatSideAligned ? 2.0 : 1.0)) * Math.PI / sides;
+                normalX[k] = Math.Cos(angle);
+                normalY[k] = Math.Sin(angle);
+            }
+        }
+
+        // Exact inside-distance to a regular polygon's nearest supporting edge. The circular annulus checks
+        // are conservative: they reject only points whose support can provably never reach the wall. This is
+        // especially important for tapered prisms, whose AABB is sized from the widest end even when most
+        // axial slices are much narrower.
         private bool IsOnPolygonBoundary(double x, double y, double radius, double halfDiagonal)
         {
+            double radiusSquared = x * x + y * y;
+            double apothem = radius * _apothemRatio;
+            double innerRadius = apothem - halfDiagonal;
+            if (innerRadius > 0 && radiusSquared < innerRadius * innerRadius)
+                return false;
+
+            double outerRadius = radius + halfDiagonal / _apothemRatio;
+            if (radiusSquared > outerRadius * outerRadius)
+                return false;
+
             double support = double.MinValue;
             for (int k = 0; k < _sides; k++)
-            {
-                double normalAngle = Math.PI
-                    + (2.0 * k + (_flatSideAligned ? 2.0 : 1.0)) * Math.PI / _sides;
-                support = Math.Max(support, x * Math.Cos(normalAngle) + y * Math.Sin(normalAngle));
-            }
-            double apothem = radius * Math.Cos(Math.PI / _sides);
+                support = Math.Max(support,
+                    x * _edgeNormalX[k] + y * _edgeNormalY[k]);
             return Math.Abs(support - apothem) <= halfDiagonal;
         }
 

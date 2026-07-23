@@ -30,7 +30,8 @@ namespace Layout.Shapes
     /// anchor preserves the taper RATIO (top/base), not the absolute top radius — resizing the base of a
     /// windmill tower should scale the whole silhouette, not just its foot. (Decide-and-flag.)
     /// </remarks>
-    public sealed class TaperedCylinderShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape
+    public sealed class TaperedCylinderShape : IGuideShape, IThresholdVoxelCounter,
+        IProgressiveVoxelShape, IIntrinsicGuideExtent
     {
         private const double MinRadius = 0.05;
         private const double MinHeight = 0.05;
@@ -103,6 +104,17 @@ namespace Layout.Shapes
                 : r * DefaultTopRatio;
             if (rTop > r * MaxTopRatio) rTop = r * MaxTopRatio;
             if (rTop < 0) rTop = 0;
+            return true;
+        }
+
+        public bool TryGetIntrinsicDimensions(out double width, out double height)
+        {
+            width = height = 0;
+            if (!TryGetFull(out _, out double baseRadius, out _, out _, out _,
+                out double axialHeight, out double topRadius))
+                return false;
+            width = Math.Max(baseRadius, topRadius) * 2.0;
+            height = Math.Abs(axialHeight);
             return true;
         }
 

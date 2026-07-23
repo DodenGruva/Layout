@@ -22,7 +22,8 @@ namespace Layout.Shapes
     /// filled domes retain the bounding-lattice scan guard. Dragging the apex is absorbed (it snaps back to
     /// the derived position — no break target in v1).
     /// </remarks>
-    public sealed class DomeShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape
+    public sealed class DomeShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape,
+        IIntrinsicGuideExtent
     {
         private const double MinRadius = 0.05;
         private const long MaxScanCells = 4_000_000;
@@ -75,6 +76,15 @@ namespace Layout.Shapes
             Vec3d v = _controlPoints[2].WorldPosition;
             double side = ShapeGeometry.Dot(new Vec3d(v.X - c.X, v.Y - c.Y, v.Z - c.Z), n) < 0 ? -1.0 : 1.0;
             n = new Vec3d(n.X * side, n.Y * side, n.Z * side);   // n̂ points at the apex's side
+            return true;
+        }
+
+        public bool TryGetIntrinsicDimensions(out double width, out double height)
+        {
+            width = height = 0;
+            if (!TryGetFrame(out _, out double radius, out _, out _, out _)) return false;
+            width = radius * 2.0;
+            height = radius;
             return true;
         }
 

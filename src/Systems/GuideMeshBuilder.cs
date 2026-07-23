@@ -526,6 +526,11 @@ namespace Layout.Systems
         public static GuideExtent MeasureShapeExtent(IGuideShape shape, int scale)
         {
             if (shape == null || scale <= 0) return GuideExtent.Empty;
+            if (shape is IIntrinsicGuideExtent intrinsic
+                && intrinsic.TryGetIntrinsicDimensions(
+                    out double intrinsicWidth, out double intrinsicHeight))
+                return ExtentFromWorldDimensions(intrinsicWidth, intrinsicHeight, scale);
+
             List<Vec3d> curve = shape.SampleCurve(128);
             if ((curve == null || curve.Count == 0) && shape.ControlPoints == null)
                 return GuideExtent.Empty;
@@ -557,6 +562,24 @@ namespace Layout.Systems
             int voxelHeight = (maxY - minY) / scale + 1;
             return new GuideExtent(voxelWidth, voxelHeight,
                 CeilDiv(voxelWidth * scale, 16), CeilDiv(voxelHeight * scale, 16));
+        }
+
+        private static GuideExtent ExtentFromWorldDimensions(
+            double width, double height, int scale)
+        {
+            const double roundingEpsilon = 1e-9;
+            int voxelWidth = Math.Max(1,
+                (int)Math.Ceiling(Math.Max(0.0, width) * 16.0 / scale
+                    - roundingEpsilon));
+            int voxelHeight = Math.Max(1,
+                (int)Math.Ceiling(Math.Max(0.0, height) * 16.0 / scale
+                    - roundingEpsilon));
+            int blockWidth = Math.Max(1,
+                (int)Math.Ceiling(Math.Max(0.0, width) - roundingEpsilon));
+            int blockHeight = Math.Max(1,
+                (int)Math.Ceiling(Math.Max(0.0, height) - roundingEpsilon));
+            return new GuideExtent(
+                voxelWidth, voxelHeight, blockWidth, blockHeight);
         }
 
         /// <summary>

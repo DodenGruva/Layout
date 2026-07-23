@@ -179,6 +179,20 @@ namespace Layout.Shapes
     /// </summary>
     internal static class OrganicVoxelGrowth
     {
+        // Every shell receives a true base population, then size adds more sites. The earlier max(floor,
+        // proportional-count) formula stopped the floor contributing as soon as a guide became immense;
+        // adding the two terms gives smaller shells several more simultaneous fronts without flattening the
+        // proportional growth of large guides.
+        private const int BaseNucleationSites = 6;
+        private const int VoxelsPerNucleationSite = 500;
+
+        internal static int NucleationSiteCount(int voxelCount)
+        {
+            if (voxelCount <= 0) return 0;
+            return Math.Min(voxelCount, BaseNucleationSites
+                + (voxelCount + VoxelsPerNucleationSite - 1) / VoxelsPerNucleationSite);
+        }
+
         internal static List<List<VoxelPosition>> BuildBatches(
             IReadOnlyList<VoxelPosition> voxels, int scale, int targetVoxelsPerBatch,
             int minimumBatches, int maximumBatches, CancellationToken cancellationToken)
@@ -218,10 +232,8 @@ namespace Layout.Shapes
                 at[(voxel.X, voxel.Y, voxel.Z)] = i;
             }
 
-            int seedGoal = Math.Max(6, Math.Min(28,
-                (int)Math.Ceiling(Math.Sqrt(batchCount) * 1.8)));
-            seedGoal = Math.Min(count, seedGoal);
-            List<int> seeds = SelectSeeds(voxels, seedGoal, cancellationToken);
+            int seedGoal = NucleationSiteCount(count);
+            List<int> seeds = SelectSeeds(voxels, step, seedGoal, cancellationToken);
 
             var reached = new bool[count];
             var distance = new double[count];
@@ -303,11 +315,12 @@ namespace Layout.Shapes
         }
 
         private static List<int> SelectSeeds(
-            IReadOnlyList<VoxelPosition> voxels, int seedGoal,
+            IReadOnlyList<VoxelPosition> voxels, int step, int seedGoal,
             CancellationToken cancellationToken)
         {
             int count = voxels.Count;
             var seeds = new List<int>(seedGoal);
+            var selected = new bool[count];
 
             // Functional colours are natural nucleation points, but cap them so division marks cannot turn
             // the entire reveal back into a regular line.
@@ -321,7 +334,13 @@ namespace Layout.Shapes
             }
             special.Sort((a, b) => a.hash.CompareTo(b.hash));
             int specialCount = Math.Min(Math.Min(6, seedGoal / 3), special.Count);
-            for (int i = 0; i < specialCount; i++) seeds.Add(special[i].index);
+            for (int i = 0; i < specialCount; i++)
+            {
+                int index = special[i].index;
+                if (selected[index]) continue;
+                selected[index] = true;
+                seeds.Add(index);
+            }
 
             if (seeds.Count == 0)
             {
@@ -334,57 +353,93 @@ namespace Layout.Shapes
                     bestHash = hash;
                     first = i;
                 }
+                selected[first] = true;
                 seeds.Add(first);
             }
 
-            var nearestDistance = new double[count];
-            for (int i = 0; i < count; i++) nearestDistance[i] = double.PositiveInfinity;
-            var selected = new bool[count];
-            for (int i = 0; i < seeds.Count; i++)
-            {
-                selected[seeds[i]] = true;
-                UpdateNearestDistances(voxels, seeds[i], nearestDistance, cancellationToken);
-            }
-
+            // A full farthest-point pass costs O(voxels * seeds), which becomes self-defeating now that seed
+            // count grows linearly. Spatial buckets retain the important separation property in O(voxels):
+            // take one deterministic representative per roughly sqrt(area-per-seed) surface patch, then
+            // tighten the buckets only if an unusually thin or disconnected shell did not supply enough.
+            double cellsPerSeed = count / (double)Math.Max(1, seedGoal);
+            int spacingCells = Math.Max(1, (int)Math.Floor(Math.Sqrt(cellsPerSeed) * 0.70));
+            int safeStep = Math.Max(1, step);
             while (seeds.Count < seedGoal)
             {
-                int nextSeed = -1;
-                double bestScore = double.NegativeInfinity;
+                int cellSpan = Math.Max(safeStep, spacingCells * safeStep);
+                var bucketBest =
+                    new Dictionary<(int, int, int), (ulong hash, int index)>();
                 for (int i = 0; i < count; i++)
                 {
                     if ((i & 2047) == 0) cancellationToken.ThrowIfCancellationRequested();
                     if (selected[i]) continue;
                     VoxelPosition voxel = voxels[i];
-                    double jitter = 0.82 + HashUnit(voxel.X, voxel.Y, voxel.Z) * 0.36;
-                    double score = nearestDistance[i] * jitter;
-                    if (score <= bestScore) continue;
-                    bestScore = score;
-                    nextSeed = i;
+                    var cell = (
+                        FloorDiv(voxel.X, cellSpan),
+                        FloorDiv(voxel.Y, cellSpan),
+                        FloorDiv(voxel.Z, cellSpan));
+                    ulong voxelHash = Hash(voxel.X, voxel.Y, voxel.Z);
+                    if (!bucketBest.TryGetValue(cell, out var current)
+                        || voxelHash < current.hash)
+                        bucketBest[cell] = (voxelHash, i);
                 }
-                if (nextSeed < 0) break;
-                selected[nextSeed] = true;
-                seeds.Add(nextSeed);
-                UpdateNearestDistances(voxels, nextSeed, nearestDistance, cancellationToken);
+
+                var candidates = new List<(ulong rank, int index)>(bucketBest.Count);
+                foreach (var entry in bucketBest)
+                {
+                    var cell = entry.Key;
+                    ulong rank = Hash(cell.Item1, cell.Item2, cell.Item3)
+                        ^ entry.Value.hash;
+                    candidates.Add((rank, entry.Value.index));
+                }
+                candidates.Sort((a, b) =>
+                {
+                    int byRank = a.rank.CompareTo(b.rank);
+                    return byRank != 0 ? byRank : a.index.CompareTo(b.index);
+                });
+                for (int i = 0; i < candidates.Count && seeds.Count < seedGoal; i++)
+                {
+                    int index = candidates[i].index;
+                    if (selected[index]) continue;
+                    selected[index] = true;
+                    seeds.Add(index);
+                }
+
+                if (seeds.Count >= seedGoal || spacingCells == 1) break;
+                spacingCells = Math.Max(1, spacingCells / 2);
+            }
+
+            // Degenerate duplicate-heavy inputs can collapse spatial buckets. Complete the exact requested
+            // count with a deterministic coprime walk without sorting or allocating another count-sized list.
+            if (seeds.Count < seedGoal)
+            {
+                int cursor = (int)(Hash(count, safeStep, seedGoal) % (ulong)count);
+                int stride = Math.Max(1, count / Math.Max(1, seedGoal));
+                if ((stride & 1) == 0) stride++;
+                while (GreatestCommonDivisor(stride, count) != 1) stride += 2;
+                for (int visited = 0; visited < count && seeds.Count < seedGoal; visited++)
+                {
+                    if (!selected[cursor])
+                    {
+                        selected[cursor] = true;
+                        seeds.Add(cursor);
+                    }
+                    cursor = (int)(((long)cursor + stride) % count);
+                }
             }
 
             return seeds;
         }
 
-        private static void UpdateNearestDistances(
-            IReadOnlyList<VoxelPosition> voxels, int seedIndex, double[] nearestDistance,
-            CancellationToken cancellationToken)
+        private static int GreatestCommonDivisor(int a, int b)
         {
-            VoxelPosition seed = voxels[seedIndex];
-            for (int i = 0; i < voxels.Count; i++)
+            while (b != 0)
             {
-                if ((i & 2047) == 0) cancellationToken.ThrowIfCancellationRequested();
-                VoxelPosition voxel = voxels[i];
-                double dx = voxel.X - seed.X;
-                double dy = voxel.Y - seed.Y;
-                double dz = voxel.Z - seed.Z;
-                double distance = dx * dx + dy * dy + dz * dz;
-                if (distance < nearestDistance[i]) nearestDistance[i] = distance;
+                int remainder = a % b;
+                a = b;
+                b = remainder;
             }
+            return Math.Abs(a);
         }
 
         private static double OrganicNoise(int x, int y, int z, int step)

@@ -163,6 +163,16 @@ namespace Layout.Shapes
         int GetVoxelCountUpTo(int scale, bool filled, int stopAfter);
     }
 
+    /// <summary>
+    /// Optional nominal-dimension source for 3D shapes whose world-axis AABB diagonal is not their width.
+    /// Circular and regular-polygon footprints use their true widest diameter; axial height is reported
+    /// independently of placement orientation.
+    /// </summary>
+    public interface IIntrinsicGuideExtent
+    {
+        bool TryGetIntrinsicDimensions(out double width, out double height);
+    }
+
     /// <summary>Shared dispatch and overflow-safe sentinel helpers for threshold-aware counting.</summary>
     public static class GuideShapeVoxelCounting
     {

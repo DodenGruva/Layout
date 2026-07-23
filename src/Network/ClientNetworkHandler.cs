@@ -691,7 +691,7 @@ namespace Layout.Network
             PlaneAxis shapePlaneAxis = PlaneAxis.Y,
             bool inverted = false, int sides = 0, Vec3d apex = null,
             IReadOnlyList<Vec3d> chain = null, bool closed = false, Vec3d rim = null,
-            bool flatSideAligned = false)
+            bool flatSideAligned = false, bool deferPlacementEffects = false)
         {
             bool localMutation = AuthorityMode == ClientAuthorityMode.Local && _local != null;
             _lastMutationWasLocal = localMutation;
@@ -713,7 +713,11 @@ namespace Layout.Network
                 }
                 // Local placement feedback (snap + dust along the guide), client-side only — matching a
                 // private guide's visibility: nobody else can see it, so nobody else hears its snap.
-                if (created != null) Systems.ChalkEffects.PlacementEffects(_capi.World, created);
+                if (created != null)
+                {
+                    if (!deferPlacementEffects)
+                        Systems.ChalkEffects.PlacementEffects(_capi.World, created);
+                }
                 else PlacementRejected?.Invoke();
                 return;
             }

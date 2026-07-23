@@ -33,7 +33,8 @@ namespace Layout.Shapes
     /// policy). No inserts, no constraints in v1, no phantoms; Surface projection and Divisions do not
     /// apply (the GUI greys them).
     /// </remarks>
-    public sealed class SphereShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape
+    public sealed class SphereShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape,
+        IIntrinsicGuideExtent
     {
         private const double MinRadius = 0.05;
 
@@ -72,6 +73,14 @@ namespace Layout.Shapes
             c = new Vec3d((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5, (a.Z + b.Z) * 0.5);
             r = 0.5 * ShapeGeometry.Dist(a, b);
             return r >= MinRadius;
+        }
+
+        public bool TryGetIntrinsicDimensions(out double width, out double height)
+        {
+            width = height = 0;
+            if (!TryGetBall(out _, out double radius)) return false;
+            width = height = radius * 2.0;
+            return true;
         }
 
         // Bounding-box cell count at this scale, for the scan guard.
