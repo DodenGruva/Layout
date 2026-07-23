@@ -1,12 +1,30 @@
 # Layout — Architecture Changelog (document-version history)
 
 > **Split out of `ARCHITECTURE.md` to keep the orientation read cheap.** These are the per-revision deltas
-> for the architecture document itself, v2.5 → v3.11. **Nothing here is unique:** each delta is already folded
+> for the architecture document itself, v2.5 → v3.12. **Nothing here is unique:** each delta is already folded
 > in place into `ARCHITECTURE.md`'s body (Settled Decisions Register, file tree, module map, persistence,
 > edge cases), and each has a fuller narrative in its `SESSION_*.md` record. Kept as the audit trail — read
 > it when you need to know *when* something changed, not *what* the current state is.
 
 ---
+
+## Changelog — v3.11 → v3.12 (measured guide culling + spatial settled meshes, v0.3.41 → v0.3.43; full record in `SESSION_25.md`)
+
+- **Whole-guide camera rejection (v0.3.41):** conservative world-space bounds now combine the live view
+  distance with Vintage Story's current frustum for placed guides, drafts, pending visuals, and remote
+  markers. Complete off-screen guides submit no mesh.
+- **Measurement seam (v0.3.42):** `.layout renderstats` exposes last-frame guide visibility, mesh batches,
+  approximate submitted triangles, extras, and smoothed frame time through centralized upload/draw/delete
+  tracking.
+- **Spatial final geometry (v0.3.43):** immense clean final meshes are partitioned into fixed 32-block world
+  regions with independent bounds. Small guides and organic growth previews keep their existing paths.
+- **Boundary correctness:** all regional builders receive the complete guide occupancy set, so shared faces
+  remain omitted across region boundaries. Mathematical floor division handles negative world coordinates.
+- **Reload behavior:** immense saved Shells show a cheap scaffold and enter the existing below-normal
+  materialization lane instead of synchronously rebuilding one monolithic mesh.
+- **Measured result:** the human-approved partial-view stress case fell from 128 drawn batches / 32.6M
+  triangles / 7.5 ms to 33 / 7.5M / 4.4 ms, with 110 regional batches culled. The remaining optional step is
+  same-colour/orientation greedy merging for fully-visible triangle cost.
 
 ## Changelog — v3.10 → v3.11 (materialization completion + intrinsic HUD dimensions, v0.3.35 → v0.3.40; full record in `SESSION_24.md`)
 

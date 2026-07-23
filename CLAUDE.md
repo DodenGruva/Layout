@@ -14,7 +14,7 @@ on servers without Layout and, when permitted, alongside public guides. The tool
 (SESSION_21), on top of exposed-face meshing (SESSION_16, Stage A). 3D volumes can persist as either a
 hollow **Shell** or a structural **Wireframe**.
 The catalog is **15 shape types / 21 picker tiles** (SESSION_20 added straight/tapered Polygonal Prisms).
-Status: **v0.3.40, in real play.**
+Status: **v0.3.43, in real play.**
 
 ## Build & run
 - **Build:** `dotnet build` from the repo root (the folder with `Layout.csproj`).
@@ -32,7 +32,7 @@ Status: **v0.3.40, in real play.**
 - **Versioning rule (standing, human-set):** EVERY revision bumps `modinfo.json` and ships as a NEW
   `Layout<version>.zip` in **`..\LayoutZips\`** (the sibling folder of this repo — human-directed location;
   holds 0.1.10–0.1.27 + the 0.2.x line; the 0.1.28–0.1.53 zips live in `Documents\ChatGPT\LayoutZips\`) —
-  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.3.40.**
+  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.3.43.**
 - **Git:** `main` is the mainline, published at **github.com/DodenGruva/Layout** (the
   `ClientOnlyFallback` branch was merged via PR #1). **The repo is published at release** — no personal
   paths, no personal usernames in tracked files. Commit/push ONLY when the human instructs.
@@ -40,7 +40,7 @@ Status: **v0.3.40, in real play.**
 ## The documents (read these before large work)
 - **`HANDOFF.md`** (repo root) — the consolidated current-state brief (scope · status · direction ·
   performance characteristics), written for external analysis; the fastest way to get oriented.
-- **`ARCHITECTURE.md`** (in `dev/`, v3.11) — the authoritative plan. Its **Settled Decisions Register** lists
+- **`ARCHITECTURE.md`** (in `dev/`, v3.12) — the authoritative plan. Its **Settled Decisions Register** lists
   locked-in design choices; **do not reopen those without the human explicitly asking.** Its per-revision
   deltas live in **`CHANGELOG_ARCHITECTURE.md`** (an archive — rarely needed).
 - **`TODO.md`** — the live punch-list: open bug, deferred requests, flagged decisions, future features.
@@ -48,7 +48,7 @@ Status: **v0.3.40, in real play.**
 - **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix (candidate for 0.2.0).
 - **`PLAN_CHALKING_KIT.md`** — the F5 chalking-kit design rationale, now marked ✅ implemented with its
   plan-vs-shipped deltas up top.
-- **`SESSION_9.md` … `SESSION_24.md`** — standalone per-session records; SESSION_12 covers **v0.1.28–v0.1.45
+- **`SESSION_9.md` … `SESSION_25.md`** — standalone per-session records; SESSION_12 covers **v0.1.28–v0.1.45
   ClientOnlyFallback**, SESSION_13 the **v0.1.46–v0.1.52 optimization and interaction pass**, SESSION_14 the
   **v0.1.53 hollow-shell + mesh optimization handoff** (read before continuing performance work), SESSION_15
   the **v0.2.0–v0.2.9 Chalking Kit arc**, SESSION_16 the **v0.2.10–v0.2.21 mesh + polish arc** (Stage-A
@@ -64,11 +64,12 @@ Status: **v0.3.40, in real play.**
   safe giant-grab cancellation, persistent Shell/Wireframe mode, and surface-only oversized fallbacks), and
   SESSION_22 the **v0.3.9–v0.3.21 action-aware HUD, attribution, sculpting-parity, and projection-transition
   arc**, SESSION_23 the **v0.3.22–v0.3.34 moderation, claims, and streamed immense-guide arc**, and
-  SESSION_24 the **v0.3.35–v0.3.40 materialization-completion, shell-transition, and HUD-dimension arc**.
+  SESSION_24 the **v0.3.35–v0.3.40 materialization-completion, shell-transition, and HUD-dimension arc**, and
+  SESSION_25 the **v0.3.41–v0.3.43 measured frustum/spatial-culling arc**.
 
-## ✅ Docs verified & consolidated to v0.3.40 (2026-07-23)
-The authoritative prose docs are consistent with **v0.3.40, DataVersion 12, protocol 16, 77 source files,
-15 shape types / 21 tiles**. `ARCHITECTURE.md` is **v3.11**; `SESSION_24.md` is the latest record
+## ✅ Docs verified & consolidated to v0.3.43 (2026-07-23)
+The authoritative prose docs are consistent with **v0.3.43, DataVersion 12, protocol 16, 77 source files,
+15 shape types / 21 tiles**. `ARCHITECTURE.md` is **v3.12**; `SESSION_25.md` is the latest record
 (mesh: `SESSION_16.md`, F5: `SESSION_15.md`); `HANDOFF.md` is the consolidated brief. Prefer source for exact
 identifiers, but no from-scratch doc audit is needed before ordinary work.
 
@@ -95,7 +96,7 @@ settings-only: left-click **selects** a guide and the GUI's setting rows then ac
 reshaping — geometry stays in Create); this replaced the old panel-expanding "selected-guide section".
 **Delete** dispels. `ToolMode` is client-only (never wired), so it's safe to reorder.
 
-## Current priorities (detail in TODO.md; mesh plan in SESSION_14.md §6–§7, latest record in SESSION_24.md)
+## Current priorities (detail in TODO.md; mesh plan in SESSION_14.md §6–§7, latest record in SESSION_25.md)
 F4 (client-only/private guides) and F5 (Chalking Kit durability) are both feature-complete. Public/private
 multiplayer was release-tested successfully at **v0.2.35**, the fired-jug/raw-jug recipe behavior is
 playtest-confirmed, and B-S9-1 adjacent-lock targeting was closed and playtest-approved in **v0.2.36**.
@@ -104,14 +105,14 @@ Mesh **Stage A** shipped and filled 3D volumes were retired. Normal public multi
    **never tested against xskills itself**; craft a quality-bonus kit and confirm it comes out 32/32.
    (b) **1.22.x support is declared, not tested** — the code was built against 1.22.3; smoke-test a
    1.22.0/1.22.1 install. See `SESSION_17.md` §8.
-2. **Field-test v0.3.40.** Stress small and immense Shell materialization, Wireframe→Shell Edit transitions,
-   the full-growth hold and clean-shell swap, post-placement effects, repeated sculpt resize/release,
-   polygonal-prism startup, and intrinsic HUD dimensions.
-3. **Performance follow-up only from measurements.** Immense placement/sculpt geometry now uses one
-   below-normal worker plus bounded claim ticks; the client streams organic selected-scale batches and retires
-   old meshes across frames. Mesh Stage B/C remains optional if settled in-range drawing becomes the bottleneck.
-4. **Large-guide mesh Stage B/C only if needed.** Per-guide spatial chunks/culling, then same-colour greedy
-   face merging; staged plan and invariants remain in `SESSION_14.md`.
+2. **Field-soak v0.3.43.** Whole-guide frustum rejection and 32-block final-mesh regions are playtest-approved;
+   retain regression coverage for reload scaffolds, partial views, materialization, and repeated sculpt release.
+3. **Performance follow-up only from measurements.** Immense placement/sculpt geometry uses one below-normal
+   worker plus bounded claim ticks; settled clean meshes now cull independently by 32-block region. The measured
+   partial-view case dropped from 128 batches / 32.6M triangles / 7.5 ms to 33 / 7.5M / 4.4 ms.
+4. **Greedy same-colour face merging only if requested.** It is the remaining fully-visible optimization.
+   Preserve face orientation, role colour/alpha, exact plane/inset, exposed-face occupancy, and region bounds;
+   staged invariants remain in `SESSION_14.md` and `SESSION_25.md`.
 5. If asked: **Roof / Tunnel** volumes; concave-safe Free-Shape fill; F3 re-constrain op. Remaining
    flagged decisions are cosmetic.
 

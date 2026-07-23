@@ -1,11 +1,11 @@
-# Layout — TODO / Outstanding Items (current: v0.3.40)
+# Layout — TODO / Outstanding Items (current: v0.3.43)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.3.40 → next)
+## ⭐ Top of the list (v0.3.43 → next)
 
 > **Session-16 playtest results (human-confirmed):** the v0.2.21 **inventory refill and hotbar refill both
 > work** — the MouseDown-hook ordering and the `InventoryID` round-trip both hold, closing `SESSION_16.md` §8.
@@ -175,6 +175,25 @@ particles occur only after final placement; small/large timing feels proportiona
 repeated large→small sculpt releases remain responsive; polygonal prisms start promptly; and every 3D family
 reports intuitive block dimensions.
 
+### A7. Session-25 measured guide culling (v0.3.41–v0.3.43) — full detail in `SESSION_25.md`
+
+1. ~~**Cull complete guides outside the camera.**~~ **DONE (v0.3.41).** Whole-guide bounds combine live
+   view distance with Vintage Story's current frustum for placed guides, drafts, pending visuals, and markers.
+2. ~~**Measure the actual render submission.**~~ **DONE (v0.3.42).** `.layout renderstats` reports last-frame
+   guide visibility, batches, approximate triangles, extras, and smoothed frame time.
+3. ~~**Cull invisible portions of an intersecting immense guide.**~~ **DONE (v0.3.43).** Clean final
+   materialization uses fixed 32-block regions with independent bounds. Small guides and organic growth
+   retain their paths; existing immense saved Shells reload through a temporary scaffold/background build.
+4. ~~**Preserve region-boundary fidelity.**~~ **DONE and harnessed.** Mathematical floor division covers
+   negative coordinates and every region receives the full guide occupancy, so cross-boundary shared faces
+   remain absent. Human playtest approved the result.
+5. **Optional next:** same-colour/orientation greedy face merging for measured fully-visible triangle cost.
+   Treat colour/alpha, exact plane, orientation, z-fight inset, occupancy exposure, and region ownership as
+   hard merge boundaries.
+
+**Measured result:** partial view changed from 128 drawn batches / 32.6M submitted triangles / 7.5 ms to
+33 / 7.5M / 4.4 ms, with 110 spatial batches culled.
+
 ### A. Human backlog — queued at Session-16 end — ✅ ALL SEVEN DELIVERED (v0.2.22–v0.2.23)
 
 1. ~~**Move the chalk-refill config from the server to the client.**~~ **DONE (v0.2.22).** Both toggles now
@@ -247,11 +266,12 @@ reports intuitive block dimensions.
 
 ### B. Carried forward
 
-1. **Large-guide follow-up only from a measured remaining bottleneck.** Session 23 delivered the cancellable
-   streamed producer/consumer path, retained handoffs, bounded server validation, and whole-guide distance
-   culling. If already-settled *in-range* rendering is still costly, continue Stage B/C in `SESSION_14.md`
-   §6–§7: per-guide spatial meshes/per-chunk culling, then same-colour greedy merging. Keep settled Shells
-   and persistent Wireframes at true selected scale.
+1. **Large-guide follow-up only from a measured remaining bottleneck.** v0.3.41–v0.3.43 delivered
+   whole-guide frustum rejection, `.layout renderstats`, and 32-block independently culled final meshes.
+   The human-approved partial-view case dropped from 128 batches / 32.6M triangles / 7.5 ms to
+   33 / 7.5M / 4.4 ms. Only same-colour greedy merging remains, and only for a measured fully-visible
+   bottleneck. Preserve true scale, region bounds, role colour/alpha, exact face plane/orientation/inset,
+   and guide-wide exposed-face occupancy. See `SESSION_25.md`.
 2. ~~**Fix the narrowed B-S9-1 adjacent-lock targeting residual.**~~ **CLOSED (v0.2.36).** Exact rendered-cell
    ownership removed the former-neighbor selection bias, and the human approved the result in play. Retain
    the interaction as regression coverage; do not reopen the passive-marker design without a new report.
@@ -584,9 +604,10 @@ deliberate (11r).
 - **Immense public validation is intentionally serialized.** One below-normal worker performs pure
   generation/counting; claim checks consume no more than 128 blocks or about 1 ms per 20 ms server tick.
   Longer build time is acceptable; server tick health is the priority.
-- **Distance culling is conservative at whole-guide granularity.** It eliminates guides fully outside live
-  `viewDistance`, while an enormous bound intersecting the range may still draw distant portions. Per-chunk
-  Stage B remains the next step only if measured settled in-range rendering warrants it.
+- **Whole-guide + regional culling is conservative and measured.** A complete bound outside live
+  `viewDistance`/camera frustum submits nothing; an intersecting immense clean Shell then tests fixed 32-block
+  regions independently. Cross-region neighbours use the complete guide occupancy, so boundaries add no
+  internal faces. The measured partial-view win is recorded in `SESSION_25.md`.
 - **Division marks add a render-side pass** *(verified)* — `DivisionMarks.Apply` is called on every mesh
   rebuild in `GuideRenderer` (both the draft ghost and placed guides), walking `SampleCurve(128)` for arc
   length then a nearest-cell claim per boundary; cheap, but it does walk the cell list. Watch on very high
@@ -649,10 +670,9 @@ the inventory refill remains (Top of the list).
 ## Next session — start here
 
 **The agenda is "⭐ Top of the list" at the top of this file** — it is not repeated here. Current state:
-the v0.3.40 materialization-completion/HUD-dimension arc is complete, documented, built, packaged, and
-pushed on `main`;
-collect the focused v0.3.40 field reports above and revisit performance only from a measured remaining
-bottleneck.
+the v0.3.43 measured frustum/spatial-culling arc is complete, documented, built, packaged, playtest-approved,
+and pushed on `main`; field-soak its reload/materialization paths and revisit greedy merging only from a
+measured fully-visible bottleneck.
 
 **Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\LayoutZips\`;
 docs are updated ONLY when the human says so; commits/pushes only when the human instructs. `main` is the

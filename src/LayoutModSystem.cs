@@ -319,6 +319,10 @@ namespace Layout
                     .WithDescription("Show the creator and last sculptor of your selected or targeted guide.")
                     .HandleWith(OnClientWhoCommand)
                 .EndSubCommand()
+                .BeginSubCommand("renderstats")
+                    .WithDescription("Show local Layout guide rendering statistics for the last frame.")
+                    .HandleWith(OnClientRenderStatsCommand)
+                .EndSubCommand()
                 .BeginSubCommand("off")
                     .WithDescription("Turn off all Layout guide rendering for yourself.")
                     .HandleWith(OnClientRenderingOffCommand)
@@ -334,6 +338,14 @@ namespace Layout
 
         private TextCommandResult OnClientRenderingOnCommand(TextCommandCallingArgs args) =>
             SetLocalRenderingState(true);
+
+        private TextCommandResult OnClientRenderStatsCommand(TextCommandCallingArgs args)
+        {
+            if (Renderer == null)
+                return TextCommandResult.Error("Enter a world before inspecting Layout render statistics.");
+
+            return TextCommandResult.Success(Renderer.DescribeRenderStats());
+        }
 
         private TextCommandResult SetLocalRenderingState(bool enabled)
         {

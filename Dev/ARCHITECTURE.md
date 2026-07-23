@@ -1,7 +1,7 @@
-# Layout — Architecture Document (v3.11)
+# Layout — Architecture Document (v3.12)
 
-**Supersedes v3.10 — materialization completion, clean-shell transitions, and intrinsic HUD dimensions
-(v0.3.35–v0.3.40).** v2.5 consolidated five
+**Supersedes v3.11 — measured whole-guide and spatial settled-mesh culling
+(v0.3.41–v0.3.43).** v2.5 consolidated five
 revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
 catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
 surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
@@ -38,7 +38,7 @@ makes tapered-rim flare opt-in. **v3.8 adds motion-sensitive structural previews
 precision, generation-safe background refinement and batched materialization, cached placed-guide metadata,
 retained-mesh cancel quarantine, canonical/persistent Shell↔Wireframe form, size-weighted placement sound,
 and surface-proportional oversized Cylinder/Cone/Box fallback generation.** The register, file tree, module
-map, persistence, and edge cases below are updated in place to the v0.3.40 / DataVersion 12 / protocol-16 /
+map, persistence, and edge cases below are updated in place to the v0.3.43 / DataVersion 12 / protocol-16 /
 77-file state; the per-revision deltas live
 in **`CHANGELOG_ARCHITECTURE.md`** (indexed below).
 
@@ -58,18 +58,22 @@ cadence; a complete-growth hold followed by an atomic clean-shell swap; scaffold
 gating; cancellable Wireframe→Shell materialization; below-threshold sculpt-latch closure; polygonal-prism
 scan rejection; and shape-intrinsic HUD dimensions.**
 
-**Where the project stands:** Layout **v0.3.40** is built, packaged, documented, and pushed on `main`.
+**v3.12 folds in Session 25 (v0.3.41–v0.3.43): whole-guide camera-frustum rejection; local last-frame render
+statistics; and 32-block independently culled clean final meshes with cross-region occupancy and
+reload-time background materialization.**
+
+**Where the project stands:** Layout **v0.3.43** is built, packaged, documented, and pushed on `main`.
 All seven modules, the complete 2D/3D catalog, normal public multiplayer, vanilla-server local
 fallback, mixed public/private operation, and the full F5 chalk system run against **VS 1.22.x** / .NET 10.
 The catalog is **15 shape types / 21 picker tiles**, **DataVersion 12**, **protocol 16**, and **77 source
 files**. F4 and F5 are feature-complete. The large-guide mesh Stage A remains; v0.3’s immense path now keeps
 motion, final placement/sculpt, and public validation off the main-frame/tick cliffs through bounded client
-and server pipelines. Filled 3D interiors are retired; volumes persist as a hollow Shell or canonical
-structural Wireframe.
+   and server pipelines. Filled 3D interiors are retired; volumes persist as a hollow Shell or canonical
+   structural Wireframe. Immense clean Shell meshes use independently culled 32-block regions.
 The Session-16 backlog is fully delivered. Public/private multiplayer passed the v0.2.35 release test,
 fired-jug/raw-jug crafting is confirmed, and B-S9-1 closed with a human-approved v0.2.36 playtest. Remaining:
-ordinary v0.3.40 field soak and mesh Stage B (spatial chunks + per-chunk culling) only if settled in-range
-rendering—not calculation/validation—proves insufficient.
+ordinary v0.3.43 field soak and optional same-colour greedy merging only if fully-visible triangle
+submission—not calculation/validation or off-screen geometry—proves insufficient.
 Two items carry
 verification debt — the chalk ceiling has not been tested against xskills itself, and 1.22.0 support is
 declared but untested. See `TODO.md` and `SESSION_17.md`.
@@ -110,13 +114,14 @@ declared but untested. See `TODO.md` and `SESSION_17.md`.
 
 ## Document changelog — index
 
-Per-revision deltas for THIS document (v2.5 → v3.11) now live in **`CHANGELOG_ARCHITECTURE.md`**. They are
+Per-revision deltas for THIS document (v2.5 → v3.12) now live in **`CHANGELOG_ARCHITECTURE.md`**. They are
 not repeated here: every delta is already folded in place into the register / file tree / module map /
 persistence / edge cases below, and each has a fuller narrative in its session record. Use this table to find
 *when* something changed; read the body below for *what is true now*.
 
 | Doc rev | Mod versions | Theme | Session record |
 |---|---|---|---|
+| v3.12 | v0.3.41 → v0.3.43 | Whole-guide frustum culling; render stats; 32-block spatial settled meshes | `SESSION_25.md` |
 | v3.11 | v0.3.35 → v0.3.40 | Materialization completion; clean-shell transitions; intrinsic HUD dimensions | `SESSION_24.md` |
 | v3.10 | v0.3.22 → v0.3.34 | Moderation/claims; bounded immense validation; organic materialization; render controls | `SESSION_23.md` |
 | v3.9 | v0.3.9 → v0.3.21 | Action-aware HUD; attribution; sculpt parity; projection-transition fix | `SESSION_22.md` |
@@ -373,15 +378,17 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   blocks arrived sank behind the face on reload (B-S10-1).
 - **Settled guides always render at their true scale**; `ChooseRenderScale` coarsening (8,000-voxel cap) is
   a **draft-ghost-only** courtesy — it once leaked into placed guides and permanently degraded them.
-- **Large-guide meshing — Stage A shipped (v0.2.14–v0.2.16, `SESSION_16.md`):** `GuideMeshBuilder`'s
+- **Large-guide meshing — exposed faces + spatial culling shipped (v0.2.14–v0.3.43):** `GuideMeshBuilder`'s
   Volumetric cube path now does **exposed-face meshing** — it builds a presence set of rendered cells,
   pre-counts the faces with no neighbour, allocates exactly, and emits ONLY those faces (per-voxel role
   colours preserved). Interior/shared faces vanish, so a ~100-block hollow Sphere draws only its outer skin
-  (and, with filled volumes retired in v0.2.17, worst-case counts dropped further). Still one uploaded mesh
-  per guide/batch, rebuilt on change. `GuideRenderer` first conservatively rejects whole guides whose sampled
-  bounding sphere lies beyond the live game `viewDistance`, so unloaded-distance guides submit no draw
-  calls. **The remaining seams for very large guides are Stage B/C:** per-guide spatial chunk meshes with
-  per-chunk frustum/distance culling, then same-colour greedy face merging.
+  (and, with filled volumes retired in v0.2.17, worst-case counts dropped further). `GuideRenderer` first
+  conservatively rejects whole guides outside live `viewDistance` or Vintage Story's current frustum.
+  Immense clean final meshes then use fixed 32-block world regions with independent conservative bounds;
+  every region receives the complete guide occupancy set so shared faces across a boundary remain omitted.
+  Small guides and organic growth retain their prior paths. The measured partial-view stress case dropped
+  from 128 to 33 drawn batches and 32.6M to 7.5M submitted triangles. **The remaining optional mesh seam is
+  same-colour/orientation greedy face merging inside a region** for the fully-visible case.
   Surface tile/slab paths stay on the legacy whole-box builder; preserve the verified draw recipe. Full
   invariants + the mesh-count harness are in `SESSION_14.md` §6–§7 and `SESSION_16.md` §2.
 - **Leaving Surface bakes the flattened positions into the control points** (undoable, full-state
@@ -1066,7 +1073,7 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
 
 ---
 
-This v3.11 document is the authoritative architecture, consolidated to current state: **Layout v0.3.40 built,
+This v3.12 document is the authoritative architecture, consolidated to current state: **Layout v0.3.43 built,
 packaged, documented, and pushed on `main`**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
 (+ right/equilateral/isosceles), rectangles (+ square), polygons, and Free-Shapes — plus the **3D volume
 family** (spheres, domes, cylinders, tapered cylinders, straight/tapered polygonal prisms, cones, boxes)
@@ -1077,5 +1084,5 @@ punch-list live in `PROJECT_STATUS.md` and `TODO.md`; the current-state brief fo
 `HANDOFF.md` at the repo root; F4's final behavior record lives in `PLAN_CLIENT_ONLY.md`, its implementation
 history in `SESSION_12.md`, the interaction checkpoint in `SESSION_13.md`, the mesh resume plan in
 `SESSION_14.md`, the adaptive large-guide record in `SESSION_21.md`, the HUD/attribution/sculpting record in
-`SESSION_22.md`, the moderation/claims/immense-guide record in `SESSION_23.md`, and the current
-materialization-completion/HUD-dimension record in `SESSION_24.md`.
+`SESSION_22.md`, the moderation/claims/immense-guide record in `SESSION_23.md`, the materialization-completion/
+HUD-dimension record in `SESSION_24.md`, and the current measured spatial-culling record in `SESSION_25.md`.
