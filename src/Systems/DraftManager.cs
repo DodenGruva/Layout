@@ -488,14 +488,17 @@ namespace Layout.Systems
         /// <summary>
         /// Evaluates the final click against the active draft: builds the would-be shape (with
         /// <paramref name="apexPoint"/> applied for a three-click triangle) and checks it against the
-        /// per-guide cap at the current scale. Returns <see cref="DraftCompletionStatus.Ready"/> with the
+        /// per-guide cap at the current scale. A caller may supply an already-computed exact count, or defer
+        /// an expensive public immense-shell check to the authoritative server pipeline. Returns
+        /// <see cref="DraftCompletionStatus.Ready"/> with the
         /// points when it fits, <see cref="DraftCompletionStatus.RejectedOverCap"/> (with count and cap)
         /// when it does not, or <see cref="DraftCompletionStatus.NoActiveDraft"/> when there is nothing to
         /// complete. This is a pure check — it does NOT clear the draft; the caller clears it after a
         /// successful send, assembling the render settings via <see cref="BuildRenderSettings"/> then.
         /// </summary>
         public DraftCompletion TryCompleteDraft(Vec3d endPoint, Vec3d apexPoint = null, bool inverted = false,
-            Vec3d rimPoint = null, bool flatSideAligned = false)
+            Vec3d rimPoint = null, bool flatSideAligned = false,
+            int knownVoxelCount = -1, bool deferCapCheckToAuthority = false)
         {
             if (!_hasDraft || endPoint == null)
                 return new DraftCompletion(DraftCompletionStatus.NoActiveDraft, null, null, 0, 0);
@@ -505,13 +508,19 @@ namespace Layout.Systems
             Vec3d apex = apexPoint == null ? null : new Vec3d(apexPoint.X, apexPoint.Y, apexPoint.Z);
             Vec3d rim = rimPoint == null ? null : new Vec3d(rimPoint.X, rimPoint.Y, rimPoint.Z);
 
-            IGuideShape preview = ShapeFactory.Create(_shape, _constraint, _draftPlaneAxis, start, end,
-                inverted, _sides, flatSideAligned: flatSideAligned);
-            ApplyPlacementPoints(preview, _shape, _constraint, apex, rim);
-            int count = CountDraftVoxels(preview);
+            int count = knownVoxelCount;
+            if (count < 0 && !deferCapCheckToAuthority)
+            {
+                IGuideShape preview = ShapeFactory.Create(_shape, _constraint, _draftPlaneAxis, start, end,
+                    inverted, _sides, flatSideAligned: flatSideAligned);
+                ApplyPlacementPoints(preview, _shape, _constraint, apex, rim);
+                count = CountDraftVoxels(preview);
+            }
+            if (count < 0) count = 0;
 
             // Cap of 0 or less = the server enforces no per-guide cap (unlimited); everything passes.
-            DraftCompletionStatus status = _perGuideVoxelCap > 0 && count > _perGuideVoxelCap
+            DraftCompletionStatus status = !deferCapCheckToAuthority
+                && _perGuideVoxelCap > 0 && count > _perGuideVoxelCap
                 ? DraftCompletionStatus.RejectedOverCap
                 : DraftCompletionStatus.Ready;
 

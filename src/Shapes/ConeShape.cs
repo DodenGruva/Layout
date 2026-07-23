@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Vintagestory.API.MathTools;
 using Layout.Guide;
 
@@ -16,7 +17,7 @@ namespace Layout.Shapes
     /// <see cref="CylinderShape"/> for the reasoning. The cone's band compares the cell centre's radial
     /// distance against the LOCAL radius at its axial station.
     /// </remarks>
-    public sealed class ConeShape : IGuideShape, IThresholdVoxelCounter
+    public sealed class ConeShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape
     {
         private const double MinRadius = 0.05;
         private const double MinHeight = 0.05;
@@ -131,6 +132,74 @@ namespace Layout.Shapes
 
             ClaimMarkers(result, scale);
             return result;
+        }
+
+        public List<VoxelPosition> GetVoxelPositionsProgressively(
+            int scale, bool filled, int targetVoxelsPerChunk,
+            CancellationToken cancellationToken, Action<List<VoxelPosition>> emitChunk)
+        {
+            var collector = new ProgressiveVoxelCollector(
+                targetVoxelsPerChunk, cancellationToken, emitChunk);
+            if (!TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m,
+                out Vec3d n, out double h)) return collector.Result;
+            if (ScanTooBig(scale, c, n, r, h))
+            {
+                LargeVolumeShellFallback.RadialShellProgressively(
+                    c, r, u, m, n, h, true, scale, collector);
+                collector.Flush();
+                ClaimMarkers(collector.Result, scale);
+                return collector.Result;
+            }
+
+            double cell = scale / 16.0;
+            double hd = cell * 0.866;
+            double lo = Math.Min(0, h), hi = Math.Max(0, h);
+            double ex = c.X + n.X * h, ey = c.Y + n.Y * h, ez = c.Z + n.Z * h;
+            double pad = r + cell;
+            double x0 = Math.Min(c.X, ex) - pad, x1 = Math.Max(c.X, ex) + pad;
+            double y0 = Math.Min(c.Y, ey) - pad, y1 = Math.Max(c.Y, ey) + pad;
+            double z0 = Math.Min(c.Z, ez) - pad, z1 = Math.Max(c.Z, ez) + pad;
+            int minX = AlignDown(x0, scale), maxX = AlignDown(x1, scale);
+            int minY = AlignDown(y0, scale), maxY = AlignDown(y1, scale);
+            int minZ = AlignDown(z0, scale), maxZ = AlignDown(z1, scale);
+            ProgressiveVoxelTile[] tiles = ProgressiveVoxelOrder.ShuffledSpatialTiles(
+                (maxX - minX) / scale + 1,
+                (maxY - minY) / scale + 1,
+                (maxZ - minZ) / scale + 1);
+            for (int visit = 0; visit < tiles.Length; visit++)
+            {
+                collector.ThrowIfCancellationRequested();
+                ProgressiveVoxelTile tile = tiles[visit];
+                for (int xi = tile.X0; xi < tile.X1; xi++)
+                {
+                    int ix = minX + xi * scale;
+                    double px = ix / 16.0 + cell * 0.5 - c.X;
+                    for (int yi = tile.Y0; yi < tile.Y1; yi++)
+                    {
+                        int iy = minY + yi * scale;
+                        double py = iy / 16.0 + cell * 0.5 - c.Y;
+                        for (int zi = tile.Z0; zi < tile.Z1; zi++)
+                        {
+                            int iz = minZ + zi * scale;
+                            double pz = iz / 16.0 + cell * 0.5 - c.Z;
+                            double axial = px * n.X + py * n.Y + pz * n.Z;
+                            if (axial < lo || axial > hi) continue;
+                            double localR = r * (1.0 - axial / h);
+                            double rx = px - n.X * axial;
+                            double ry = py - n.Y * axial;
+                            double rz = pz - n.Z * axial;
+                            double rho = Math.Sqrt(rx * rx + ry * ry + rz * rz);
+                            if (Math.Abs(rho - localR) <= hd)
+                                collector.Add(new VoxelPosition(
+                                    ix, iy, iz, VoxelRenderType.Normal));
+                        }
+                    }
+                }
+            }
+
+            collector.Flush();
+            ClaimMarkers(collector.Result, scale);
+            return collector.Result;
         }
 
         public int GetVoxelCount(int scale, bool filled = false)

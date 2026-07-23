@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
@@ -63,9 +66,12 @@ namespace Layout.Network
     /// released (and broadcast as free), their undo history is dropped, their drag session is cleared, and
     /// any draft anchor of theirs is removed for everyone.
     ///
-    /// THREADING. Everything runs on the server main thread, like the managers — no locking.
+    /// THREADING. Authority mutations and game-world APIs remain on the server main thread. Immense create
+    /// requests and final immense sculpts are the sole exceptions: one isolated candidate at a time performs
+    /// pure shape counting and footprint generation on a low-priority worker, then returns to the tick thread
+    /// for bounded claim checks and commit. Live manager collections are never exposed to that worker.
     /// </remarks>
-    public class ServerNetworkHandler
+    public class ServerNetworkHandler : IDisposable
     {
         private readonly ICoreServerAPI _sapi;
         private readonly IServerNetworkChannel _channel;
@@ -88,6 +94,63 @@ namespace Layout.Network
         private readonly HashSet<string> _hotbarRefillOptIn = new HashSet<string>();
         private const int MaxGuidesPerPush = 100;
 
+        // Immense public placements take a second path. The tick thread only performs a small threshold
+        // probe and bounded claim lookups; one low-priority worker at a time owns the expensive pure geometry.
+        private const int StreamedCreateVoxelThreshold = 8000;
+        private const int MaxQueuedImmenseCreates = 8;
+        private const int MaxClaimChecksPerTick = 128;
+        private const double ClaimCheckBudgetMilliseconds = 1.0;
+
+        private sealed class ImmenseCreateGeometry
+        {
+            public int VoxelCount;
+            public int ExceededCap;
+            public List<BlockPos> Footprint;
+        }
+
+        private sealed class PendingImmenseCreate
+        {
+            public string PlayerUid;
+            public PreparedGuideCreation Prepared;
+            public int CountLimit;
+            public int CountLimitCap;
+            public Task<ImmenseCreateGeometry> GeometryTask;
+            public ImmenseCreateGeometry Geometry;
+            public int ClaimIndex;
+            public bool Cancelled;
+        }
+
+        private readonly Queue<PendingImmenseCreate> _immenseCreateQueue =
+            new Queue<PendingImmenseCreate>();
+        private readonly HashSet<string> _playersWithPendingImmenseCreate =
+            new HashSet<string>();
+        private PendingImmenseCreate _activeImmenseCreate;
+        private long _immenseCreateTickId;
+
+        private sealed class PendingImmenseSculpt
+        {
+            public string PlayerUid;
+            public Guid GuideId;
+            public GuideData ExpectedLive;
+            public GuideData Candidate;
+            public IGuideShape CandidateShape;
+            public int CountLimit;
+            public int CountLimitCap;
+            public Task<ImmenseCreateGeometry> GeometryTask;
+            public ImmenseCreateGeometry Geometry;
+            public int ClaimIndex;
+            public bool ReleaseRequested;
+            public bool Cancelled;
+        }
+
+        private readonly Queue<PendingImmenseSculpt> _immenseSculptQueue =
+            new Queue<PendingImmenseSculpt>();
+        private readonly Dictionary<string, PendingImmenseSculpt> _pendingImmenseSculpts =
+            new Dictionary<string, PendingImmenseSculpt>();
+        private PendingImmenseSculpt _activeImmenseSculpt;
+        private long _immenseSculptTickId;
+        private bool _disposed;
+
         // Per-player in-progress drag: the guide being edited and each moved point's pre-drag origin.
         // Used to coalesce a drag into a single undo entry on release — and, since Session 8, to service
         // GuideCancelGrabPacket (restore origins, or remove the point when the grab began as an insert).
@@ -98,6 +161,7 @@ namespace Layout.Network
             public ShapeConstraint OriginConstraint;
             public List<ControlPoint> OriginPoints;
             public int OriginVoxelCount = -1;
+            public bool CommitAsWholeShape;
 
             /// <summary>
             /// Index of the point this grab CREATED (body insert), or −1 for a grab of a pre-existing
@@ -174,6 +238,10 @@ namespace Layout.Network
 
             _sapi.Event.PlayerNowPlaying += OnPlayerNowPlaying;
             _sapi.Event.PlayerDisconnect += OnPlayerDisconnect;
+            _immenseCreateTickId = _sapi.Event.RegisterGameTickListener(
+                OnImmenseCreateTick, 20);
+            _immenseSculptTickId = _sapi.Event.RegisterGameTickListener(
+                OnImmenseSculptTick, 20);
 
             RegisterCommands();
         }
@@ -251,6 +319,16 @@ namespace Layout.Network
                     .WithDescription("Show the creator and last sculptor of your selected or targeted guide.")
                     .RequiresPrivilege(Privilege.chat)
                     .HandleWith(OnWhoCommand)
+                .EndSubCommand()
+                .BeginSubCommand("off")
+                    .WithDescription("Turn off all Layout guide rendering for yourself.")
+                    .RequiresPrivilege(Privilege.chat)
+                    .HandleWith(OnRenderingOffCommand)
+                .EndSubCommand()
+                .BeginSubCommand("on")
+                    .WithDescription("Turn on all Layout guide rendering for yourself.")
+                    .RequiresPrivilege(Privilege.chat)
+                    .HandleWith(OnRenderingOnCommand)
                 .EndSubCommand()
                 .BeginSubCommand("client")
                     .WithDescription("Private-guide publication commands.")
@@ -378,6 +456,24 @@ namespace Layout.Network
 
             _channel.SendPacket(new GuideWhoQueryPacket(), player);
             return TextCommandResult.Success();
+        }
+
+        private TextCommandResult OnRenderingOffCommand(TextCommandCallingArgs args) =>
+            SendRenderingState(args, false);
+
+        private TextCommandResult OnRenderingOnCommand(TextCommandCallingArgs args) =>
+            SendRenderingState(args, true);
+
+        private TextCommandResult SendRenderingState(
+            TextCommandCallingArgs args, bool enabled)
+        {
+            if (args.Caller.Player is not IServerPlayer player)
+                return TextCommandResult.Error("This command must be run by a player.");
+
+            _channel.SendPacket(new GuideRenderingPacket(enabled), player);
+            return TextCommandResult.Success(enabled
+                ? "Layout guide rendering is on for you."
+                : "Layout guide rendering is off for you.");
         }
 
         private TextCommandResult OnPrivateModeCommand(TextCommandCallingArgs args)
@@ -568,6 +664,8 @@ namespace Layout.Network
             _drags.Remove(uid);
             _clientOnlyPlayers.Remove(uid);
             _hotbarRefillOptIn.Remove(uid);
+            CancelPendingImmenseCreate(uid);
+            CancelPendingImmenseSculpt(uid);
 
             if (_draftAnchors.Remove(uid))
                 _channel.BroadcastPacket(new DraftAnchorRemovePacket(uid));
@@ -594,6 +692,10 @@ namespace Layout.Network
 
             if (wasClientOnly != clientOnly)
             {
+                if (_playersWithPendingImmenseCreate.Contains(player.PlayerUID))
+                    SendPlacementRejected(player, GuideOpStatus.InvalidArgument);
+                CancelPendingImmenseCreate(player.PlayerUID);
+                CancelPendingImmenseSculpt(player.PlayerUID);
                 IReadOnlyList<Guid> freed = _locks.ReleaseAllLocksForPlayer(player.PlayerUID);
                 foreach (Guid id in freed)
                     _channel.BroadcastPacket(new GuideLockStatePacket(id, null));
@@ -688,8 +790,24 @@ namespace Layout.Network
 
         private void OnCreateRequest(IServerPlayer fromPlayer, GuideCreateRequestPacket p)
         {
-            if (DeniedByPrivilege(fromPlayer)) return;
-            if (p?.Start == null || p.End == null || p.Settings == null) return;
+            if (DeniedByPrivilege(fromPlayer))
+            {
+                SendPlacementRejected(fromPlayer, GuideOpStatus.InvalidArgument);
+                return;
+            }
+            if (p?.Start == null || p.End == null || p.Settings == null)
+            {
+                SendPlacementRejected(fromPlayer, GuideOpStatus.InvalidArgument);
+                return;
+            }
+
+            if (_playersWithPendingImmenseCreate.Contains(fromPlayer.PlayerUID))
+            {
+                fromPlayer.SendIngameError("layout-validationpending",
+                    "Your previous immense guide is still being validated.");
+                SendPlacementRejected(fromPlayer, GuideOpStatus.InvalidArgument);
+                return;
+            }
 
             // F5 chalk gate (NO LOCKOUT rule): a kit at 0 chalk blocks NEW placements only — every other
             // operation (edit, dispel, undo) has no gate. The client pre-checks at draft start; this is the
@@ -699,6 +817,7 @@ namespace Layout.Network
             {
                 fromPlayer.SendIngameError("layout-outofchalk",
                     "Out of chalk. Refill the Chalking Kit with Chalking Powder (hold it and right-click).");
+                SendPlacementRejected(fromPlayer, GuideOpStatus.InvalidArgument);
                 return;
             }
 
@@ -721,6 +840,12 @@ namespace Layout.Network
                     chain.Add(c.ToVec3d());
                 }
             }
+
+            if (TryQueueImmenseCreate(
+                fromPlayer, start, end, settings, shapeType, constraint, planeAxis,
+                p.Apex?.ToVec3d(), p.Inverted, p.Sides, chain, p.Closed,
+                p.Rim?.ToVec3d(), p.FlatSideAligned))
+                return;
 
             GuideOperationResult result = _guides.CreateGuide(
                 start, end, settings, shapeType, constraint, planeAxis,
@@ -751,8 +876,8 @@ namespace Layout.Network
                     break;
 
                 case GuideOpStatus.RejectedOverCap:
-                    // The client pre-checks the PER-GUIDE cap, so a server-side over-cap on CREATE is the
-                    // total-voxel budget or the hard scan ceiling. The HUD cap-flash is tied to a guide id
+                    // Small guides and already-refined drafts pre-check the per-guide cap. An immense public
+                    // shell may deliberately defer that expensive final count here. The HUD cap-flash is tied to a guide id
                     // that doesn't exist yet, so it never showed — send a CLEAR ingame error instead
                     // (v0.1.26 fix: previously this rejection was effectively silent). Leave the draft so
                     // the player can shrink it or dispel some guides and retry.
@@ -789,6 +914,352 @@ namespace Layout.Network
 
                 // InvalidArgument: malformed input — ignore.
             }
+            if (!result.IsSuccess) SendPlacementRejected(fromPlayer, result.Status);
+        }
+
+        private bool TryQueueImmenseCreate(
+            IServerPlayer player, Vec3d start, Vec3d end, GuideRenderSettings settings,
+            GuideShapeType shapeType, ShapeConstraint constraint, PlaneAxis planeAxis,
+            Vec3d thirdPoint, bool inverted, int sides, IReadOnlyList<Vec3d> chain,
+            bool closed, Vec3d fourthPoint, bool flatSideAligned)
+        {
+            if (!GuideShapeTypes.IsVolume(shapeType) || settings.Wireframe) return false;
+
+            if (!_guides.TryPrepareGuideCreation(
+                start, end, settings, shapeType, constraint, planeAxis,
+                player.PlayerUID, PlayerDisplayName(player), thirdPoint, inverted, sides,
+                chain, closed, fourthPoint, flatSideAligned,
+                out PreparedGuideCreation prepared, out _))
+                return false;
+
+            ResolveCreateCountLimit(player, out int countLimit, out int countLimitCap);
+            int probeLimit = Math.Min(StreamedCreateVoxelThreshold, countLimit);
+            int probeCount = prepared.CountUpTo(probeLimit);
+
+            // At or below the threshold, preserve the established immediate path. If the applicable cap is
+            // itself no larger than the threshold, that path also rejects cheaply without starting a job.
+            if (probeCount <= probeLimit || countLimit <= StreamedCreateVoxelThreshold) return false;
+
+            if (_playersWithPendingImmenseCreate.Count >= MaxQueuedImmenseCreates)
+            {
+                player.SendIngameError("layout-validationbusy",
+                    "The immense-guide validator is busy. Please try placing this guide again shortly.");
+                SendPlacementRejected(player, GuideOpStatus.InvalidArgument);
+                return true;
+            }
+
+            var pending = new PendingImmenseCreate
+            {
+                PlayerUid = player.PlayerUID,
+                Prepared = prepared,
+                CountLimit = countLimit,
+                CountLimitCap = countLimitCap
+            };
+            _playersWithPendingImmenseCreate.Add(player.PlayerUID);
+            _immenseCreateQueue.Enqueue(pending);
+            StartNextImmenseCreate();
+            return true;
+        }
+
+        private void ResolveCreateCountLimit(
+            IServerPlayer player, out int countLimit, out int countLimitCap)
+        {
+            countLimit = GuideManager.HardVoxelCeiling;
+            countLimitCap = GuideManager.HardVoxelCeiling;
+
+            int perGuideCap = _policies.EffectiveVoxelCap(
+                player?.PlayerUID, _guides.PerGuideVoxelCap);
+            if (perGuideCap > 0 && perGuideCap < countLimit)
+            {
+                countLimit = perGuideCap;
+                countLimitCap = perGuideCap;
+            }
+
+            if (_guides.TotalVoxelCap <= 0) return;
+            long available = (long)_guides.TotalVoxelCap - _guides.TotalVoxelCount;
+            int totalLimit = available <= 0 ? 0
+                : available >= int.MaxValue ? int.MaxValue
+                : (int)available;
+            if (totalLimit < countLimit)
+            {
+                countLimit = totalLimit;
+                countLimitCap = _guides.TotalVoxelCap;
+            }
+        }
+
+        private void StartNextImmenseCreate()
+        {
+            if (_disposed || _activeImmenseCreate != null || _activeImmenseSculpt != null) return;
+            while (_immenseCreateQueue.Count > 0)
+            {
+                PendingImmenseCreate next = _immenseCreateQueue.Dequeue();
+                if (next.Cancelled)
+                {
+                    _playersWithPendingImmenseCreate.Remove(next.PlayerUid);
+                    continue;
+                }
+
+                _activeImmenseCreate = next;
+                next.GeometryTask = Task.Factory.StartNew(
+                    () => CalculateImmenseCreateGeometry(next),
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default);
+                return;
+            }
+        }
+
+        private static ImmenseCreateGeometry CalculateImmenseCreateGeometry(
+            PendingImmenseCreate pending)
+        {
+            Thread thread = Thread.CurrentThread;
+            ThreadPriority originalPriority = ThreadPriority.Normal;
+            bool priorityChanged = false;
+            try
+            {
+                try
+                {
+                    originalPriority = thread.Priority;
+                    thread.Priority = ThreadPriority.BelowNormal;
+                    priorityChanged = true;
+                }
+                catch (Exception) { }
+
+                int count = pending.Prepared.CountUpTo(pending.CountLimit);
+                if (count > pending.CountLimit)
+                    return new ImmenseCreateGeometry
+                    {
+                        VoxelCount = count,
+                        ExceededCap = pending.CountLimitCap
+                    };
+
+                return new ImmenseCreateGeometry
+                {
+                    VoxelCount = count,
+                    Footprint = GuideClaimAccessValidator.BuildFootprint(
+                        pending.Prepared.Guide, pending.Prepared.Shape)
+                };
+            }
+            finally
+            {
+                if (priorityChanged)
+                {
+                    try { thread.Priority = originalPriority; }
+                    catch (Exception) { }
+                }
+            }
+        }
+
+        private void OnImmenseCreateTick(float deltaTime)
+        {
+            if (_disposed) return;
+            StartNextImmenseCreate();
+            PendingImmenseCreate pending = _activeImmenseCreate;
+            if (pending?.GeometryTask == null || !pending.GeometryTask.IsCompleted) return;
+
+            if (pending.Cancelled)
+            {
+                CompleteActiveImmenseCreate();
+                return;
+            }
+
+            if (pending.Geometry == null)
+            {
+                try
+                {
+                    pending.Geometry = pending.GeometryTask.GetAwaiter().GetResult();
+                }
+                catch (Exception e)
+                {
+                    _sapi.Logger.Error(
+                        "[Layout] Immense placement geometry failed for {0}: {1}",
+                        pending.PlayerUid, e.Message);
+                    IServerPlayer failedPlayer = FindOnlinePlayer(pending.PlayerUid);
+                    if (failedPlayer != null)
+                    {
+                        failedPlayer.SendIngameError("layout-validationfailed",
+                            "That immense guide could not be validated. Please try again.");
+                        SendPlacementRejected(failedPlayer, GuideOpStatus.InvalidArgument);
+                    }
+                    CompleteActiveImmenseCreate();
+                    return;
+                }
+            }
+
+            IServerPlayer player = FindOnlinePlayer(pending.PlayerUid);
+            if (player == null)
+            {
+                CompleteActiveImmenseCreate();
+                return;
+            }
+
+            if (pending.Geometry.ExceededCap > 0)
+            {
+                FinishImmenseCreate(player, GuideOperationResult.OverCap(
+                    pending.Prepared.Guide, pending.Geometry.VoxelCount,
+                    pending.Geometry.ExceededCap));
+                CompleteActiveImmenseCreate();
+                return;
+            }
+
+            List<BlockPos> footprint = pending.Geometry.Footprint ?? new List<BlockPos>();
+            if (player.HasPrivilege(Privilege.controlserver))
+            {
+                pending.ClaimIndex = footprint.Count;
+            }
+            else
+            {
+                var budget = Stopwatch.StartNew();
+                int checks = 0;
+                while (pending.ClaimIndex < footprint.Count
+                    && checks < MaxClaimChecksPerTick
+                    && budget.Elapsed.TotalMilliseconds < ClaimCheckBudgetMilliseconds)
+                {
+                    BlockPos block = footprint[pending.ClaimIndex++];
+                    checks++;
+                    if (_sapi.World.Claims.TestAccess(
+                        player, block, EnumBlockAccessFlags.BuildOrBreak)
+                        != EnumWorldAccessResponse.Granted)
+                    {
+                        FinishImmenseCreate(player, GuideOperationResult.ClaimDenied(
+                            pending.Prepared.Guide, block));
+                        CompleteActiveImmenseCreate();
+                        return;
+                    }
+                }
+            }
+
+            if (pending.ClaimIndex < footprint.Count) return;
+
+            if (DeniedByPrivilege(player))
+            {
+                SendPlacementRejected(player, GuideOpStatus.InvalidArgument);
+                CompleteActiveImmenseCreate();
+                return;
+            }
+            if (ChalkApplies(player, out ItemSlot kitSlot)
+                && Items.ItemGuideTool.GetChalk(kitSlot.Itemstack) <= 0)
+            {
+                player.SendIngameError("layout-outofchalk",
+                    "Out of chalk. Refill the Chalking Kit with Chalking Powder (hold it and right-click).");
+                SendPlacementRejected(player, GuideOpStatus.InvalidArgument);
+                CompleteActiveImmenseCreate();
+                return;
+            }
+
+            GuideOperationResult committed = default;
+            WithPlayerVoxelCap(player, () =>
+                committed = _guides.CommitPreparedGuideCreation(
+                    pending.Prepared, pending.Geometry.VoxelCount, validateAccess: false));
+            FinishImmenseCreate(player, committed);
+            CompleteActiveImmenseCreate();
+        }
+
+        private void FinishImmenseCreate(IServerPlayer player, GuideOperationResult result)
+        {
+            if (result.IsSuccess)
+            {
+                _undo.Record(player.PlayerUID, new CreateGuideCommand(result.Guide));
+                _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
+                if (_draftAnchors.Remove(player.PlayerUID))
+                    _channel.BroadcastPacket(new DraftAnchorRemovePacket(player.PlayerUID), player);
+                ChalkEffects.PlacementEffects(_sapi.World, result.Guide);
+                if (ChalkApplies(player, out ItemSlot chargeSlot))
+                    Items.ItemGuideTool.ConsumeChalk(chargeSlot,
+                        GuideShapeTypes.IsVolume(result.Guide.ShapeType)
+                            ? Items.ItemGuideTool.ChalkCostVolume
+                            : Items.ItemGuideTool.ChalkCostFlat);
+                return;
+            }
+
+            switch (result.Status)
+            {
+                case GuideOpStatus.RejectedOverCap:
+                    if (result.CapLimit >= GuideManager.HardVoxelCeiling)
+                        player.SendIngameError("layout-toolarge",
+                            "That guide is too large to render ({0:n0} voxels). Make it smaller or use a coarser scale.",
+                            result.VoxelCount);
+                    else if (_policies.EffectiveVoxelCap(
+                        player.PlayerUID, _guides.PerGuideVoxelCap) > 0
+                        && result.CapLimit == _policies.EffectiveVoxelCap(
+                            player.PlayerUID, _guides.PerGuideVoxelCap))
+                        player.SendIngameError("layout-overcap",
+                            "That guide exceeds your per-guide limit of {0:n0} voxels. Make it smaller or use a coarser scale.",
+                            result.CapLimit);
+                    else
+                        player.SendIngameError("layout-overcap",
+                            "World voxel budget reached: {0:n0} more would pass the {1:n0} limit. Dispel some guides ('/layout dispel'), coarsen the scale, or raise totalVoxelCap.",
+                            result.VoxelCount, result.CapLimit);
+                    if (result.Guide != null)
+                        _channel.SendPacket(new VoxelCapWarningPacket(
+                            result.Guide.Id, result.VoxelCount, result.CapLimit), player);
+                    break;
+
+                case GuideOpStatus.RejectedOverGuideCount:
+                    player.SendIngameError("layout-guidecountcap",
+                        "Guide limit reached ({0} of {1}). Dispel a guide before placing another.",
+                        result.VoxelCount, result.CapLimit);
+                    break;
+
+                case GuideOpStatus.RejectedClaimAccess:
+                    SendClaimDenied(player, result.DeniedPosition);
+                    break;
+
+                default:
+                    player.SendIngameError("layout-validationfailed",
+                        "That guide could not be placed. Please try again.");
+                    break;
+            }
+            SendPlacementRejected(player, result.Status);
+        }
+
+        private void CompleteActiveImmenseCreate()
+        {
+            PendingImmenseCreate completed = _activeImmenseCreate;
+            _activeImmenseCreate = null;
+            if (completed != null)
+                _playersWithPendingImmenseCreate.Remove(completed.PlayerUid);
+            StartNextImmenseCreate();
+            StartNextImmenseSculpt();
+        }
+
+        private void CancelPendingImmenseCreate(string playerUid)
+        {
+            if (string.IsNullOrEmpty(playerUid)) return;
+            if (_activeImmenseCreate?.PlayerUid == playerUid)
+            {
+                _activeImmenseCreate.Cancelled = true;
+                return;
+            }
+
+            int queued = _immenseCreateQueue.Count;
+            bool removed = false;
+            for (int i = 0; i < queued; i++)
+            {
+                PendingImmenseCreate pending = _immenseCreateQueue.Dequeue();
+                if (pending.PlayerUid == playerUid) removed = true;
+                else _immenseCreateQueue.Enqueue(pending);
+            }
+            if (removed) _playersWithPendingImmenseCreate.Remove(playerUid);
+        }
+
+        private void CancelPendingImmenseSculpt(string playerUid)
+        {
+            if (string.IsNullOrEmpty(playerUid)) return;
+            if (_pendingImmenseSculpts.TryGetValue(
+                playerUid, out PendingImmenseSculpt pending))
+                pending.Cancelled = true;
+            _pendingImmenseSculpts.Remove(playerUid);
+        }
+
+        private IServerPlayer FindOnlinePlayer(string playerUid) =>
+            _sapi.World.AllOnlinePlayers.OfType<IServerPlayer>()
+                .FirstOrDefault(player => player.PlayerUID == playerUid);
+
+        private void SendPlacementRejected(IServerPlayer player, GuideOpStatus status)
+        {
+            if (player != null)
+                _channel.SendPacket(new GuidePlacementRejectedPacket((int)status), player);
         }
 
         /// <summary>
@@ -945,6 +1416,16 @@ namespace Layout.Network
         {
             // Releasing/cancelling an in-flight gesture is cleanup. It must remain possible if a claim was
             // created during the drag, or the player would be unable to restore/remove the transient edit.
+            if (p != null
+                && _pendingImmenseSculpts.TryGetValue(
+                    fromPlayer.PlayerUID, out PendingImmenseSculpt pending)
+                && pending.GuideId == p.GuideId())
+            {
+                // The client is already free to continue playing. Retain the authority lock only until the
+                // isolated candidate finishes its low-priority count and bounded claim validation.
+                pending.ReleaseRequested = true;
+                return;
+            }
             using (_guides.UseMutationAccessValidator(null))
                 OnReleaseWithoutClaimChecks(fromPlayer, p);
         }
@@ -989,7 +1470,7 @@ namespace Layout.Network
                         bool promotedMarker = HasPromotedMarker(
                             session.OriginPoints, g.ControlPoints);
                         visibleChange = promotedMarker || session.OriginConstraint != g.Constraint;
-                        if (promotedMarker)
+                        if (promotedMarker || session.CommitAsWholeShape)
                         {
                             _undo.Record(uid, new SpringBackCommand(
                                 id, session.OriginConstraint, session.OriginPoints,
@@ -1032,6 +1513,19 @@ namespace Layout.Network
         // on removal and self-cleans via the validate-then-apply discard, per the settled undo model.
         private void OnCancelGrab(IServerPlayer fromPlayer, GuideCancelGrabPacket p)
         {
+            if (p != null
+                && _pendingImmenseSculpts.TryGetValue(
+                    fromPlayer.PlayerUID, out PendingImmenseSculpt pending)
+                && pending.GuideId == p.GuideId())
+            {
+                pending.Cancelled = true;
+                _pendingImmenseSculpts.Remove(fromPlayer.PlayerUID);
+                _drags.Remove(fromPlayer.PlayerUID);
+                if (_locks.ReleaseLock(pending.GuideId, fromPlayer.PlayerUID))
+                    _channel.BroadcastPacket(new GuideLockStatePacket(pending.GuideId, null));
+                ResyncOrDrop(fromPlayer, pending.GuideId);
+                return;
+            }
             CancelGrabSession(fromPlayer, p.GuideId());
         }
 
@@ -1122,16 +1616,21 @@ namespace Layout.Network
 
             DragSession session = DragFor(uid, id);
             IGuideShape shape = _guides.GetShape(id);
+            bool immenseSculpt = g.CachedVoxelCount > StreamedCreateVoxelThreshold
+                && GuideShapeTypes.IsVolume(g.ShapeType) && !g.IsWireframe;
 
             // ABSORB-OR-BREAK on move (Session 8): dragging a point the constraint cannot absorb — a
             // circle's minor handle — breaks it (one undoable command), and the move then applies to the
             // free parent. Feet/diameter anchors absorb, so they never reach this.
             bool broke = false;
+            bool shouldBreak = false;
             if (g.Constraint != ShapeConstraint.None && shape != null)
             {
-                for (int i = 0; i < p.Edits.Length && !broke; i++)
+                for (int i = 0; i < p.Edits.Length && !shouldBreak; i++)
                 {
                     if (!shape.WouldBreakOnMove(p.Edits[i].Index)) continue;
+                    shouldBreak = true;
+                    if (immenseSculpt) continue;
                     var breakCmd = new BreakConstraintCommand(id, g.Constraint, g.ControlPoints);
                     GuideOperationResult breakResult = _guides.BreakConstraint(id);
                     if (breakResult.Status == GuideOpStatus.Success)
@@ -1184,6 +1683,10 @@ namespace Layout.Network
             for (int i = 0; i < g.ControlPoints.Count && !promotedLockMarker; i++)
                 promotedLockMarker = g.ControlPoints[i].IsLockMarker && g.ControlPoints[i].IsLocked;
 
+            if (immenseSculpt && TryQueueImmenseSculpt(
+                fromPlayer, g, composed, shouldBreak, session))
+                return;
+
             GuideOperationResult result = _guides.UpdateControlPoints(id, composed.ToArray());
             switch (result.Status)
             {
@@ -1224,6 +1727,285 @@ namespace Layout.Network
                     _channel.SendPacket(new GuideDeletePacket(id), fromPlayer);
                     break;
             }
+        }
+
+        private bool TryQueueImmenseSculpt(
+            IServerPlayer player, GuideData live, IReadOnlyList<ControlPointEdit> edits,
+            bool breakConstraint, DragSession session)
+        {
+            if (player == null || live == null || edits == null || edits.Count == 0) return false;
+            if (_pendingImmenseSculpts.ContainsKey(player.PlayerUID)) return true;
+            if (_pendingImmenseSculpts.Count >= MaxQueuedImmenseCreates)
+            {
+                player.SendIngameError("layout-validationbusy",
+                    "The immense-guide validator is busy. Please try that reshape again shortly.");
+                SendResync(player, live);
+                return true;
+            }
+
+            GuideData candidate = live.DeepClone();
+            IGuideShape candidateShape = ShapeFactory.Adopt(candidate);
+            candidateShape.RecalculatePhantomPoints();
+            if (breakConstraint && candidateShape.BreakConstraint())
+                candidate.Constraint = ShapeConstraint.None;
+
+            bool promotedMarker = false;
+            for (int i = 0; i < candidate.ControlPoints.Count; i++)
+                if (candidate.ControlPoints[i].IsLockMarker && candidate.ControlPoints[i].IsLocked)
+                {
+                    candidate.ControlPoints[i].IsLockMarker = false;
+                    promotedMarker = true;
+                }
+
+            for (int i = 0; i < edits.Count; i++)
+            {
+                ControlPointEdit edit = edits[i];
+                if (edit.Index < 0 || edit.Index >= candidate.ControlPoints.Count
+                    || candidate.ControlPoints[edit.Index].IsPhantom
+                    || candidate.ControlPoints[edit.Index].IsLocked
+                    || edit.Position == null)
+                {
+                    SendResync(player, live);
+                    return true;
+                }
+                candidateShape.MoveControlPoint(edit.Index, edit.Position);
+            }
+            candidateShape.RecalculatePhantomPoints();
+            session.CommitAsWholeShape = breakConstraint || promotedMarker;
+
+            ResolveSculptCountLimit(player, live, out int countLimit, out int countLimitCap);
+            var pending = new PendingImmenseSculpt
+            {
+                PlayerUid = player.PlayerUID,
+                GuideId = live.Id,
+                ExpectedLive = live,
+                Candidate = candidate,
+                CandidateShape = candidateShape,
+                CountLimit = countLimit,
+                CountLimitCap = countLimitCap
+            };
+            _pendingImmenseSculpts[player.PlayerUID] = pending;
+            _immenseSculptQueue.Enqueue(pending);
+            StartNextImmenseSculpt();
+            return true;
+        }
+
+        private void ResolveSculptCountLimit(
+            IServerPlayer player, GuideData live, out int countLimit, out int countLimitCap)
+        {
+            countLimit = GuideManager.HardVoxelCeiling;
+            countLimitCap = GuideManager.HardVoxelCeiling;
+
+            int perGuideCap = _policies.EffectiveVoxelCap(
+                player.PlayerUID, _guides.PerGuideVoxelCap);
+            if (perGuideCap > 0 && perGuideCap < countLimit)
+            {
+                countLimit = perGuideCap;
+                countLimitCap = perGuideCap;
+            }
+
+            if (_guides.TotalVoxelCap <= 0) return;
+            long withoutCurrent = _guides.TotalVoxelCount - Math.Max(0, live.CachedVoxelCount);
+            long available = (long)_guides.TotalVoxelCap - withoutCurrent;
+            int totalLimit = available <= 0 ? 0
+                : available >= int.MaxValue ? int.MaxValue
+                : (int)available;
+            if (totalLimit < countLimit)
+            {
+                countLimit = totalLimit;
+                countLimitCap = _guides.TotalVoxelCap;
+            }
+        }
+
+        private void StartNextImmenseSculpt()
+        {
+            if (_disposed || _activeImmenseSculpt != null || _activeImmenseCreate != null
+                || _immenseCreateQueue.Count > 0) return;
+            while (_immenseSculptQueue.Count > 0)
+            {
+                PendingImmenseSculpt next = _immenseSculptQueue.Dequeue();
+                if (next.Cancelled)
+                {
+                    _pendingImmenseSculpts.Remove(next.PlayerUid);
+                    continue;
+                }
+
+                _activeImmenseSculpt = next;
+                next.GeometryTask = Task.Factory.StartNew(
+                    () => CalculateImmenseSculptGeometry(next),
+                    CancellationToken.None,
+                    TaskCreationOptions.LongRunning,
+                    TaskScheduler.Default);
+                return;
+            }
+        }
+
+        private static ImmenseCreateGeometry CalculateImmenseSculptGeometry(
+            PendingImmenseSculpt pending)
+        {
+            Thread thread = Thread.CurrentThread;
+            ThreadPriority originalPriority = ThreadPriority.Normal;
+            bool priorityChanged = false;
+            try
+            {
+                try
+                {
+                    originalPriority = thread.Priority;
+                    thread.Priority = ThreadPriority.BelowNormal;
+                    priorityChanged = true;
+                }
+                catch (Exception) { }
+
+                int count = GuideShapeVoxelCounting.CountUpTo(
+                    pending.CandidateShape, pending.Candidate.VoxelScale,
+                    pending.Candidate.IsFilled, pending.CountLimit);
+                if (count > pending.CountLimit)
+                    return new ImmenseCreateGeometry
+                    {
+                        VoxelCount = count,
+                        ExceededCap = pending.CountLimitCap
+                    };
+
+                return new ImmenseCreateGeometry
+                {
+                    VoxelCount = count,
+                    Footprint = GuideClaimAccessValidator.BuildFootprint(
+                        pending.Candidate, pending.CandidateShape)
+                };
+            }
+            finally
+            {
+                if (priorityChanged)
+                {
+                    try { thread.Priority = originalPriority; }
+                    catch (Exception) { }
+                }
+            }
+        }
+
+        private void OnImmenseSculptTick(float deltaTime)
+        {
+            if (_disposed) return;
+            StartNextImmenseSculpt();
+            PendingImmenseSculpt pending = _activeImmenseSculpt;
+            if (pending?.GeometryTask == null || !pending.GeometryTask.IsCompleted) return;
+            if (pending.Cancelled)
+            {
+                CompleteActiveImmenseSculpt();
+                return;
+            }
+
+            if (pending.Geometry == null)
+            {
+                try
+                {
+                    pending.Geometry = pending.GeometryTask.GetAwaiter().GetResult();
+                }
+                catch (Exception e)
+                {
+                    _sapi.Logger.Error(
+                        "[Layout] Immense sculpt geometry failed for {0}: {1}",
+                        pending.PlayerUid, e.Message);
+                    IServerPlayer failed = FindOnlinePlayer(pending.PlayerUid);
+                    if (failed != null)
+                    {
+                        failed.SendIngameError("layout-validationfailed",
+                            "That immense reshape could not be validated. The original guide was retained.");
+                        FinishRejectedImmenseSculpt(failed, pending);
+                    }
+                    CompleteActiveImmenseSculpt();
+                    return;
+                }
+            }
+
+            IServerPlayer player = FindOnlinePlayer(pending.PlayerUid);
+            if (player == null || !_locks.IsHeldBy(pending.GuideId, pending.PlayerUid))
+            {
+                CompleteActiveImmenseSculpt();
+                return;
+            }
+
+            if (pending.Geometry.ExceededCap > 0)
+            {
+                _channel.SendPacket(new VoxelCapWarningPacket(
+                    pending.GuideId, pending.Geometry.VoxelCount,
+                    pending.Geometry.ExceededCap), player);
+                FinishRejectedImmenseSculpt(player, pending);
+                CompleteActiveImmenseSculpt();
+                return;
+            }
+
+            List<BlockPos> footprint = pending.Geometry.Footprint ?? new List<BlockPos>();
+            if (player.HasPrivilege(Privilege.controlserver))
+            {
+                pending.ClaimIndex = footprint.Count;
+            }
+            else
+            {
+                var budget = Stopwatch.StartNew();
+                int checks = 0;
+                while (pending.ClaimIndex < footprint.Count
+                    && checks < MaxClaimChecksPerTick
+                    && budget.Elapsed.TotalMilliseconds < ClaimCheckBudgetMilliseconds)
+                {
+                    BlockPos block = footprint[pending.ClaimIndex++];
+                    checks++;
+                    if (_sapi.World.Claims.TestAccess(
+                        player, block, EnumBlockAccessFlags.BuildOrBreak)
+                        != EnumWorldAccessResponse.Granted)
+                    {
+                        SendClaimDenied(player, block);
+                        FinishRejectedImmenseSculpt(player, pending);
+                        CompleteActiveImmenseSculpt();
+                        return;
+                    }
+                }
+            }
+            if (pending.ClaimIndex < footprint.Count) return;
+
+            GuideOperationResult committed;
+            int playerCap = _policies.EffectiveVoxelCap(
+                player.PlayerUID, _guides.PerGuideVoxelCap);
+            using (_guides.UsePerGuideVoxelCap(playerCap))
+                committed = _guides.CommitPreparedGuideMutation(
+                    pending.GuideId, pending.ExpectedLive, pending.Candidate,
+                    pending.CandidateShape, pending.Geometry.VoxelCount);
+
+            if (committed.IsSuccess)
+            {
+                _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(committed.Guide)));
+                if (pending.ReleaseRequested)
+                    OnReleaseWithoutClaimChecks(
+                        player, new GuideReleasePacket(pending.GuideId));
+            }
+            else
+            {
+                if (committed.Status == GuideOpStatus.RejectedOverCap)
+                    _channel.SendPacket(new VoxelCapWarningPacket(
+                        pending.GuideId, committed.VoxelCount, committed.CapLimit), player);
+                FinishRejectedImmenseSculpt(player, pending);
+            }
+            CompleteActiveImmenseSculpt();
+        }
+
+        private void FinishRejectedImmenseSculpt(
+            IServerPlayer player, PendingImmenseSculpt pending)
+        {
+            if (player == null || pending == null) return;
+            if (pending.ReleaseRequested)
+                OnReleaseWithoutClaimChecks(player, new GuideReleasePacket(pending.GuideId));
+            else
+                ResyncOrDrop(player, pending.GuideId);
+        }
+
+        private void CompleteActiveImmenseSculpt()
+        {
+            PendingImmenseSculpt completed = _activeImmenseSculpt;
+            _activeImmenseSculpt = null;
+            if (completed != null)
+                _pendingImmenseSculpts.Remove(completed.PlayerUid);
+            StartNextImmenseCreate();
+            StartNextImmenseSculpt();
         }
 
         private void OnInsert(IServerPlayer fromPlayer, GuideInsertPointPacket p)
@@ -1715,6 +2497,10 @@ namespace Layout.Network
         {
             if (player == null) return;
             string uid = player.PlayerUID;
+            if (_playersWithPendingImmenseCreate.Contains(uid))
+                SendPlacementRejected(player, GuideOpStatus.InvalidArgument);
+            CancelPendingImmenseCreate(uid);
+            CancelPendingImmenseSculpt(uid);
             if (_drags.TryGetValue(uid, out DragSession session))
                 CancelGrabSession(player, session.GuideId);
             ClearPlayerSessionState(uid);
@@ -2052,6 +2838,30 @@ namespace Layout.Network
             if (a == null || b == null) return false;
             const double eps = 1e-6;
             return Math.Abs(a.X - b.X) <= eps && Math.Abs(a.Y - b.Y) <= eps && Math.Abs(a.Z - b.Z) <= eps;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            if (_immenseCreateTickId != 0)
+            {
+                _sapi.Event.UnregisterGameTickListener(_immenseCreateTickId);
+                _immenseCreateTickId = 0;
+            }
+            if (_immenseSculptTickId != 0)
+            {
+                _sapi.Event.UnregisterGameTickListener(_immenseSculptTickId);
+                _immenseSculptTickId = 0;
+            }
+            _sapi.Event.PlayerNowPlaying -= OnPlayerNowPlaying;
+            _sapi.Event.PlayerDisconnect -= OnPlayerDisconnect;
+            if (_activeImmenseCreate != null) _activeImmenseCreate.Cancelled = true;
+            if (_activeImmenseSculpt != null) _activeImmenseSculpt.Cancelled = true;
+            _immenseCreateQueue.Clear();
+            _immenseSculptQueue.Clear();
+            _playersWithPendingImmenseCreate.Clear();
+            _pendingImmenseSculpts.Clear();
         }
     }
 }

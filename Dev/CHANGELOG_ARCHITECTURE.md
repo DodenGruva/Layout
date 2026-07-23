@@ -1,12 +1,35 @@
 # Layout — Architecture Changelog (document-version history)
 
 > **Split out of `ARCHITECTURE.md` to keep the orientation read cheap.** These are the per-revision deltas
-> for the architecture document itself, v2.5 → v3.9. **Nothing here is unique:** each delta is already folded
+> for the architecture document itself, v2.5 → v3.10. **Nothing here is unique:** each delta is already folded
 > in place into `ARCHITECTURE.md`'s body (Settled Decisions Register, file tree, module map, persistence,
 > edge cases), and each has a fuller narrative in its `SESSION_*.md` record. Kept as the audit trail — read
 > it when you need to know *when* something changed, not *what* the current state is.
 
 ---
+
+## Changelog — v3.9 → v3.10 (moderation + bounded immense guides + organic materialization, v0.3.22 → v0.3.34; full record in `SESSION_23.md`)
+
+- **Persistent server policy and moderation (v0.3.22–v0.3.25, protocol 14):** per-player jail and cap
+  overrides, administrative inspection/cleanup commands, policy synchronization, and a comatose HUD state
+  for drafts that cannot currently proceed.
+- **Claim-authoritative public guides (v0.3.25):** public create/sculpt commits require access to every
+  affected claimed block. Private/local guides retain their local-authority contract.
+- **Bounded immense server lane (v0.3.26–v0.3.27, protocol 15):** guides above the 8,000-voxel immediate
+  threshold use one below-normal-priority worker for pure generation/counting, followed by claim checks
+  capped at 128 blocks or roughly 1 ms per 20 ms server tick. Explicit rejection completes the retained
+  client handoff cleanly.
+- **Retained progressive handoffs (v0.3.28–v0.3.32):** cancellable shape scans and bounded mesh uploads keep
+  a selected-scale scaffold visible from the final click through authority and materialization. Immense
+  reshape retains the old settled shell; competing immense placements/reshapes are gated; obsolete meshes
+  retire across later frames.
+- **View-distance and personal render control (v0.3.33, protocol 16):** conservative whole-guide bounding
+  culling follows the live game view-distance setting. `/layout off|on` and `.layout off|on` skip/resume the
+  complete guide render pass without deleting state.
+- **Organic exact reveal (v0.3.34):** streamed deterministic multi-seed 26-neighbour growth, shaped by broad
+  and detail noise plus fine grain, replaces bands and square chunks with torn/frayed spreading splotches.
+  The union remains the generator's exact voxel set. Immense final sculpt generation joins the same single
+  server lane, and no synchronous full-shell rebuild occurs at release.
 
 ## Changelog — v3.8 → v3.9 (action HUD + attribution + sculpting parity, v0.3.9 → v0.3.21; full record in `SESSION_22.md`)
 

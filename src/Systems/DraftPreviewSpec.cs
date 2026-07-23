@@ -124,6 +124,81 @@ namespace Layout.Systems
             return h;
         }
 
+        /// <summary>
+        /// True when an authoritative newly-created guide describes exactly the same renderable placement
+        /// as this immutable draft. This is deliberately stricter than <see cref="Fingerprint"/>, whose
+        /// grid-quantized identity is intended only to suppress harmless live-aim churn. A successful match
+        /// lets the renderer adopt an already-refined immense draft instead of voxelising it again when the
+        /// authority echoes the placed guide.
+        /// </summary>
+        public bool MatchesPlacedGuide(GuideData guide)
+        {
+            if (guide == null || guide.IsHidden || guide.ShapeType != ShapeType
+                || guide.ShapePlaneAxis != PlaneAxis || guide.VoxelScale != Settings.Scale)
+                return false;
+
+            bool volume = GuideShapeTypes.IsVolume(ShapeType);
+            ProjectionMode expectedMode = volume ? ProjectionMode.Volumetric : Settings.Mode;
+            bool expectedFilled = volume ? false : Settings.Filled;
+            int expectedDivisions = volume ? 0 : Settings.Divisions;
+            bool expectedWireframe = volume && Settings.Wireframe;
+            int expectedSides = GuideShapeTypes.UsesSides(ShapeType)
+                ? PolygonShape.ClampSides(Sides) : 0;
+
+            if (guide.Projection != expectedMode
+                || guide.Plane.FlattenedAxis != Settings.Plane.FlattenedAxis
+                || guide.Plane.PlaneOffset != Settings.Plane.PlaneOffset
+                || guide.IsFilled != expectedFilled
+                || guide.Divisions != expectedDivisions
+                || guide.IsWireframe != expectedWireframe
+                || guide.Sides != expectedSides
+                || guide.FlatSideAligned != (GuideShapeTypes.UsesSides(ShapeType) && FlatSideAligned)
+                || guide.IsClosed != (IsChain && ChainClosing))
+                return false;
+
+            IGuideShape shape;
+            try
+            {
+                shape = CreateShape();
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (shape.Constraint != guide.Constraint) return false;
+            List<ControlPoint> expected = shape.ControlPoints;
+            List<ControlPoint> actual = guide.ControlPoints;
+            if (expected == null || actual == null || expected.Count != actual.Count) return false;
+
+            const double epsilon = 1e-9;
+            for (int i = 0; i < expected.Count; i++)
+            {
+                ControlPoint a = expected[i], b = actual[i];
+                if (a == null || b == null)
+                {
+                    if (!ReferenceEquals(a, b)) return false;
+                    continue;
+                }
+
+                Vec3d ap = a.WorldPosition, bp = b.WorldPosition;
+                if (ap == null || bp == null)
+                {
+                    if (!ReferenceEquals(ap, bp)) return false;
+                }
+                else if (Math.Abs(ap.X - bp.X) > epsilon
+                    || Math.Abs(ap.Y - bp.Y) > epsilon
+                    || Math.Abs(ap.Z - bp.Z) > epsilon)
+                    return false;
+
+                if (a.IsLocked != b.IsLocked || a.IsPhantom != b.IsPhantom
+                    || a.IsAnchor != b.IsAnchor || a.IsPrimary != b.IsPrimary
+                    || a.IsLockMarker != b.IsLockMarker)
+                    return false;
+            }
+            return true;
+        }
+
         private static Vec3d Copy(Vec3d p) => p == null ? null : new Vec3d(p.X, p.Y, p.Z);
 
         private static void MixPoint(ref ulong h, Vec3d p)

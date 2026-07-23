@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Vintagestory.API.MathTools;
 using Layout.Guide;
 
@@ -10,7 +11,7 @@ namespace Layout.Shapes
     /// The base gesture is identical to <see cref="PolygonShape"/>: the first click is a vertex and the
     /// second is the opposite vertex (even N) or opposite edge midpoint (odd N).
     /// </summary>
-    public sealed class PolygonalPrismShape : IGuideShape, IThresholdVoxelCounter
+    public sealed class PolygonalPrismShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape
     {
         private const double MinRadius = 0.05;
         private const double MinHeight = 0.05;
@@ -183,6 +184,64 @@ namespace Layout.Shapes
 
             ClaimMarkers(result, scale);
             return result;
+        }
+
+        public List<VoxelPosition> GetVoxelPositionsProgressively(
+            int scale, bool filled, int targetVoxelsPerChunk,
+            CancellationToken cancellationToken, Action<List<VoxelPosition>> emitChunk)
+        {
+            var collector = new ProgressiveVoxelCollector(
+                targetVoxelsPerChunk, cancellationToken, emitChunk);
+            if (!TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n,
+                out double h, out double rTop)) return collector.Result;
+
+            double cell = scale / 16.0, hd = cell * 0.866;
+            double lo = Math.Min(0, h), hi = Math.Max(0, h);
+            GetAabb(c, n, r, rTop, h, cell,
+                out double x0, out double y0, out double z0,
+                out double x1, out double y1, out double z1);
+            int minX = AlignDown(x0, scale), maxX = AlignDown(x1, scale);
+            int minY = AlignDown(y0, scale), maxY = AlignDown(y1, scale);
+            int minZ = AlignDown(z0, scale), maxZ = AlignDown(z1, scale);
+            ProgressiveVoxelTile[] tiles = ProgressiveVoxelOrder.ShuffledSpatialTiles(
+                (maxX - minX) / scale + 1,
+                (maxY - minY) / scale + 1,
+                (maxZ - minZ) / scale + 1);
+            for (int visit = 0; visit < tiles.Length; visit++)
+            {
+                collector.ThrowIfCancellationRequested();
+                ProgressiveVoxelTile tile = tiles[visit];
+                for (int xi = tile.X0; xi < tile.X1; xi++)
+                {
+                    int ix = minX + xi * scale;
+                    double px = ix / 16.0 + cell * 0.5 - c.X;
+                    for (int yi = tile.Y0; yi < tile.Y1; yi++)
+                    {
+                        int iy = minY + yi * scale;
+                        double py = iy / 16.0 + cell * 0.5 - c.Y;
+                        for (int zi = tile.Z0; zi < tile.Z1; zi++)
+                        {
+                            int iz = minZ + zi * scale;
+                            double pz = iz / 16.0 + cell * 0.5 - c.Z;
+                            double axial = px * n.X + py * n.Y + pz * n.Z;
+                            if (axial < lo || axial > hi) continue;
+                            double localR = r + (rTop - r) * (axial / h);
+                            double rx = px - n.X * axial;
+                            double ry = py - n.Y * axial;
+                            double rz = pz - n.Z * axial;
+                            double localX = rx * u.X + ry * u.Y + rz * u.Z;
+                            double localY = rx * m.X + ry * m.Y + rz * m.Z;
+                            if (IsOnPolygonBoundary(localX, localY, localR, hd))
+                                collector.Add(new VoxelPosition(
+                                    ix, iy, iz, VoxelRenderType.Normal));
+                        }
+                    }
+                }
+            }
+
+            collector.Flush();
+            ClaimMarkers(collector.Result, scale);
+            return collector.Result;
         }
 
         public int GetVoxelCount(int scale, bool filled = false) =>

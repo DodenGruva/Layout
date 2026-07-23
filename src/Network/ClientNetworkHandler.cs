@@ -138,6 +138,12 @@ namespace Layout.Network
         /// <summary>The server changed this player's effective per-guide cap at runtime.</summary>
         public event Action<bool> PublicGuidePolicyChanged;
 
+        /// <summary>The authority rejected the player's provisional final placement.</summary>
+        public event Action PlacementRejected;
+
+        /// <summary>A personal command enabled or disabled every Layout render pass.</summary>
+        public event Action<bool> GuideRenderingChanged;
+
         public ClientNetworkHandler(ICoreClientAPI capi)
         {
             _capi = capi ?? throw new ArgumentNullException(nameof(capi));
@@ -170,7 +176,10 @@ namespace Layout.Network
                 .SetMessageHandler<ClientGuidePushRequestPacket>(OnGuidePushRequest)
                 .SetMessageHandler<ClientGuidePushResultPacket>(OnGuidePushResult)
                 .SetMessageHandler<GuideWhoQueryPacket>(_ => GuideWhoRequested?.Invoke())
-                .SetMessageHandler<PlayerGuidePolicyPacket>(OnPlayerGuidePolicy);
+                .SetMessageHandler<PlayerGuidePolicyPacket>(OnPlayerGuidePolicy)
+                .SetMessageHandler<GuidePlacementRejectedPacket>(_ => PlacementRejected?.Invoke())
+                .SetMessageHandler<GuideRenderingPacket>(
+                    packet => GuideRenderingChanged?.Invoke(packet?.Enabled ?? true));
         }
 
         private void OnPlayerGuidePolicy(PlayerGuidePolicyPacket packet)
@@ -705,6 +714,7 @@ namespace Layout.Network
                 // Local placement feedback (snap + dust along the guide), client-side only — matching a
                 // private guide's visibility: nobody else can see it, so nobody else hears its snap.
                 if (created != null) Systems.ChalkEffects.PlacementEffects(_capi.World, created);
+                else PlacementRejected?.Invoke();
                 return;
             }
 

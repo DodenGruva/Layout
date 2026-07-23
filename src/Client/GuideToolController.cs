@@ -84,6 +84,7 @@ namespace Layout.Client
         private ulong _draftRawAimFingerprint;
         private int _draftGeneration;
         private int _acceptedDraftScale;
+        private int _acceptedDraftVoxelCount = -1;
         private int _adaptiveMovingScale;
         private int _healthyMovingUpdates;
         private ulong _draftAdaptiveContextFingerprint;
@@ -888,7 +889,7 @@ namespace Layout.Client
         /// clicks; the completion pre-check covers them). The search itself lives in
         /// <see cref="CapClampTracker"/>, which converges across frames — see its remarks for why.
         /// </summary>
-        private Vec3d ClampDraftAimToPerGuideCap(Vec3d aim)
+        private Vec3d ClampDraftAimToPerGuideCap(Vec3d aim, bool allowScheduledCheck = true)
         {
             if (aim == null || _draft.DraftStart == null || DraftManager.IsChainShape(_draft.Shape))
                 return aim;
@@ -926,7 +927,7 @@ namespace Layout.Client
                 ^ (cap * 51539607551L);
 
             return _draftClamp.Clamp(key, anchorRef, aim, c => DraftCandidateFits(c, cap),
-                DraftClampStepBudget());
+                allowScheduledCheck ? DraftClampStepBudget() : 0);
         }
 
         private void ObserveDraftMotion(Vec3d aim, bool flatSideAligned)
@@ -970,6 +971,7 @@ namespace Layout.Client
                 _draftGeneration++;
                 _draftPoseFingerprint = fingerprint;
                 _acceptedDraftScale = 0;
+                _acceptedDraftVoxelCount = -1;
                 _draftLastMotionMs = now;
                 _lastDraftRefineRequestMs = 0;
                 _currentDraftSpec = unversioned.WithGeneration(_draftGeneration);
@@ -988,6 +990,7 @@ namespace Layout.Client
                 if (moving.IsFullShell)
                 {
                     _acceptedDraftScale = moving.RenderScale;
+                    _acceptedDraftVoxelCount = moving.VoxelCount;
                     _hud.SetDraftMeasurement(moving.Extent, moving.VoxelCount);
                 }
 
@@ -1078,6 +1081,7 @@ namespace Layout.Client
         {
             if (e == null || e.Generation != _draftGeneration || _currentDraftSpec == null) return;
             _acceptedDraftScale = e.RenderScale;
+            _acceptedDraftVoxelCount = e.VoxelCount;
             _lastDraftWorkMilliseconds = Math.Max(1, e.WorkMilliseconds);
             if (e.RenderScale == _currentDraftSpec.Settings.Scale)
                 _hud.SetDraftMeasurement(e.Extent, e.VoxelCount);
@@ -1089,6 +1093,7 @@ namespace Layout.Client
             _draftPoseFingerprint = 0;
             _draftRawAimFingerprint = 0;
             _acceptedDraftScale = 0;
+            _acceptedDraftVoxelCount = -1;
             _adaptiveMovingScale = 0;
             _healthyMovingUpdates = 0;
             _draftAdaptiveContextFingerprint = 0;
@@ -1367,6 +1372,13 @@ namespace Layout.Client
         // play if adoption ever fails silently again.)
         private void BeginBodyInsert(TargetHit hit)
         {
+            if (_renderer.PlacementMaterializationBusy || _renderer.SculptMaterializationBusy)
+            {
+                Error("layout-guide-materializing",
+                    "Wait for the immense guide to finish materializing before reshaping a guide.");
+                return;
+            }
+
             // Mark the adoption handshake before sending. Networked authority answers asynchronously, while
             // local authority answers in-process and may publish the inserted point before SendInsertPoint
             // returns; setting this first makes the same event-driven adoption work for both paths.
@@ -1407,6 +1419,13 @@ namespace Layout.Client
 
             if (!_draft.HasActiveDraft)
             {
+                if (_renderer.PlacementMaterializationBusy || _renderer.SculptMaterializationBusy)
+                {
+                    Error("layout-guide-materializing",
+                        "Wait for the immense guide to finish materializing before placing another guide.");
+                    return;
+                }
+
                 // F5 chalk pre-check, at the FIRST click so no drawing effort is wasted: an empty kit
                 // cannot start a new (public, server-authoritative) draft. Advisory only — the server
                 // enforces the same gate on create. Local/private placements are chalk-free (F4 no-op),
@@ -1505,9 +1524,9 @@ namespace Layout.Client
 
             // 0.2.19: the completing click lands on the same clamped (≤ per-guide cap) size the ghost
             // showed — clicking while pulled past the cap places AT the cap instead of erroring out.
-            if (_draft.AwaitingRim) rim = ClampDraftAimToPerGuideCap(rim);
-            else if (_draft.AwaitingApex) apex = ClampDraftAimToPerGuideCap(apex);
-            else end = ClampDraftAimToPerGuideCap(end);
+            if (_draft.AwaitingRim) rim = ClampDraftAimToPerGuideCap(rim, allowScheduledCheck: false);
+            else if (_draft.AwaitingApex) apex = ClampDraftAimToPerGuideCap(apex, allowScheduledCheck: false);
+            else end = ClampDraftAimToPerGuideCap(end, allowScheduledCheck: false);
 
             // SHIFT at the completing click bakes the inverted (upside-down) form — only meaningful for
             // the shapes that derive an "up" (arch family, equilateral triangle, Dome); apex-clicked
@@ -1517,11 +1536,34 @@ namespace Layout.Client
 
             bool flatSideAligned = GuideShapeTypes.UsesSides(_draft.Shape)
                 && (_draft.AwaitingApex ? _draft.DraftFlatSideAligned : ShiftHeld());
+            GuideRenderSettings placementSettings = BuildSettings(blockSel, anchor);
+            var candidateSpec = new DraftPreviewSpec(
+                _draftGeneration, placementSettings,
+                _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
+                _draft.DraftStart, end,
+                sides: _draft.Sides, inverted: inverted,
+                apex: apex, rim: rim, flatSideAligned: flatSideAligned);
+            bool candidateMatchesPreview = candidateSpec.Fingerprint() == _draftPoseFingerprint;
+            int knownVoxelCount = candidateMatchesPreview
+                && _acceptedDraftScale == placementSettings.Scale
+                ? _acceptedDraftVoxelCount : -1;
+            bool deferCapCheck = knownVoxelCount < 0
+                && _net.AuthorityMode == ClientAuthorityMode.Networked
+                && GuideShapeTypes.IsVolume(_draft.Shape)
+                && !_draft.Wireframe;
             DraftCompletion completion = _draft.TryCompleteDraft(
-                end, apex, inverted, rim, flatSideAligned);
+                end, apex, inverted, rim, flatSideAligned,
+                knownVoxelCount, deferCapCheck);
             if (completion.IsReady)
             {
-                _net.SendCreateRequest(completion.Start, completion.End, BuildSettings(blockSel, anchor),
+                DraftPreviewSpec placementSpec = candidateSpec;
+
+                // An immense selected-scale job can cross the placement seam at any stage: even a final click
+                // that beats the next preview tick gets a bounded exact-pose scaffold before authority work.
+                bool retainedExactPreview =
+                    _renderer.RetainExactDraftForPlacement(placementSpec);
+
+                _net.SendCreateRequest(completion.Start, completion.End, placementSettings,
                     _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
                     inverted, _draft.Sides, completion.Apex, rim: completion.Rim,
                     flatSideAligned: completion.FlatSideAligned);
@@ -1531,7 +1573,8 @@ namespace Layout.Client
                 ResetDraftVisualState();
                 _lastDraftClampCheckMs = 0;
                 _hud.ClearDraftAim();
-                _renderer.ClearDraftPreview();       // now: the real guide arrives via broadcast
+                if (!retainedExactPreview)
+                    _renderer.ClearDraftPreview();   // cheap/unsettled path: real guide arrives via authority
             }
             else if (completion.Status == DraftCompletionStatus.RejectedOverCap)
             {
@@ -1707,6 +1750,13 @@ namespace Layout.Client
 
         private void StartGrab(Guid guideId, int pointIndex)
         {
+            if (_renderer.PlacementMaterializationBusy || _renderer.SculptMaterializationBusy)
+            {
+                Error("layout-guide-materializing",
+                    "Wait for the immense guide to finish materializing before reshaping a guide.");
+                return;
+            }
+
             if (!_net.Guides.TryGetValue(guideId, out GuideData g)) return;
 
             ShapeConstraint originConstraint = g.Constraint;

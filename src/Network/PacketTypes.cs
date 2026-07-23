@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 14;
+        public const int ProtocolVersion = 16;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -998,6 +998,32 @@ namespace Layout.Network
     {
     }
 
+    /// <summary>
+    /// S to C. The authoritative create pipeline rejected the player's provisional placement. The ordinary
+    /// ingame error carries the explanation; this tiny result packet lets the renderer immediately discard
+    /// a retained immense draft instead of waiting for a safety timeout.
+    /// </summary>
+    [ProtoContract]
+    public class GuidePlacementRejectedPacket
+    {
+        [ProtoMember(1)] public int Reason;
+
+        public GuidePlacementRejectedPacket() { }
+
+        public GuidePlacementRejectedPacket(int reason) { Reason = reason; }
+    }
+
+    /// <summary>S to C. Personally enables or disables every Layout render pass for one player.</summary>
+    [ProtoContract]
+    public class GuideRenderingPacket
+    {
+        [ProtoMember(1)] public bool Enabled;
+
+        public GuideRenderingPacket() { }
+
+        public GuideRenderingPacket(bool enabled) { Enabled = enabled; }
+    }
+
     // ----------------------------------------------------------------------------------------------
     //  Registration — the single source of truth for type order on BOTH sides
     // ----------------------------------------------------------------------------------------------
@@ -1084,7 +1110,11 @@ namespace Layout.Network
             // 0.3.13: /layout who asks the invoking client to inspect its current target (protocol 13)
             typeof(GuideWhoQueryPacket),
             // 0.3.22: live refresh for per-player per-guide cap overrides (protocol 14)
-            typeof(PlayerGuidePolicyPacket)
+            typeof(PlayerGuidePolicyPacket),
+            // 0.3.27: explicit rejection for provisional immense placements (protocol 15)
+            typeof(GuidePlacementRejectedPacket),
+            // 0.3.33: personal /layout on|off rendering control (protocol 16)
+            typeof(GuideRenderingPacket)
         };
     }
 }

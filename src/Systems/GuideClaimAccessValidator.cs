@@ -97,11 +97,35 @@ namespace Layout.Systems
 
         private HashSet<(int X, int Y, int Z)> DeniedBlocks(GuideData guide, IGuideShape shape)
         {
+            var denied = new HashSet<(int X, int Y, int Z)>();
+            List<BlockPos> footprint = BuildFootprint(guide, shape);
+            for (int i = 0; i < footprint.Count; i++)
+                if (!HasBuildAccess(footprint[i]))
+                    denied.Add((footprint[i].X, footprint[i].Y, footprint[i].Z));
+
+            return denied;
+        }
+
+        /// <summary>
+        /// Pure geometry half of claim validation. It materialises and collapses a guide's render cells to
+        /// the distinct world blocks they touch, but deliberately makes no world/claim API calls. Immense
+        /// create validation can therefore run this part on its isolated worker and time-slice only the
+        /// resulting authoritative claim lookups on the server thread.
+        /// </summary>
+        internal static List<BlockPos> BuildFootprint(GuideData guide, IGuideShape shape)
+        {
+            var result = new List<BlockPos>();
+            if (guide == null || shape == null) return result;
+
             List<VoxelPosition> voxels = guide.IsWireframe
                 ? ShapeWireframe.GetVoxelPositions(shape, guide.VoxelScale)
                 : shape.GetVoxelPositions(guide.VoxelScale, guide.IsFilled);
             var tested = new HashSet<(int X, int Y, int Z)>();
-            var denied = new HashSet<(int X, int Y, int Z)>();
+
+            void Add(int x, int y, int z)
+            {
+                if (tested.Add((x, y, z))) result.Add(new BlockPos(x, y, z));
+            }
 
             for (int i = 0; i < voxels.Count; i++)
             {
@@ -112,7 +136,7 @@ namespace Layout.Systems
 
                 if (guide.Projection != ProjectionMode.Surface)
                 {
-                    TestBlock(bx, by, bz, tested, denied);
+                    Add(bx, by, bz);
                     continue;
                 }
 
@@ -124,32 +148,21 @@ namespace Layout.Systems
                     case PlaneAxis.Y: by = planeBlock; break;
                     default: bz = planeBlock; break;
                 }
-                TestBlock(bx, by, bz, tested, denied);
+                Add(bx, by, bz);
 
-                // A surface tile drawn exactly on a block boundary touches both sides. Protecting both
-                // prevents a guide on the outside face of a claim from slipping through via rounding.
                 if (plane % 16 == 0)
                 {
                     int adjacent = BlockCoordinate(plane - 1);
                     switch (guide.Plane.FlattenedAxis)
                     {
-                        case PlaneAxis.X: TestBlock(adjacent, by, bz, tested, denied); break;
-                        case PlaneAxis.Y: TestBlock(bx, adjacent, bz, tested, denied); break;
-                        default: TestBlock(bx, by, adjacent, tested, denied); break;
+                        case PlaneAxis.X: Add(adjacent, by, bz); break;
+                        case PlaneAxis.Y: Add(bx, adjacent, bz); break;
+                        default: Add(bx, by, adjacent); break;
                     }
                 }
             }
 
-            return denied;
-        }
-
-        private void TestBlock(int x, int y, int z,
-            HashSet<(int X, int Y, int Z)> tested,
-            HashSet<(int X, int Y, int Z)> denied)
-        {
-            var key = (x, y, z);
-            if (!tested.Add(key)) return;
-            if (!HasBuildAccess(new BlockPos(x, y, z))) denied.Add(key);
+            return result;
         }
 
         private bool HasBuildAccess(BlockPos position) =>

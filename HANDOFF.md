@@ -2,12 +2,12 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-21 against the built/package/pushed checkpoint
-> **v0.3.21**. Where this file and the code disagree, **the code wins** — treat this as a map, then
+> and the performance-relevant mechanics. Updated 2026-07-23 against the built/package checkpoint
+> **v0.3.34**. Where this file and the code disagree, **the code wins** — treat this as a map, then
 > read the `.cs` files it points at.
 >
-> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.9),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/22.md` (per-session
+> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.10),
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/23.md` (per-session
 > history), `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
 
@@ -21,18 +21,20 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.3.21 built, packaged, documented, and pushed on `main`. The v0.3 arc is
-  playtest-driven and successful: behemoth drafting stays responsive, selected-scale detail materializes
-  after settling, giant grabs/cancels no longer rebuild catastrophically, and persistent Shell/Wireframe
-  mode works. The HUD is fixed-size and action-aware; guide attribution is available through `/layout who`;
-  large sculpted Shells settle into selected-scale detail; active projection switches preserve anchors.
+- **Status:** v0.3.34 built, packaged, documented, and pushed on `main`. The v0.3 arc is playtest-driven: behemoth motion stays
+  wireframe-cheap; immense placement and final sculpt validation use a single low-priority server lane;
+  selected-scale shells stream to the client in bounded, organic neighbour-growth batches; old GPU batches
+  retire across frames; and persistent Shell/Wireframe mode works. The HUD is fixed-size and action-aware;
+  guide attribution is available through `/layout who`; active projection switches preserve anchors;
+  view-distance culling and personal `/layout off|on` control are present.
   F4 (client-only / private guides) and F5 (**the Chalking Kit**: finite chalk
   durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
   **mesh pass Stage A (exposed-face meshing) has shipped** and filled 3D interiors are retired. Volumes may
   persist as their hollow **Shell** or canonical structural **Wireframe**.
-- **Size:** **74 source files** (`src/`), ~one asset tree, one `.csproj`.
+- **Size:** **77 source files** (`src/`), ~one asset tree, one `.csproj`.
 - **Data schema:** **DataVersion 12** (creator/Last Sculptor attribution; v11 `IsWireframe`; v10 cached metadata).
-- **Wire protocol:** **13** (`/layout who` query; v12 attribution metadata; v11 wireframe state;
+- **Wire protocol:** **16** (personal render state; explicit immense-placement rejection; player moderation
+  policy; `/layout who` query; v12 attribution metadata; v11 wireframe state;
   protocol 9 polygon orientation; earlier append-only fields remain compatible with matching builds).
 - **Catalog:** **15 shape types**, shown as **21 picker tiles** — a full 2D family plus an eight-volume 3D family.
 - **The tool:** the **Chalking Kit** — 32-chalk durability (2D −1 / 3D −2, completed placements only; no
@@ -48,10 +50,12 @@ guides on servers without Layout and, when server policy permits, alongside publ
 - **Closed in v0.2.36:** B-S9-1 adjacent-lock targeting. Exact rendered-cell ownership prevents a formerly
   locked marker from shadowing its neighbor. Two unrelated verification debts remain: xskills itself and a
   VS 1.22.0/1.22.1 smoke test.
-- **Current performance state:** interaction-side large-guide work was rebuilt in v0.3.0–v0.3.15. Motion
-  uses bounded/adaptive wireframes, the cursor keeps selected-scale precision, exact shells calculate once
-  after settling and materialize in batches during drafting and large sculpting, and placed hover uses cached
-  metadata. Stage B/C remain only for a future settled-rendering bottleneck. See §9 and `dev/SESSION_21.md`–`SESSION_22.md`.
+- **Current performance state:** interaction-side large-guide work was rebuilt in v0.3.0–v0.3.34. Motion
+  uses bounded/adaptive wireframes, the cursor keeps selected-scale precision, exact occupancy calculates
+  off-thread, and connected mold-like splotches stream through bounded queues. Public immense count/footprint
+  work is isolated from the server tick; claim checks consume at most 128 blocks / about 1 ms per tick. Placed
+  hover uses cached metadata and out-of-range guides are not drawn. Stage B/C remain only for a future
+  in-range settled-rendering bottleneck. See §9 and `dev/SESSION_21.md`–`SESSION_23.md`.
 - **Design philosophy (standing rule): correctness over performance** unless told otherwise. Several
   deliberate un-optimized paths exist by choice; see §9.
 
@@ -71,7 +75,7 @@ guides on servers without Layout and, when server policy permits, alongside publ
   `Layout.dll` at the **zip root** (forward-slash entry paths); drop into `VintagestoryData/Mods`. Config
   files (`layout.json`, `layout-client.json`) appear in `ModConfig` after first run.
 - **Versioning rule (standing):** every revision bumps `modinfo.json` and ships as a new
-  `Layout<version>.zip` in the **sibling `..\Layout Zips\`** folder — older zips are never overwritten.
+  `Layout<version>.zip` in the **sibling `..\LayoutZips\`** folder — older zips are never overwritten.
 - **Runtime note:** `Entity.SidedPos` is obsolete in this API version — use `Pos`.
 
 ---
@@ -84,10 +88,10 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── HANDOFF.md                  ← THIS FILE
 ├── Layout.csproj  modinfo.json  modicon.png
 ├── assets/layout/              ← itemtypes, textures, lang
-├── src/                        ← all 74 .cs files (see §6)
+├── src/                        ← all 77 .cs files (see §6)
 └── dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
-    ├── SESSION_9.md … SESSION_18.md  SESSION_19.md  SESSION_20.md  SESSION_21.md  SESSION_22.md
+    ├── SESSION_9.md … SESSION_18.md  SESSION_19.md  SESSION_20.md  SESSION_21.md  SESSION_22.md  SESSION_23.md
     ├── CHANGELOG_ARCHITECTURE.md   ← ARCHITECTURE.md's per-revision deltas (archive)
     ├── PLAN_CLIENT_ONLY.md  PLAN_CHALKING_KIT.md  BUILD_INSTRUCTIONS.txt
 ```
@@ -177,7 +181,7 @@ Pure, dependency-light layers under a server-authoritative core. Namespaces matc
 |---|---|---|
 | `src/` | `Layout` | `LayoutModSystem` — composition root (registers systems, item, channels, keybinds, HUD). |
 | `Guide/` | `Layout.Guide` | Pure data: `GuideData`, `ControlPoint`, `VoxelPosition`, the pinned enums, projection/render settings. Depends only on `Vec3d`. |
-| `Shapes/` | `Layout.Shapes` | Pure geometry math (no engine deps beyond `Vec3d`). `IGuideShape` seam; `ShapeFactory`; 14 shape-generator classes backing 15 enum types; `CatmullRomSpline`; `VoxelMarch`; `ShapeGeometry`; `SoftPointFlow`; `DivisionMarks`. |
+| `Shapes/` | `Layout.Shapes` | Pure geometry math (no engine deps beyond `Vec3d`). `IGuideShape` seam; `ShapeFactory`; 14 shape-generator classes backing 15 enum types; progressive/cancellable voxel generation and organic neighbour-growth ordering; `CatmullRomSpline`; `VoxelMarch`; `ShapeGeometry`; `SoftPointFlow`; `DivisionMarks`. |
 | `Systems/` | `Layout.Systems` | Side-neutral `GuideManager` (authority + JSON persistence + cap validation), persistence/block-probe seams, `GuideLockManager`, `DraftManager`, `UndoManager`, `GuideRenderer`, `GuideMeshBuilder`. |
 | `Network/` | `Layout.Network` | `PacketTypes` (protobuf DTOs, fixed append-only registration), `ServerNetworkHandler`, `ClientNetworkHandler`. |
 | `UI/` | `Layout.UI` | `GuideToolGui` (the F-menu icon-tile GUI), `LayoutToolIcons` (Cairo glyphs), `GuideHud`. |
@@ -189,8 +193,10 @@ Pure, dependency-light layers under a server-authoritative core. Namespaces matc
 **Data-flow (networked mode):** client `GuideToolController`/GUI/HUD → `ClientNetworkHandler.Send*` →
 protobuf packet → `ServerNetworkHandler` → `GuideManager` validates + persists + records undo → **broadcasts
 full/atomic state to everyone (originator included)** → `ClientNetworkHandler` applies to the local mirror →
-raises change events → `GuideRenderer` rebuilds that guide's mesh. Rejections send a corrective full-state
-resync. Systems communicate by **return value (`GuideOperationResult`), not events**.
+  raises change events → `GuideRenderer` rebuilds that guide's mesh. Immense creates/sculpts instead isolate
+  pure count/footprint work on one low-priority worker and return to the tick thread for bounded claim checks
+  and commit. Rejections send a corrective full-state resync. Systems communicate by **return value
+  (`GuideOperationResult`), not events**.
 
 **Data-flow (client-only mode):** the same UI/controller calls → `ClientNetworkHandler` routes by guide
 ownership → `LocalGuideAuthority` applies through a client-side `GuideManager`/`UndoManager` → the accepted
@@ -230,8 +236,9 @@ path.
 
 ## 8. Rendering pipeline — Stage A shipped
 
-- **One compiled mesh per guide, rebuilt only on change** (`GuideRenderer` listens for mirror-apply change
-  events). `GuideMeshBuilder` is a stateless `List<VoxelPosition>` → `MeshData` converter.
+- **Compiled mesh assets per guide, rebuilt only on change** (`GuideRenderer` listens for mirror-apply change
+  events). Ordinary guides retain one mesh; an immense materialization temporarily/settled may own bounded
+  primary + auxiliary batches. `GuideMeshBuilder` is a stateless `List<VoxelPosition>` → `MeshData` converter.
 - **The verified draw recipe** (each element was a real playtest bug): Opaque stage + **manual blend** (not
   OIT); `PreparedStandardShader` forced full-bright; a **real white 2×2 texture** (texture id 0 samples
   garbage); the full **pos + uv + rgba** vertex layout with uv (0,0); color carried purely by packed vertex
@@ -250,14 +257,16 @@ path.
   mesh-count harness locks the face counts and flush/inset invariants (15/15).
 - **Marker voxels** are single-voxel nearest-claim (precedence Locked > Primary > Anchor > Division); the
   apex and off-cell division boundaries claim 2 voxels on even spans so they read centered.
-- **No spatial partition/culling yet:** each guide owns one `{MeshRef, Origin}` and the render loop draws
-  every loaded guide mesh; replacing a guide deletes and uploads that entire mesh. Per-guide chunking +
-  culling is the Stage B target.
-- **Adaptive draft pipeline (v0.3):** cheap poses retain the selected-scale shell. Expensive moving poses use
+- **Whole-guide view-distance culling (v0.3.33):** conservative sampled bounds skip every mesh belonging to a
+  guide only when its entire bound is beyond the player's live Vintage Story `viewDistance`. Per-guide spatial
+  chunks and frustum/sub-guide culling remain the Stage B target.
+- **Adaptive/streamed draft pipeline (v0.3):** cheap poses retain the selected-scale shell. Expensive moving poses use
   a canonical structural wireframe under work/frame-pressure hysteresis; a four-selected-voxel cursor region
   remains precise and transitions outward across roughly two blocks. After settling, one generation-tagged
-  background calculation builds the exact selected-scale result and the main thread reveals prebuilt,
-  pseudo-random batches at a bounded cadence. Movement invalidates stale generations.
+  background calculation discovers exact selected-scale occupancy. Several separated seeds then grow only
+  through neighbouring voxels under layered noise, streaming torn/mold-like batches through a capacity-three
+  queue. Main-thread upload cadence is bounded and backs off under frame pressure. Movement invalidates stale
+  generations; matching placement/sculpt authority echoes adopt the existing work instead of rebuilding it.
 - **Persistent structural form (v0.3.7):** a 3D guide may be saved as Shell or Wireframe. Persistent wires
   use canonical topology at the selected scale and have their own exact count/cap semantics; they are distinct
   from the temporary adaptive/coarse preview used while moving a Shell guide.
@@ -266,17 +275,25 @@ path.
 
 ## 9. Performance characteristics & deliberate trade-offs
 
-**The interaction bottleneck has been addressed.** Stage A reduced steady mesh cost; v0.3 then removed
-repeated full shape/HUD calculations from active drafting and giant grabs. A behemoth playtest was smooth.
-Standing rule remains **input smoothness first for this path**: exact visuals and numbers may settle later,
-but cursor/input responsiveness must not wait on them. Stage B/C remain available for a distinct future
-steady-rendering bottleneck.
+**The interaction and authority spikes have dedicated immense-guide paths.** Stage A reduced steady mesh cost;
+v0.3 removed repeated full shape/HUD calculations from motion, then v0.3.26–v0.3.34 moved public immense
+count/footprint work off the server tick and made placement/sculpt visuals stream through bounded queues.
+Standing rule is **input smoothness first for this path**: exact visuals and numbers may settle later, but
+cursor/input responsiveness and the server tick must not wait on them. Stage B/C remain available for a
+distinct future in-range settled-rendering bottleneck.
 
 **Hot paths & large-quantity structures**
 - **Voxel generation per guide** — up to the configured cap or unconditional 10M ceiling. During drafts it
   is generation-tagged and deferred until settling when expensive. Sphere/Dome use `SphericalShellScan`;
   oversized Cylinder/Cone/Box switch from their legacy scan to `LargeVolumeShellFallback`, whose work scales
   with rings/faces rather than empty bounding volume.
+- **Immense public validation (v0.3.26/v0.3.34)** — creates and final volume sculpts share one below-normal
+  worker for isolated exact count + claim-footprint generation. Claim API calls remain on the server thread
+  and stop after 128 blocks or about 1 ms per 20 ms tick. Small candidates (≤8,000 voxels) retain the immediate
+  path.
+- **Organic materialization (v0.3.34)** — exact occupancy feeds deterministic multi-seed 26-neighbour growth.
+  Broad/detail smooth noise and fine grain deform the front; batches stream as traversal proceeds. Uploads
+  target 750 voxels, cap at 128 batches, normally advance every 45 ms, and slow further when frame time rises.
 - **Mesh rebuild** — a full `MeshData` rebuild for a guide on every change event. The cube path now emits
   **only exposed faces** (4 verts / 6 indices each, no interior/shared faces), pre-counted and exactly
   allocated. Settled guides mesh at **true scale, never coarsened** (see below).
@@ -294,8 +311,9 @@ steady-rendering bottleneck.
 - **Division recolor** — `DivisionMarks.Apply` runs on **every mesh rebuild** (draft ghost + placed),
   walking `SampleCurve(128)` for arc length then a nearest-cell claim per boundary. Cheap, but it walks the
   cell list; watch on very high division counts × large guides.
-- **Drag** — live moves preview locally and send at **~10 Hz** (throttled); the server composes one
-  authoritative batch (grabbed edit + its soft-flow reflow), cap-checks once, broadcasts once.
+- **Drag** — ordinary live moves preview locally and send at **~10 Hz** (throttled). A behemoth is a local
+  wireframe transaction and sends only its final pose; the server validates that isolated candidate off-thread,
+  while the client retains/materializes the working pose without a synchronous release rebuild.
 
 **Deliberate, documented trade-offs (do not "fix" without checking intent)**
 - **Filled 2D guides recount voxels exactly per drag update** (cells generated each move packet) — no
@@ -324,11 +342,11 @@ steady-rendering bottleneck.
    stays on the legacy path. Solidity-aware z-fight inset; deterministic mesh-count harness (15/15).
 2. **Stage B — partition each guide into 16- or 32-block trial chunks** with independent mesh refs/origins.
    Border neighbour checks must cross chunk boundaries. Dispose all refs on replace/delete/bulk sync/shutdown.
-3. **Stage C — distance/frustum culling** when dependable, then same-colour/orientation **greedy face
-   merging** inside chunks.
+3. **Stage C — per-chunk distance/frustum culling** (whole-guide view-distance culling shipped in v0.3.33),
+   then same-colour/orientation **greedy face merging** inside chunks.
 4. ~~Temporary coarse interaction previews + async CPU builds~~ **DONE differently in v0.3:** adaptive
-   wireframes, selected-scale cursor precision, generation-safe background refinement, and materialization.
-   The stronger streamed producer/consumer shell pipeline remains deferred in `SESSION_21.md`.
+   wireframes, selected-scale cursor precision, generation-safe background refinement, streamed producer/
+   consumer queues, organic neighbour growth, and retained placement/sculpt handoffs.
 
 Stages B–C are gated on whether Stage A's win is enough on the ~100-block sphere in real play. Do not begin
 by raising `HardVoxelCeiling`.
@@ -341,6 +359,9 @@ by raising `HardVoxelCeiling`.
   is a server-administration concern, deliberately out of scope.
 - **Public authority is unchanged.** The server `GuideManager` is authoritative; broadcasts go to everyone
   (originator included) and rejects trigger a corrective resync.
+- **Public geometry is claim-aware (v0.3.25).** The server checks the exact touched-block footprint with
+  `BuildOrBreak`; Surface boundary cells protect both adjacent blocks. Existing forbidden overlaps may only
+  shrink their denied set. `controlserver` bypasses; cleanup remains possible.
 - **Private authority is client-local.** On a server without Layout it activates automatically. On a Layout
   server it exists only when `allowClientOnlyMode=true`; the default is false. Local guide files are keyed by
   world/server identifier + player UID and never enter the main world save.
@@ -354,8 +375,11 @@ by raising `HardVoxelCeiling`.
   session-only), and private history lives in the local authority. Both use validate-then-apply with stale
   command skip and a `Blocked` outcome for cap-rejected-but-valid commands. **One drag = one undo entry.**
   Ctrl+Z/Y follows the most recently mutated authority; mode or selection changes do not redirect it.
-- **Admin commands (v0.1.26–0.1.27):** `/layout dispel all` and `/layout dispel <chunk radius>`
-  (`controlserver`; namespaced under `/layout` so they can't clash with other mods).
+- **Admin/moderation commands:** the original `/layout dispel all|<chunk radius>` plus v0.3.22–v0.3.23
+  `/layout jail|free|limit|voxelcap|info|jailroster|top` and targeted player/guide dispel. Policies persist
+  per world and online changes refresh the affected client immediately.
+- **Personal visibility:** `/layout off|on` (or `.layout off|on` in client-only fallback) disables/enables
+  the entire render pass for only the invoking player; guide state and authority are untouched.
 - **Private commands (unchanged through v0.1.53):** `/layout private`, `/layout public`, `/layout client push all`, plus the
   client-only `.layout dispel all|<radius>`. Push assigns new public IDs, enforces server caps and
   privilege, removes only confirmed private copies, and is deliberately not undoable.
@@ -423,10 +447,10 @@ cell; an adjacent first-hit body cell now receives a distinct passive marker. Hu
    (a) the hard 32-chalk ceiling is verified by an offline harness but **never tested against xskills
    itself**; (b) **1.22.x support is declared, not tested** — the code was built against 1.22.3, so nothing
    confirms every API used exists in 1.22.0.
-2. **Collect v0.3.21 field reports.** Focus on HUD action transitions, `/layout who`, selected Edit settings,
-   large sculpt settle/cancel, tapered-rim flare, and active Surface↔Volumetric switching.
-3. **Mesh pass Stage B/C** (§9 / `SESSION_14.md`) only if settled rendering—not drafting calculation—becomes
-   the next measured bottleneck. Preserve true selected-scale semantics.
+2. **Collect v0.3.34 field reports.** Focus on immense placement/final-sculpt smoothness, organic-growth
+   silhouette and cadence, rejected/cancelled validation, view-range transitions, and `/layout off|on`.
+3. **Mesh pass Stage B/C** (§9 / `SESSION_14.md`) only if settled in-range rendering—not calculation,
+   validation, or out-of-range guides—becomes the next measured bottleneck. Preserve true selected-scale semantics.
 4. **Keep the broader multiplayer matrix as future regression coverage.** The v0.2.35 public/private pass
    succeeded and is not a release blocker.
 5. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill (fill is currently inert on Free-Shapes);
@@ -448,13 +472,14 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   `GuideShapeType` / `ShapeConstraint` / projection enums, which are pinned append-only).
 - **`UndoManager` folder ≠ namespace:** it lives in `src/Systems/` but is `Layout.Systems.UndoManager` —
   the one file where folder and namespace diverge.
-- **The Session docs are historical.** `SESSION_9`…`SESSION_22.md` are point-in-time narratives (SESSION_12
+- **The Session docs are historical.** `SESSION_9`…`SESSION_23.md` are point-in-time narratives (SESSION_12
   covers F4 through v0.1.45; SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 mesh handoff;
   SESSION_15 is the v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc;
   SESSION_17 is the v0.2.22–v0.2.23 seven-item backlog; SESSION_18/19 cover the Tapered Cylinder and dust;
   SESSION_20 covers v0.2.36–v0.2.47 polygonal volumes/modifiers; SESSION_21 covers the v0.3.0–v0.3.8
   adaptive large-guide and persistent-wireframe arc; SESSION_22 covers the v0.3.9–v0.3.21 HUD,
-  attribution, sculpting-parity, and projection-transition arc). For
+  attribution, sculpting-parity, and projection-transition arc; SESSION_23 covers v0.3.22–v0.3.34
+  moderation, claims, bounded immense validation, organic materialization, and render controls). For
   current state, trust `HANDOFF.md` / `ARCHITECTURE.md` / the code, not a mid-session checklist inside a
   session record.
 - **`dev/BUILD_INSTRUCTIONS.txt`** is the original v0.1.0 first-build doc; its build/run steps are still

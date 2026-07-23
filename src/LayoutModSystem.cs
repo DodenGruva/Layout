@@ -234,6 +234,7 @@ namespace Layout
 
             // Renderer over the mirror (constructed here, disposed in Dispose — the seam Module 5 left open).
             Renderer = new GuideRenderer(capi, ClientNet);
+            ClientNet.GuideRenderingChanged += OnGuideRenderingChanged;
 
             // The two dialogs share the same DraftManager + ClientNetworkHandler (the Module-6 contract).
             // They are constructed ready but stay closed: the controller shows the HUD on equip and opens
@@ -317,8 +318,36 @@ namespace Layout
                 .BeginSubCommand("who")
                     .WithDescription("Show the creator and last sculptor of your selected or targeted guide.")
                     .HandleWith(OnClientWhoCommand)
+                .EndSubCommand()
+                .BeginSubCommand("off")
+                    .WithDescription("Turn off all Layout guide rendering for yourself.")
+                    .HandleWith(OnClientRenderingOffCommand)
+                .EndSubCommand()
+                .BeginSubCommand("on")
+                    .WithDescription("Turn on all Layout guide rendering for yourself.")
+                    .HandleWith(OnClientRenderingOnCommand)
                 .EndSubCommand();
         }
+
+        private TextCommandResult OnClientRenderingOffCommand(TextCommandCallingArgs args) =>
+            SetLocalRenderingState(false);
+
+        private TextCommandResult OnClientRenderingOnCommand(TextCommandCallingArgs args) =>
+            SetLocalRenderingState(true);
+
+        private TextCommandResult SetLocalRenderingState(bool enabled)
+        {
+            if (Renderer == null)
+                return TextCommandResult.Error("Enter a world before changing Layout rendering.");
+
+            Renderer.SetRenderingEnabled(enabled);
+            return TextCommandResult.Success(enabled
+                ? "Layout guide rendering is on for you."
+                : "Layout guide rendering is off for you.");
+        }
+
+        private void OnGuideRenderingChanged(bool enabled) =>
+            Renderer?.SetRenderingEnabled(enabled);
 
         private TextCommandResult OnClientWhoCommand(TextCommandCallingArgs args)
         {
@@ -461,6 +490,7 @@ namespace Layout
                     ClientNet.PublicGuidePolicyChanged -= OnPublicGuidePolicyChanged;
                     ClientNet.AuthorityModeChanged -= OnAuthorityModeChanged;
                     ClientNet.ForceClientOnlyPreferenceChanged -= OnForceClientOnlyPreferenceChanged;
+                    ClientNet.GuideRenderingChanged -= OnGuideRenderingChanged;
                 }
 
                 try { Controller?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] Controller dispose: {0}", e.Message); }
@@ -475,7 +505,14 @@ namespace Layout
                 Hud = null;
             }
 
-            // Server side holds no unmanaged resources; the managers are dropped with the system.
+            if (_sapi != null)
+            {
+                try { ServerNet?.Dispose(); }
+                catch (Exception e) { _sapi.Logger.Warning("[Layout] Server network dispose: {0}", e.Message); }
+                ServerNet = null;
+            }
+
+            // The remaining server managers are dropped with the system.
             base.Dispose();
         }
     }

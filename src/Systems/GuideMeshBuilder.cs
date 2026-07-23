@@ -114,6 +114,12 @@ namespace Layout.Systems
         /// faces are culled against the final shell even when the neighbouring voxel belongs to a later batch.
         /// </summary>
         public HashSet<(int, int, int)> Occupancy = null;
+
+        /// <summary>
+        /// Optional global minimum Y for a spatially partitioned final mesh. Without it, every subset would
+        /// treat its own lowest exposed layer as the guide floor and apply the floor clearance repeatedly.
+        /// </summary>
+        public int? MinimumVoxelY = null;
     }
 
     /// <summary>
@@ -303,9 +309,10 @@ namespace Layout.Systems
             // Z-fight pre-pass: the lowest voxel layer's bottom face is always lifted (guides resting on
             // slab/chiseled tops sit off-grid); grid-coplanar faces are handled per-face in the cube
             // branch below — see BlockPlaneInset.
-            int minY = int.MaxValue;
-            for (int i = 0; i < voxels.Count; i++)
-                if (voxels[i].Y < minY) minY = voxels[i].Y;
+            int minY = options.MinimumVoxelY ?? int.MaxValue;
+            if (!options.MinimumVoxelY.HasValue)
+                for (int i = 0; i < voxels.Count; i++)
+                    if (voxels[i].Y < minY) minY = voxels[i].Y;
 
             // EXPOSED-FACE MESHING (Stage A of the SESSION_14 large-guide mesh plan, 0.2.14). The ordinary
             // Volumetric cube path no longer emits six faces per voxel: a presence set of the RENDERED

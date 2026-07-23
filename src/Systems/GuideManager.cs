@@ -144,6 +144,27 @@ namespace Layout.Systems
     }
 
     /// <summary>
+    /// A not-yet-authoritative create candidate. Its shape and guide record are isolated from the live
+    /// manager, so expensive counting can happen away from the server tick before an atomic commit.
+    /// </summary>
+    internal sealed class PreparedGuideCreation
+    {
+        public GuideData Guide { get; }
+        public IGuideShape Shape { get; }
+
+        public PreparedGuideCreation(GuideData guide, IGuideShape shape)
+        {
+            Guide = guide ?? throw new ArgumentNullException(nameof(guide));
+            Shape = shape ?? throw new ArgumentNullException(nameof(shape));
+        }
+
+        public int CountUpTo(int stopAfter) => Guide.IsWireframe
+            ? ShapeWireframe.GetVoxelCount(Shape, Guide.VoxelScale)
+            : GuideShapeVoxelCounting.CountUpTo(
+                Shape, Guide.VoxelScale, Guide.IsFilled, stopAfter);
+    }
+
+    /// <summary>
     /// Server-side single authority for all guide state: the in-memory registry, the spine generation on
     /// create, validation (voxel caps, locks, existence) of every mutation, and JSON persistence to the world
     /// save. Nothing else is allowed to mutate guide state — callers go through the mutation methods here.
@@ -429,6 +450,131 @@ namespace Layout.Systems
             StoreCount(data.Id, count);
             Persist();
             return GuideOperationResult.Success(data, count);
+        }
+
+        /// <summary>
+        /// Builds a create candidate without counting voxels, testing claims, persisting, or touching live
+        /// manager state. Cheap guide-count limits are checked here and again at commit because a queued
+        /// immense placement can wait behind another request.
+        /// </summary>
+        internal bool TryPrepareGuideCreation(
+            Vec3d start, Vec3d end, GuideRenderSettings settings,
+            GuideShapeType shapeType, ShapeConstraint constraint, PlaneAxis shapePlaneAxis,
+            string creatorUid, string creatorName, Vec3d thirdPoint, bool inverted, int sides,
+            IReadOnlyList<Vec3d> chain, bool closed, Vec3d fourthPoint, bool flatSideAligned,
+            out PreparedGuideCreation prepared, out GuideOperationResult failure)
+        {
+            prepared = null;
+            failure = default;
+            if (start == null || end == null || !GuideData.IsValidVoxelScale(settings.Scale))
+            {
+                failure = GuideOperationResult.Invalid();
+                return false;
+            }
+
+            bool volume = GuideShapeTypes.IsVolume(shapeType);
+            if (volume && (settings.Mode == ProjectionMode.Surface
+                || settings.Divisions != 0 || settings.Filled))
+                settings = new GuideRenderSettings(settings.Scale, ProjectionMode.Volumetric,
+                    settings.Plane, false, 0, settings.Wireframe);
+            else if (!volume && settings.Wireframe)
+                settings = new GuideRenderSettings(settings.Scale, settings.Mode,
+                    settings.Plane, settings.Filled, settings.Divisions, false);
+
+            GuideOperationResult countLimit = CheckCreateGuideCountLimits(creatorUid);
+            if (countLimit.Status == GuideOpStatus.RejectedOverGuideCount)
+            {
+                failure = countLimit;
+                return false;
+            }
+
+            IGuideShape shape;
+            try
+            {
+                shape = ShapeFactory.Create(shapeType, constraint, shapePlaneAxis, start, end,
+                    inverted, sides, chain, closed, flatSideAligned);
+                DraftManager.ApplyPlacementPoints(
+                    shape, shapeType, shape.Constraint, thirdPoint, fourthPoint);
+            }
+            catch (Exception)
+            {
+                failure = GuideOperationResult.Invalid();
+                return false;
+            }
+
+            var data = GuideData.Create(
+                shapeType,
+                shape.ControlPoints,
+                settings.Scale,
+                settings.Mode,
+                settings.Plane,
+                settings.Filled,
+                shape.Constraint,
+                shapePlaneAxis,
+                settings.Divisions,
+                GuideShapeTypes.UsesSides(shapeType) ? Shapes.PolygonShape.ClampSides(sides) : 0,
+                shape is Shapes.FreeShape fs && fs.IsClosed,
+                GuideShapeTypes.UsesSides(shapeType) && flatSideAligned,
+                volume && settings.Wireframe);
+            data.CreatorUid = creatorUid;
+            data.CreatorName = CleanPlayerName(creatorName);
+            data.LastSculptorUid = creatorUid;
+            data.LastSculptorName = data.CreatorName;
+            prepared = new PreparedGuideCreation(data, shape);
+            return true;
+        }
+
+        /// <summary>
+        /// Atomically publishes a prepared candidate after its exact count is known. All volatile limits are
+        /// rechecked. A caller may skip the ordinary all-at-once access validator only after completing the
+        /// candidate's full claim footprint through an equivalent main-thread validation pipeline.
+        /// </summary>
+        internal GuideOperationResult CommitPreparedGuideCreation(
+            PreparedGuideCreation prepared, int exactCount, bool validateAccess)
+        {
+            if (prepared?.Guide == null || prepared.Shape == null || exactCount < 0)
+                return GuideOperationResult.Invalid(prepared?.Guide);
+
+            GuideData data = prepared.Guide;
+            if (_guides.ContainsKey(data.Id)) return GuideOperationResult.Invalid(data);
+
+            GuideOperationResult countLimit = CheckCreateGuideCountLimits(data.CreatorUid);
+            if (countLimit.Status == GuideOpStatus.RejectedOverGuideCount) return countLimit;
+
+            if (exactCount > HardVoxelCeiling)
+                return GuideOperationResult.OverCap(data, exactCount, HardVoxelCeiling);
+            int perGuideCap = EffectivePerGuideVoxelCap;
+            if (perGuideCap > 0 && exactCount > perGuideCap)
+                return GuideOperationResult.OverCap(data, exactCount, perGuideCap);
+            if (_totalVoxelCap > 0 && _totalVoxels + exactCount > _totalVoxelCap)
+                return GuideOperationResult.OverCap(data, exactCount, _totalVoxelCap);
+
+            if (validateAccess
+                && AccessDenied(null, data, prepared.Shape, out BlockPos deniedPosition))
+                return GuideOperationResult.ClaimDenied(data, deniedPosition);
+
+            _guides[data.Id] = data;
+            _shapes[data.Id] = prepared.Shape;
+            StoreCount(data.Id, exactCount);
+            Persist();
+            return GuideOperationResult.Success(data, exactCount);
+        }
+
+        private GuideOperationResult CheckCreateGuideCountLimits(string creatorUid)
+        {
+            if (_maxGuidesWorldWide > 0 && _guides.Count >= _maxGuidesWorldWide)
+                return GuideOperationResult.OverGuideCount(
+                    null, _guides.Count, _maxGuidesWorldWide);
+
+            int playerGuideLimit = EffectivePlayerGuideLimit(creatorUid);
+            if (playerGuideLimit > 0)
+            {
+                int playerGuideCount = CountGuidesBy(creatorUid);
+                if (playerGuideCount >= playerGuideLimit)
+                    return GuideOperationResult.OverGuideCount(
+                        null, playerGuideCount, playerGuideLimit);
+            }
+            return GuideOperationResult.Success(null, 0);
         }
 
         /// <summary>Records the player behind the latest committed visible change. Selection, hover,
@@ -1066,6 +1212,30 @@ namespace Layout.Systems
             StoreCount(id, count);
             Persist();
             return GuideOperationResult.Success(g, count);
+        }
+
+        /// <summary>
+        /// Commits an isolated immense-sculpt candidate whose expensive count and claim footprint were
+        /// calculated off-thread. The expected live object must still be current; all collection mutation,
+        /// final cap validation, cached metadata, and persistence remain on the server tick thread.
+        /// </summary>
+        public GuideOperationResult CommitPreparedGuideMutation(
+            Guid id, GuideData expectedLive, GuideData candidate,
+            IGuideShape candidateShape, int exactVoxelCount)
+        {
+            if (!_guides.TryGetValue(id, out GuideData live))
+                return GuideOperationResult.NotFound();
+            if (!ReferenceEquals(live, expectedLive) || candidate == null
+                || candidateShape == null || candidate.Id != id || exactVoxelCount < 0)
+                return GuideOperationResult.Invalid(live);
+            if (WouldExceedCaps(id, exactVoxelCount, out int cap))
+                return GuideOperationResult.OverCap(live, exactVoxelCount, cap);
+
+            _guides[id] = candidate;
+            _shapes[id] = candidateShape;
+            StoreCount(id, exactVoxelCount);
+            Persist();
+            return GuideOperationResult.Success(candidate, exactVoxelCount);
         }
 
         /// <summary>

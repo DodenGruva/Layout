@@ -1,8 +1,9 @@
-# SESSION 23 — v0.3.22 → v0.3.25: moderation, comatose-draft HUD, and claim-aware guides
+# SESSION 23 — v0.3.22 → v0.3.34: moderation, claim-aware guides, and streamed immense-guide work
 
 > This session added persistent per-player moderation and capacity controls, made suspended drafts remain
-> visible in the HUD, and taught every public-guide geometry path to respect Vintage Story build permissions.
-> Current checkpoint: **v0.3.25**, **DataVersion 12**, **protocol 14**, **76 C# source files**, **15 shape
+> visible in the HUD, taught every public-guide geometry path to respect Vintage Story build permissions,
+> and replaced immense placement/sculpt stalls with bounded client/server pipelines and organic materialization.
+> Current checkpoint: **v0.3.34**, **DataVersion 12**, **protocol 16**, **77 C# source files**, **15 shape
 > types / 21 picker tiles**.
 
 ## 1. Delivered iteration arc
@@ -23,6 +24,25 @@
   public geometry mutation now use Vintage Story's authoritative land-claim permission system. The shape icon
   received its own forced-grey paused glyph so it cannot remain yellow merely because custom icon rendering
   ignores disabled-button tint. No red or invalid live draft preview was added in this revision.
+- **v0.3.26–v0.3.27 — immense placement leaves the server tick.** Large public volume candidates are isolated,
+  counted, and reduced to a claim footprint on one below-normal worker. Claim checks return to the tick thread
+  under a 128-check / 1 ms budget. Small guides retain the immediate path. An explicit placement-rejection
+  packet (protocol **15**) lets the client discard a retained provisional visual immediately.
+- **v0.3.28–v0.3.32 — progressive placement handoff.** Expensive volume shapes gained cancellable progressive
+  scanners. The client keeps a selected-scale wire scaffold visible, streams bounded preview/clean meshes,
+  adopts matching authority echoes without rebuilding, prevents a second placement from replacing an active
+  immense job, and preserves a scaffold when the final click outruns draft refinement. Old materialization
+  meshes retire over later frames rather than being destroyed in one spike.
+- **v0.3.33 — culling and personal rendering control.** Placed guides and remote markers are culled against
+  the player's live Vintage Story `viewDistance`, using conservative guide bounds so a huge guide remains
+  visible while any part intersects range. `/layout off` and `/layout on` personally disable/enable the entire
+  Layout render pass without deleting state; `.layout off|on` provides the client-only fallback. Protocol is
+  **16**.
+- **v0.3.34 — organic growth and bounded immense sculpting.** Square/hash-bucket reveal was replaced by
+  deterministic multi-seed neighbour growth. Smooth broad/detail noise plus fine grain produces torn fronts,
+  tendrils, bays, merging islands, and mold-like coverage while preserving the exact final voxel set. Immense
+  sculpt release no longer rebuilds a full shell synchronously: the client keeps its working visual and streams
+  the result, while the server validates the isolated final candidate through the same single low-priority lane.
 
 ## 2. Administrative command contract
 
@@ -112,24 +132,61 @@ otherwise invalid live preview while aiming through claimed land.
 - Re-equipping clears the comatose flag before reopening/resuming the live guide preview. Unequipping with no
   active draft retains the previous behavior and closes the HUD completely.
 
-## 5. Persistence and compatibility
+## 5. Immense-guide execution contract
+
+- **Small remains immediate.** A candidate at or below 8,000 voxels uses the established synchronous path so
+  an inexpensive guide still appears immediately.
+- **One server geometry worker.** Immense creates and final immense sculpts share one below-normal execution
+  lane. Pure count/footprint work may run there; live manager collections, claims, commit, persistence, undo,
+  broadcasts, and inventory mutation remain on the server thread.
+- **Bounded claims.** At most 128 claim blocks and approximately 1 ms are spent per 20 ms tick. The authority
+  lock remains held during an immense sculpt validation, but the acting client has already left its gesture.
+- **One client materialization lane.** A new placement or reshape is refused while another immense visual is
+  still materializing. Generation results carry pose/generation fingerprints, and cancellation makes stale
+  producers stop instead of joining a newer pose.
+- **No release cliff.** Final placement can adopt the already-refined draft; final sculpt can promote its
+  materialized grab meshes. Neither seam performs full selected-scale voxelization/upload on the render thread.
+  Superseded GPU batches are retired incrementally.
+
+## 6. Organic materialization contract
+
+- Several deterministic, well-separated seeds nucleate across the complete shell. Functional marker voxels may
+  seed a few regions, but division marks cannot dominate the pattern.
+- Every later voxel is reached through a face/edge/corner neighbour at the selected voxel scale. This is actual
+  connected growth, not a shuffle of rectangular scan tiles or independent hash buckets.
+- Smooth 9-cell and 4-cell noise bends the growth fronts; fine coordinate grain adds tears and branches.
+  Growth batches stream to the bounded mesh queue as soon as each step is ready.
+- The selected-scale wire scaffold remains the continuity visual while exact occupancy is discovered. Clean
+  final meshes replace the deliberately ragged preview only after every bounded clean batch is ready.
+- Verification covered 9,600 negative-coordinate planar voxels and a 7,720-voxel hollow shell: every exact
+  voxel appeared once, with 18 and 16 true nucleation points respectively.
+
+## 7. View-range and visibility controls
+
+- Culling reads the game's live `viewDistance` client setting. Conservative sampled bounds use an enclosing
+  sphere; a guide is skipped only when the whole bound is outside range.
+- `/layout off` and `/layout on` are personal commands. Off suppresses placed guides, local drafts, retained
+  materializations, grab visuals, and remote draft markers without deleting any guide or changing authority.
+  Work resumes when rendering is enabled. Client-only worlds use `.layout off|on`.
+
+## 8. Persistence and compatibility
 
 - **DataVersion remains 12.** Claim checks derive from current geometry and world claims; no guide record fields
   were added.
-- **Protocol is 14.** `PlayerGuidePolicyPacket` carries the acting player's effective per-guide cap and jail
-  state so an online admin change updates the client immediately.
+- **Protocol is 16.** Protocol 14 added `PlayerGuidePolicyPacket`; protocol 15 added explicit immense-placement
+  rejection; protocol 16 added the personal render-enable packet. Registration remains append-only.
 - Administrative policies use their own versioned, world-scoped save payload at `layout:adminpolicies`.
   Empty policies are removed; jail, guide-limit, and voxel-cap fields may coexist on one UID.
 - Existing guides and saves load unchanged. Existing server defaults remain the fallback whenever a personal
   override is zero or absent.
 
-## 6. Release checkpoint
+## 9. Release checkpoint
 
-- Current package: `Layout0.3.25.zip` in `Documents/ChatGPT/LayoutZips`.
+- Current package: `Layout0.3.34.zip` in `Documents/ChatGPT/LayoutZips`.
 - Release build: **0 warnings / 0 errors**.
 - Package verification: **40 ZIP entries**, including all **37 asset files**; `Layout.dll`, `modinfo.json`, and
   `modicon.png` are at the ZIP root; all archive paths use forward slashes; the packaged DLL SHA-256 matches the
   Release output.
-- In-game multiplayer testing against owned, shared, and denied claims is still the next recommended field check,
-  particularly Surface guides on claim boundaries and progressive retreat after a claim is created around an
-  existing guide.
+- In-game multiplayer testing against owned, shared, and denied claims remains recommended, particularly
+  Surface boundaries and progressive retreat. The immediate playtest priority is immense placement/sculpt
+  smoothness, the organic reveal silhouette and cadence, view-distance culling, and `/layout off|on`.

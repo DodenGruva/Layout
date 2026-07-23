@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Vintagestory.API.MathTools;
 using Layout.Guide;
 
@@ -21,7 +22,7 @@ namespace Layout.Shapes
     /// filled domes retain the bounding-lattice scan guard. Dragging the apex is absorbed (it snaps back to
     /// the derived position — no break target in v1).
     /// </remarks>
-    public sealed class DomeShape : IGuideShape, IThresholdVoxelCounter
+    public sealed class DomeShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape
     {
         private const double MinRadius = 0.05;
         private const long MaxScanCells = 4_000_000;
@@ -156,6 +157,20 @@ namespace Layout.Shapes
 
             ClaimHandleMarkers(result, scale);
             return result;
+        }
+
+        public List<VoxelPosition> GetVoxelPositionsProgressively(
+            int scale, bool filled, int targetVoxelsPerChunk,
+            CancellationToken cancellationToken, Action<List<VoxelPosition>> emitChunk)
+        {
+            var collector = new ProgressiveVoxelCollector(
+                targetVoxelsPerChunk, cancellationToken, emitChunk);
+            if (!TryGetFrame(out Vec3d c, out double r, out _, out _, out Vec3d n))
+                return collector.Result;
+            SphericalShellScan.ScanProgressively(c, r, scale, n, collector);
+            collector.Flush();
+            ClaimHandleMarkers(collector.Result, scale);
+            return collector.Result;
         }
 
         public int GetVoxelCount(int scale, bool filled = false)

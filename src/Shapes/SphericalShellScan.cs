@@ -24,6 +24,27 @@ namespace Layout.Shapes
             Vec3d halfSpaceNormal,
             int stopAfter,
             List<VoxelPosition> output)
+            => ScanCore(centre, radius, scale, halfSpaceNormal, stopAfter, output, null);
+
+        internal static void ScanProgressively(
+            Vec3d centre,
+            double radius,
+            int scale,
+            Vec3d halfSpaceNormal,
+            ProgressiveVoxelCollector collector)
+        {
+            if (collector == null) throw new ArgumentNullException(nameof(collector));
+            ScanCore(centre, radius, scale, halfSpaceNormal, int.MaxValue, null, collector);
+        }
+
+        private static int ScanCore(
+            Vec3d centre,
+            double radius,
+            int scale,
+            Vec3d halfSpaceNormal,
+            int stopAfter,
+            List<VoxelPosition> output,
+            ProgressiveVoxelCollector collector)
         {
             stopAfter = Math.Max(0, stopAfter);
             double cell = scale / 16.0;
@@ -42,70 +63,79 @@ namespace Layout.Shapes
             int globalMin16Z = AlignDown(centre.Z - radius, scale);
             int globalMax16Z = AlignDown(centre.Z + radius, scale);
 
-            for (int ix = min16X; ix <= max16X; ix += scale)
+            int xCount = (max16X - min16X) / scale + 1;
+            int yCount = (max16Y - min16Y) / scale + 1;
+            int columnCount = checked(xCount * yCount);
+            int[] columnOrder = collector == null
+                ? null : ProgressiveVoxelOrder.ShuffledIndices(
+                    columnCount, xCount * 73856093 ^ yCount * 19349663);
+            int visitCount = columnOrder == null ? columnCount : columnOrder.Length;
+            for (int visit = 0; visit < visitCount; visit++)
             {
+                collector?.ThrowIfCancellationRequested();
+                int column = columnOrder == null ? visit : columnOrder[visit];
+                int xi = column / yCount;
+                int yi = column % yCount;
+                int ix = min16X + xi * scale;
+                int iy = min16Y + yi * scale;
                 double lox = ix / 16.0;
                 double nx = Nearest(centre.X, lox, lox + cell);
                 double fx = Farthest(centre.X, lox, lox + cell);
                 double ccx = lox + cell * 0.5 - centre.X;
+                double loy = iy / 16.0;
+                double ny = Nearest(centre.Y, loy, loy + cell);
+                double fy = Farthest(centre.Y, loy, loy + cell);
+                double nxy2 = nx * nx + ny * ny;
+                if (nxy2 > r2) continue;
 
-                for (int iy = min16Y; iy <= max16Y; iy += scale)
+                double fxy2 = fx * fx + fy * fy;
+                double outerZ = Math.Sqrt(Math.Max(0.0, r2 - nxy2));
+                int outerMin16Z = Math.Max(
+                    globalMin16Z,
+                    AlignDown(centre.Z - outerZ, scale) - scale);
+                int outerMax16Z = Math.Min(
+                    globalMax16Z,
+                    AlignDown(centre.Z + outerZ, scale));
+                if (outerMin16Z > outerMax16Z) continue;
+
+                double ccy = loy + cell * 0.5 - centre.Y;
+
+                // If the X/Y cell itself crosses the spherical surface, every Z cell intersecting
+                // the ball can belong to the shell. Otherwise skip the provably interior middle of
+                // the column and visit only narrow bands around the two surface crossings.
+                if (fxy2 >= r2)
                 {
-                    double loy = iy / 16.0;
-                    double ny = Nearest(centre.Y, loy, loy + cell);
-                    double fy = Farthest(centre.Y, loy, loy + cell);
-                    double nxy2 = nx * nx + ny * ny;
-                    if (nxy2 > r2) continue;
-
-                    double fxy2 = fx * fx + fy * fy;
-                    double outerZ = Math.Sqrt(Math.Max(0.0, r2 - nxy2));
-                    int outerMin16Z = Math.Max(
-                        globalMin16Z,
-                        AlignDown(centre.Z - outerZ, scale) - scale);
-                    int outerMax16Z = Math.Min(
-                        globalMax16Z,
-                        AlignDown(centre.Z + outerZ, scale));
-                    if (outerMin16Z > outerMax16Z) continue;
-
-                    double ccy = loy + cell * 0.5 - centre.Y;
-
-                    // If the X/Y cell itself crosses the spherical surface, every Z cell intersecting
-                    // the ball can belong to the shell. Otherwise skip the provably interior middle of
-                    // the column and visit only narrow bands around the two surface crossings.
-                    if (fxy2 >= r2)
-                    {
-                        if (VisitRange(
-                                ix, iy, outerMin16Z, outerMax16Z, scale,
-                                centre, halfSpaceNormal, clipped, spread,
-                                nxy2, fxy2, ccx, ccy, r2,
-                                stopAfter, output, ref count))
-                            return Exceeded(stopAfter);
-                        continue;
-                    }
-
-                    double innerZ = Math.Sqrt(r2 - fxy2);
-                    int lowerEnd16Z = Math.Min(
-                        outerMax16Z,
-                        AlignDown(centre.Z - innerZ, scale) + scale);
                     if (VisitRange(
-                            ix, iy, outerMin16Z, lowerEnd16Z, scale,
+                            ix, iy, outerMin16Z, outerMax16Z, scale,
                             centre, halfSpaceNormal, clipped, spread,
                             nxy2, fxy2, ccx, ccy, r2,
-                            stopAfter, output, ref count))
+                            stopAfter, output, collector, ref count))
                         return Exceeded(stopAfter);
-
-                    int upperStart16Z = Math.Max(
-                        outerMin16Z,
-                        AlignDown(centre.Z + innerZ, scale) - scale);
-                    // Avoid duplicate visits where the conservative lower/upper bands overlap.
-                    upperStart16Z = Math.Max(upperStart16Z, lowerEnd16Z + scale);
-                    if (VisitRange(
-                            ix, iy, upperStart16Z, outerMax16Z, scale,
-                            centre, halfSpaceNormal, clipped, spread,
-                            nxy2, fxy2, ccx, ccy, r2,
-                            stopAfter, output, ref count))
-                        return Exceeded(stopAfter);
+                    continue;
                 }
+
+                double innerZ = Math.Sqrt(r2 - fxy2);
+                int lowerEnd16Z = Math.Min(
+                    outerMax16Z,
+                    AlignDown(centre.Z - innerZ, scale) + scale);
+                if (VisitRange(
+                        ix, iy, outerMin16Z, lowerEnd16Z, scale,
+                        centre, halfSpaceNormal, clipped, spread,
+                        nxy2, fxy2, ccx, ccy, r2,
+                        stopAfter, output, collector, ref count))
+                    return Exceeded(stopAfter);
+
+                int upperStart16Z = Math.Max(
+                    outerMin16Z,
+                    AlignDown(centre.Z + innerZ, scale) - scale);
+                // Avoid duplicate visits where the conservative lower/upper bands overlap.
+                upperStart16Z = Math.Max(upperStart16Z, lowerEnd16Z + scale);
+                if (VisitRange(
+                        ix, iy, upperStart16Z, outerMax16Z, scale,
+                        centre, halfSpaceNormal, clipped, spread,
+                        nxy2, fxy2, ccx, ccy, r2,
+                        stopAfter, output, collector, ref count))
+                    return Exceeded(stopAfter);
             }
 
             return count;
@@ -129,6 +159,7 @@ namespace Layout.Shapes
             double r2,
             int stopAfter,
             List<VoxelPosition> output,
+            ProgressiveVoxelCollector collector,
             ref int count)
         {
             if (first16Z > last16Z) return false;
@@ -153,7 +184,9 @@ namespace Layout.Shapes
                 }
 
                 count++;
-                if (output != null)
+                if (collector != null)
+                    collector.Add(new VoxelPosition(ix, iy, iz, VoxelRenderType.Normal));
+                else if (output != null)
                     output.Add(new VoxelPosition(ix, iy, iz, VoxelRenderType.Normal));
                 else if (count > stopAfter)
                     return true;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Vintagestory.API.MathTools;
 using Layout.Guide;
 
@@ -32,7 +33,7 @@ namespace Layout.Shapes
     /// policy). No inserts, no constraints in v1, no phantoms; Surface projection and Divisions do not
     /// apply (the GUI greys them).
     /// </remarks>
-    public sealed class SphereShape : IGuideShape, IThresholdVoxelCounter
+    public sealed class SphereShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape
     {
         private const double MinRadius = 0.05;
 
@@ -129,6 +130,19 @@ namespace Layout.Shapes
 
             ClaimHandleMarkers(result, scale);
             return result;
+        }
+
+        public List<VoxelPosition> GetVoxelPositionsProgressively(
+            int scale, bool filled, int targetVoxelsPerChunk,
+            CancellationToken cancellationToken, Action<List<VoxelPosition>> emitChunk)
+        {
+            var collector = new ProgressiveVoxelCollector(
+                targetVoxelsPerChunk, cancellationToken, emitChunk);
+            if (!TryGetBall(out Vec3d c, out double r)) return collector.Result;
+            SphericalShellScan.ScanProgressively(c, r, scale, null, collector);
+            collector.Flush();
+            ClaimHandleMarkers(collector.Result, scale);
+            return collector.Result;
         }
 
         public int GetVoxelCount(int scale, bool filled = false)

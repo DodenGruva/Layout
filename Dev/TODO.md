@@ -1,11 +1,11 @@
-# Layout — TODO / Outstanding Items (current: v0.3.21)
+# Layout — TODO / Outstanding Items (current: v0.3.34)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.3.21 → next)
+## ⭐ Top of the list (v0.3.34 → next)
 
 > **Session-16 playtest results (human-confirmed):** the v0.2.21 **inventory refill and hotbar refill both
 > work** — the MouseDown-hook ordering and the `InventoryID` round-trip both hold, closing `SESSION_16.md` §8.
@@ -49,7 +49,7 @@
 3. ~~**Large drafts could lag badly enough for input and preview work to pile up.**~~ **MITIGATED (v0.2.31).**
    Input still samples at ~33 Hz, while expensive guide generation/HUD/cap work scales from ~33 Hz down to
    ~2 Hz based on the last voxel count. Unlimited public servers skip pointless live cap-clamp recounts.
-   Further large-guide optimization is deliberately deferred.
+   This was the pre-v0.3 mitigation; Session 23 now delivers the bounded immense-guide pipeline.
 4. ~~**Placement feedback needed complementary drifting dust.**~~ **DONE (v0.2.33–v0.2.35).** The original
    falling flecks remain; capped dust sites now cover 2D curves and full 3D shells without voxel generation.
    Dust has zero gravity. Flat shapes scatter broadly sideways; 3D dust drifts outward/upward.
@@ -123,9 +123,32 @@
    Surface omits plane descriptors, the empty Edit instruction is gone, label punctuation no longer wraps,
    arrows align, and `Volumetric · Wireframe` uses the below-tile full width.
 
-**Next playtest focus:** every HUD state transition; `/layout who` under public/private/local authority;
-large sculpt settle/cancel; tapered-rim SHIFT flare; Edit right-click deselect; Surface↔Volumetric switches
-at different Arch/Half-Circle draft stages.
+### A5. Session-23 moderation, claims, and immense-guide execution (v0.3.22–v0.3.34) — full detail in `SESSION_23.md`
+
+1. ~~**Add persistent server moderation/cap controls.**~~ **DONE (v0.3.22–v0.3.25, protocol 14).**
+   Per-player jail and capacity overrides persist; administrative inspect/cleanup commands and policy sync
+   are implemented; blocked drafts present a comatose HUD state.
+2. ~~**Make public guide geometry respect block claims.**~~ **DONE (v0.3.25).** The server validates every
+   affected claim before public create/sculpt commits. Private/local authority remains local.
+3. ~~**Remove the immense final-placement server hang.**~~ **DONE (v0.3.26–v0.3.27, protocol 15).** Above
+   the 8,000-voxel immediate threshold, pure generation/counting uses one below-normal worker and claim
+   validation advances by at most 128 blocks or about 1 ms per 20 ms tick. One immense operation runs at a
+   time; explicit rejection closes the client handoff.
+4. ~~**Keep an immense guide visible through final placement and sculpt release.**~~ **DONE
+   (v0.3.28–v0.3.32).** Selected-scale scaffolds/settled meshes persist through authority and first
+   replacement batches; cancellable scans discard stale work; competing immense operations are gated; old
+   meshes retire over later frames.
+5. ~~**Replace banded/square reveal with torn organic growth.**~~ **DONE (v0.3.33–v0.3.34).**
+   Deterministic multi-seed 26-neighbour growth, broad/detail noise, and fine grain stream the exact voxel
+   set in frayed spreading fronts. Immense sculpt release no longer performs a synchronous full rebuild.
+6. ~~**Do not render guides beyond the game's range; add a personal master switch.**~~ **DONE (v0.3.33,
+   protocol 16).** Conservative whole-guide bounds follow live `viewDistance`; `/layout off|on` and
+   `.layout off|on` skip/resume the full Layout render pass without deleting guides.
+
+**Next playtest focus:** small guides still appear immediately; immense final click never freezes or
+disappears; server tick health during allowed/denied claim checks; organic reveal stays torn from beginning
+to end; immense sculpt release; overlapping-operation gate; distance culling; and `/layout off|on` in public,
+private, and vanilla-fallback contexts.
 
 ### A. Human backlog — queued at Session-16 end — ✅ ALL SEVEN DELIVERED (v0.2.22–v0.2.23)
 
@@ -199,11 +222,11 @@ at different Arch/Half-Circle draft stages.
 
 ### B. Carried forward
 
-1. **Large-guide follow-up only from a measured remaining bottleneck.** v0.3 addressed interaction-side
-   calculation with adaptive wireframes/background materialization. If calculate-first refinement itself
-   remains costly, revisit the streamed chunk pipeline in `SESSION_21.md`. If already-settled rendering is
-   the problem, continue Stage B/C in `SESSION_14.md` §6–§7: per-guide chunk meshes/culling, then same-colour
-   greedy merging. Keep settled Shells and persistent Wireframes at true selected scale.
+1. **Large-guide follow-up only from a measured remaining bottleneck.** Session 23 delivered the cancellable
+   streamed producer/consumer path, retained handoffs, bounded server validation, and whole-guide distance
+   culling. If already-settled *in-range* rendering is still costly, continue Stage B/C in `SESSION_14.md`
+   §6–§7: per-guide spatial meshes/per-chunk culling, then same-colour greedy merging. Keep settled Shells
+   and persistent Wireframes at true selected scale.
 2. ~~**Fix the narrowed B-S9-1 adjacent-lock targeting residual.**~~ **CLOSED (v0.2.36).** Exact rendered-cell
    ownership removed the former-neighbor selection bias, and the human approved the result in play. Retain
    the interaction as regression coverage; do not reopen the passive-marker design without a new report.
@@ -215,7 +238,7 @@ at different Arch/Half-Circle draft stages.
    Free-Shape draft chain to other players (11q); the **F3 re-constrain op**.
 
 **Standing workflow rule (human-set — also in CLAUDE.md):** ship a NEW zip per code iteration into
-`..\Layout Zips\`, but update docs / commit ONLY when the human says so. Warn before any context trim if
+`..\LayoutZips\`, but update docs / commit ONLY when the human says so. Warn before any context trim if
 the docs are stale.
 
 ---
@@ -349,7 +372,7 @@ The queued backlog, the Free-Shape, and a long GUI-polish loop — all playtest-
 - **GUI polish (0.1.16–0.1.19):** Sides floor at 3; 5-wide catalog + separator; favorites as YELLOW glyphs;
   Projection+Fill and Divisions+Sides on shared rows; HUD Current Shape chip; Delete-mode "-ghost" tile
   greying; Free-Shape SHIFT = vertical segment; pin/unpin wording; Fill greyed on Free-Shapes; zips moved
-  to `..\Layout Zips\`.
+  to `..\LayoutZips\`.
 
 ---
 
@@ -526,12 +549,19 @@ deliberate (11r).
 - **Filled guides recount exactly per drag update** (cells generated each move packet). If big filled discs
   drag sluggishly → add a per-drag count cache. Correctness-first per the standing rule.
 - **Settled Shells and persistent Wireframes use true selected scale.** Adaptive coarsening is motion-only;
-  the cursor neighbourhood stays precise and Shell refinement materializes after settling.
+  the cursor neighbourhood and final-click scaffold stay precise while exact Shell refinement streams.
 - **`PreviewFullResVoxelCap` = 8,000** — the cheap/full-shell moving threshold. Tune only from playtest data;
   adaptive scale, work time, and frame pressure already provide secondary controls.
-- **Materialization currently calculate-first.** The background task finishes the full selected-scale shell,
-  then uploads prebuilt batches. A cancellable producer/consumer chunk pipeline is explicitly deferred in
-  `SESSION_21.md`; never implement one upload per voxel or rebuild one growing mesh each frame.
+- **Immense materialization is streamed and cancellable.** Shape scans feed a capacity-three queue, and
+  deterministic multi-seed 26-neighbour ordering creates exact torn/frayed growth. Current client targets:
+  about 750 voxels per upload, 8–128 total batches, nominal 45 ms cadence, with frame-pressure backoff.
+  Preserve exact final occupancy; never upload one voxel at a time or rebuild one growing mesh each frame.
+- **Immense public validation is intentionally serialized.** One below-normal worker performs pure
+  generation/counting; claim checks consume no more than 128 blocks or about 1 ms per 20 ms server tick.
+  Longer build time is acceptable; server tick health is the priority.
+- **Distance culling is conservative at whole-guide granularity.** It eliminates guides fully outside live
+  `viewDistance`, while an enormous bound intersecting the range may still draw distant portions. Per-chunk
+  Stage B remains the next step only if measured settled in-range rendering warrants it.
 - **Division marks add a render-side pass** *(verified)* — `DivisionMarks.Apply` is called on every mesh
   rebuild in `GuideRenderer` (both the draft ghost and placed guides), walking `SampleCurve(128)` for arc
   length then a nearest-cell claim per boundary; cheap, but it does walk the cell list. Watch on very high
@@ -594,11 +624,11 @@ the inventory refill remains (Top of the list).
 ## Next session — start here
 
 **The agenda is "⭐ Top of the list" at the top of this file** — it is not repeated here. Current state:
-the v0.3.21 HUD/attribution/sculpting arc is complete, documented, built, packaged, and pushed on `main`;
-collect the focused v0.3.21 field reports above and revisit performance only from a
-measured remaining bottleneck.
+the v0.3.34 moderation/claims/immense-guide arc is complete, documented, built, packaged, and pushed on `main`;
+collect the focused v0.3.34 field reports above and revisit performance only from a measured remaining
+bottleneck.
 
-**Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;
+**Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\LayoutZips\`;
 docs are updated ONLY when the human says so; commits/pushes only when the human instructs. `main` is the
 mainline.
 
