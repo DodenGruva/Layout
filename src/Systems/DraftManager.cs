@@ -134,7 +134,7 @@ namespace Layout.Systems
         /// once the join-time bulk sync arrives, the composition root (Module 7) replaces it with the server's
         /// actual figure via <see cref="SetPerGuideVoxelCap"/>, so the pre-check and the server always agree.
         /// </summary>
-        public DraftManager(int perGuideVoxelCap = 25000)
+        public DraftManager(int perGuideVoxelCap = 500000)
         {
             _perGuideVoxelCap = perGuideVoxelCap;
         }

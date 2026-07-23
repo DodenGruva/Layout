@@ -406,7 +406,7 @@ namespace Layout.Network
             if (target.Online != null) SendPlayerPolicy(target.Online);
             return TextCommandResult.Success(cap == 0
                 ? $"Removed {target.Name}'s custom voxel cap. Effective per-guide cap: {FormatCap(effective)}."
-                : $"Set {target.Name}'s per-guide voxel cap to {cap:n0}. World and absolute safety caps still apply.");
+                : $"Set {target.Name}'s per-guide voxel cap to {cap:n0}. Per-player cumulative, world, and absolute safety caps still apply.");
         }
 
         private TextCommandResult OnInfoCommand(TextCommandCallingArgs args)
@@ -891,6 +891,11 @@ namespace Layout.Network
                         fromPlayer.SendIngameError("layout-overcap",
                             "That guide exceeds your per-guide limit of {0:n0} voxels. Make it smaller or use a coarser scale.",
                             result.CapLimit);
+                    else if (_guides.PerPlayerTotalVoxelCap > 0
+                        && result.CapLimit == _guides.PerPlayerTotalVoxelCap)
+                        fromPlayer.SendIngameError("layout-playerovercap",
+                            "Your guides would exceed the cumulative limit of {0:n0} voxels. Dispel or shrink one of your guides before adding more.",
+                            result.CapLimit);
                     else
                         fromPlayer.SendIngameError("layout-overcap",
                             "World voxel budget reached: {0:n0} more would pass the {1:n0} limit. Dispel some guides ('/layout dispel'), coarsen the scale, or raise totalVoxelCap.",
@@ -973,6 +978,21 @@ namespace Layout.Network
             {
                 countLimit = perGuideCap;
                 countLimitCap = perGuideCap;
+            }
+
+            if (_guides.PerPlayerTotalVoxelCap > 0 && player != null)
+            {
+                long playerAvailable =
+                    (long)_guides.PerPlayerTotalVoxelCap
+                    - _guides.VoxelCountBy(player.PlayerUID);
+                int playerLimit = playerAvailable <= 0 ? 0
+                    : playerAvailable >= int.MaxValue ? int.MaxValue
+                    : (int)playerAvailable;
+                if (playerLimit < countLimit)
+                {
+                    countLimit = playerLimit;
+                    countLimitCap = _guides.PerPlayerTotalVoxelCap;
+                }
             }
 
             if (_guides.TotalVoxelCap <= 0) return;
@@ -1186,6 +1206,11 @@ namespace Layout.Network
                             player.PlayerUID, _guides.PerGuideVoxelCap))
                         player.SendIngameError("layout-overcap",
                             "That guide exceeds your per-guide limit of {0:n0} voxels. Make it smaller or use a coarser scale.",
+                            result.CapLimit);
+                    else if (_guides.PerPlayerTotalVoxelCap > 0
+                        && result.CapLimit == _guides.PerPlayerTotalVoxelCap)
+                        player.SendIngameError("layout-playerovercap",
+                            "Your guides would exceed the cumulative limit of {0:n0} voxels. Dispel or shrink one of your guides before adding more.",
                             result.CapLimit);
                     else
                         player.SendIngameError("layout-overcap",
@@ -1803,6 +1828,28 @@ namespace Layout.Network
             {
                 countLimit = perGuideCap;
                 countLimitCap = perGuideCap;
+            }
+
+            string creatorUid = live?.CreatorUid;
+            if (_guides.PerPlayerTotalVoxelCap > 0
+                && !string.IsNullOrEmpty(creatorUid))
+            {
+                long creatorTotal = _guides.VoxelCountBy(creatorUid);
+                if (creatorTotal <= _guides.PerPlayerTotalVoxelCap)
+                {
+                    long creatorWithoutCurrent =
+                        creatorTotal - Math.Max(0, live.CachedVoxelCount);
+                    long creatorAvailable =
+                        (long)_guides.PerPlayerTotalVoxelCap - creatorWithoutCurrent;
+                    int playerLimit = creatorAvailable <= 0 ? 0
+                        : creatorAvailable >= int.MaxValue ? int.MaxValue
+                        : (int)creatorAvailable;
+                    if (playerLimit < countLimit)
+                    {
+                        countLimit = playerLimit;
+                        countLimitCap = _guides.PerPlayerTotalVoxelCap;
+                    }
+                }
             }
 
             if (_guides.TotalVoxelCap <= 0) return;
@@ -2529,6 +2576,7 @@ namespace Layout.Network
                 $"Public guides: {_guides.GuideCount:n0} / {FormatCap(_guides.MaxGuidesWorldWide)}",
                 $"Guide voxels: {_guides.TotalVoxelCount:n0} / {FormatCap(_guides.TotalVoxelCap)}",
                 $"Per-guide voxel cap: {FormatCap(_guides.PerGuideVoxelCap)} (absolute ceiling {GuideManager.HardVoxelCeiling:n0})",
+                $"Per-player cumulative voxel cap: {FormatCap(_guides.PerPlayerTotalVoxelCap)}",
                 $"Default per-player guide limit: {FormatCap(_guides.MaxGuidesPerPlayer)}",
                 $"Jailed players: {_policies.JailedCount}; custom guide limits: {_policies.CustomGuideLimitCount}; custom voxel caps: {_policies.CustomVoxelCapCount}",
                 $"Active edit locks: {_locks.ActiveLockCount}"
@@ -2551,7 +2599,7 @@ namespace Layout.Network
             {
                 $"Layout player status: {target.Name}",
                 $"Public access: {(_policies.IsJailed(target.Uid) ? "jailed" : "allowed")}",
-                $"Public guides: {guides.Count:n0} / {FormatCap(effectiveGuideLimit)}; attributed voxels: {voxels:n0}",
+                $"Public guides: {guides.Count:n0} / {FormatCap(effectiveGuideLimit)}; attributed voxels: {voxels:n0} / {FormatCap(_guides.PerPlayerTotalVoxelCap)}",
                 $"Guide-limit override: {(customGuideLimit > 0 ? customGuideLimit.ToString("n0") : "none (server default)")}",
                 $"Per-guide voxel cap: {FormatCap(effectiveVoxelCap)}; override: {(customVoxelCap > 0 ? customVoxelCap.ToString("n0") : "none (server default)")}",
                 $"Connection: {(target.Online != null ? "online" : "offline")}"

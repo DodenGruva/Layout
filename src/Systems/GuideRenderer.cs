@@ -73,8 +73,6 @@ namespace Layout.Systems
         private const int PendingPlacementVisualTimeoutMs = 300000;
         private const int GrabSettleDelayMs = 180;
         private const double FrustumCullPadding = 0.25;
-        private const int SpatialMeshRegionBlocks = 32;
-        private const int SpatialMeshRegionUnits = SpatialMeshRegionBlocks * 16;
 
         // Remote draft-anchor marker: a small blue cube (a fraction of a block) centred on the anchor.
         private const int DraftMarkerScale = 4;                          // 1/16 units → 0.25-block cube
@@ -173,7 +171,7 @@ namespace Layout.Systems
             public GuideData Guide;
             public IGuideShape Shape;
             public BlockingCollection<MeshData> ReadyMeshes;
-            public BlockingCollection<MeshUploadBatch> CleanReadyMeshes;
+            public BlockingCollection<MeshData> CleanReadyMeshes;
             public CancellationTokenSource Cancellation;
             public Vec3d Origin;
             public Exception Error;
@@ -235,8 +233,6 @@ namespace Layout.Systems
         private readonly Dictionary<Guid, GuideMesh> _guideMeshes = new Dictionary<Guid, GuideMesh>();
         private readonly Dictionary<string, Vec3d> _remoteAnchors = new Dictionary<string, Vec3d>();
         private readonly Dictionary<MeshRef, int> _meshTriangleCounts = new Dictionary<MeshRef, int>();
-        private readonly Dictionary<MeshRef, MeshCullBounds> _meshCullBounds =
-            new Dictionary<MeshRef, MeshCullBounds>();
 
         // Surface guides whose air-side probe hit UNLOADED chunks (the world-load / approach-from-afar race):
         // their decal side is provisional and may render behind the block face. A low-frequency tick re-probes
@@ -278,7 +274,6 @@ namespace Layout.Systems
             public int FrustumCulledGuides;
             public int MeshDrawCalls;
             public long SubmittedTriangles;
-            public int SpatialBatchesCulled;
             public int VisibleDraftBatches;
             public int VisiblePendingBatches;
             public int VisibleRemoteMarkers;
@@ -286,32 +281,6 @@ namespace Layout.Systems
         }
 
         private RenderFrameStats _lastRenderStats = new RenderFrameStats();
-
-        private sealed class MeshUploadBatch
-        {
-            public MeshData Data;
-            public Vec3d CullCenter;
-            public double CullRadius;
-        }
-
-        private sealed class SpatialVoxelBatch
-        {
-            public List<VoxelPosition> Voxels;
-            public Vec3d CullCenter;
-            public double CullRadius;
-        }
-
-        private readonly struct MeshCullBounds
-        {
-            public readonly Vec3d Center;
-            public readonly double Radius;
-
-            public MeshCullBounds(Vec3d center, double radius)
-            {
-                Center = center;
-                Radius = radius;
-            }
-        }
 
         /// <summary>A compiled guide mesh plus the world-space origin its vertices are relative to.</summary>
         private sealed class GuideMesh
@@ -375,13 +344,11 @@ namespace Layout.Systems
             return string.Format(
                 "Layout render stats (last frame): {0}/{1} placed guide(s) visible; "
                 + "{2} distance-culled; {3} off-screen; {4} mesh batch(es) and about {5:N0} triangle(s) "
-                + "submitted; {6} spatial batch(es) culled. Extras drawn: "
-                + "{7} draft batch(es), {8} pending batch(es), "
-                + "{9}/{10} remote marker(s). Smoothed frame time: {11:0.0} ms.",
+                + "submitted. Extras drawn: {6} draft batch(es), {7} pending batch(es), "
+                + "{8}/{9} remote marker(s). Smoothed frame time: {10:0.0} ms.",
                 stats.VisiblePlacedGuides, stats.PlacedGuides,
                 stats.DistanceCulledGuides, stats.FrustumCulledGuides,
                 stats.MeshDrawCalls, stats.SubmittedTriangles,
-                stats.SpatialBatchesCulled,
                 stats.VisibleDraftBatches, stats.VisiblePendingBatches,
                 stats.VisibleRemoteMarkers, stats.TotalRemoteMarkers,
                 SmoothedFrameMilliseconds);
@@ -477,13 +444,11 @@ namespace Layout.Systems
                 stats.VisiblePlacedGuides++;
                 SetModelMatrix(origin.X - camPos.X, origin.Y - camPos.Y, origin.Z - camPos.Z);
                 prog.ModelMatrix = _modelMat;
-                RenderMeshIfVisible(
-                    rpi, primary, camPos, viewDistance, frustumCuller, stats);
+                RenderMeshTracked(rpi, primary, stats);
                 List<MeshRef> auxiliary = gm.GrabRef != null ? gm.GrabAuxiliary
                     : gm.TransitionRef != null ? gm.TransitionAuxiliary : gm.Auxiliary;
                 for (int i = 0; i < auxiliary.Count; i++)
-                    RenderMeshIfVisible(
-                        rpi, auxiliary[i], camPos, viewDistance, frustumCuller, stats);
+                    RenderMeshTracked(rpi, auxiliary[i], stats);
             }
 
             bool draftVisible = VisibleToPlayer(
@@ -495,9 +460,8 @@ namespace Layout.Systems
                     _draftPreviewOrigin.Y - camPos.Y,
                 _draftPreviewOrigin.Z - camPos.Z);
                 prog.ModelMatrix = _modelMat;
-                if (RenderMeshIfVisible(
-                    rpi, _draftPreviewMesh, camPos, viewDistance, frustumCuller, stats))
-                    stats.VisibleDraftBatches++;
+                RenderMeshTracked(rpi, _draftPreviewMesh, stats);
+                stats.VisibleDraftBatches++;
             }
 
             for (int i = 0; draftVisible && i < _draftPrecisionMeshes.Count; i++)
@@ -507,9 +471,8 @@ namespace Layout.Systems
                     _draftPreviewOrigin.Y - camPos.Y,
                 _draftPreviewOrigin.Z - camPos.Z);
                 prog.ModelMatrix = _modelMat;
-                if (RenderMeshIfVisible(
-                    rpi, _draftPrecisionMeshes[i], camPos, viewDistance, frustumCuller, stats))
-                    stats.VisibleDraftBatches++;
+                RenderMeshTracked(rpi, _draftPrecisionMeshes[i], stats);
+                stats.VisibleDraftBatches++;
             }
 
             for (int i = 0; draftVisible && i < _draftMaterializationMeshes.Count; i++)
@@ -519,10 +482,8 @@ namespace Layout.Systems
                     _draftPreviewOrigin.Y - camPos.Y,
                 _draftPreviewOrigin.Z - camPos.Z);
                 prog.ModelMatrix = _modelMat;
-                if (RenderMeshIfVisible(
-                    rpi, _draftMaterializationMeshes[i],
-                    camPos, viewDistance, frustumCuller, stats))
-                    stats.VisibleDraftBatches++;
+                RenderMeshTracked(rpi, _draftMaterializationMeshes[i], stats);
+                stats.VisibleDraftBatches++;
             }
 
             PendingPlacementVisual pendingPlacement = _pendingPlacementVisual;
@@ -539,10 +500,8 @@ namespace Layout.Systems
                 for (int i = 0; i < pendingPlacement.Meshes.Count; i++)
                 {
                     if (pendingPlacement.Meshes[i] == null) continue;
-                    if (RenderMeshIfVisible(
-                        rpi, pendingPlacement.Meshes[i],
-                        camPos, viewDistance, frustumCuller, stats))
-                        stats.VisiblePendingBatches++;
+                    RenderMeshTracked(rpi, pendingPlacement.Meshes[i], stats);
+                    stats.VisiblePendingBatches++;
                 }
                 for (int i = 0; i < pendingPlacement.ProvisionalMeshes.Count; i++)
                 {
@@ -651,23 +610,6 @@ namespace Layout.Systems
             stats.MeshDrawCalls++;
             if (_meshTriangleCounts.TryGetValue(mesh, out int triangles))
                 stats.SubmittedTriangles += triangles;
-        }
-
-        private bool RenderMeshIfVisible(
-            IRenderAPI render, MeshRef mesh, Vec3d camera, double viewDistance,
-            FrustumCulling frustumCuller, RenderFrameStats stats)
-        {
-            if (mesh == null) return false;
-            if (_meshCullBounds.TryGetValue(mesh, out MeshCullBounds bounds)
-                && ClassifyVisibility(
-                    camera, bounds.Center, bounds.Radius, viewDistance, frustumCuller)
-                    != VisibilityResult.Visible)
-            {
-                stats.SpatialBatchesCulled++;
-                return false;
-            }
-            RenderMeshTracked(render, mesh, stats);
-            return true;
         }
 
         // World-unit pull toward the camera applied to every guide mesh (see SetModelMatrix). Tune by eye.
@@ -882,7 +824,7 @@ namespace Layout.Systems
             public List<VoxelPosition> Voxels;
             public BlockingCollection<MeshData> ScaffoldReadyMeshes;
             public BlockingCollection<MeshData> ReadyMeshes;
-            public BlockingCollection<MeshUploadBatch> CleanReadyMeshes;
+            public BlockingCollection<MeshData> CleanReadyMeshes;
             public CancellationTokenSource Cancellation;
             public Vec3d Origin;
             public Exception Error;
@@ -904,7 +846,7 @@ namespace Layout.Systems
             public List<VoxelPosition> Voxels;
             public int VoxelCount;
             public BlockingCollection<MeshData> ReadyMeshes;
-            public BlockingCollection<MeshUploadBatch> CleanReadyMeshes;
+            public BlockingCollection<MeshData> CleanReadyMeshes;
             public CancellationTokenSource Cancellation;
             public GuideExtent Extent;
             public Vec3d Origin;
@@ -1257,8 +1199,8 @@ namespace Layout.Systems
                     new ConcurrentQueue<MeshData>(), 1);
                 result.ReadyMeshes = new BlockingCollection<MeshData>(
                     new ConcurrentQueue<MeshData>(), MaterializationReadyBatchCapacity);
-                result.CleanReadyMeshes = new BlockingCollection<MeshUploadBatch>(
-                    new ConcurrentQueue<MeshUploadBatch>(), MaterializationReadyBatchCapacity);
+                result.CleanReadyMeshes = new BlockingCollection<MeshData>(
+                    new ConcurrentQueue<MeshData>(), MaterializationReadyBatchCapacity);
             }
             if (assignToActiveDraft)
             {
@@ -1427,7 +1369,7 @@ namespace Layout.Systems
             IGuideShape shape, List<VoxelPosition> voxels, DraftPreviewSpec spec,
             int renderScale, Vec3d origin, bool privateAnchors,
             BlockingCollection<MeshData> readyMeshes,
-            BlockingCollection<MeshUploadBatch> cleanMeshes, CancellationToken token)
+            BlockingCollection<MeshData> cleanMeshes, CancellationToken token)
         {
             var occupancy = new HashSet<(int, int, int)>(voxels.Count);
             int minimumY = int.MaxValue;
@@ -1439,11 +1381,30 @@ namespace Layout.Systems
                 if (voxel.Y < minimumY) minimumY = voxel.Y;
             }
 
-            var cleanBatches = new Queue<SpatialVoxelBatch>(
-                PartitionSpatialVoxelBatches(voxels, renderScale, token));
-
-            void EnqueueCleanBatch(SpatialVoxelBatch cleanBatch)
+            var ordered = new List<VoxelPosition>(voxels);
+            ordered.Sort((a, b) =>
             {
+                int byX = a.X.CompareTo(b.X);
+                if (byX != 0) return byX;
+                int byY = a.Y.CompareTo(b.Y);
+                return byY != 0 ? byY : a.Z.CompareTo(b.Z);
+            });
+            int cleanCursor = 0;
+
+            OrganicVoxelGrowth.GrowBatches(
+                voxels, renderScale, MaterializationTargetVoxelsPerBatch,
+                MaterializationMinimumBatches, MaterializationMaximumBatches, token,
+                batch =>
+            {
+                token.ThrowIfCancellationRequested();
+                if (batch == null || batch.Count == 0) return;
+
+                // Build and enqueue the corresponding final partition first. The renderer uploads this mesh
+                // invisibly alongside the organic preview, so the complete uniform shell is ready at the exact
+                // cadence point where the final growth batch arrives.
+                int cleanCount = Math.Min(batch.Count, ordered.Count - cleanCursor);
+                var cleanBatch = ordered.GetRange(cleanCursor, cleanCount);
+                cleanCursor += cleanCount;
                 var cleanOptions = new GuideMeshOptions
                 {
                     Scale = renderScale,
@@ -1458,26 +1419,7 @@ namespace Layout.Systems
                     IsNeighborSolid = (_, _, _) => false
                 };
                 AssignAnchors(shape.ControlPoints, cleanOptions);
-                cleanMeshes.Add(new MeshUploadBatch
-                {
-                    Data = GuideMeshBuilder.Build(cleanBatch.Voxels, cleanOptions),
-                    CullCenter = cleanBatch.CullCenter,
-                    CullRadius = cleanBatch.CullRadius
-                }, token);
-            }
-
-            OrganicVoxelGrowth.GrowBatches(
-                voxels, renderScale, MaterializationTargetVoxelsPerBatch,
-                MaterializationMinimumBatches, MaterializationMaximumBatches, token,
-                batch =>
-            {
-                token.ThrowIfCancellationRequested();
-                if (batch == null || batch.Count == 0) return;
-
-                // Upload final spatial regions invisibly alongside the organic preview. Each region keeps
-                // the guide-wide occupancy set, so faces shared across a 32-block boundary remain omitted.
-                if (cleanBatches.Count > 0)
-                    EnqueueCleanBatch(cleanBatches.Dequeue());
+                cleanMeshes.Add(GuideMeshBuilder.Build(cleanBatch, cleanOptions), token);
 
                 var previewOptions = new GuideMeshOptions
                 {
@@ -1494,38 +1436,45 @@ namespace Layout.Systems
                 AssignAnchors(shape.ControlPoints, previewOptions);
                 readyMeshes.Add(GuideMeshBuilder.Build(batch, previewOptions), token);
             });
-
-            while (cleanBatches.Count > 0)
-            {
-                token.ThrowIfCancellationRequested();
-                EnqueueCleanBatch(cleanBatches.Dequeue());
-            }
         }
 
         private static void ProduceCleanMaterializationMeshes(
             IGuideShape shape, List<VoxelPosition> voxels, DraftPreviewSpec spec,
             int renderScale, Vec3d origin, bool privateAnchors,
-            BlockingCollection<MeshUploadBatch> cleanMeshes, CancellationToken token)
+            BlockingCollection<MeshData> cleanMeshes, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
             if (voxels == null || voxels.Count == 0) return;
 
-            var occupancy = new HashSet<(int, int, int)>(voxels.Count);
+            var ordered = new List<VoxelPosition>(voxels);
+            ordered.Sort((a, b) =>
+            {
+                int byX = a.X.CompareTo(b.X);
+                if (byX != 0) return byX;
+                int byY = a.Y.CompareTo(b.Y);
+                return byY != 0 ? byY : a.Z.CompareTo(b.Z);
+            });
+
+            var occupancy = new HashSet<(int, int, int)>(ordered.Count);
             int minimumY = int.MaxValue;
-            for (int i = 0; i < voxels.Count; i++)
+            for (int i = 0; i < ordered.Count; i++)
             {
                 if ((i & 1023) == 0) token.ThrowIfCancellationRequested();
-                VoxelPosition voxel = voxels[i];
+                VoxelPosition voxel = ordered[i];
                 occupancy.Add((voxel.X, voxel.Y, voxel.Z));
                 if (voxel.Y < minimumY) minimumY = voxel.Y;
             }
 
-            List<SpatialVoxelBatch> batches =
-                PartitionSpatialVoxelBatches(voxels, renderScale, token);
-            for (int i = 0; i < batches.Count; i++)
+            int batchCount = Math.Max(MaterializationMinimumBatches,
+                (ordered.Count + MaterializationTargetVoxelsPerBatch - 1)
+                    / MaterializationTargetVoxelsPerBatch);
+            batchCount = Math.Min(MaterializationMaximumBatches, Math.Max(1, batchCount));
+            int batchSize = Math.Max(1, (ordered.Count + batchCount - 1) / batchCount);
+            for (int start = 0; start < ordered.Count; start += batchSize)
             {
                 token.ThrowIfCancellationRequested();
-                SpatialVoxelBatch batch = batches[i];
+                int count = Math.Min(batchSize, ordered.Count - start);
+                var batch = ordered.GetRange(start, count);
                 var options = new GuideMeshOptions
                 {
                     Scale = renderScale,
@@ -1540,120 +1489,8 @@ namespace Layout.Systems
                     IsNeighborSolid = (_, _, _) => false
                 };
                 AssignAnchors(shape.ControlPoints, options);
-                cleanMeshes.Add(new MeshUploadBatch
-                {
-                    Data = GuideMeshBuilder.Build(batch.Voxels, options),
-                    CullCenter = batch.CullCenter,
-                    CullRadius = batch.CullRadius
-                }, token);
+                cleanMeshes.Add(GuideMeshBuilder.Build(batch, options), token);
             }
-        }
-
-        private static List<SpatialVoxelBatch> PartitionSpatialVoxelBatches(
-            List<VoxelPosition> voxels, int scale, CancellationToken token)
-        {
-            var result = new List<SpatialVoxelBatch>();
-            if (voxels == null || voxels.Count == 0 || scale <= 0) return result;
-
-            var regions =
-                new Dictionary<(int X, int Y, int Z), List<VoxelPosition>>();
-            for (int i = 0; i < voxels.Count; i++)
-            {
-                if ((i & 1023) == 0) token.ThrowIfCancellationRequested();
-                VoxelPosition voxel = voxels[i];
-                var key = (
-                    FloorDivide(voxel.X, SpatialMeshRegionUnits),
-                    FloorDivide(voxel.Y, SpatialMeshRegionUnits),
-                    FloorDivide(voxel.Z, SpatialMeshRegionUnits));
-                if (!regions.TryGetValue(key, out List<VoxelPosition> region))
-                {
-                    region = new List<VoxelPosition>();
-                    regions.Add(key, region);
-                }
-                region.Add(voxel);
-            }
-
-            var keys = new List<(int X, int Y, int Z)>(regions.Keys);
-            keys.Sort((a, b) =>
-            {
-                int byX = a.X.CompareTo(b.X);
-                if (byX != 0) return byX;
-                int byY = a.Y.CompareTo(b.Y);
-                return byY != 0 ? byY : a.Z.CompareTo(b.Z);
-            });
-
-            int desiredBatchCount = Math.Max(MaterializationMinimumBatches,
-                (voxels.Count + MaterializationTargetVoxelsPerBatch - 1)
-                    / MaterializationTargetVoxelsPerBatch);
-            desiredBatchCount = Math.Min(
-                MaterializationMaximumBatches, Math.Max(1, desiredBatchCount));
-            int maximumVoxelsPerMesh = Math.Max(
-                1, (voxels.Count + desiredBatchCount - 1) / desiredBatchCount);
-
-            for (int keyIndex = 0; keyIndex < keys.Count; keyIndex++)
-            {
-                token.ThrowIfCancellationRequested();
-                List<VoxelPosition> region = regions[keys[keyIndex]];
-                region.Sort((a, b) =>
-                {
-                    int byX = a.X.CompareTo(b.X);
-                    if (byX != 0) return byX;
-                    int byY = a.Y.CompareTo(b.Y);
-                    return byY != 0 ? byY : a.Z.CompareTo(b.Z);
-                });
-
-                ComputeVoxelBounds(region, scale, out Vec3d centre, out double radius);
-                for (int start = 0; start < region.Count; start += maximumVoxelsPerMesh)
-                {
-                    int count = Math.Min(maximumVoxelsPerMesh, region.Count - start);
-                    result.Add(new SpatialVoxelBatch
-                    {
-                        Voxels = region.GetRange(start, count),
-                        CullCenter = centre,
-                        CullRadius = radius
-                    });
-                }
-            }
-            return result;
-        }
-
-        private static int FloorDivide(int value, int divisor)
-        {
-            int quotient = value / divisor;
-            int remainder = value % divisor;
-            return remainder < 0 ? quotient - 1 : quotient;
-        }
-
-        private static void ComputeVoxelBounds(
-            List<VoxelPosition> voxels, int scale, out Vec3d centre, out double radius)
-        {
-            int minX = int.MaxValue, minY = int.MaxValue, minZ = int.MaxValue;
-            int maxX = int.MinValue, maxY = int.MinValue, maxZ = int.MinValue;
-            for (int i = 0; i < voxels.Count; i++)
-            {
-                VoxelPosition voxel = voxels[i];
-                if (voxel.X < minX) minX = voxel.X;
-                if (voxel.Y < minY) minY = voxel.Y;
-                if (voxel.Z < minZ) minZ = voxel.Z;
-                if (voxel.X > maxX) maxX = voxel.X;
-                if (voxel.Y > maxY) maxY = voxel.Y;
-                if (voxel.Z > maxZ) maxZ = voxel.Z;
-            }
-
-            double worldMinX = minX / 16.0;
-            double worldMinY = minY / 16.0;
-            double worldMinZ = minZ / 16.0;
-            double worldMaxX = (maxX + scale) / 16.0;
-            double worldMaxY = (maxY + scale) / 16.0;
-            double worldMaxZ = (maxZ + scale) / 16.0;
-            centre = new Vec3d(
-                (worldMinX + worldMaxX) * 0.5,
-                (worldMinY + worldMaxY) * 0.5,
-                (worldMinZ + worldMaxZ) * 0.5);
-            double halfX = (worldMaxX - worldMinX) * 0.5;
-            double halfY = (worldMaxY - worldMinY) * 0.5;
-            double halfZ = (worldMaxZ - worldMinZ) * 0.5;
-            radius = Math.Sqrt(halfX * halfX + halfY * halfY + halfZ * halfZ);
         }
 
         private void FinishDraftRefinement(DraftBuildResult result)
@@ -1828,7 +1665,7 @@ namespace Layout.Systems
                 return;
 
             BlockingCollection<MeshData> ready = build.ReadyMeshes;
-            BlockingCollection<MeshUploadBatch> cleanReady = build.CleanReadyMeshes;
+            BlockingCollection<MeshData> cleanReady = build.CleanReadyMeshes;
             BlockingCollection<MeshData> scaffoldReady = build.ScaffoldReadyMeshes;
             if (ready == null || cleanReady == null || scaffoldReady == null) return;
             if (!_draftMaterializationStarted)
@@ -1877,7 +1714,7 @@ namespace Layout.Systems
             if (!scaffoldReady.IsCompleted) return;
 
             bool uploaded = false;
-            if (cleanReady.TryTake(out MeshUploadBatch cleanData))
+            if (cleanReady.TryTake(out MeshData cleanData))
             {
                 _draftCleanMaterializationMeshes.Add(UploadTrackedMesh(cleanData));
                 uploaded = true;
@@ -2144,7 +1981,7 @@ namespace Layout.Systems
             }
 
             BlockingCollection<MeshData> ready = build.ReadyMeshes;
-            BlockingCollection<MeshUploadBatch> cleanReady = build.CleanReadyMeshes;
+            BlockingCollection<MeshData> cleanReady = build.CleanReadyMeshes;
             BlockingCollection<MeshData> scaffoldReady = build.ScaffoldReadyMeshes;
             if (ready == null || cleanReady == null || scaffoldReady == null) return;
 
@@ -2178,7 +2015,7 @@ namespace Layout.Systems
             if (!scaffoldReady.IsCompleted) return;
 
             bool uploadedPending = false;
-            if (cleanReady.TryTake(out MeshUploadBatch cleanData))
+            if (cleanReady.TryTake(out MeshData cleanData))
             {
                 pending.CleanMeshes.Add(UploadTrackedMesh(cleanData));
                 uploadedPending = true;
@@ -2617,10 +2454,8 @@ namespace Layout.Systems
         {
             foreach (KeyValuePair<Guid, GuideData> kv in _network.Guides)
             {
-                GuideData guide = kv.Value;
-                if (guide == null) continue;
-                if (!TryRebuildLargeSettledScaffold(guide))
-                    RebuildGuide(guide);
+                if (kv.Value != null)
+                    RebuildGuide(kv.Value);
             }
 
             // Drop meshes for guides no longer present in the mirror.
@@ -2709,8 +2544,8 @@ namespace Layout.Systems
                 Guide = snapshot,
                 ReadyMeshes = new BlockingCollection<MeshData>(
                     new ConcurrentQueue<MeshData>(), MaterializationReadyBatchCapacity),
-                CleanReadyMeshes = new BlockingCollection<MeshUploadBatch>(
-                    new ConcurrentQueue<MeshUploadBatch>(), MaterializationReadyBatchCapacity),
+                CleanReadyMeshes = new BlockingCollection<MeshData>(
+                    new ConcurrentQueue<MeshData>(), MaterializationReadyBatchCapacity),
                 Cancellation = new CancellationTokenSource()
             };
             _settledMaterializations[guide.Id] = build;
@@ -2801,50 +2636,6 @@ namespace Layout.Systems
             }
         }
 
-        private bool TryRebuildLargeSettledScaffold(GuideData guide)
-        {
-            if (guide == null || guide.CachedVoxelCount <= PreviewFullResVoxelCap
-                || guide.IsWireframe || guide.Projection != ProjectionMode.Volumetric
-                || !GuideShapeTypes.IsVolume(guide.ShapeType))
-                return false;
-
-            IGuideShape shape = ShapeFactory.Adopt(guide);
-            shape.RecalculatePhantomPoints();
-            List<Vec3d> curve = shape.SampleCurve(128);
-            int scaffoldScale = ChooseMovingWireframeScale(curve, guide.VoxelScale);
-            List<VoxelPosition> voxels = BuildWireframe(curve, scaffoldScale);
-            for (int i = 0; i < shape.ControlPoints.Count; i++)
-            {
-                ControlPoint point = shape.ControlPoints[i];
-                if (point?.WorldPosition == null || point.IsPhantom) continue;
-                VoxelRenderType type = point.IsLocked ? VoxelRenderType.Locked
-                    : point.IsPrimary ? VoxelRenderType.Primary : VoxelRenderType.Anchor;
-                ShapeGeometry.ClaimMarker(voxels, scaffoldScale, point.WorldPosition, type);
-            }
-            if (voxels.Count == 0) return false;
-
-            Vec3d origin = ComputeOrigin(shape.ControlPoints);
-            var options = new GuideMeshOptions
-            {
-                Scale = scaffoldScale,
-                Mode = ProjectionMode.Volumetric,
-                Plane = guide.Plane,
-                Origin = origin,
-                Hidden = guide.IsHidden,
-                PrivateAnchors = _network.ServerLayoutAvailable
-                    && _network.IsLocalGuide(guide.Id),
-                IsNeighborSolid = (_, _, _) => false
-            };
-            AssignAnchors(shape.ControlPoints, options);
-            UploadOrReplace(guide.Id, GuideMeshBuilder.Build(voxels, options), origin);
-            if (_guideMeshes.TryGetValue(guide.Id, out GuideMesh mesh))
-                mesh.RenderedWireframe = true;
-            ComputeCullBounds(
-                shape, guide.VoxelScale, out Vec3d cullCenter, out double cullRadius);
-            SetGuideCullBounds(guide.Id, cullCenter, cullRadius);
-            return TryStartSettledShellMaterialization(guide);
-        }
-
         private void FinishSettledShellMaterialization(SettledMaterializationBuild build)
         {
             if (_disposed || build == null) return;
@@ -2894,7 +2685,7 @@ namespace Layout.Systems
                 if (!_guideMeshes.TryGetValue(id, out GuideMesh mesh)) continue;
 
                 BlockingCollection<MeshData> ready = build.ReadyMeshes;
-                BlockingCollection<MeshUploadBatch> cleanReady = build.CleanReadyMeshes;
+                BlockingCollection<MeshData> cleanReady = build.CleanReadyMeshes;
                 bool drained = build.Completed && build.CompletionHandled
                     && ready.IsCompleted && ready.Count == 0
                     && cleanReady.IsCompleted && cleanReady.Count == 0;
@@ -2909,7 +2700,7 @@ namespace Layout.Systems
                 if (build.LastUploadMs != 0 && now - build.LastUploadMs < interval) continue;
 
                 bool uploaded = false;
-                if (cleanReady.TryTake(out MeshUploadBatch cleanData))
+                if (cleanReady.TryTake(out MeshData cleanData))
                 {
                     MeshRef clean = UploadTrackedMesh(cleanData);
                     if (mesh.TransitionCleanRef == null)
@@ -3249,8 +3040,8 @@ namespace Layout.Systems
             {
                 result.ReadyMeshes = new BlockingCollection<MeshData>(
                     new ConcurrentQueue<MeshData>(), MaterializationReadyBatchCapacity);
-                result.CleanReadyMeshes = new BlockingCollection<MeshUploadBatch>(
-                    new ConcurrentQueue<MeshUploadBatch>(), MaterializationReadyBatchCapacity);
+                result.CleanReadyMeshes = new BlockingCollection<MeshData>(
+                    new ConcurrentQueue<MeshData>(), MaterializationReadyBatchCapacity);
             }
             _activeGrabBuild = result;
             _grabMaterializationStarted = false;
@@ -3347,7 +3138,7 @@ namespace Layout.Systems
             GuideData guide, IGuideShape shape, List<VoxelPosition> voxels,
             int grabbedIndex, Vec3d origin, bool privateAnchors,
             BlockingCollection<MeshData> readyMeshes,
-            BlockingCollection<MeshUploadBatch> cleanMeshes, CancellationToken token)
+            BlockingCollection<MeshData> cleanMeshes, CancellationToken token)
         {
             Vec3d grabbed = grabbedIndex >= 0 && grabbedIndex < shape.ControlPoints.Count
                 ? shape.ControlPoints[grabbedIndex]?.WorldPosition : null;
@@ -3361,11 +3152,27 @@ namespace Layout.Systems
                 if (voxel.Y < minimumY) minimumY = voxel.Y;
             }
 
-            var cleanBatches = new Queue<SpatialVoxelBatch>(
-                PartitionSpatialVoxelBatches(voxels, guide.VoxelScale, token));
-
-            void EnqueueCleanBatch(SpatialVoxelBatch cleanBatch)
+            var ordered = new List<VoxelPosition>(voxels);
+            ordered.Sort((a, b) =>
             {
+                int byX = a.X.CompareTo(b.X);
+                if (byX != 0) return byX;
+                int byY = a.Y.CompareTo(b.Y);
+                return byY != 0 ? byY : a.Z.CompareTo(b.Z);
+            });
+            int cleanCursor = 0;
+
+            OrganicVoxelGrowth.GrowBatches(
+                voxels, guide.VoxelScale, MaterializationTargetVoxelsPerBatch,
+                MaterializationMinimumBatches, MaterializationMaximumBatches, token,
+                batch =>
+            {
+                token.ThrowIfCancellationRequested();
+                if (batch == null || batch.Count == 0) return;
+
+                int cleanCount = Math.Min(batch.Count, ordered.Count - cleanCursor);
+                var cleanBatch = ordered.GetRange(cleanCursor, cleanCount);
+                cleanCursor += cleanCount;
                 var cleanOptions = new GuideMeshOptions
                 {
                     Scale = guide.VoxelScale,
@@ -3380,24 +3187,7 @@ namespace Layout.Systems
                     IsNeighborSolid = (_, _, _) => false
                 };
                 AssignAnchors(shape.ControlPoints, cleanOptions);
-                cleanMeshes.Add(new MeshUploadBatch
-                {
-                    Data = GuideMeshBuilder.Build(cleanBatch.Voxels, cleanOptions),
-                    CullCenter = cleanBatch.CullCenter,
-                    CullRadius = cleanBatch.CullRadius
-                }, token);
-            }
-
-            OrganicVoxelGrowth.GrowBatches(
-                voxels, guide.VoxelScale, MaterializationTargetVoxelsPerBatch,
-                MaterializationMinimumBatches, MaterializationMaximumBatches, token,
-                batch =>
-            {
-                token.ThrowIfCancellationRequested();
-                if (batch == null || batch.Count == 0) return;
-
-                if (cleanBatches.Count > 0)
-                    EnqueueCleanBatch(cleanBatches.Dequeue());
+                cleanMeshes.Add(GuideMeshBuilder.Build(cleanBatch, cleanOptions), token);
 
                 var previewOptions = new GuideMeshOptions
                 {
@@ -3414,12 +3204,6 @@ namespace Layout.Systems
                 AssignAnchors(shape.ControlPoints, previewOptions);
                 readyMeshes.Add(GuideMeshBuilder.Build(batch, previewOptions), token);
             });
-
-            while (cleanBatches.Count > 0)
-            {
-                token.ThrowIfCancellationRequested();
-                EnqueueCleanBatch(cleanBatches.Dequeue());
-            }
         }
 
         private void FinishGrabRefinement(GrabBuildResult result)
@@ -3519,7 +3303,7 @@ namespace Layout.Systems
             }
 
             BlockingCollection<MeshData> ready = build.ReadyMeshes;
-            BlockingCollection<MeshUploadBatch> cleanReady = build.CleanReadyMeshes;
+            BlockingCollection<MeshData> cleanReady = build.CleanReadyMeshes;
             if (ready == null || cleanReady == null) return;
             if (!_grabMaterializationStarted)
             {
@@ -3560,7 +3344,7 @@ namespace Layout.Systems
                 && now - _lastGrabMaterializationUploadMs < interval) return;
 
             bool uploadedAny = false;
-            if (cleanReady.TryTake(out MeshUploadBatch cleanData))
+            if (cleanReady.TryTake(out MeshData cleanData))
             {
                 MeshRef uploadedClean = UploadTrackedMesh(cleanData);
                 if (mesh.GrabCleanRef == null)
@@ -3832,21 +3616,10 @@ namespace Layout.Systems
             return mesh;
         }
 
-        private MeshRef UploadTrackedMesh(MeshUploadBatch batch)
-        {
-            if (batch == null) return null;
-            MeshRef mesh = UploadTrackedMesh(batch.Data);
-            if (mesh != null && batch.CullCenter != null)
-                _meshCullBounds[mesh] =
-                    new MeshCullBounds(batch.CullCenter, Math.Max(0.0, batch.CullRadius));
-            return mesh;
-        }
-
         private void DeleteTrackedMesh(MeshRef mesh)
         {
             if (mesh == null) return;
             _meshTriangleCounts.Remove(mesh);
-            _meshCullBounds.Remove(mesh);
             _capi.Render.DeleteMesh(mesh);
         }
 
@@ -4109,7 +3882,6 @@ namespace Layout.Systems
                 _markerMesh = null;
             }
             _meshTriangleCounts.Clear();
-            _meshCullBounds.Clear();
         }
     }
 }

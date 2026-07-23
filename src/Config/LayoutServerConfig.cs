@@ -10,7 +10,7 @@ namespace Layout.Config
     /// so edits take effect on the next server restart.
     /// </summary>
     /// <remarks>
-    /// UNLIMITED SEMANTICS. For all four caps, <c>0</c> or any negative value means "unlimited" — the check
+    /// UNLIMITED SEMANTICS. For all five caps, <c>0</c> or any negative value means "unlimited" — the check
     /// is skipped entirely. <see cref="Normalize"/> folds negatives to 0 so "unlimited" has one on-disk
     /// representation, and folds a non-positive undo depth back to the default (an undo history of zero is a
     /// config error, not a feature).
@@ -20,13 +20,24 @@ namespace Layout.Config
     /// </remarks>
     public class LayoutServerConfig
     {
+        /// <summary>Internal schema marker used only to migrate unchanged historical defaults.</summary>
+        [JsonProperty("configVersion")]
+        public int ConfigVersion { get; set; } = 0;
+
         /// <summary>Max voxels a single guide may occupy. 0 = unlimited. Synced to clients on join.</summary>
         [JsonProperty("perGuideVoxelCap")]
-        public int PerGuideVoxelCap { get; set; } = 25000;
+        public int PerGuideVoxelCap { get; set; } = 500000;
 
         /// <summary>Max voxels across ALL guides. 0 = unlimited. Synced to clients on join.</summary>
         [JsonProperty("totalVoxelCap")]
-        public int TotalVoxelCap { get; set; } = 250000;
+        public int TotalVoxelCap { get; set; } = 0;
+
+        /// <summary>
+        /// Max voxels across all currently existing guides attributed to one original creator.
+        /// 0 = unlimited. Existing over-cap guides still load, but cannot grow.
+        /// </summary>
+        [JsonProperty("perPlayerTotalVoxelCap")]
+        public int PerPlayerTotalVoxelCap { get; set; } = 1000000;
 
         /// <summary>Max guides one player may have created at once. 0 = unlimited (the default).</summary>
         [JsonProperty("maxGuidesPerPlayer")]
@@ -81,8 +92,17 @@ namespace Layout.Config
         /// <summary>Folds out-of-range values to their canonical forms. Call once after loading.</summary>
         public void Normalize()
         {
+            // Existing layout.json files contain the old generated defaults explicitly. Migrate only those
+            // exact inherited values; administrators who chose any other limits keep their configuration.
+            if (ConfigVersion < 1)
+            {
+                if (PerGuideVoxelCap == 25000) PerGuideVoxelCap = 500000;
+                if (TotalVoxelCap == 250000) TotalVoxelCap = 0;
+                ConfigVersion = 1;
+            }
             if (PerGuideVoxelCap < 0) PerGuideVoxelCap = 0;
             if (TotalVoxelCap < 0) TotalVoxelCap = 0;
+            if (PerPlayerTotalVoxelCap < 0) PerPlayerTotalVoxelCap = 0;
             if (MaxGuidesPerPlayer < 0) MaxGuidesPerPlayer = 0;
             if (MaxGuidesWorldWide < 0) MaxGuidesWorldWide = 0;
             if (UndoHistoryDepth <= 0) UndoHistoryDepth = 50;

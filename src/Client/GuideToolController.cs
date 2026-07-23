@@ -289,6 +289,15 @@ namespace Layout.Client
             return Items.ItemGuideTool.GetChalk(stack) <= 0;
         }
 
+        private bool WarnIfRenderingDisabled()
+        {
+            if (_renderer.RenderingEnabled) return false;
+            Error("layout-renderingoff",
+                "Layout guide rendering is off. Use /layout on to turn it back on "
+                + "(or .layout on in client-only mode).");
+            return true;
+        }
+
         private void OnTick(float dt)
         {
             if (_disposed) return;
@@ -300,6 +309,12 @@ namespace Layout.Client
                 OnHeldChanged(held);
             }
             if (!held) return;
+            if (!_renderer.RenderingEnabled)
+            {
+                _currentTargetGuide = null;
+                _hud.SetExaminedGuide(null);
+                return;
+            }
 
             // Mode switched (via the GUI, which already cancels any draft): a live grab is released
             // properly so the lock never leaks across modes.
@@ -1183,6 +1198,7 @@ namespace Layout.Client
         public void OnPrimaryClick(BlockSelection blockSel)
         {
             if (!_toolHeld) return;
+            if (WarnIfRenderingDisabled()) return;
 
             if (_draft.Mode == ToolMode.Delete)
             {
@@ -1269,6 +1285,7 @@ namespace Layout.Client
         public void OnSecondaryClick(BlockSelection blockSel)
         {
             if (!_toolHeld) return;
+            if (WarnIfRenderingDisabled()) return;
 
             // Edit selection is client-side UI state. Right-click returns to an unselected Edit tool
             // without mutating the guide, matching the cancel/backtrack gesture used in Create.
@@ -1929,6 +1946,38 @@ namespace Layout.Client
             }
         }
 
+        /// <summary>
+        /// Applies the personal rendering gate to tool state. Turning rendering off cancels any invisible
+        /// draft or grab so it cannot retain a server lock or resume later without the player seeing it.
+        /// </summary>
+        public void OnRenderingChanged(bool enabled)
+        {
+            _hud.SetRenderingEnabled(enabled);
+            if (enabled) return;
+
+            if (_grab != null) CancelGrab();
+            if (_draft.HasActiveDraft)
+            {
+                _net.SendDraftCancel();
+                _draft.ClearDraft();
+            }
+            _draft.ClearSelection();
+            _rimAimArmed = false;
+            _rimAwaitingRelease = false;
+            ResetDraftVisualState();
+            _lastDraftClampCheckMs = 0;
+            _hasPendingInsert = false;
+            _pendingInsertOriginPoints = null;
+            _hud.ClearDraftAim();
+            _hud.ClearGrabMeasurement();
+            _hud.SetExaminedGuide(null);
+            _currentTargetGuide = null;
+            _renderer.ClearDraftPreview();
+            _hud.SetComatoseDraft(false);
+            if (_gui.IsOpened()) _gui.TryClose();
+            if (!_toolHeld) _hud.TryClose();
+        }
+
         private void OnGuideRemoved(Guid guideId)
         {
             if (_grab != null && _grab.GuideId == guideId) DropGrabLocally();
@@ -2038,6 +2087,7 @@ namespace Layout.Client
         public bool OnToolGuiHotkey()
         {
             if (!IsToolActive()) return false;
+            if (WarnIfRenderingDisabled()) return true;
             if (_gui.IsOpened()) _gui.TryClose(); else _gui.TryOpen();
             return true;
         }
@@ -2046,6 +2096,7 @@ namespace Layout.Client
         public bool OnUndoHotkey()
         {
             if (!IsToolActive()) return false;
+            if (WarnIfRenderingDisabled()) return true;
             _net.SendUndo();
             return true;
         }
@@ -2054,6 +2105,7 @@ namespace Layout.Client
         public bool OnRedoHotkey()
         {
             if (!IsToolActive()) return false;
+            if (WarnIfRenderingDisabled()) return true;
             _net.SendRedo();
             return true;
         }

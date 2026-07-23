@@ -125,6 +125,7 @@ namespace Layout
                 sapi.Logger,
                 ServerConfig.PerGuideVoxelCap,
                 ServerConfig.TotalVoxelCap,
+                ServerConfig.PerPlayerTotalVoxelCap,
                 ServerConfig.MaxGuidesPerPlayer,
                 ServerConfig.MaxGuidesWorldWide,
                 uid => AdminPolicies.EffectiveGuideLimit(uid, ServerConfig.MaxGuidesPerPlayer));
@@ -147,10 +148,10 @@ namespace Layout
                 ServerConfig.EnableChalkDurability);
 
             sapi.Logger.Notification(
-                "[Layout] Server started. Caps: {0} voxels/guide, {1} total, {2} guides/player, {3} world-wide (0 = unlimited); undo depth {4}; privilege '{5}'; admin lock-override {6}; client-only mode {7}.",
-                ServerConfig.PerGuideVoxelCap, ServerConfig.TotalVoxelCap,
-                ServerConfig.MaxGuidesPerPlayer, ServerConfig.MaxGuidesWorldWide,
-                ServerConfig.UndoHistoryDepth,
+                "[Layout] Server started. Caps: {0} voxels/guide, {1} per-player total, {2} world total, {3} guides/player, {4} world-wide (0 = unlimited); undo depth {5}; privilege '{6}'; admin lock-override {7}; client-only mode {8}.",
+                ServerConfig.PerGuideVoxelCap, ServerConfig.PerPlayerTotalVoxelCap,
+                ServerConfig.TotalVoxelCap, ServerConfig.MaxGuidesPerPlayer,
+                ServerConfig.MaxGuidesWorldWide, ServerConfig.UndoHistoryDepth,
                 ServerConfig.RequiredPrivilege == "" ? "(none)" : ServerConfig.RequiredPrivilege,
                 ServerConfig.AdminCanOverrideLocks ? "on" : "off",
                 ServerConfig.AllowClientOnlyMode ? "allowed" : "disallowed");
@@ -234,6 +235,7 @@ namespace Layout
 
             // Renderer over the mirror (constructed here, disposed in Dispose — the seam Module 5 left open).
             Renderer = new GuideRenderer(capi, ClientNet);
+            Renderer.SetRenderingEnabled(ClientConfig.GuideRenderingEnabled);
             ClientNet.GuideRenderingChanged += OnGuideRenderingChanged;
 
             // The two dialogs share the same DraftManager + ClientNetworkHandler (the Module-6 contract).
@@ -247,6 +249,7 @@ namespace Layout
             // The aim-controller: per-tick raycast + click routing while the tool is held. It (not the
             // ModSystem, not the item) owns all interaction state, including comatose grab sessions.
             Controller = new GuideToolController(capi, Draft, ClientNet, Renderer, ToolGui, Hud);
+            Controller.OnRenderingChanged(Renderer.RenderingEnabled);
             if (ClientNet.PublicGuideAccessJailed) Controller.OnPublicGuidePolicyChanged(true);
 
             // Hotkeys — all rebindable in the vanilla controls screen, all gated to the held tool by the
@@ -270,6 +273,11 @@ namespace Layout
         {
             StopModeDetection();
             _modeDetectionElapsedSeconds = 0f;
+
+            if (Renderer?.RenderingEnabled == false)
+                _capi.ShowChatMessage(
+                    "[Layout] Guide rendering is currently off. Use /layout on to turn it back on "
+                    + "(or .layout on in client-only mode).");
 
             if (ClientNet.AuthorityMode != ClientAuthorityMode.Detecting) return;
 
@@ -353,13 +361,22 @@ namespace Layout
                 return TextCommandResult.Error("Enter a world before changing Layout rendering.");
 
             Renderer.SetRenderingEnabled(enabled);
+            Controller?.OnRenderingChanged(enabled);
+            ClientConfig.GuideRenderingEnabled = enabled;
+            SaveClientConfig();
             return TextCommandResult.Success(enabled
                 ? "Layout guide rendering is on for you."
                 : "Layout guide rendering is off for you.");
         }
 
-        private void OnGuideRenderingChanged(bool enabled) =>
+        private void OnGuideRenderingChanged(bool enabled)
+        {
             Renderer?.SetRenderingEnabled(enabled);
+            Controller?.OnRenderingChanged(enabled);
+            if (ClientConfig == null) return;
+            ClientConfig.GuideRenderingEnabled = enabled;
+            SaveClientConfig();
+        }
 
         private TextCommandResult OnClientWhoCommand(TextCommandCallingArgs args)
         {

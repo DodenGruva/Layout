@@ -3,11 +3,11 @@
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
 > and the performance-relevant mechanics. Updated 2026-07-23 against the built/package checkpoint
-> **v0.3.43**. Where this file and the code disagree, **the code wins** — treat this as a map, then
+> **v0.3.52**. Where this file and the code disagree, **the code wins** — treat this as a map, then
 > read the `.cs` files it points at.
 >
-> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.12),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/25.md` (per-session
+> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.13),
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/26.md` (per-session
 > history), `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
 
@@ -21,13 +21,13 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.3.43 built, packaged, documented, and pushed on `main`. The v0.3 arc is playtest-driven: behemoth motion stays
+- **Status:** v0.3.52 built, packaged, and playtest-approved. The v0.3 arc is playtest-driven: behemoth motion stays
   wireframe-cheap; immense placement and final sculpt validation use a single low-priority server lane;
   selected-scale shells stream to the client in bounded, organic neighbour-growth batches; old GPU batches
   retire across frames; and persistent Shell/Wireframe mode works. The HUD is fixed-size and action-aware;
   guide attribution is available through `/layout who`; active projection switches preserve anchors;
-  whole-guide frustum rejection, 32-block settled-mesh culling, render statistics, and personal
-  `/layout off|on` control are present.
+  whole-guide frustum rejection and render statistics are present. Personal `/layout off|on` state persists;
+  while it is off, chat/HUD explain how to restore it and the Chalking Kit cannot invisibly mutate guides.
   F4 (client-only / private guides) and F5 (**the Chalking Kit**: finite chalk
   durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
   **mesh pass Stage A (exposed-face meshing) has shipped** and filled 3D interiors are retired. Volumes may
@@ -51,15 +51,14 @@ guides on servers without Layout and, when server policy permits, alongside publ
 - **Closed in v0.2.36:** B-S9-1 adjacent-lock targeting. Exact rendered-cell ownership prevents a formerly
   locked marker from shadowing its neighbor. Two unrelated verification debts remain: xskills itself and a
   VS 1.22.0/1.22.1 smoke test.
-- **Current performance state:** interaction-side large-guide work was rebuilt in v0.3.0–v0.3.40, then
-  v0.3.41–v0.3.43 addressed settled GPU submission from measurements. Motion
+- **Current performance state:** interaction-side large-guide work was rebuilt in v0.3.0–v0.3.40. Motion
   uses bounded/adaptive wireframes, the cursor keeps selected-scale precision, exact occupancy calculates
   off-thread, and connected mold-like splotches stream through bounded queues. Public immense count/footprint
   work is isolated from the server tick; claim checks consume at most 128 blocks / about 1 ms per tick. Placed
-  hover uses cached metadata; off-screen guides are not drawn; immense clean shells are split into 32-block
-  regions and each region is culled independently. A partial-view stress case fell from 128 batches / 32.6M
-  triangles / 7.5 ms to 33 / 7.5M / 4.4 ms. Greedy same-colour face merging remains optional for the
-  fully-visible case. See §9 and `dev/SESSION_21.md`–`SESSION_25.md`.
+  hover uses cached metadata and whole guides outside view distance/frustum are not drawn. v0.3.43's spatial
+  meshes and v0.3.44–v0.3.48's greedy/depth experiments were rejected after visible seams, fidelity defects,
+  and an approximately 140→80 FPS real-play regression; v0.3.49 restored the v0.3.42 renderer. See §9 and
+  `dev/SESSION_21.md`–`SESSION_26.md`.
 - **Design philosophy (standing rule): correctness over performance** unless told otherwise. Several
   deliberate un-optimized paths exist by choice; see §9.
 
@@ -95,7 +94,7 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── src/                        ← all 77 .cs files (see §6)
 └── dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
-    ├── SESSION_9.md … SESSION_19.md  SESSION_20.md  SESSION_21.md  SESSION_22.md  SESSION_23.md  SESSION_24.md  SESSION_25.md
+    ├── SESSION_9.md … SESSION_19.md  SESSION_20.md  SESSION_21.md  SESSION_22.md  SESSION_23.md  SESSION_24.md  SESSION_25.md  SESSION_26.md
     ├── CHANGELOG_ARCHITECTURE.md   ← ARCHITECTURE.md's per-revision deltas (archive)
     ├── PLAN_CLIENT_ONLY.md  PLAN_CHALKING_KIT.md  BUILD_INSTRUCTIONS.txt
 ```
@@ -261,10 +260,9 @@ path.
   mesh-count harness locks the face counts and flush/inset invariants (15/15).
 - **Marker voxels** are single-voxel nearest-claim (precedence Locked > Primary > Anchor > Division); the
   apex and off-cell division boundaries claim 2 voxels on even spans so they read centered.
-- **Whole-guide and spatial culling (v0.3.33/v0.3.41–v0.3.43):** conservative sampled bounds reject an entire
-  guide beyond live `viewDistance` or outside Vintage Story's current camera frustum. Immense clean final
-  Shells are then divided into fixed 32-block world regions with independent bounds; a partially visible guide
-  submits only intersecting regions. Small guides and organic growth previews retain their former paths.
+- **Whole-guide culling (v0.3.33/v0.3.41–v0.3.42, restored v0.3.49):** conservative sampled bounds reject an
+  entire guide beyond live `viewDistance` or outside Vintage Story's current camera frustum. v0.3.43's
+  32-block spatial final meshes were later removed because their boundaries produced visible seams.
 - **Adaptive/streamed draft pipeline (v0.3):** cheap poses retain the selected-scale shell. Expensive moving poses use
   a canonical structural wireframe under work/frame-pressure hysteresis; a four-selected-voxel cursor region
   remains precise and transitions outward across roughly two blocks. After settling, one generation-tagged
@@ -284,9 +282,9 @@ path.
 v0.3 removed repeated full shape/HUD calculations from motion, v0.3.26–v0.3.40 moved public immense
 count/footprint work off the server tick and made placement/sculpt visuals stream through bounded queues.
 Standing rule is **input smoothness first for this path**: exact visuals and numbers may settle later, but
-cursor/input responsiveness and the server tick must not wait on them. v0.3.41–v0.3.43 then measured and
-removed whole-guide and partial-guide off-screen GPU submissions. Greedy same-colour merging remains
-available for the distinct fully-visible triangle bottleneck.
+cursor/input responsiveness and the server tick must not wait on them. v0.3.41–v0.3.42 measured and removed
+whole-guide off-screen GPU submissions. The later spatial/greedy path improved isolated submission numbers
+but failed real-play visual and frame-rate validation, so v0.3.49 restored the v0.3.42 implementation.
 
 **Hot paths & large-quantity structures**
 - **Voxel generation per guide** — up to the configured cap or unconditional 10M ceiling. During drafts it
@@ -310,12 +308,11 @@ available for the distinct fully-visible triangle bottleneck.
 - **Intrinsic HUD dimensions (v0.3.40)** — round and polygonal volumes report their local defining width and
   axial height rather than the diagonal of a rotated world-axis AABB. An 83-block dome therefore reports
   83 blocks wide, not 117.
-- **Measured spatial settled meshes (v0.3.41–v0.3.43)** — `.layout renderstats` reports last-frame guide
-  visibility, draw batches, approximate triangles, spatial rejections, extras, and smoothed frame time.
-  Final immense clean meshes use fixed 32-block regions while retaining guide-wide occupancy for cross-region
-  neighbour checks. Existing immense saved Shells reload through a temporary scaffold and the same background
-  spatial materialization. Human-measured partial view: 128→33 drawn batches, 32.6M→7.5M triangles, and
-  7.5→4.4 ms, with 110 regional batches rejected.
+- **Rendering instrumentation and rollback (v0.3.41–v0.3.49)** — `.layout renderstats` reports last-frame
+  visibility, draw batches, approximate triangles, extras, and smoothed frame time. v0.3.43 measured a strong
+  partial-view spatial result, but broader tests exposed chunk seams. Greedy/depth follow-ups added bands,
+  unstable far-side visibility, blur/brightness/depth defects, slow clean swaps, and worse real FPS. The
+  accepted implementation is therefore the exact v0.3.42 renderer plus later non-rendering features.
 - **Mesh rebuild** — a full `MeshData` rebuild for a guide on every change event. The cube path now emits
   **only exposed faces** (4 verts / 6 indices each, no interior/shared faces), pre-counted and exactly
   allocated. Settled guides mesh at **true scale, never coarsened** (see below).
@@ -362,17 +359,17 @@ available for the distinct fully-visible triangle bottleneck.
 1. ~~Add an optimized **Volumetric exposed-face** builder~~ **— DONE (Stage A, v0.2.14–v0.2.16):** neighbour
    lookup, omit shared/interior faces, preserve role colours and private/public anchor shades; Surface/slab
    stays on the legacy path. Solidity-aware z-fight inset; deterministic mesh-count harness (15/15).
-2. ~~**Stage B — partition immense final meshes into 32-block chunks** with independent mesh refs/bounds;
-   preserve cross-boundary neighbour checks and disposal~~ **— DONE (v0.3.43).**
-3. ~~**Stage C1 — whole-guide and per-region distance/frustum culling**~~ **— DONE (v0.3.41/v0.3.43).**
-   **Stage C2 remains optional:** same-colour/orientation **greedy face merging** inside regions, preserving
-   exact role colour/alpha, plane, orientation, and z-fight inset.
+2. **Stage B spatial chunks — TRIED in v0.3.43, REVERTED in v0.3.49.** Region boundaries caused visible
+   seams on immense curved guides despite correct cross-boundary occupancy.
+3. **Stage C1 whole-guide distance/frustum culling — DONE (v0.3.41); per-region culling reverted.**
+   **Stage C2 greedy merging — TRIED and REJECTED (v0.3.44–v0.3.48)** after fidelity and performance
+   regressions. It is not the assumed next optimization.
 4. ~~Temporary coarse interaction previews + async CPU builds~~ **DONE differently in v0.3:** adaptive
    wireframes, selected-scale cursor precision, generation-safe background refinement, streamed producer/
    consumer queues, organic neighbour growth, and retained placement/sculpt handoffs.
 
-Greedy merging is gated on whether the fully-visible case warrants another pass. Do not begin by raising
-`HardVoxelCeiling`.
+Future rendering work requires a new measured bottleneck and a design that preserves the v0.3.42 appearance
+and real-play frame rate. Do not begin by raising `HardVoxelCeiling`.
 
 ---
 
@@ -402,7 +399,9 @@ Greedy merging is gated on whether the fully-visible case warrants another pass.
   `/layout jail|free|limit|voxelcap|info|jailroster|top` and targeted player/guide dispel. Policies persist
   per world and online changes refresh the affected client immediately.
 - **Personal visibility:** `/layout off|on` (or `.layout off|on` in client-only fallback) disables/enables
-  the entire render pass for only the invoking player; guide state and authority are untouched.
+  the entire render pass for only the invoking player and persists in `layout-client.json`. On login, chat
+  explains a saved off-state. While off, guide state remains authoritative but Chalking Kit guide actions,
+  settings, undo, and redo are blocked; the HUD and attempted-use warning explain `/layout on`.
 - **Private commands (unchanged through v0.1.53):** `/layout private`, `/layout public`, `/layout client push all`, plus the
   client-only `.layout dispel all|<radius>`. Push assigns new public IDs, enforces server caps and
   privilege, removes only confirmed private copies, and is deliberately not undoable.
@@ -416,8 +415,10 @@ Greedy merging is gated on whether the fully-visible case warrants another pass.
 
 | Key | Default |
 |---|---|
-| `perGuideVoxelCap` | 25,000 |
-| `totalVoxelCap` | 250,000 |
+| `configVersion` | 1 (narrow migration marker) |
+| `perGuideVoxelCap` | 500,000 |
+| `perPlayerTotalVoxelCap` | 1,000,000 (all current public guides attributed to one original creator) |
+| `totalVoxelCap` | 0 (unlimited) |
 | `maxGuidesPerPlayer` | 0 (unlimited) |
 | `maxGuidesWorldWide` | 0 (unlimited) |
 | `undoHistoryDepth` | 50 |
@@ -442,6 +443,7 @@ refill is always allowed and ungated) — player convenience toggles, moved here
 Mostly never synced, with one exception: the hotbar flag is **reported to the server on join** via
 `ChalkRefillPrefsPacket`, because `ItemChalkingPowder`'s held-interact runs on both sides and the server is
 what mutates the stacks — without it the toggle would be a no-op.
+`guideRenderingEnabled` defaults true and is saved immediately by either public or client-only on/off command.
 
 **Private guide data** is separate from both config files and the world save:
 `Layout/ClientOnlyGuides/<world-key>-<player-key>.json`, with atomic `.tmp` replacement, one `.bak`, and
@@ -470,10 +472,10 @@ cell; an adjacent first-hit body cell now receives a distinct passive marker. Hu
    (a) the hard 32-chalk ceiling is verified by an offline harness but **never tested against xskills
    itself**; (b) **1.22.x support is declared, not tested** — the code was built against 1.22.3, so nothing
    confirms every API used exists in 1.22.0.
-2. **Field-soak v0.3.43.** Whole-guide and partial-guide culling are human-approved; retain reload scaffolds,
-   materialization, repeated sculpt resizing, and varied camera angles as regression coverage.
-3. **Greedy merging only if requested** (§9 / `SESSION_14.md` / `SESSION_25.md`). Its target is fully-visible
-   triangle submission; preserve true scale, spatial bounds, role colours, exact planes, and per-face insets.
+2. **Protect the v0.3.42 renderer baseline restored in v0.3.49.** Spatial chunks and greedy merging were
+   deliberately rejected; read `SESSION_26.md` before proposing more renderer work.
+3. **Field-soak v0.3.50–v0.3.52.** Cover persistent visibility across reconnect/restart, per-creator
+   cumulative budgets during multiplayer mutation/undo/delete, and the off-state Chalking Kit lockout.
 4. **Keep the broader multiplayer matrix as future regression coverage.** The v0.2.35 public/private pass
    succeeded and is not a release blocker.
 5. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill (fill is currently inert on Free-Shapes);
@@ -495,7 +497,7 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   `GuideShapeType` / `ShapeConstraint` / projection enums, which are pinned append-only).
 - **`UndoManager` folder ≠ namespace:** it lives in `src/Systems/` but is `Layout.Systems.UndoManager` —
   the one file where folder and namespace diverge.
-- **The Session docs are historical.** `SESSION_9`…`SESSION_25.md` are point-in-time narratives (SESSION_12
+- **The Session docs are historical.** `SESSION_9`…`SESSION_26.md` are point-in-time narratives (SESSION_12
   covers F4 through v0.1.45; SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 mesh handoff;
   SESSION_15 is the v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc;
   SESSION_17 is the v0.2.22–v0.2.23 seven-item backlog; SESSION_18/19 cover the Tapered Cylinder and dust;
@@ -504,8 +506,9 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   attribution, sculpting-parity, and projection-transition arc; SESSION_23 covers v0.3.22–v0.3.34
   moderation, claims, bounded immense validation, organic materialization, and render controls; SESSION_24
   covers v0.3.35–v0.3.40 materialization completion, clean-shell transitions, timing, polygonal scan
-  optimization, and intrinsic HUD dimensions; SESSION_25 covers v0.3.41–v0.3.43 whole-guide frustum culling,
-  render instrumentation, and measured 32-block spatial settled meshes). For
+  optimization, and intrinsic HUD dimensions; SESSION_25 covers the v0.3.41–v0.3.43 spatial experiment;
+  SESSION_26 records v0.3.44–v0.3.52, the renderer rollback, persistent visibility, cumulative creator caps,
+  and the off-state tool lockout). For
   current state, trust `HANDOFF.md` / `ARCHITECTURE.md` / the code, not a mid-session checklist inside a
   session record.
 - **`dev/BUILD_INSTRUCTIONS.txt`** is the original v0.1.0 first-build doc; its build/run steps are still

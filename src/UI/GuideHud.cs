@@ -80,6 +80,7 @@ namespace Layout.UI
         private long _tickId;
         private bool _subscribed;
         private bool _comatoseDraft;
+        private bool _renderingEnabled = true;
 
         // The HUD's copy of the Current Shape chip (0.1.16): which "-current" glyph is composed right
         // now, or null when hidden (non-Create modes). A change recomposes the HUD (rare — shape picks).
@@ -214,6 +215,14 @@ namespace Layout.UI
         {
             if (_comatoseDraft == comatose) return;
             _comatoseDraft = comatose;
+            if (SingleComposer != null) SetupHud();
+            RefreshText();
+        }
+
+        public void SetRenderingEnabled(bool enabled)
+        {
+            if (_renderingEnabled == enabled) return;
+            _renderingEnabled = enabled;
             if (SingleComposer != null) SetupHud();
             RefreshText();
         }
@@ -359,6 +368,17 @@ namespace Layout.UI
         private void RefreshText()
         {
             if (SingleComposer == null) return;
+
+            if (!_renderingEnabled)
+            {
+                SetText("status", "Layout is Off");
+                SetText("scale", "—");
+                SetText("settings", "Guide rendering is off.");
+                ClearContextRows();
+                SetText("ctx1", "Use /layout on");
+                SetText("ctx2", "to turn it back on.");
+                return;
+            }
 
             bool wantsClientOnlyIndicator = ShouldShowPrivateIndicator();
             HudVisualState wantState = CurrentVisualState();

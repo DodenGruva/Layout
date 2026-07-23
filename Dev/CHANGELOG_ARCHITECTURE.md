@@ -1,12 +1,30 @@
 # Layout — Architecture Changelog (document-version history)
 
 > **Split out of `ARCHITECTURE.md` to keep the orientation read cheap.** These are the per-revision deltas
-> for the architecture document itself, v2.5 → v3.12. **Nothing here is unique:** each delta is already folded
+> for the architecture document itself, v2.5 → v3.13. **Nothing here is unique:** each delta is already folded
 > in place into `ARCHITECTURE.md`'s body (Settled Decisions Register, file tree, module map, persistence,
 > edge cases), and each has a fuller narrative in its `SESSION_*.md` record. Kept as the audit trail — read
 > it when you need to know *when* something changed, not *what* the current state is.
 
 ---
+
+## Changelog — v3.12 → v3.13 (renderer rollback + persistent visibility + creator budgets, v0.3.44 → v0.3.52; full record in `SESSION_26.md`)
+
+- **Meshing experiments rejected (v0.3.44–v0.3.48):** same-colour greedy merging and follow-up
+  curved-surface/depth/materialization variants reduced submission cost but introduced striping, splotchy
+  view dependence, abrupt far-side disappearance, blurry/bright voxels, world-depth defects, delayed clean
+  swaps, and worse real-play FPS.
+- **Renderer baseline restored (v0.3.49):** `GuideRenderer` and `GuideMeshBuilder` returned to archived
+  v0.3.42 behavior. Exposed faces, bounded organic materialization, whole-guide distance/frustum rejection,
+  and render statistics remain; spatial final regions and greedy merging do not.
+- **Persistent personal visibility (v0.3.50):** public `/layout off|on` and client-only `.layout off|on`
+  immediately save `guideRenderingEnabled` in `layout-client.json` and restore it across reconnect/restart.
+- **Capacity defaults and attribution (v0.3.50):** the per-guide default is 500,000; the new cumulative
+  original-creator cap is 1,000,000 across currently existing public guides; the world-total default is
+  unlimited. A narrow config migration changes only exact historical generated defaults.
+- **Off-state communication and safety (v0.3.51–v0.3.52):** a saved off-state produces a login reminder.
+  Chalking Kit guide actions/settings/undo/redo are blocked while hidden, attempted use flashes the recovery
+  instruction, the HUD shows the same state, and disabling cancels transient draft/grab work.
 
 ## Changelog — v3.11 → v3.12 (measured guide culling + spatial settled meshes, v0.3.41 → v0.3.43; full record in `SESSION_25.md`)
 
@@ -22,9 +40,9 @@
   remain omitted across region boundaries. Mathematical floor division handles negative world coordinates.
 - **Reload behavior:** immense saved Shells show a cheap scaffold and enter the existing below-normal
   materialization lane instead of synchronously rebuilding one monolithic mesh.
-- **Measured result:** the human-approved partial-view stress case fell from 128 drawn batches / 32.6M
-  triangles / 7.5 ms to 33 / 7.5M / 4.4 ms, with 110 regional batches culled. The remaining optional step is
-  same-colour/orientation greedy merging for fully-visible triangle cost.
+- **Measured result at this checkpoint:** the partial-view stress case fell from 128 drawn batches / 32.6M
+  triangles / 7.5 ms to 33 / 7.5M / 4.4 ms, with 110 regional batches culled. Broader playtesting later
+  rejected the spatial renderer; see the v3.13 entry and `SESSION_26.md`.
 
 ## Changelog — v3.10 → v3.11 (materialization completion + intrinsic HUD dimensions, v0.3.35 → v0.3.40; full record in `SESSION_24.md`)
 

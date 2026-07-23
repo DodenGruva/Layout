@@ -65,8 +65,8 @@ namespace Layout.Network
         private readonly Dictionary<Guid, PendingGrabCancel> _pendingGrabCancels =
             new Dictionary<Guid, PendingGrabCancel>();
 
-        private int _perGuideVoxelCap = 25000;
-        private int _totalVoxelCap = 250000;
+        private int _perGuideVoxelCap = 500000;
+        private int _totalVoxelCap = 0;
 
         /// <summary>The authority selected for the current world.</summary>
         public ClientAuthorityMode AuthorityMode { get; private set; } = ClientAuthorityMode.Detecting;

@@ -1,7 +1,7 @@
-# Layout — Architecture Document (v3.12)
+# Layout — Architecture Document (v3.13)
 
-**Supersedes v3.11 — measured whole-guide and spatial settled-mesh culling
-(v0.3.41–v0.3.43).** v2.5 consolidated five
+**Supersedes v3.12 — experimental meshing rollback, persistent personal visibility, cumulative creator
+budgets, and off-state tool gating (v0.3.44–v0.3.52).** v2.5 consolidated five
 revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
 catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
 surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
@@ -38,7 +38,7 @@ makes tapered-rim flare opt-in. **v3.8 adds motion-sensitive structural previews
 precision, generation-safe background refinement and batched materialization, cached placed-guide metadata,
 retained-mesh cancel quarantine, canonical/persistent Shell↔Wireframe form, size-weighted placement sound,
 and surface-proportional oversized Cylinder/Cone/Box fallback generation.** The register, file tree, module
-map, persistence, and edge cases below are updated in place to the v0.3.43 / DataVersion 12 / protocol-16 /
+map, persistence, and edge cases below are updated in place to the v0.3.52 / DataVersion 12 / protocol-16 /
 77-file state; the per-revision deltas live
 in **`CHANGELOG_ARCHITECTURE.md`** (indexed below).
 
@@ -62,18 +62,23 @@ scan rejection; and shape-intrinsic HUD dimensions.**
 statistics; and 32-block independently culled clean final meshes with cross-region occupancy and
 reload-time background materialization.**
 
-**Where the project stands:** Layout **v0.3.43** is built, packaged, documented, and pushed on `main`.
+**v3.13 folds in Session 26 (v0.3.44–v0.3.52): the rejected greedy/depth experiments; exact restoration of
+the v0.3.42 renderer after spatial seams, fidelity defects, and worse real-play FPS; persistent personal
+render state; a 500,000 per-guide default and 1,000,000 cumulative original-creator cap; a narrowly migrated
+unlimited world default; and login/tool/HUD guidance while rendering is off.**
+
+**Where the project stands:** Layout **v0.3.52** is built, packaged, documented, and playtest-approved.
 All seven modules, the complete 2D/3D catalog, normal public multiplayer, vanilla-server local
 fallback, mixed public/private operation, and the full F5 chalk system run against **VS 1.22.x** / .NET 10.
 The catalog is **15 shape types / 21 picker tiles**, **DataVersion 12**, **protocol 16**, and **77 source
-files**. F4 and F5 are feature-complete. The large-guide mesh Stage A remains; v0.3’s immense path now keeps
+files**. F4 and F5 are feature-complete. The large-guide mesh Stage A remains; v0.3’s immense path keeps
 motion, final placement/sculpt, and public validation off the main-frame/tick cliffs through bounded client
-   and server pipelines. Filled 3D interiors are retired; volumes persist as a hollow Shell or canonical
-   structural Wireframe. Immense clean Shell meshes use independently culled 32-block regions.
+and server pipelines. Filled 3D interiors are retired; volumes persist as a hollow Shell or canonical
+structural Wireframe. Whole guides outside view distance/frustum are culled; spatial final meshes and greedy
+face merging are not part of the accepted renderer.
 The Session-16 backlog is fully delivered. Public/private multiplayer passed the v0.2.35 release test,
 fired-jug/raw-jug crafting is confirmed, and B-S9-1 closed with a human-approved v0.2.36 playtest. Remaining:
-ordinary v0.3.43 field soak and optional same-colour greedy merging only if fully-visible triangle
-submission—not calculation/validation or off-screen geometry—proves insufficient.
+field soak for v0.3.50–v0.3.52 visibility persistence, creator budgets, and off-state tool gating.
 Two items carry
 verification debt — the chalk ceiling has not been tested against xskills itself, and 1.22.0 support is
 declared but untested. See `TODO.md` and `SESSION_17.md`.
@@ -114,13 +119,14 @@ declared but untested. See `TODO.md` and `SESSION_17.md`.
 
 ## Document changelog — index
 
-Per-revision deltas for THIS document (v2.5 → v3.12) now live in **`CHANGELOG_ARCHITECTURE.md`**. They are
+Per-revision deltas for THIS document (v2.5 → v3.13) now live in **`CHANGELOG_ARCHITECTURE.md`**. They are
 not repeated here: every delta is already folded in place into the register / file tree / module map /
 persistence / edge cases below, and each has a fuller narrative in its session record. Use this table to find
 *when* something changed; read the body below for *what is true now*.
 
 | Doc rev | Mod versions | Theme | Session record |
 |---|---|---|---|
+| v3.13 | v0.3.44 → v0.3.52 | Meshing rollback; persistent visibility; cumulative creator cap; off-state tool lockout | `SESSION_26.md` |
 | v3.12 | v0.3.41 → v0.3.43 | Whole-guide frustum culling; render stats; 32-block spatial settled meshes | `SESSION_25.md` |
 | v3.11 | v0.3.35 → v0.3.40 | Materialization completion; clean-shell transitions; intrinsic HUD dimensions | `SESSION_24.md` |
 | v3.10 | v0.3.22 → v0.3.34 | Moderation/claims; bounded immense validation; organic materialization; render controls | `SESSION_23.md` |
@@ -378,17 +384,17 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   blocks arrived sank behind the face on reload (B-S10-1).
 - **Settled guides always render at their true scale**; `ChooseRenderScale` coarsening (8,000-voxel cap) is
   a **draft-ghost-only** courtesy — it once leaked into placed guides and permanently degraded them.
-- **Large-guide meshing — exposed faces + spatial culling shipped (v0.2.14–v0.3.43):** `GuideMeshBuilder`'s
+- **Large-guide meshing — exposed faces + whole-guide culling (v0.2.14–v0.3.42; restored v0.3.49):**
+  `GuideMeshBuilder`'s
   Volumetric cube path now does **exposed-face meshing** — it builds a presence set of rendered cells,
   pre-counts the faces with no neighbour, allocates exactly, and emits ONLY those faces (per-voxel role
   colours preserved). Interior/shared faces vanish, so a ~100-block hollow Sphere draws only its outer skin
-  (and, with filled volumes retired in v0.2.17, worst-case counts dropped further). `GuideRenderer` first
+  (and, with filled volumes retired in v0.2.17, worst-case counts dropped further). `GuideRenderer`
   conservatively rejects whole guides outside live `viewDistance` or Vintage Story's current frustum.
-  Immense clean final meshes then use fixed 32-block world regions with independent conservative bounds;
-  every region receives the complete guide occupancy set so shared faces across a boundary remain omitted.
-  Small guides and organic growth retain their prior paths. The measured partial-view stress case dropped
-  from 128 to 33 drawn batches and 32.6M to 7.5M submitted triangles. **The remaining optional mesh seam is
-  same-colour/orientation greedy face merging inside a region** for the fully-visible case.
+  v0.3.43's 32-block final regions measured well from one partial view but produced visible curved-guide
+  seams. v0.3.44–v0.3.48 greedy/depth experiments then introduced bands, unstable far-side visibility,
+  blur/brightness/depth defects, slow clean swaps, and worse real-play FPS. v0.3.49 restored the exact
+  v0.3.42 renderer; spatial subdivision and greedy merging are not queued architecture.
   Surface tile/slab paths stay on the legacy whole-box builder; preserve the verified draw recipe. Full
   invariants + the mesh-count harness are in `SESSION_14.md` §6–§7 and `SESSION_16.md` §2.
 - **Leaving Surface bakes the flattened positions into the control points** (undoable, full-state
@@ -402,8 +408,11 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   shifted violet-ward away from green) · white grabbed · hidden guides = anchors only at low alpha. All six
   type opacities are client-configurable.
 - **Personal render control (protocol 16):** `/layout off` and `/layout on` (with `.layout off|on` for the
-  local command path) disable/enable the entire Layout render pass for that player. Guide state, authority,
-  persistence, and other players are unaffected; turning it back on resumes from retained state.
+  local command path) disable/enable the entire Layout render pass for that player. The preference is saved
+  immediately in `layout-client.json` and restored across reconnects/restarts. Guide state, authority, and
+  other players are unaffected. A saved off-state produces a login reminder; Chalking Kit guide actions,
+  settings, undo, and redo are blocked with matching HUD/warning guidance, and disabling cancels transient
+  draft/grab state so invisible work cannot continue.
 
 ### Multiplayer, locks, undo
 - **World-shared with server policy, not private ownership.** Public guides remain collaborative, while
@@ -438,11 +447,13 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   contract: `PLAN_CLIENT_ONLY.md`.
 
 ### Configuration, assets, GUI
-- **Server `layout.json`:** perGuideVoxelCap 25,000 · totalVoxelCap 250,000 · maxGuidesPerPlayer 0 ·
+- **Server `layout.json`:** configVersion 1 · perGuideVoxelCap 500,000 · **perPlayerTotalVoxelCap 1,000,000**
+  (current public guides attributed to one original creator) · totalVoxelCap 0 · maxGuidesPerPlayer 0 ·
   maxGuidesWorldWide 0 · undoHistoryDepth 50 · requiredPrivilege "" · adminCanOverrideLocks true ·
   **allowClientOnlyMode false** · **enableChalkDurability true** (F5)
   (0/negative = unlimited; **construction-time injection — edits need a server restart**). Caps sync to
-  clients on join so the pre-check matches enforcement.
+  clients on join so the pre-check matches enforcement. Existing exact historical generated defaults migrate
+  to 500,000 per guide and an unlimited world total; other administrator-selected values are preserved.
   **The two chalk refill-channel flags left this file in v0.2.22** — they are player preferences now, in
   `layout-client.json`; stale keys in an existing `layout.json` are ignored. **The running total is a `long`** (v0.1.27) so a
   caps-off server can't overflow it negative. A **hard voxel ceiling** (`GuideManager.HardVoxelCeiling`,
@@ -1073,8 +1084,8 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
 
 ---
 
-This v3.12 document is the authoritative architecture, consolidated to current state: **Layout v0.3.43 built,
-packaged, documented, and pushed on `main`**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
+This v3.13 document is the authoritative architecture, consolidated to current state: **Layout v0.3.52 built,
+packaged, documented, and playtest-approved**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
 (+ right/equilateral/isosceles), rectangles (+ square), polygons, and Free-Shapes — plus the **3D volume
 family** (spheres, domes, cylinders, tapered cylinders, straight/tapered polygonal prisms, cones, boxes)
 place, preview, reshape, fill/form, lock/unlock, divide, and
@@ -1085,4 +1096,5 @@ punch-list live in `PROJECT_STATUS.md` and `TODO.md`; the current-state brief fo
 history in `SESSION_12.md`, the interaction checkpoint in `SESSION_13.md`, the mesh resume plan in
 `SESSION_14.md`, the adaptive large-guide record in `SESSION_21.md`, the HUD/attribution/sculpting record in
 `SESSION_22.md`, the moderation/claims/immense-guide record in `SESSION_23.md`, the materialization-completion/
-HUD-dimension record in `SESSION_24.md`, and the current measured spatial-culling record in `SESSION_25.md`.
+HUD-dimension record in `SESSION_24.md`, the superseded spatial experiment in `SESSION_25.md`, and the
+current renderer/policy record in `SESSION_26.md`.

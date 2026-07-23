@@ -24,6 +24,13 @@ namespace Layout.Config
         public string ForceClientOnlyNote { get; set; } =
             "Only applies on Layout-enabled servers when allowClientOnlyMode is enabled by the server owner.";
 
+        /// <summary>
+        /// Whether Layout guides are rendered for this client. Updated immediately by /layout on|off and
+        /// retained across disconnects, world changes, and game restarts.
+        /// </summary>
+        [JsonProperty("guideRenderingEnabled")]
+        public bool GuideRenderingEnabled { get; set; } = true;
+
         // ------------------------------------------------------------------------------------------
         //  Chalk refill channels (v0.2.22 — moved here from the SERVER config, human-directed). These are
         //  player CONVENIENCE toggles, not server policy: refilling always costs the same powder wherever

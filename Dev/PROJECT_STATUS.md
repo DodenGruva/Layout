@@ -1,6 +1,6 @@
 # Layout — Project Status & Handoff
 
-**Checkpoint: Layout v0.3.43 built, packaged, documented, and pushed on `main`** (the `ClientOnlyFallback` branch merged via
+**Checkpoint: Layout v0.3.52 built, packaged, documented, and playtest-approved** (the `ClientOnlyFallback` branch merged via
 PR #1). **F4** is
 implemented and playtested: automatic client-only authority on servers without Layout; opt-in private
 overlays on Layout servers; per-world/per-UID client persistence; placement/reshape/settings/undo parity;
@@ -13,17 +13,19 @@ channels are **client-preference** opt-in as of v0.2.22), private placements cha
 ground storage, whole-guide chalk-puff/snap feedback. **The large-guide mesh pass Stage A shipped, and the
 v0.3 immense-guide path now uses motion wireframes, selected-scale cursor precision, cancellable progressive
 generation, retained authority handoffs, organic streamed materialization, and frame-aware mesh retirement.**
-Public immense-guide validation runs in one bounded low-priority server lane; whole-guide frustum rejection,
-32-block independently culled final meshes, and `/layout off|on` prevent unwanted draws. Filled 3D interiors are
+Public immense-guide validation runs in one bounded low-priority server lane; whole-guide frustum rejection
+and persistent `/layout off|on` prevent unwanted draws. The off-state blocks Chalking Kit guide actions and
+explains `/layout on` in chat, warnings, and the HUD. Filled 3D interiors are
 retired; volumes may persist as Shell or structural Wireframe. Targets **all of VS
 1.22.x**; the repo is publication-clean (no personal paths/usernames tracked).
 **DataVersion 12; protocol 16; 77 source files; 15 shape types / 21 picker tiles.** Release zips:
-`..\LayoutZips\` (through `Layout0.3.43.zip`). **Top tasks:** field-soak v0.3.43's approved culling path;
-retain the two verification debts (32-chalk ceiling vs xskills, and VS 1.22.0/1.22.1 support); consider
-same-colour greedy face merging only for measured fully-visible triangle cost. **B-S9-1 closed in v0.2.36.** Standing rule: ship
-a zip per code iteration; update docs / commit ONLY on the human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_25.md`**,
+`..\LayoutZips\` (through `Layout0.3.52.zip`). **Top tasks:** field-soak v0.3.50–v0.3.52 persistence,
+cumulative creator budgets, and off-state tool gating; retain the two verification debts (32-chalk ceiling
+vs xskills, and VS 1.22.0/1.22.1 support). Spatial meshes and greedy merging were rejected and rolled back.
+**B-S9-1 closed in v0.2.36.** Standing rule: ship a zip per code iteration; update docs / commit ONLY on the
+human's say-so. Detail lives in **`SESSION_12.md`–`SESSION_26.md`**,
 `PLAN_CLIENT_ONLY.md`, `PLAN_CHALKING_KIT.md`, and `TODO.md`; the authoritative plan is
-**`ARCHITECTURE.md`** (v3.12).
+**`ARCHITECTURE.md`** (v3.13).
 
 ---
 
@@ -31,7 +33,7 @@ a zip per code iteration; update docs / commit ONLY on the human's say-so. Detai
 
 The doc set (now a Claude Code repo):
 
-1. **`ARCHITECTURE.md`** — the authoritative plan (v3.12); Settled Decisions Register updated through v0.3.43.
+1. **`ARCHITECTURE.md`** — the authoritative plan (v3.13); Settled Decisions Register updated through v0.3.52.
 2. **The code** — `src/` (**77 files**: 74 through Session 22, plus Session 23’s
    `ProgressiveVoxelGeneration`, `GuideClaimAccessValidator`, and `LayoutAdminPolicyManager`; historical
    breakdown: 43 at Session-8 end + 6 Session-9 — LineShape, TriangleShape,
@@ -45,7 +47,7 @@ The doc set (now a Claude Code repo):
    Session-20 — PolygonalPrismShape),
    `assets/layout/`, `modinfo.json`, `modicon.png`, `Layout.csproj`, `BUILD_INSTRUCTIONS.txt`.
 3. **`TODO.md`** — the live punch-list (renamed from `OUTSTANDING_ITEMS.md`).
-4. **`SESSION_9.md`** … **`SESSION_25.md`** — standalone records (SESSION_12 runs through v0.1.45;
+4. **`SESSION_9.md`** … **`SESSION_26.md`** — standalone records (SESSION_12 runs through v0.1.45;
    SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 shell/mesh handoff; SESSION_15 is the
    v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc; SESSION_17 is the
    v0.2.22–v0.2.23 seven-item backlog; SESSION_18 is the v0.2.24–v0.2.28 Tapered Cylinder arc;
@@ -54,7 +56,8 @@ The doc set (now a Claude Code repo):
    persistent structural-wireframe arc; SESSION_22 is the v0.3.9–v0.3.21 HUD/attribution/sculpting arc;
    SESSION_23 is the v0.3.22–v0.3.34 moderation/claims/immense-guide/materialization arc; SESSION_24 is the
    v0.3.35–v0.3.40 materialization-completion, clean-shell-transition, and HUD-dimension arc; SESSION_25 is
-   the v0.3.41–v0.3.43 measured frustum/spatial-culling arc).
+   the v0.3.41–v0.3.43 spatial experiment; SESSION_26 records v0.3.44–v0.3.52, the renderer rollback,
+   persistent visibility, cumulative creator cap, and off-state Chalking Kit lockout).
 5. **`HANDOFF.md`** (repo root) — the consolidated current-state brief for external AI analysis
    (scope / status / direction / performance characteristics).
 6. **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix.
@@ -252,12 +255,19 @@ The doc set (now a Claude Code repo):
   operation latch set, polygonal prism scans reject safe non-wall regions early, and round/polygonal volume
   HUD dimensions now use intrinsic width/height rather than a world-AABB diagonal. DataVersion remains 12;
   protocol remains 16.
-- **Session 25 — measured guide culling and spatial settled meshes (v0.3.41–v0.3.43): DELIVERED and playtested.**
+- **Session 25 — measured guide culling and spatial settled meshes (v0.3.41–v0.3.43): HISTORICAL; renderer conclusion superseded.**
   Whole-guide camera-frustum rejection, `.layout renderstats`, and 32-block independently culled clean final
   meshes shipped without persistence or protocol changes. Cross-region neighbour checks retain the complete
   guide occupancy, and immense saved Shells reload through a background scaffold/materialization path.
   Human-measured partial view fell from 128 to 33 drawn batches, 32.6M to 7.5M triangles, and 7.5 to 4.4 ms,
   with 110 regional batches culled. DataVersion remains 12; protocol remains 16.
+- **Session 26 — meshing experiments, rollback, persistence, and budgets (v0.3.44–v0.3.52): DELIVERED and playtested.**
+  Greedy/depth experiments were rejected after seams, view-dependent fidelity problems, delayed clean swaps,
+  and an approximately 140→80 FPS real-play regression. v0.3.49 restored the v0.3.42 renderer. v0.3.50
+  persists personal rendering state, raises the per-guide default to 500,000, adds a 1,000,000 cumulative
+  original-creator cap, and makes the default world total unlimited with narrow config migration. v0.3.51
+  adds the saved-off login reminder; v0.3.52 blocks Chalking Kit guide actions/settings/undo/redo while off
+  and explains recovery in warnings and the HUD.
 - **IN REAL PLAY:** save-compatibility matters — DataVersion **12** saves (v12: attribution; v11: `IsWireframe`; v10: cached
   display/count/dimensions; v9: polygon
   `FlatSideAligned`; v8: passive `IsLockMarker`; v7:
@@ -277,7 +287,7 @@ The doc set (now a Claude Code repo):
 | 2 | Data model | Low | COMPLETE (DataVersion **12**: attribution + persistent form + cached metadata; v9 polygon orientation; earlier passive markers/Sides/snapshot/IsClosed) |
 | 3 | Systems + undo | High | COMPLETE (+ public/private `SetWireframe`; canonical form counts; adaptive draft state; cancel quarantine) |
 | 4 | Networking | **Max** | COMPLETE (protocol **16**; policy sync, async placement rejection, and personal rendering state appended after attribution/who) |
-| 5 | Rendering | High | FUNCTIONAL: exposed faces + adaptive wireframes + retained final-click/sculpt handoffs + streamed exact organic growth + whole-guide frustum rejection + 32-block spatial final-mesh culling; greedy same-colour merging remains optional for fully-visible draw cost |
+| 5 | Rendering | High | FUNCTIONAL: exposed faces + adaptive wireframes + retained final-click/sculpt handoffs + streamed exact organic growth + whole-guide frustum rejection; v0.3.43 spatial meshes and later greedy experiments were reverted in v0.3.49 |
 | 6 | UI | Medium | COMPLETE (21-tile catalog, favorites fold-out, stage-aware help, fixed action HUD, contextual shape/setting display, calculating dots) |
 | 7 | Integration | High | COMPLETE (+ CTRL/SHIFT stage modifiers, 2/3/4-click routing; + F4 authority, private persistence/commands, mixed-mode HUD) |
 
@@ -340,10 +350,10 @@ config. (The build-hiccup note about the packet class once being omitted is now 
 
 ## 5. Tuning backlog
 
-Full annotated list in `TODO.md`. Headlines: v0.3.43 field soak; filled 2D recount per drag;
-division-mark recolor; optional same-colour greedy merging if fully-visible draw cost remains; carried Session-7
-cosmetic items. The cancellable streamed immense pipeline and selected-scale Shell/Wireframe semantics are
-delivered.
+Full annotated list in `TODO.md`. Headlines: v0.3.50–v0.3.52 multiplayer/persistence field soak; the
+xskills and oldest-1.22.x verification debts; filled 2D recount per drag; division-mark recolor; carried
+Session-7 cosmetic items. The cancellable streamed immense pipeline and selected-scale Shell/Wireframe
+semantics are delivered.
 
 ---
 
@@ -361,9 +371,9 @@ the scale-icon/tile-proportion calls; Session-9 adds the regime split, triangle'
 no-break-gesture for Right/Isosceles/Square, rectangle corners as markers, magenta division color, the
 per-keystroke divisions field; Session-8's list still stands. Full list + rationale in `TODO.md`.
 
-**Open — real-play agenda:** field-soak v0.3.43 reload scaffolds, materialization, repeated sculpt resizing,
-varied partial-view angles, and `/layout off|on`. Whole-guide and 32-block regional culling are playtest
-approved. Revisit greedy merging only from measured fully-visible triangle cost. The
+**Open — real-play agenda:** field-soak saved `/layout off|on` state across reconnect/restart, cumulative
+creator budgets during multiplayer mutation/undo/delete, and the off-state Chalking Kit lockout. Preserve the
+v0.3.42 renderer baseline restored in v0.3.49; spatial/greedy work is not a queued follow-up. The
 v0.2.35 public/private multiplayer release check passed, so broader regression coverage can follow field
 reports rather than block release.
 
@@ -371,15 +381,16 @@ reports rather than block release.
 
 ## 7. Next session — start here
 
-**The current checkpoint is v0.3.43 built, packaged, documented, and pushed on `main`.**
-Read `SESSION_25.md` first for current settled rendering, then `SESSION_24.md`, `SESSION_23.md`, `SESSION_21.md`, and
+**The current checkpoint is v0.3.52 built, packaged, documented, and playtest-approved.**
+Read `SESSION_26.md` first for the current renderer/policy state, then `SESSION_25.md`, `SESSION_24.md`,
+`SESSION_23.md`, `SESSION_21.md`, and
 `SESSION_14.md` for
 the historical adaptive path and optional mesh plan.
 
-1. **Field-soak v0.3.43.** Exercise immense reload scaffolds, clean swaps, repeated large→small sculpt
-   releases, partial views from several angles, and `/layout off|on` in public/private/fallback modes.
-2. **Performance only from evidence.** Spatial culling is delivered and measured. If fully-visible triangle
-   submission remains costly, prototype same-colour greedy merging under `SESSION_25.md`'s fidelity rules.
+1. **Field-soak v0.3.50–v0.3.52.** Exercise saved rendering state in public/private/fallback modes,
+   cumulative creator caps through create/edit/delete/undo, and every blocked Chalking Kit input while off.
+2. **Performance only from new evidence.** The v0.3.43–v0.3.48 spatial/greedy path was rejected. Preserve
+   the v0.3.42 renderer's appearance and compare real FPS, not only mesh counters, in any future proposal.
 3. **Preserve the settled invariants.** Input and server ticks remain responsive; final-click scaffolds do
    not disappear; organic batches preserve exact occupancy; small guides stay immediate; persistent wires
    and settled shells remain true selected scale.

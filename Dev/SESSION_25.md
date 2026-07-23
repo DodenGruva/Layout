@@ -1,5 +1,10 @@
 # SESSION 25 — v0.3.41–v0.3.43: measured guide culling and spatial settled meshes
 
+> **Superseded renderer conclusion (2026-07-23):** the measurements below remain a valid record of the
+> v0.3.43 experiment, but broader playtesting exposed distracting spatial seams and later greedy-meshing
+> regressions. v0.3.49 restored the v0.3.42 renderer, which is the current accepted baseline. Read
+> `SESSION_26.md` before using this session to guide new rendering work.
+
 **Checkpoint:** Layout v0.3.43 is built, packaged, playtested, and human-approved. DataVersion remains
 **12**, protocol remains **16**, and the source tree remains **77 C# files**. Package:
 `..\LayoutZips\Layout0.3.43.zip`.

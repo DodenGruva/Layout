@@ -188,7 +188,8 @@ namespace Layout.Systems
     /// (<see cref="_totalVoxels"/>) plus a per-guide cache keep cap checks O(1).
     ///
     /// VALIDATION + REVERT. Every geometry-changing mutation is applied, then the result is counted; if it
-    /// would breach the per-guide or total cap the change is rolled back to the pre-mutation snapshot and the
+    /// would breach the per-guide, creator-total, or world-total cap, the change is rolled back to the
+    /// pre-mutation snapshot and the
     /// caller gets <see cref="GuideOpStatus.RejectedOverCap"/>. Rescale and large drags are the realistic
     /// cap triggers (a finer scale multiplies voxel count).
     ///
@@ -220,6 +221,7 @@ namespace Layout.Systems
         private readonly ILogger _logger;
         private readonly int _perGuideVoxelCap;
         private readonly int _totalVoxelCap;
+        private readonly int _perPlayerTotalVoxelCap;
         private readonly int _maxGuidesPerPlayer;
         private readonly int _maxGuidesWorldWide;
         private readonly System.Func<string, int> _playerGuideLimitResolver;
@@ -267,6 +269,12 @@ namespace Layout.Systems
         /// </summary>
         public int TotalVoxelCap => _totalVoxelCap;
 
+        /// <summary>
+        /// Max voxels attributed to one guide creator across all of their currently existing guides.
+        /// 0 = unlimited.
+        /// </summary>
+        public int PerPlayerTotalVoxelCap => _perPlayerTotalVoxelCap;
+
         /// <summary>Max guides one player may have created at once; 0 = unlimited. Server config (Module 7).</summary>
         public int MaxGuidesPerPlayer => _maxGuidesPerPlayer;
 
@@ -279,8 +287,8 @@ namespace Layout.Systems
         /// <summary>
         /// Wires up persistence (load on save-game load, write on world-save) and stores the caps, which
         /// normally come from server config (<c>layout.json</c>). UNLIMITED SEMANTICS: a cap of 0 or any
-        /// negative value means "unlimited" — that check is simply skipped. This applies to all four caps
-        /// (both voxel caps and both guide-count caps); values are normalised to 0 here so "unlimited" has
+        /// negative value means "unlimited" — that check is simply skipped. This applies to all five caps
+        /// (three voxel caps and both guide-count caps); values are normalised to 0 here so "unlimited" has
         /// one representation. Existing guides always LOAD regardless of caps (caps gate new mutations, never
         /// eject persisted state a server admin lowered a cap underneath).
         /// </summary>
@@ -288,8 +296,9 @@ namespace Layout.Systems
             IGuidePersistence persistence,
             IGuideBlockProbe blockProbe,
             ILogger logger,
-            int perGuideVoxelCap = 25000,
-            int totalVoxelCap = 250000,
+            int perGuideVoxelCap = 500000,
+            int totalVoxelCap = 0,
+            int perPlayerTotalVoxelCap = 1000000,
             int maxGuidesPerPlayer = 0,
             int maxGuidesWorldWide = 0,
             System.Func<string, int> playerGuideLimitResolver = null)
@@ -299,6 +308,8 @@ namespace Layout.Systems
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _perGuideVoxelCap = perGuideVoxelCap > 0 ? perGuideVoxelCap : 0;
             _totalVoxelCap = totalVoxelCap > 0 ? totalVoxelCap : 0;
+            _perPlayerTotalVoxelCap =
+                perPlayerTotalVoxelCap > 0 ? perPlayerTotalVoxelCap : 0;
             _maxGuidesPerPlayer = maxGuidesPerPlayer > 0 ? maxGuidesPerPlayer : 0;
             _maxGuidesWorldWide = maxGuidesWorldWide > 0 ? maxGuidesWorldWide : 0;
             _playerGuideLimitResolver = playerGuideLimitResolver;
@@ -433,12 +444,15 @@ namespace Layout.Systems
             data.LastSculptorUid = creatorUid;
             data.LastSculptorName = data.CreatorName;
 
-            int count = CountForCaps(data.Id, shape, data.VoxelScale, data.IsFilled, data.IsWireframe);
+            int count = CountForCaps(
+                data.Id, shape, data.VoxelScale, data.IsFilled, data.IsWireframe, creatorUid);
             if (count > HardVoxelCeiling)                        // scan-guard sentinel — too big to render
                 return GuideOperationResult.OverCap(data, count, HardVoxelCeiling);
             int perGuideCap = EffectivePerGuideVoxelCap;
             if (perGuideCap > 0 && count > perGuideCap)
                 return GuideOperationResult.OverCap(data, count, perGuideCap);
+            if (WouldExceedPlayerTotal(data.CreatorUid, data.Id, count))
+                return GuideOperationResult.OverCap(data, count, _perPlayerTotalVoxelCap);
             if (_totalVoxelCap > 0 && _totalVoxels + count > _totalVoxelCap)
                 return GuideOperationResult.OverCap(data, count, _totalVoxelCap);
 
@@ -546,6 +560,9 @@ namespace Layout.Systems
             int perGuideCap = EffectivePerGuideVoxelCap;
             if (perGuideCap > 0 && exactCount > perGuideCap)
                 return GuideOperationResult.OverCap(data, exactCount, perGuideCap);
+            if (WouldExceedPlayerTotal(data.CreatorUid, data.Id, exactCount))
+                return GuideOperationResult.OverCap(
+                    data, exactCount, _perPlayerTotalVoxelCap);
             if (_totalVoxelCap > 0 && _totalVoxels + exactCount > _totalVoxelCap)
                 return GuideOperationResult.OverCap(data, exactCount, _totalVoxelCap);
 
@@ -625,15 +642,20 @@ namespace Layout.Systems
             if (playerGuideLimit > 0 && CountGuidesBy(live.CreatorUid) >= playerGuideLimit)
                 return GuideOperationResult.OverGuideCount(live, CountGuidesBy(live.CreatorUid), playerGuideLimit);
 
-            int count = CountForCaps(live.Id, shape, live.VoxelScale, live.IsFilled, live.IsWireframe);
+            int count = CountForCaps(
+                live.Id, shape, live.VoxelScale, live.IsFilled, live.IsWireframe,
+                live.CreatorUid);
             // Restore is also the import seam used by client-only "push". Keep the absolute rendering
             // safeguard identical to normal creation even when an administrator disables configurable
-            // per-guide and world caps; otherwise a client-supplied snapshot could bypass the ceiling.
+            // per-guide, creator-total, and world caps; otherwise a client-supplied snapshot could bypass
+            // the ceiling.
             if (count > HardVoxelCeiling)
                 return GuideOperationResult.OverCap(live, count, HardVoxelCeiling);
             int perGuideCap = EffectivePerGuideVoxelCap;
             if (perGuideCap > 0 && count > perGuideCap)
                 return GuideOperationResult.OverCap(live, count, perGuideCap);
+            if (WouldExceedPlayerTotal(live.CreatorUid, live.Id, count))
+                return GuideOperationResult.OverCap(live, count, _perPlayerTotalVoxelCap);
             if (_totalVoxelCap > 0 && _totalVoxels + count > _totalVoxelCap)
                 return GuideOperationResult.OverCap(live, count, _totalVoxelCap);
 
@@ -1275,9 +1297,10 @@ namespace Layout.Systems
         // this threshold is crossed; other shapes fall back to their exact counter. When the result is
         // accepted it is still exact, so the running total/cache retain their existing invariant.
         private int CountForCaps(Guid id, IGuideShape shape, int scale, bool filled,
-            bool wireframe = false)
+            bool wireframe = false, string creatorUid = null)
         {
-            if (wireframe || (_guides.TryGetValue(id, out GuideData guide) && guide.IsWireframe))
+            _guides.TryGetValue(id, out GuideData guide);
+            if (wireframe || guide?.IsWireframe == true)
                 return ShapeWireframe.GetVoxelCount(shape, scale);
             int limit = HardVoxelCeiling;
             int perGuideCap = EffectivePerGuideVoxelCap;
@@ -1287,6 +1310,26 @@ namespace Layout.Systems
             // A lower-cap actor is allowed to preserve or shrink a trusted player's oversized guide. In
             // that case an early stop at actorCap+1 would not be the real count and could corrupt totals.
             if (perGuideCap > 0 && !existingExceedsActorCap) limit = Math.Min(limit, perGuideCap);
+
+            string attributedCreator = creatorUid ?? guide?.CreatorUid;
+            if (_perPlayerTotalVoxelCap > 0 && !string.IsNullOrEmpty(attributedCreator))
+            {
+                long playerTotal = VoxelCountBy(attributedCreator);
+                int currentForId = guide?.CreatorUid == attributedCreator
+                    && _voxelCounts.TryGetValue(id, out int currentPlayerGuide)
+                    ? currentPlayerGuide : 0;
+                // If persisted state already exceeds a newly lowered cap, count exactly so a shrink can be
+                // accepted. Otherwise stop as soon as this guide would pass the creator's remaining budget.
+                if (playerTotal <= _perPlayerTotalVoxelCap)
+                {
+                    long available =
+                        (long)_perPlayerTotalVoxelCap - (playerTotal - currentForId);
+                    int playerLimit = available <= 0 ? 0
+                        : available >= int.MaxValue ? int.MaxValue
+                        : (int)available;
+                    limit = Math.Min(limit, playerLimit);
+                }
+            }
 
             if (_totalVoxelCap > 0)
             {
@@ -1307,7 +1350,8 @@ namespace Layout.Systems
                 ? ShapeWireframe.GetVoxelCount(shape, scale)
                 : shape.GetVoxelCount(scale, filled);
 
-        // True if making guide `id`'s count `newCount` would breach the per-guide or projected total cap.
+        // True if making guide `id`'s count `newCount` would breach its per-guide, creator-total, or
+        // projected world-total cap.
         // A cap of 0 means unlimited — that check is skipped (normalised in the ctor).
         private bool WouldExceedCaps(Guid id, int newCount, out int cap)
         {
@@ -1321,6 +1365,12 @@ namespace Layout.Systems
             if (perGuideCap > 0 && newCount > perGuideCap && newCount > currentForId)
             {
                 cap = perGuideCap;
+                return true;
+            }
+            if (_guides.TryGetValue(id, out GuideData guide)
+                && WouldExceedPlayerTotal(guide.CreatorUid, id, newCount))
+            {
+                cap = _perPlayerTotalVoxelCap;
                 return true;
             }
             long projectedTotal = _totalVoxels - currentForId + newCount;
@@ -1342,6 +1392,36 @@ namespace Layout.Systems
             foreach (var g in _guides.Values)
                 if (g.CreatorUid == playerUid) n++;
             return n;
+        }
+
+        /// <summary>
+        /// Sum of cached voxels across all currently existing guides attributed to one original creator.
+        /// Guides from pre-attribution saves (no creator uid) count toward no player.
+        /// </summary>
+        public long VoxelCountBy(string playerUid)
+        {
+            if (string.IsNullOrEmpty(playerUid)) return 0;
+            long total = 0;
+            foreach (KeyValuePair<Guid, GuideData> entry in _guides)
+            {
+                if (entry.Value?.CreatorUid != playerUid) continue;
+                if (_voxelCounts.TryGetValue(entry.Key, out int count))
+                    total += Math.Max(0, count);
+            }
+            return total;
+        }
+
+        private bool WouldExceedPlayerTotal(string playerUid, Guid id, int newCount)
+        {
+            if (_perPlayerTotalVoxelCap <= 0 || string.IsNullOrEmpty(playerUid)) return false;
+            long currentTotal = VoxelCountBy(playerUid);
+            int currentForId = _guides.TryGetValue(id, out GuideData guide)
+                && guide?.CreatorUid == playerUid
+                && _voxelCounts.TryGetValue(id, out int count)
+                ? count : 0;
+            long projected = currentTotal - currentForId + Math.Max(0, newCount);
+            // Loading never ejects old state, and lowering a cap must not prevent a player from shrinking it.
+            return projected > _perPlayerTotalVoxelCap && projected > currentTotal;
         }
 
         // Records a guide's voxel count, keeping the running total in step.
