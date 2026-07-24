@@ -748,12 +748,12 @@ namespace Layout.Network
 
         /// <summary>
         /// v0.2.22: report this player's own refill-channel preferences so the server's half of the
-        /// held-interact honours them. Sent once the join sync lands; harmless on a vanilla server (no
-        /// channel) because the local-authority guard below short-circuits.
+        /// held-interact honours them. GuidesBulkSynced also fires for local-authority loads and world
+        /// teardown, so require positive proof of a Layout server and a live optional channel before sending.
         /// </summary>
         public void SendChalkRefillPrefs(bool allowHotbar, bool allowInventory)
         {
-            if (AuthorityMode == ClientAuthorityMode.Local) return;
+            if (!_receivedServerBulkSync || !_channel.Connected) return;
             _channel.SendPacket(new ChalkRefillPrefsPacket(allowHotbar, allowInventory));
         }
 
