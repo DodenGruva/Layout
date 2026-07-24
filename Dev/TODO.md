@@ -231,6 +231,14 @@ reports intuitive block dimensions.
 5. ~~**Verify and package the final release.**~~ **DONE.** Focused cumulative-cap smoke test passed; Release
    build has 0 warnings/errors; `Layout0.3.53.zip` has 40 entries and 37 assets.
 
+### A10. Current human backlog
+
+1. **Fix Box and Square guides automatically constraining to cardinal directions.**
+2. **Perform an adversarial code review.**
+3. **Perform a performance-focused code review.**
+4. **Explore alternative rendering options for performance gains.**
+5. **Clean up and consolidate the documentation.**
+
 ### A. Human backlog — queued at Session-16 end — ✅ ALL SEVEN DELIVERED (v0.2.22–v0.2.23)
 
 1. ~~**Move the chalk-refill config from the server to the client.**~~ **DONE (v0.2.22).** Both toggles now
