@@ -371,6 +371,10 @@ namespace Layout.Systems
             _capi.Event.RegisterRenderer(this, RenderStage, "layout-guides");
             _reprobeListenerId = _capi.Event.RegisterGameTickListener(OnReprobeTick, ReprobeIntervalMs);
 
+            // Must re-register on every shader reload, or an in-game reload leaves a dead program behind.
+            _capi.Event.ReloadShader += LoadCustomShader;
+            LoadCustomShader();
+
             // Pick up anything already synced before the renderer existed (e.g. tool equipped after join).
             RebuildAll();
         }
@@ -483,6 +487,125 @@ namespace Layout.Systems
             return 0;
         }
 
+        // -- Custom guide shader (Stage 2a) --------------------------------------------------------
+
+        private IShaderProgram _guideShader;
+
+        /// <summary>
+        /// Use the lean custom shader instead of <c>PreparedStandardShader</c>. Falls back automatically
+        /// when the program failed to compile, so a shader problem degrades to the old look rather than to
+        /// invisible or corrupt guides.
+        /// </summary>
+        public bool UseCustomShader { get; private set; } = true;
+
+        public bool CustomShaderAvailable => _guideShader != null;
+
+        public void SetCustomShaderEnabled(bool enabled) => UseCustomShader = enabled;
+
+        /// <summary>
+        /// Compiles <c>assets/layout/shaders/guide.vsh</c>/<c>.fsh</c>. Registered against the engine's
+        /// shader-reload event so it survives an in-game shader reload, the same lifecycle trap that made
+        /// GUI icons vanish after exit-to-title in v0.1.24.
+        /// </summary>
+        public bool LoadCustomShader()
+        {
+            try
+            {
+                IShaderProgram program = _capi.Shader.NewShaderProgram();
+                program.AssetDomain = "layout";
+                _capi.Shader.RegisterFileShaderProgram("guide", program);
+
+                if (!program.Compile() || program.LoadError)
+                {
+                    _capi.Logger.Warning(
+                        "[Layout] Guide shader failed to compile; using the standard shader instead.");
+                    _guideShader = null;
+                    return false;
+                }
+
+                _guideShader = program;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _capi.Logger.Warning("[Layout] Guide shader could not be loaded ({0}); "
+                    + "using the standard shader instead.", ex.Message);
+                _guideShader = null;
+                return false;
+            }
+        }
+
+        private float _shaderBrightness = 0.78f;
+        private float _shaderAmbientResponse = 0.55f;
+
+        /// <summary>
+        /// Sets the custom shader's brightness controls. Both are clamped by the config's Normalize().
+        /// </summary>
+        public void SetShaderBrightness(float brightness, float ambientResponse)
+        {
+            _shaderBrightness = brightness;
+            _shaderAmbientResponse = ambientResponse;
+        }
+
+        public float ShaderBrightness => _shaderBrightness;
+        public float ShaderAmbientResponse => _shaderAmbientResponse;
+
+        /// <summary>
+        /// The per-frame RGB multiplier that stands in for the standard shader's lighting and shadow terms.
+        /// </summary>
+        /// <remarks>
+        /// The standard shader darkened guides two ways: <c>applyLight()</c> mixed the forced-white block
+        /// light with the world's ambient colour, and the fragment stage then multiplied by shadow-map
+        /// brightness. Neither is reproducible in a mod shader — the shadow samplers are not exposed — so
+        /// this approximates the visible result at effectively zero cost: blend white toward the live
+        /// ambient colour by <see cref="_shaderAmbientResponse"/> (restoring day/night response and tint),
+        /// then scale by <see cref="_shaderBrightness"/> (restoring the overall darkening).
+        ///
+        /// It cannot reproduce per-pixel shadowing or torch response, and is not meant to. It is an eye
+        /// match for the average case, tuned in play rather than derived.
+        /// </remarks>
+        private Vec3f ResolveGuideBrightness()
+        {
+            Vec3f ambient = _capi.Render.AmbientColor;
+            float response = _shaderAmbientResponse;
+
+            float r = 1f, g = 1f, b = 1f;
+            if (ambient != null && response > 0f)
+            {
+                r = 1f + (ambient.R - 1f) * response;
+                g = 1f + (ambient.G - 1f) * response;
+                b = 1f + (ambient.B - 1f) * response;
+            }
+
+            return new Vec3f(
+                Math.Max(0f, r * _shaderBrightness),
+                Math.Max(0f, g * _shaderBrightness),
+                Math.Max(0f, b * _shaderBrightness));
+        }
+
+        /// <summary>
+        /// Feeds the custom program the uniforms its fog term needs. Values come from the ambient manager,
+        /// which is the same blended state the engine hands its own shaders, so guides fade on the same
+        /// curve as the world rather than on an approximation of it.
+        /// </summary>
+        private void PrepareCustomShader(IShaderProgram prog, IRenderAPI rpi)
+        {
+            prog.Use();
+            prog.UniformMatrix("projectionMatrix", rpi.CurrentProjectionMatrix);
+            prog.UniformMatrix("viewMatrix", rpi.CameraMatrixOriginf);
+
+            prog.Uniform("layoutBrightnessIn", ResolveGuideBrightness());
+
+            Vec4f fogColor = _capi.Ambient.BlendedFogColor;
+            prog.Uniform("layoutFogColorIn", fogColor);
+            prog.Uniform("layoutFogMinIn", _capi.Ambient.BlendedFogMin);
+            prog.Uniform("layoutFogDensityIn", _capi.Ambient.BlendedFogDensity);
+            prog.Uniform("layoutFlatFogDensityIn", _capi.Ambient.BlendedFlatFogDensity);
+            // ...ForShader is the variant the engine feeds its own shaders (camera-relative), which is what
+            // getFogLevel's flatFogStart term expects. BlendedFlatFogYOffset is world-absolute and wrong here.
+            prog.Uniform("layoutFlatFogStartIn", _capi.Ambient.BlendedFlatFogYPosForShader);
+        }
+
         private static string FormatBytes(long bytes)
         {
             if (bytes <= 0) return "0 B";
@@ -544,21 +667,36 @@ namespace Layout.Systems
             rpi.GlToggleBlend(true);
             rpi.GlDisableCullFace(); // translucent guides are drawn double-sided
 
-            // PreparedStandardShader (NOT raw StandardShader.Use()): it configures ALL the standard
-            // shader's uniforms — shadow map, ambient, fog — for the given world position and calls Use().
-            // Module-7 in-game finding: with raw Use(), the unset shadow/ambient uniforms multiplied every
-            // fragment to black in the Opaque stage. We then override the lighting inputs to full-bright so
-            // the guide palette shows verbatim, day or night.
-            IStandardShaderProgram prog = rpi.PreparedStandardShader(
-                (int)camPos.X, (int)camPos.Y, (int)camPos.Z);
-            prog.RgbaTint = new Vec4f(1f, 1f, 1f, 1f);
-            prog.RgbaLightIn = new Vec4f(1f, 1f, 1f, 1f);   // full-bright: guide colours ignore block light
-            prog.NormalShaded = 0;
-            prog.ExtraGodray = 0f;
-            prog.AddRenderFlags = 0;
-            prog.Tex2D = _whiteTex.TextureId;               // real white texture — see _whiteTex remarks
-            prog.ViewMatrix = rpi.CameraMatrixOriginf;
-            prog.ProjectionMatrix = rpi.CurrentProjectionMatrix;
+            // SHADER SELECTION (Stage 2a). The custom program does only what a guide needs; the standard
+            // program is the fallback and the reference look. Falling back on a failed compile is
+            // deliberate — a shader problem should cost performance, never make guides invisible.
+            bool useCustom = UseCustomShader && _guideShader != null;
+            IStandardShaderProgram prog = null;
+            IShaderProgram activeProg;
+
+            if (useCustom)
+            {
+                PrepareCustomShader(_guideShader, rpi);
+                activeProg = _guideShader;
+            }
+            else
+            {
+                // PreparedStandardShader (NOT raw StandardShader.Use()): it configures ALL the standard
+                // shader's uniforms — shadow map, ambient, fog — for the given world position and calls
+                // Use(). Module-7 in-game finding: with raw Use(), the unset shadow/ambient uniforms
+                // multiplied every fragment to black in the Opaque stage. We then override the lighting
+                // inputs to full-bright so the guide palette shows verbatim, day or night.
+                prog = rpi.PreparedStandardShader((int)camPos.X, (int)camPos.Y, (int)camPos.Z);
+                prog.RgbaTint = new Vec4f(1f, 1f, 1f, 1f);
+                prog.RgbaLightIn = new Vec4f(1f, 1f, 1f, 1f); // full-bright-ish; see the guide.fsh note
+                prog.NormalShaded = 0;
+                prog.ExtraGodray = 0f;
+                prog.AddRenderFlags = 0;
+                prog.Tex2D = _whiteTex.TextureId;             // real white texture — see _whiteTex remarks
+                prog.ViewMatrix = rpi.CameraMatrixOriginf;
+                prog.ProjectionMatrix = rpi.CurrentProjectionMatrix;
+                activeProg = prog;
+            }
 
             foreach (GuideMesh gm in _guideMeshes.Values)
             {
@@ -581,7 +719,7 @@ namespace Layout.Systems
                 }
                 stats.VisiblePlacedGuides++;
                 SetModelMatrix(origin.X - camPos.X, origin.Y - camPos.Y, origin.Z - camPos.Z);
-                prog.ModelMatrix = _modelMat;
+                ApplyModelMatrix(useCustom, prog);
                 RenderMeshTracked(rpi, primary, stats);
                 List<MeshRef> auxiliary = gm.GrabRef != null ? gm.GrabAuxiliary
                     : gm.TransitionRef != null ? gm.TransitionAuxiliary : gm.Auxiliary;
@@ -597,7 +735,7 @@ namespace Layout.Systems
                     _draftPreviewOrigin.X - camPos.X,
                     _draftPreviewOrigin.Y - camPos.Y,
                 _draftPreviewOrigin.Z - camPos.Z);
-                prog.ModelMatrix = _modelMat;
+                ApplyModelMatrix(useCustom, prog);
                 RenderMeshTracked(rpi, _draftPreviewMesh, stats);
                 stats.VisibleDraftBatches++;
             }
@@ -608,7 +746,7 @@ namespace Layout.Systems
                     _draftPreviewOrigin.X - camPos.X,
                     _draftPreviewOrigin.Y - camPos.Y,
                 _draftPreviewOrigin.Z - camPos.Z);
-                prog.ModelMatrix = _modelMat;
+                ApplyModelMatrix(useCustom, prog);
                 RenderMeshTracked(rpi, _draftPrecisionMeshes[i], stats);
                 stats.VisibleDraftBatches++;
             }
@@ -619,7 +757,7 @@ namespace Layout.Systems
                     _draftPreviewOrigin.X - camPos.X,
                     _draftPreviewOrigin.Y - camPos.Y,
                 _draftPreviewOrigin.Z - camPos.Z);
-                prog.ModelMatrix = _modelMat;
+                ApplyModelMatrix(useCustom, prog);
                 RenderMeshTracked(rpi, _draftMaterializationMeshes[i], stats);
                 stats.VisibleDraftBatches++;
             }
@@ -634,7 +772,7 @@ namespace Layout.Systems
                     pendingPlacement.Origin.X - camPos.X,
                     pendingPlacement.Origin.Y - camPos.Y,
                     pendingPlacement.Origin.Z - camPos.Z);
-                prog.ModelMatrix = _modelMat;
+                ApplyModelMatrix(useCustom, prog);
                 for (int i = 0; i < pendingPlacement.Meshes.Count; i++)
                 {
                     if (pendingPlacement.Meshes[i] == null) continue;
@@ -659,16 +797,26 @@ namespace Layout.Systems
                         anchor.X - camPos.X - DraftMarkerHalf,
                         anchor.Y - camPos.Y - DraftMarkerHalf,
                     anchor.Z - camPos.Z - DraftMarkerHalf);
-                    prog.ModelMatrix = _modelMat;
+                    ApplyModelMatrix(useCustom, prog);
                     RenderMeshTracked(rpi, _markerMesh, stats);
                     stats.VisibleRemoteMarkers++;
                 }
             }
 
-            prog.Stop();
+            activeProg.Stop();
             rpi.GlEnableCullFace();
             rpi.GlToggleBlend(false);
             _lastRenderStats = stats;
+        }
+
+        /// <summary>
+        /// Pushes <see cref="_modelMat"/> to whichever program is active. The standard program exposes a
+        /// typed property; the custom one takes a named uniform.
+        /// </summary>
+        private void ApplyModelMatrix(bool useCustom, IStandardShaderProgram standardProg)
+        {
+            if (useCustom) _guideShader.UniformMatrix("modelMatrix", _modelMat);
+            else standardProg.ModelMatrix = _modelMat;
         }
 
         private void SetModelMatrix(double dx, double dy, double dz)
@@ -4100,6 +4248,9 @@ namespace Layout.Systems
 
             _capi.Event.UnregisterRenderer(this, RenderStage);
             _capi.Event.UnregisterGameTickListener(_reprobeListenerId);
+            _capi.Event.ReloadShader -= LoadCustomShader;
+            _guideShader?.Dispose();
+            _guideShader = null;
             _deferredSurface.Clear();
 
             if (!_whiteTexBorrowed) _whiteTex?.Dispose();   // engine-cached fallback textures stay alive

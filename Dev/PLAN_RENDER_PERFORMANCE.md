@@ -172,23 +172,90 @@ solidity probe producing mixed per-face insets.
 remaining 771 MB — **48% of all traffic** — and neither welding nor a leaner vertex format touches them.
 See the revised §6.
 
-## 6. Stage 2 — lean vertex format — DEFER (revised after Stage 1)
+## 6. Stage 2 — custom shader — REINSTATED AND REFRAMED (2026-07-24)
 
-**Recommendation changed on evidence.** This stage was projected to remove ~33% of traffic when vertices
-were 80% of it. After welding they are 52%, so the same change now removes far less:
+**This stage was briefly deferred on a bad analysis, then reinstated after an external developer pushed
+back. They were right.** The deferral treated "custom shader" as purely a *vertex format* change — drop the
+always-`(0,0)` UV, maybe shrink positions — worth ~0.5 ms now that indices dominate. That framing missed the
+larger point entirely.
 
-| Change | Traffic | 8M geometry term | Saving |
-|---:|---:|---:|---:|
-| Now (v0.3.57) | 771 MB | 3.1 ms | — |
-| Drop the always-(0,0) UV | 638 MB | ~2.6 ms | ~0.5 ms |
-| Also fixed-point positions | 537 MB | ~2.2 ms | ~0.9 ms |
+### What guides actually pay for today
 
-That is roughly 6–11% of the *original* 8.2 ms cost, on a guide 16× the shipped cap, bought with a custom
-shader, exact fog replication, attribute-binding verification, and shader-reload lifecycle handling — risk
-carried by every player on every guide, for a benefit concentrated in a case almost nobody will build.
+Guides render through `PreparedStandardShader`, Vintage Story's **full world shader**. `RgbaLightIn`,
+`NormalShaded`, `ExtraGodray` and a white texture are set to neutralise its effects — but **uniforms do not
+remove instructions**. Reading the shipped sources (`assets/game/shaders/standard.vsh` / `.fsh`), every
+guide vertex and fragment still executes:
 
-**Do not build this next.** Revisit only if field reports show mesh traffic still hurting after Stage 3.
-The original write-up is kept below for whenever that happens.
+**Per vertex — 17.5M times per frame on the 8M guide:**
+
+- `applyVertexWarping` + `applyGlobalWarping` (wind/noise vertex animation)
+- `applyLight(...)` and `getFogLevel(...)`
+- `calcShadowMapCoords(viewMatrix, worldPos)` — unconditional shadow-map coordinate work
+- `unpackNormal(flags)`, `normalize`, and a `mat4` multiply for a normal **nothing ever reads**
+- a distance-fade term and an optional spheres-fog term
+
+**Per fragment, over a guide that can cover the screen several layers deep:**
+
+- `texture(tex, uv)` — sampling a white texture to multiply by 1
+- `applyFogAndShadow(...)` — includes **shadow map sampling**
+- `getSkyMurkiness()` / `getUnderwaterMurkiness()`
+- glow mixing, damage-effect noise, and overlay-texture branches
+- under `SSAOLEVEL > 0`, **two additional full-screen render targets written per fragment**
+
+A guide needs: transform the position, pass the colour through, apply fog. Everything above is waste, and it
+scales with exactly the two terms measured in §1a.
+
+### Why this is the bigger prize
+
+The §1a split attributed ~3.1 ms to "geometry" and ~1.7 ms to "fill". Both were assumed to be data
+movement. That assumption is wrong: 771 MB in 3.1 ms is only ~260 GB/s, far below what this GPU delivers, so
+a real share of the geometry term is **vertex shader execution**, not fetch. And the fill term is
+fragment-shader execution plus blending, not blending alone.
+
+Neither is reachable by any amount of format tuning. Both are reachable by a shader that does less.
+
+There is also a third prize the deferral missed: with a custom shader, faces need not be sent as vertices at
+all. `MeshData` exposes `CustomBytes`/`CustomShorts`/`CustomInts` **and per-attribute `*Instanced` flags**,
+so a compact per-face record (position, orientation, colour — around 12 bytes) with corners generated in the
+shader would replace today's ~50 bytes per face **and eliminate the index buffer** — the 370 MB that §10
+correctly identifies as untouchable by welding or by a leaner vertex format.
+
+### Verified API surface
+
+- `capi.Shader.NewShaderProgram()`, `RegisterFileShaderProgram(name, program)`, `ReloadShaders()`
+- `IShaderProgram`: `Use()`, `Stop()`, `Compile()`, `LoadError`, `Uniform(...)`, `UniformMatrix(...)`,
+  `BindTexture2D(...)`, `AssetDomain`, `PassId`/`PassName`
+- Shader assets live at `assets/layout/shaders/*.vsh` / `*.fsh`; re-register on `capi.Event.ReloadShader`
+
+### Concrete risks, now identified rather than guessed
+
+1. **Multiple render targets.** The Opaque stage binds more than one output. `standard.fsh` writes
+   `outColor` (location 0) **and `outGlow` (location 1)**, plus SSAO targets 2–3 under `SSAOLEVEL > 0`. A
+   custom shader that writes only `outColor` leaves the others undefined — expect glow/godray or SSAO
+   artifacts. Must write `outGlow` explicitly and handle the SSAO case.
+2. **Preprocessor defines.** `SSAOLEVEL`, `BLOOM`, `SHINYEFFECT` and friends are injected by the engine.
+   Whether they reach a mod's registered shader needs confirming before relying on `#if` blocks.
+3. **Attribute locations shift when arrays are omitted.** The Module-7 "solid black arch" finding recorded
+   in `GuideMeshBuilder` — that dropping the uv array made rgba bytes land in the uv slot — implies VS
+   assigns locations by which arrays are present, not fixed. With a custom shader this is harmless *if the
+   declared locations match*, but it must be verified, not assumed.
+4. **Fog.** Guides visibly fade with distance today. The custom shader must reproduce that or distant guides
+   change appearance. This remains the main fidelity risk.
+
+### Sequence
+
+**Stage 2a — minimal shader, same mesh layout minus the UV.** Trivial vertex and fragment work, fog
+replicated, `outGlow` written. This is primarily a **measurement**: it isolates how much of the 4.8 ms is
+shader execution rather than data movement. If a large share disappears, 2b is clearly worth the harder
+engineering; if almost nothing moves, the cost really is bandwidth and the stage stops here having cost one
+iteration.
+
+**Stage 2b — per-face records with shader-generated corners.** Only if 2a lands cleanly *and* its
+measurement justifies it. This is the one that reaches the index data, and the one most likely to need raw
+GL alongside VS's renderer — i.e. the one that may prove impractical.
+
+Built on the **`beta-shader`** branch, merged to `beta` only once measured and fog-checked. If abandoned,
+the branch is deleted and `beta` was never touched.
 
 ### Original Stage 2 design (retained for reference)
 

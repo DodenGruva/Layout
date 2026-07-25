@@ -140,6 +140,28 @@ namespace Layout.Config
         [JsonProperty("opacityHiddenAnchor")]
         public float OpacityHiddenAnchor { get; set; } = 0.35f;
 
+        /// <summary>
+        /// Overall brightness of guides under the custom shader (v0.3.61). 1.0 emits the palette exactly as
+        /// authored; lower values darken it toward the look of the game's standard shader.
+        /// </summary>
+        /// <remarks>
+        /// The standard shader ran guide colour through <c>applyLight()</c> and then multiplied by
+        /// shadow-map brightness, so guides were always darker than their palette and varied with light.
+        /// The custom shader cannot sample the shadow map (the modding API does not expose it), so this
+        /// scale plus <see cref="ShaderAmbientResponse"/> approximates that darkening cheaply. Tune live
+        /// with <c>/layout shaderbrightness</c>. Clamped to 0.2–1.5.
+        /// </remarks>
+        [JsonProperty("shaderGuideBrightness")]
+        public float ShaderGuideBrightness { get; set; } = 0.78f;
+
+        /// <summary>
+        /// How strongly guides follow the world's ambient light under the custom shader, 0–1. 0 keeps them
+        /// perfectly self-lit at all hours; 1 tints and dims them fully with ambient. Default 0.55 restores
+        /// most of the day/night response the standard shader gave, without any per-fragment cost.
+        /// </summary>
+        [JsonProperty("shaderAmbientResponse")]
+        public float ShaderAmbientResponse { get; set; } = 0.55f;
+
         /// <summary>Folds out-of-range values (e.g. from a hand-edited file) back to safe defaults.</summary>
         public void Normalize()
         {
@@ -152,6 +174,11 @@ namespace Layout.Config
                 DefaultShape = (int)GuideShapeType.Arch;
             if (!Systems.DraftManager.IsValidPair((GuideShapeType)DefaultShape, (ShapeConstraint)DefaultConstraint))
                 DefaultConstraint = (int)ShapeConstraint.None;
+            if (ShaderGuideBrightness < 0.2f) ShaderGuideBrightness = 0.2f;
+            if (ShaderGuideBrightness > 1.5f) ShaderGuideBrightness = 1.5f;
+            if (ShaderAmbientResponse < 0f) ShaderAmbientResponse = 0f;
+            if (ShaderAmbientResponse > 1f) ShaderAmbientResponse = 1f;
+
             if (DefaultDivisions < 0) DefaultDivisions = 0;
             if (DefaultDivisions > Shapes.DivisionMarks.MaxDivisions) DefaultDivisions = Shapes.DivisionMarks.MaxDivisions;
             DefaultSides = Shapes.PolygonShape.ClampSides(DefaultSides);
