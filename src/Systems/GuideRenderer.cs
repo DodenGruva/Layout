@@ -232,7 +232,7 @@ namespace Layout.Systems
 
         private readonly Dictionary<Guid, GuideMesh> _guideMeshes = new Dictionary<Guid, GuideMesh>();
         private readonly Dictionary<string, Vec3d> _remoteAnchors = new Dictionary<string, Vec3d>();
-        private readonly Dictionary<MeshRef, int> _meshTriangleCounts = new Dictionary<MeshRef, int>();
+        private readonly Dictionary<MeshRef, MeshCost> _meshCosts = new Dictionary<MeshRef, MeshCost>();
 
         // Surface guides whose air-side probe hit UNLOADED chunks (the world-load / approach-from-afar race):
         // their decal side is provisional and may render behind the block face. A low-frequency tick re-probes
@@ -266,6 +266,56 @@ namespace Layout.Systems
             OutsideFrustum
         }
 
+        /// <summary>
+        /// What one uploaded mesh costs the GPU to read every frame it is drawn. Sessions 25–26 compared
+        /// TRIANGLE counts and drew the wrong conclusion twice: an 8M-voxel guide costs the same whether it
+        /// fills the screen or is a speck on the horizon, which rules out fill rate and points at vertex/index
+        /// fetch bandwidth instead. <see cref="Bytes"/> is therefore the metric that actually tracks the
+        /// bottleneck, and <see cref="Vertices"/> is the one that will move when vertex welding lands —
+        /// triangles stay identical there by construction, so a triangle-only readout would show nothing.
+        /// </summary>
+        private readonly struct MeshCost
+        {
+            public readonly int Triangles;
+            public readonly int Vertices;
+            public readonly int Indices;
+            public readonly long Bytes;
+
+            public MeshCost(int triangles, int vertices, int indices, long bytes)
+            {
+                Triangles = triangles;
+                Vertices = vertices;
+                Indices = indices;
+                Bytes = bytes;
+            }
+
+            /// <summary>
+            /// Measures an about-to-be-uploaded mesh. Per-vertex size follows the arrays the
+            /// <c>MeshData</c> actually carries (guides are xyz + uv + rgba = 24 bytes today; the uv pair is
+            /// always (0,0) and is pure waste — see the Stage 2 note in <c>PLAN_RENDER_PERFORMANCE.md</c>).
+            /// Indices are 4-byte ints. This is the client-side data volume, not an exact VRAM figure:
+            /// driver padding and alignment are not modelled, and it is meant for A/B comparison between
+            /// builds rather than as an absolute.
+            /// </summary>
+            public static MeshCost Measure(MeshData data)
+            {
+                if (data == null) return default;
+
+                int vertices = Math.Max(0, data.VerticesCount);
+                int indices = Math.Max(0, data.IndicesCount);
+
+                int perVertex = 12;                             // xyz float3, always present
+                if (data.Normals != null) perVertex += 4;       // packed normal int
+                if (data.Uv != null) perVertex += 8;            // uv float2
+                if (data.Rgba != null) perVertex += 4;          // rgba bytes
+                if (data.Flags != null) perVertex += 4;         // render flags int
+
+                return new MeshCost(
+                    indices / 3, vertices, indices,
+                    (long)vertices * perVertex + (long)indices * 4L);
+            }
+        }
+
         private sealed class RenderFrameStats
         {
             public int PlacedGuides;
@@ -274,6 +324,9 @@ namespace Layout.Systems
             public int FrustumCulledGuides;
             public int MeshDrawCalls;
             public long SubmittedTriangles;
+            public long SubmittedVertices;
+            public long SubmittedIndices;
+            public long SubmittedBytes;
             public int VisibleDraftBatches;
             public int VisiblePendingBatches;
             public int VisibleRemoteMarkers;
@@ -335,6 +388,18 @@ namespace Layout.Systems
 
         public void SetRenderingEnabled(bool enabled) => RenderingEnabled = enabled;
 
+        /// <summary>
+        /// Rebuilds every guide from scratch so a diagnostic mesh-build change (currently only
+        /// <c>.layout weld</c>) takes effect on already-rendered guides. Cancels in-flight materializations
+        /// first so nothing finishes into a mesh built under the previous setting.
+        /// </summary>
+        public void RebuildAllForDiagnostics()
+        {
+            if (_disposed) return;
+            CancelAllSettledMaterializations();
+            RebuildAll();
+        }
+
         public string DescribeRenderStats()
         {
             if (!RenderingEnabled)
@@ -344,14 +409,87 @@ namespace Layout.Systems
             return string.Format(
                 "Layout render stats (last frame): {0}/{1} placed guide(s) visible; "
                 + "{2} distance-culled; {3} off-screen; {4} mesh batch(es) and about {5:N0} triangle(s) "
-                + "submitted. Extras drawn: {6} draft batch(es), {7} pending batch(es), "
-                + "{8}/{9} remote marker(s). Smoothed frame time: {10:0.0} ms.",
+                + "submitted. Mesh data read: {6} ({7:N0} vertices, {8:N0} indices). "
+                + "Extras drawn: {9} draft batch(es), {10} pending batch(es), "
+                + "{11}/{12} remote marker(s). Smoothed frame time: {13:0.0} ms.{14}",
                 stats.VisiblePlacedGuides, stats.PlacedGuides,
                 stats.DistanceCulledGuides, stats.FrustumCulledGuides,
                 stats.MeshDrawCalls, stats.SubmittedTriangles,
+                FormatBytes(stats.SubmittedBytes), stats.SubmittedVertices, stats.SubmittedIndices,
                 stats.VisibleDraftBatches, stats.VisiblePendingBatches,
                 stats.VisibleRemoteMarkers, stats.TotalRemoteMarkers,
-                SmoothedFrameMilliseconds);
+                SmoothedFrameMilliseconds,
+                DescribeFrameCap());
+        }
+
+        /// <summary>
+        /// Warns when the frame-time reading is pinned to the game's own FPS limiter. Session 25 compared a
+        /// capped baseline against an uncapped loaded frame and understated the guide's true cost for two
+        /// sessions before anyone noticed; any A/B measurement taken at the cap is measuring the cap.
+        /// </summary>
+        /// <remarks>
+        /// EVIDENCE, NOT SETTINGS (v0.3.56 fix). The first attempt trusted the <c>maxFps</c> setting and
+        /// warned whenever frame time sat at or below its frame budget. Both halves were wrong. The setting
+        /// keeps its slider value — observed as 241 — when the limiter is switched OFF, so it does not mean
+        /// "capped"; and a capped frame can never run FASTER than the limiter, so "at or below" fired on
+        /// every fast frame. A 1.0 ms uncapped baseline was flagged as clipped.
+        ///
+        /// A limiter can only ever HOLD frame time at its budget, so the sole reliable evidence of clipping
+        /// is frame time sitting in a narrow band AROUND that budget. Well below means the setting is not
+        /// limiting anything (uncapped, or a sentinel value); well above means the GPU is the limit and the
+        /// cap is irrelevant. Nothing is reported unless the reading is actually suspect — a stray
+        /// "FPS cap: 241" on an uncapped run is worse than silence, because it invites exactly the
+        /// misreading this whole warning exists to prevent.
+        /// </remarks>
+        private string DescribeFrameCap()
+        {
+            int cap = ConfiguredFrameCap();
+            if (cap <= 0) return string.Empty;
+
+            double capFrameMs = 1000.0 / cap;
+            double frameMs = SmoothedFrameMilliseconds;
+            if (frameMs <= 0) return string.Empty;
+
+            bool pinnedToLimiter = frameMs >= capFrameMs * 0.90 && frameMs <= capFrameMs * 1.10;
+            return pinnedToLimiter
+                ? string.Format(
+                    " WARNING: this reading sits at your {0} FPS limit ({1:0.0} ms), so it is a floor rather "
+                    + "than a cost. Uncap the frame rate before comparing builds.",
+                    cap, capFrameMs)
+                : string.Empty;
+        }
+
+        /// <summary>
+        /// The game's configured frame-rate limit setting, or 0 when unreadable. The key is not part of the
+        /// modding API contract, so several spellings are tried and every failure degrades to "unknown".
+        /// A returned value is NOT proof of an active cap — the setting retains its slider value while the
+        /// limiter is off — so <see cref="DescribeFrameCap"/> confirms it against measured frame time.
+        /// </summary>
+        private int ConfiguredFrameCap()
+        {
+            string[] keys = { "maxFps", "maxFPS", "maxfps" };
+            for (int i = 0; i < keys.Length; i++)
+            {
+                try
+                {
+                    int value = _capi.Settings.Int[keys[i]];
+                    if (value > 0 && value < 10000) return value;
+                }
+                catch
+                {
+                    // Unknown key for this game build — try the next spelling.
+                }
+            }
+            return 0;
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            if (bytes <= 0) return "0 B";
+            if (bytes < 1024L) return bytes + " B";
+            if (bytes < 1024L * 1024L) return (bytes / 1024.0).ToString("0.0") + " KB";
+            if (bytes < 1024L * 1024L * 1024L) return (bytes / (1024.0 * 1024.0)).ToString("0.0") + " MB";
+            return (bytes / (1024.0 * 1024.0 * 1024.0)).ToString("0.00") + " GB";
         }
 
         public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
@@ -608,8 +746,13 @@ namespace Layout.Systems
             if (mesh == null) return;
             render.RenderMesh(mesh);
             stats.MeshDrawCalls++;
-            if (_meshTriangleCounts.TryGetValue(mesh, out int triangles))
-                stats.SubmittedTriangles += triangles;
+            if (_meshCosts.TryGetValue(mesh, out MeshCost cost))
+            {
+                stats.SubmittedTriangles += cost.Triangles;
+                stats.SubmittedVertices += cost.Vertices;
+                stats.SubmittedIndices += cost.Indices;
+                stats.SubmittedBytes += cost.Bytes;
+            }
         }
 
         // World-unit pull toward the camera applied to every guide mesh (see SetModelMatrix). Tune by eye.
@@ -2514,9 +2657,12 @@ namespace Layout.Systems
             return null;
         }
 
-        private void RebuildGuideById(Guid id)
+        private void RebuildGuideById(Guid id) => RebuildGuideById(id, true);
+
+        private void RebuildGuideById(Guid id, bool allowStreaming)
         {
-            if (_network.Guides.TryGetValue(id, out GuideData guide) && guide != null) RebuildGuide(guide);
+            if (_network.Guides.TryGetValue(id, out GuideData guide) && guide != null)
+                RebuildGuide(guide, allowStreaming);
         }
 
         private bool TryStartSettledShellMaterialization(GuideData guide)
@@ -2656,7 +2802,9 @@ namespace Layout.Systems
             {
                 if (_guideMeshes.TryGetValue(build.GuideId, out GuideMesh mesh))
                     mesh.RenderedWireframe = false;
-                RebuildGuide(live);
+                // Synchronous on purpose: streaming just failed for this guide, so re-entering it would
+                // scaffold, fail, and recurse. A one-off hitch beats an infinite rebuild loop.
+                RebuildGuide(live, false);
             }
         }
 
@@ -2736,7 +2884,8 @@ namespace Layout.Systems
                 _settledMaterializations.Remove(build.GuideId);
                 DeleteTransitionMeshes(mesh);
                 mesh.RenderedWireframe = false;
-                RebuildGuideById(build.GuideId);
+                // Synchronous: the stream produced no clean mesh, so re-entering streaming would loop.
+                RebuildGuideById(build.GuideId, false);
                 return;
             }
             if (mesh.Ref != null) _retiredMaterializationMeshes.Enqueue(mesh.Ref);
@@ -2775,7 +2924,44 @@ namespace Layout.Systems
                 CancelSettledMaterialization(ids[i]);
         }
 
-        private void RebuildGuide(GuideData guide)
+        /// <summary>
+        /// Above this cached voxel count a settled Volumetric shell is streamed in behind a wireframe
+        /// scaffold instead of being generated, meshed, and uploaded in one main-thread call.
+        /// </summary>
+        /// <remarks>
+        /// This closes the gap that made a big guide hang the client on world load and drop onto OTHER
+        /// players in one lump when placed: <see cref="RebuildGuide"/> was fully synchronous with no size
+        /// check, so <c>RebuildAll</c> (bulk sync) and a remote <c>OnGuideAddedOrUpdated</c> both paid the
+        /// full cost at once. Only the local placer's own path was ever streamed.
+        ///
+        /// [FLAGGED FOR REVIEW] 100,000 is a judgement call, not a measurement. Below it a synchronous
+        /// rebuild is a sub-frame blip; at 500,000 it is a visible hitch; at 8M it is the multi-second hang.
+        /// Raising it means fewer guides visibly grow in on world load; lowering it means smoother loading
+        /// but more guides animating at once. One constant, trivially retuned from play.
+        /// </remarks>
+        private const int SettledStreamingVoxelThreshold = 100000;
+
+        /// <summary>
+        /// Whether this guide should stream rather than build synchronously. Deliberately keyed on the
+        /// PERSISTED <c>CachedVoxelCount</c>: generating the voxel set to find out how big it is would
+        /// already have paid the cost this check exists to avoid. Preconditions mirror
+        /// <see cref="TryStartSettledShellMaterialization"/> so a scaffold is never raised for a guide that
+        /// would then decline to stream.
+        /// </summary>
+        private bool ShouldStreamSettledShell(GuideData guide) =>
+            guide != null
+            && !guide.IsWireframe
+            && guide.Projection == ProjectionMode.Volumetric
+            && GuideShapeTypes.IsVolume(guide.ShapeType)
+            && guide.CachedVoxelCount > SettledStreamingVoxelThreshold;
+
+        private void RebuildGuide(GuideData guide) => RebuildGuide(guide, true);
+
+        /// <param name="allowStreaming">
+        /// False forces the synchronous path. Used by the materialization completion/failure handlers, which
+        /// call back into a rebuild — without this they would re-enter streaming and loop forever.
+        /// </param>
+        private void RebuildGuide(GuideData guide, bool allowStreaming)
         {
             if (_disposed) return;
 
@@ -2820,6 +3006,28 @@ namespace Layout.Systems
                     SetGuideCullBounds(guide.Id, cullCenter, cullRadius);
                     return;
                 }
+            }
+
+            // IMMENSE SETTLED SHELL: show a cheap wireframe scaffold now and stream the exact shell in
+            // behind it, rather than freezing the client while millions of voxels are generated, meshed,
+            // and uploaded in this one call. Covers world load / bulk sync and guides arriving from other
+            // players — previously only the local placer saw a guide materialize.
+            if (!locallyGrabbed && allowStreaming && ShouldStreamSettledShell(guide))
+            {
+                // Already streaming this exact pose: leave it alone. Re-scaffolding every rebuild would
+                // restart the animation and throw away completed batches.
+                if (_settledMaterializations.TryGetValue(
+                        guide.Id, out SettledMaterializationBuild running)
+                    && running.Fingerprint == RenderFingerprint(guide))
+                {
+                    SetGuideCullBounds(guide.Id, cullCenter, cullRadius);
+                    return;
+                }
+
+                RebuildSettledScaffold(guide, shape, points, cullCenter, cullRadius);
+                if (TryStartSettledShellMaterialization(guide)) return;
+                // Declined for a reason ShouldStreamSettledShell could not see. Fall through to the
+                // synchronous build so a guide is never left showing only its scaffold.
             }
 
             // Session-8 playtest fix: PLACED guides always render at their TRUE scale. The coarsening
@@ -2880,6 +3088,53 @@ namespace Layout.Systems
             else UploadOrReplace(guide.Id, data, origin);
             if (_guideMeshes.TryGetValue(guide.Id, out GuideMesh rendered))
                 rendered.RenderedWireframe = guide.IsWireframe;
+            SetGuideCullBounds(guide.Id, cullCenter, cullRadius);
+        }
+
+        /// <summary>
+        /// Uploads the cheap structural wireframe an immense settled guide shows while its exact shell is
+        /// generated off-thread. Marks the guide <c>RenderedWireframe</c>, which is the precondition
+        /// <see cref="TryStartSettledShellMaterialization"/> tests before taking over.
+        /// </summary>
+        /// <remarks>
+        /// Deliberately NOT the grab wireframe path: no adaptive motion scale, no cursor precision hole, no
+        /// grab mesh slot. This is a static stand-in for a guide nobody is touching.
+        /// </remarks>
+        private void RebuildSettledScaffold(
+            GuideData guide, IGuideShape shape, List<ControlPoint> points,
+            Vec3d cullCenter, double cullRadius)
+        {
+            List<Vec3d> curve = shape.SampleCurve(128);
+            int scaffoldScale = ChooseMovingWireframeScale(curve, guide.VoxelScale);
+            List<VoxelPosition> coarse = BuildWireframe(curve, scaffoldScale);
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                ControlPoint point = points[i];
+                if (point?.WorldPosition == null || point.IsPhantom) continue;
+                VoxelRenderType type = point.IsLocked ? VoxelRenderType.Locked
+                    : point.IsPrimary ? VoxelRenderType.Primary : VoxelRenderType.Anchor;
+                ShapeGeometry.ClaimMarker(coarse, scaffoldScale, point.WorldPosition, type);
+            }
+
+            Vec3d origin = ComputeOrigin(points);
+            var options = new GuideMeshOptions
+            {
+                Scale = scaffoldScale,
+                // Streaming is gated to Volumetric volumes, so the Surface slab path cannot apply here.
+                Mode = ProjectionMode.Volumetric,
+                Plane = guide.Plane,
+                Origin = origin,
+                Hidden = guide.IsHidden,
+                PrivateAnchors = _network.ServerLayoutAvailable
+                    && _network.IsLocalGuide(guide.Id),
+                IsNeighborSolid = NeighborSolidProbe
+            };
+            AssignAnchors(points, options);
+
+            UploadOrReplace(guide.Id, GuideMeshBuilder.Build(coarse, options), origin);
+            if (_guideMeshes.TryGetValue(guide.Id, out GuideMesh mesh))
+                mesh.RenderedWireframe = true;
             SetGuideCullBounds(guide.Id, cullCenter, cullRadius);
         }
 
@@ -3612,14 +3867,14 @@ namespace Layout.Systems
         {
             MeshRef mesh = _capi.Render.UploadMesh(data);
             if (mesh != null)
-                _meshTriangleCounts[mesh] = Math.Max(0, data?.IndicesCount ?? 0) / 3;
+                _meshCosts[mesh] = MeshCost.Measure(data);
             return mesh;
         }
 
         private void DeleteTrackedMesh(MeshRef mesh)
         {
             if (mesh == null) return;
-            _meshTriangleCounts.Remove(mesh);
+            _meshCosts.Remove(mesh);
             _capi.Render.DeleteMesh(mesh);
         }
 
@@ -3881,7 +4136,7 @@ namespace Layout.Systems
                 DeleteTrackedMesh(_markerMesh);
                 _markerMesh = null;
             }
-            _meshTriangleCounts.Clear();
+            _meshCosts.Clear();
         }
     }
 }

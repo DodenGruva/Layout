@@ -333,6 +333,12 @@ namespace Layout
                     .WithDescription("Show local Layout guide rendering statistics for the last frame.")
                     .HandleWith(OnClientRenderStatsCommand)
                 .EndSubCommand()
+                .BeginSubCommand("weld")
+                    .WithDescription(
+                        "Diagnostic: toggle guide vertex welding to compare the meshes side by side.")
+                    .WithArgs(parsers.Word("on-or-off"))
+                    .HandleWith(OnClientWeldCommand)
+                .EndSubCommand()
                 .BeginSubCommand("off")
                     .WithDescription("Turn off all Layout guide rendering for yourself.")
                     .HandleWith(OnClientRenderingOffCommand)
@@ -348,6 +354,36 @@ namespace Layout
 
         private TextCommandResult OnClientRenderingOnCommand(TextCommandCallingArgs args) =>
             SetLocalRenderingState(true);
+
+        /// <summary>
+        /// Diagnostic A/B switch for v0.3.57 vertex welding. Welding is proven to emit an identical triangle
+        /// stream, so this should show no visible difference — it exists so that claim can be checked in
+        /// play, on one guide, from one camera position, instead of by swapping builds and comparing from
+        /// memory. Not persisted: welding is always on again next launch.
+        /// </summary>
+        private TextCommandResult OnClientWeldCommand(TextCommandCallingArgs args)
+        {
+            string word = (args[0] as string)?.Trim().ToLowerInvariant();
+            bool enable;
+            switch (word)
+            {
+                case "on": case "true": case "1": enable = true; break;
+                case "off": case "false": case "0": enable = false; break;
+                default: return TextCommandResult.Error("Use /layout weld on or /layout weld off.");
+            }
+
+            if (Systems.GuideMeshBuilder.WeldByDefault == enable)
+                return TextCommandResult.Success(
+                    $"Layout vertex welding is already {(enable ? "on" : "off")}.");
+
+            Systems.GuideMeshBuilder.WeldByDefault = enable;
+            Renderer?.RebuildAllForDiagnostics();
+            return TextCommandResult.Success(
+                enable
+                    ? "Layout vertex welding ON — shared vertices (the v0.3.57 default)."
+                    : "Layout vertex welding OFF — pre-v0.3.57 unshared vertices. "
+                      + "Expect the same picture at roughly 2.4x the mesh data.");
+        }
 
         private TextCommandResult OnClientRenderStatsCommand(TextCommandCallingArgs args)
         {

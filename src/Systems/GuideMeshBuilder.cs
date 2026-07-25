@@ -120,6 +120,27 @@ namespace Layout.Systems
         /// treat its own lowest exposed layer as the guide floor and apply the floor clearance repeatedly.
         /// </summary>
         public int? MinimumVoxelY = null;
+
+        /// <summary>
+        /// Share vertices between faces that meet at the same position with the same colour, instead of
+        /// emitting four fresh vertices per quad (v0.3.57, Stage 1 of <c>PLAN_RENDER_PERFORMANCE.md</c>).
+        /// </summary>
+        /// <remarks>
+        /// This is DEDUPLICATION, NOT MERGING. The triangle set — count, positions, winding, colours, and
+        /// submission order — is unchanged; only the index buffer changes to point at shared vertices. That
+        /// distinction is the whole point: Sessions 25–26 rejected two renderer experiments because
+        /// regrouping primitives changed the picture, and welding cannot, because it does not regroup them.
+        ///
+        /// Measured on the v0.3.55 baseline, an 8M-voxel guide submitted 64,716,392 vertices against
+        /// 97,074,588 indices — exactly 4 vertices and 6 indices per quad, so every shared corner was
+        /// duplicated across all faces touching it. Because the vertex format carries no per-face data (no
+        /// normals, and uv is always (0,0)), any two faces meeting at one position with one colour can share.
+        ///
+        /// Cube path only. The Surface tile and slab paths are small 2D geometry and stay on the legacy
+        /// unshared path. Set false to fall back exactly to pre-v0.3.57 output — kept as the revert switch
+        /// and used by the equivalence harness.
+        /// </remarks>
+        public bool WeldVertices = GuideMeshBuilder.WeldByDefault;
     }
 
     /// <summary>
@@ -192,6 +213,14 @@ namespace Layout.Systems
     /// </remarks>
     public static class GuideMeshBuilder
     {
+        /// <summary>
+        /// Default for <see cref="GuideMeshOptions.WeldVertices"/> on newly created options, so
+        /// <c>.layout weld on|off</c> can flip every subsequent rebuild at once. Diagnostic only: it exists
+        /// so the welded and unwelded builds can be compared live, from one camera position, on one guide —
+        /// the only way to settle an "it looks slightly different" report. Not persisted; always on at start.
+        /// </summary>
+        public static bool WeldByDefault = true;
+
         // --- Colour table (RGBA, 0..1). ---------------------------------------------------------------
         // RGBs are fixed (the settled colour language); ALPHAS are client-configurable via
         // layout-client.json (Session-8, item 2) — ConfigureOpacities() overwrites the [3] slot of each
@@ -324,6 +353,7 @@ namespace Layout.Systems
             // whole-box/quad path per the staged plan.
             bool cubePath = !surface && options.SurfaceSlabThickness <= 0f;
             HashSet<(int, int, int)> present = null;
+            VertexWelder welder = null;
             MeshData mesh;
             if (cubePath)
             {
@@ -351,7 +381,11 @@ namespace Layout.Systems
                     if (!present.Contains((px, py, pz - scale))) faces++;
                     if (!present.Contains((px, py, pz + scale))) faces++;
                 }
+                // Capacity stays at the unwelded worst case (4 vertices per face). Welding only ever uses
+                // FEWER, so this keeps the "no growth reallocation is possible" guarantee the exact
+                // pre-count was introduced for; the unused tail is transient per-batch memory.
                 mesh = NewMeshForFaces(faces);
+                if (options.WeldVertices) welder = new VertexWelder(mesh, faces);
             }
             else
             {
@@ -426,10 +460,6 @@ namespace Layout.Systems
                             default: iz = options.PlaneInset; break;
                         }
                     }
-                    float lx = (float)(v.X / 16.0 - ox) + ix;
-                    float ly = (float)(v.Y / 16.0 - oy) + iy;
-                    float lz = (float)(v.Z / 16.0 - oz) + iz;
-
                     // Which faces are exposed (no neighbouring cell) — only those are emitted below.
                     bool expXn = !present.Contains((v.X - scale, v.Y, v.Z));
                     bool expXp = !present.Contains((v.X + scale, v.Y, v.Z));
@@ -460,20 +490,30 @@ namespace Layout.Systems
                     float fz1 = expZp && ((v.Z + scale) & 15) == 0
                         && (solid == null || solid(v.X, v.Y, v.Z + scale)) ? BlockPlaneInset : 0f;
 
-                    // The inset box this voxel occupies.
-                    float x0 = lx + fx0, y0 = ly + fy0, z0 = lz + fz0;
-                    float x1 = lx + edge - 2f * ix - fx1;
-                    float y1 = ly + edge - 2f * iy - fy1;
-                    float z1 = lz + edge - 2f * iz - fz1;
+                    // The inset box this voxel occupies. CANONICAL LATTICE DERIVATION (0.3.57): each bound
+                    // is computed from ITS OWN integer voxel coordinate rather than as "min corner + edge".
+                    // The two are equal in exact arithmetic, but not in floats — rounding (v.X/16 − ox) to
+                    // float and then adding `edge` lands up to one ULP away from rounding
+                    // ((v.X + scale)/16 − ox) directly. That last bit is invisible on screen (~1e-7 blocks)
+                    // but it is the difference between two adjacent voxels agreeing on their shared plane or
+                    // not, and the welder matches bit-exactly — the old form would have blocked nearly every
+                    // cross-voxel weld. Insets still apply per face, so faces that genuinely sit at
+                    // different positions correctly refuse to share.
+                    float x0 = (float)(v.X / 16.0 - ox) + ix + fx0;
+                    float y0 = (float)(v.Y / 16.0 - oy) + iy + fy0;
+                    float z0 = (float)(v.Z / 16.0 - oz) + iz + fz0;
+                    float x1 = (float)((v.X + scale) / 16.0 - ox) - ix - fx1;
+                    float y1 = (float)((v.Y + scale) / 16.0 - oy) - iy - fy1;
+                    float z1 = (float)((v.Z + scale) / 16.0 - oz) - iz - fz1;
 
                     // Emit only the exposed faces, wound to match the outward (CCW) orientation the old
                     // cube path used.
-                    if (expYn) AddQuad(mesh, x0, y0, z0, x0, y0, z1, x1, y0, z1, x1, y0, z0, color); // bottom −Y
-                    if (expYp) AddQuad(mesh, x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, color); // top +Y
-                    if (expZn) AddQuad(mesh, x0, y0, z0, x1, y0, z0, x1, y1, z0, x0, y1, z0, color); // front −Z
-                    if (expZp) AddQuad(mesh, x0, y0, z1, x0, y1, z1, x1, y1, z1, x1, y0, z1, color); // back +Z
-                    if (expXn) AddQuad(mesh, x0, y0, z0, x0, y1, z0, x0, y1, z1, x0, y0, z1, color); // left −X
-                    if (expXp) AddQuad(mesh, x1, y0, z0, x1, y0, z1, x1, y1, z1, x1, y1, z0, color); // right +X
+                    if (expYn) AddQuad(mesh, welder, x0, y0, z0, x0, y0, z1, x1, y0, z1, x1, y0, z0, color); // bottom −Y
+                    if (expYp) AddQuad(mesh, welder, x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1, color); // top +Y
+                    if (expZn) AddQuad(mesh, welder, x0, y0, z0, x1, y0, z0, x1, y1, z0, x0, y1, z0, color); // front −Z
+                    if (expZp) AddQuad(mesh, welder, x0, y0, z1, x0, y1, z1, x1, y1, z1, x1, y0, z1, color); // back +Z
+                    if (expXn) AddQuad(mesh, welder, x0, y0, z0, x0, y1, z0, x0, y1, z1, x0, y0, z1, color); // left −X
+                    if (expXp) AddQuad(mesh, welder, x1, y0, z0, x1, y0, z1, x1, y1, z1, x1, y1, z0, color); // right +X
                 }
             }
 
@@ -670,7 +710,7 @@ namespace Layout.Systems
                     float y = (float)(planeW - oy);
                     float x0 = (float)(v.X / 16.0 - ox), x1 = x0 + e;
                     float z0 = (float)(v.Z / 16.0 - oz), z1 = z0 + e;
-                    AddQuad(mesh, x0, y, z0, x1, y, z0, x1, y, z1, x0, y, z1, color);
+                    AddQuad(mesh, null, x0, y, z0, x1, y, z0, x1, y, z1, x0, y, z1, color);
                     break;
                 }
                 case PlaneAxis.Z: // vertical N–S: vary X/Y at z = offset
@@ -678,7 +718,7 @@ namespace Layout.Systems
                     float z = (float)(planeW - oz);
                     float x0 = (float)(v.X / 16.0 - ox), x1 = x0 + e;
                     float y0 = (float)(v.Y / 16.0 - oy), y1 = y0 + e;
-                    AddQuad(mesh, x0, y0, z, x1, y0, z, x1, y1, z, x0, y1, z, color);
+                    AddQuad(mesh, null, x0, y0, z, x1, y0, z, x1, y1, z, x0, y1, z, color);
                     break;
                 }
                 default: // PlaneAxis.X — vertical E–W: vary Z/Y at x = offset
@@ -686,23 +726,106 @@ namespace Layout.Systems
                     float x = (float)(planeW - ox);
                     float z0 = (float)(v.Z / 16.0 - oz), z1 = z0 + e;
                     float y0 = (float)(v.Y / 16.0 - oy), y1 = y0 + e;
-                    AddQuad(mesh, x, y0, z0, x, y0, z1, x, y1, z1, x, y1, z0, color);
+                    AddQuad(mesh, null, x, y0, z0, x, y0, z1, x, y1, z1, x, y1, z0, color);
                     break;
                 }
             }
         }
 
-        private static void AddQuad(MeshData mesh,
+        private static void AddQuad(MeshData mesh, VertexWelder welder,
             float ax, float ay, float az, float bx, float by, float bz,
             float cx, float cy, float cz, float dx, float dy, float dz, int color)
         {
-            int b0 = mesh.VerticesCount;
-            mesh.AddVertex(ax, ay, az, 0f, 0f, color);
-            mesh.AddVertex(bx, by, bz, 0f, 0f, color);
-            mesh.AddVertex(cx, cy, cz, 0f, 0f, color);
-            mesh.AddVertex(dx, dy, dz, 0f, 0f, color);
-            mesh.AddIndex(b0);     mesh.AddIndex(b0 + 1); mesh.AddIndex(b0 + 2);
-            mesh.AddIndex(b0);     mesh.AddIndex(b0 + 2); mesh.AddIndex(b0 + 3);
+            int b0, b1, b2, b3;
+            if (welder == null)
+            {
+                b0 = mesh.VerticesCount;
+                mesh.AddVertex(ax, ay, az, 0f, 0f, color);
+                mesh.AddVertex(bx, by, bz, 0f, 0f, color);
+                mesh.AddVertex(cx, cy, cz, 0f, 0f, color);
+                mesh.AddVertex(dx, dy, dz, 0f, 0f, color);
+                b1 = b0 + 1; b2 = b0 + 2; b3 = b0 + 3;
+            }
+            else
+            {
+                b0 = welder.Emit(ax, ay, az, color);
+                b1 = welder.Emit(bx, by, bz, color);
+                b2 = welder.Emit(cx, cy, cz, color);
+                b3 = welder.Emit(dx, dy, dz, color);
+            }
+
+            // Identical winding either way — only which vertex slots the indices point at can differ.
+            mesh.AddIndex(b0); mesh.AddIndex(b1); mesh.AddIndex(b2);
+            mesh.AddIndex(b0); mesh.AddIndex(b2); mesh.AddIndex(b3);
+        }
+
+        /// <summary>
+        /// Per-<see cref="Build"/> vertex cache: returns the index of an existing vertex at the same exact
+        /// position and colour, or appends a new one. Scoped to a single call — never shared between meshes
+        /// and never static, so background materialization batches stay thread-safe.
+        /// </summary>
+        /// <remarks>
+        /// MATCHING IS BIT-EXACT on the float bit patterns, not tolerance-based. That is only sound because
+        /// <see cref="Build"/> derives every face coordinate from its OWN integer lattice coordinate (see the
+        /// canonical-derivation note in the cube branch); a tolerance match would be both slower and capable
+        /// of welding two genuinely distinct positions, e.g. either side of a z-fight inset.
+        ///
+        /// A hash collision or an unmatched key costs nothing but a duplicate vertex, which is exactly the
+        /// pre-welding behaviour — this optimization degrades into correctness rather than corruption.
+        /// </remarks>
+        private sealed class VertexWelder
+        {
+            private readonly MeshData _mesh;
+            private readonly Dictionary<VertexKey, int> _shared;
+
+            public VertexWelder(MeshData mesh, int expectedFaces)
+            {
+                _mesh = mesh;
+                // A closed voxel shell shares each corner between roughly 2–3 faces, so unique vertices land
+                // near 1.5x the face count. Pre-sizing avoids rehashing the largest batches mid-build.
+                _shared = new Dictionary<VertexKey, int>(
+                    expectedFaces > 0 ? expectedFaces + (expectedFaces >> 1) : 4);
+            }
+
+            public int Emit(float x, float y, float z, int color)
+            {
+                var key = new VertexKey(x, y, z, color);
+                if (_shared.TryGetValue(key, out int existing)) return existing;
+
+                int index = _mesh.VerticesCount;
+                _mesh.AddVertex(x, y, z, 0f, 0f, color);
+                _shared[key] = index;
+                return index;
+            }
+        }
+
+        private readonly struct VertexKey : IEquatable<VertexKey>
+        {
+            private readonly int _x, _y, _z, _color;
+
+            public VertexKey(float x, float y, float z, int color)
+            {
+                _x = BitConverter.SingleToInt32Bits(x);
+                _y = BitConverter.SingleToInt32Bits(y);
+                _z = BitConverter.SingleToInt32Bits(z);
+                _color = color;
+            }
+
+            public bool Equals(VertexKey other) =>
+                _x == other._x && _y == other._y && _z == other._z && _color == other._color;
+
+            public override bool Equals(object obj) => obj is VertexKey other && Equals(other);
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    int hash = _x;
+                    hash = (hash * 397) ^ _y;
+                    hash = (hash * 397) ^ _z;
+                    return (hash * 397) ^ _color;
+                }
+            }
         }
 
         // --- small helpers ---------------------------------------------------------------------------------
