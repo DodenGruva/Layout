@@ -2,14 +2,35 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-23 against the built/package checkpoint
-> **v0.3.53 final release**. Where this file and the code disagree, **the code wins** — treat this as a map, then
-> read the `.cs` files it points at.
+> and the performance-relevant mechanics. Updated 2026-07-24 against the built/package checkpoint
+> **v0.3.58 on the `beta` branch** (v0.3.53 was the last `main` release). Where this file and the code
+> disagree, **the code wins** — treat this as a map, then read the `.cs` files it points at.
 >
 > **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.14),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/27.md` (per-session
-> history), `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/28.md` (per-session
+> history), `dev/PLAN_RENDER_PERFORMANCE.md` (the live rendering plan + measurements),
+> `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
+
+> ## ⚠️ Performance analysts: start here, not at §9
+>
+> §9 and §12 below predate Session 28 and repeat two claims that were **disproved**:
+>
+> - The "approximately 140→80 FPS regression" that closed the rendering arc was a **double-mesh draw bug**,
+>   not a cost of greedy merging. Both rejected experiments were rejected on **appearance**, not performance.
+> - Every frame-time figure in Sessions 25–27 was measured against a **238 FPS frame cap**. The "4.3 ms
+>   off-screen" baseline is the cap, not a floor; the true baseline is ~1.0 ms.
+>
+> **Current measured position (v0.3.57, uncapped, 8M-voxel guide):** 4.8 ms close / 3.1 ms distant against a
+> 1.0 ms empty baseline, on 771 MB of mesh data per frame. Vertex welding took that from 8.2 ms / 1.81 GB
+> with a provably identical triangle stream.
+>
+> **The governing constraint:** guides are **order-dependent translucent geometry** — Opaque stage, manual
+> alpha blending, depth-tested, double-sided. On a hollow shell the guide overlaps itself at nearly every
+> pixel, so whichever batch draws first wins and writes depth. The accepted appearance is partly a
+> by-product of voxel emission order, and **any change that regroups primitives changes the picture**.
+>
+> Read `dev/SESSION_28.md` and `dev/PLAN_RENDER_PERFORMANCE.md` before proposing renderer work.
 
 ---
 

@@ -1,4 +1,4 @@
-# Layout — TODO / Outstanding Items (current: v0.3.53 final release)
+# Layout — TODO / Outstanding Items (current: v0.3.58 on `beta`)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
@@ -231,13 +231,43 @@ reports intuitive block dimensions.
 5. ~~**Verify and package the final release.**~~ **DONE.** Focused cumulative-cap smoke test passed; Release
    build has 0 warnings/errors; `Layout0.3.53.zip` has 40 entries and 37 assets.
 
-### A10. Current human backlog
+### A10. Current human backlog (status at v0.3.58)
 
-1. **Fix Box and Square guides automatically constraining to cardinal directions.**
-2. **Perform an adversarial code review.**
-3. **Perform a performance-focused code review.**
-4. **Explore alternative rendering options for performance gains.**
-5. **Clean up and consolidate the documentation.**
+1. **Fix Box and Square guides automatically constraining to cardinal directions.** — **OPEN.** The only
+   outstanding functional defect; nothing in Sessions 25–28 touched it.
+2. **Perform an adversarial code review.** — **OPEN.**
+3. **Perform a performance-focused code review.** — **PARTLY ADDRESSED** by Session 28's measured renderer
+   work, but a general review of the non-render code has not been done.
+4. **Explore alternative rendering options for performance gains.** — **IN PROGRESS**, see
+   `PLAN_RENDER_PERFORMANCE.md` and `SESSION_28.md`. Vertex welding (v0.3.57) removed 41% of guide frame
+   cost with no visible change and is spent. A custom shader is under discussion. Ordering + spatial
+   culling remain gated behind a visible change to the accepted look.
+5. **Clean up and consolidate the documentation.** — **OPEN**, though Session 28 corrected the false
+   performance claims in `SESSION_26.md`.
+
+### A11. Session-28 rendering arc (v0.3.55–v0.3.58) — full detail in `SESSION_28.md`
+
+1. ~~**Measure the real bottleneck instead of guessing.**~~ **DONE (v0.3.55–v0.3.56).** `.layout
+   renderstats` reports vertices/indices/bytes and warns only on evidence of frame-cap clipping. Every
+   frame-time figure in Sessions 25–27 was taken against a 238 FPS cap and understates the truth.
+2. ~~**Reopen the renderer arc Session 26 closed.**~~ **DONE.** Its 140→80 FPS evidence was a double-mesh
+   draw bug; both rejected experiments were rejected on appearance, not performance. See the correction
+   banner atop `SESSION_26.md`.
+3. ~~**Halve the cost of a large guide with no visible change.**~~ **DONE (v0.3.57).** Vertex welding:
+   −72.9% vertices, −58.4% mesh data, −41.5% frame cost, triangle stream provably identical (10/10
+   harness), human A/B confirmed indistinguishable. Welding now runs at ~1.0–1.08 vertices per quad — the
+   theoretical floor — so this lever is spent.
+4. ~~**Stop large guides freezing the client on world load and dropping onto other players in one lump.**~~
+   **DONE (v0.3.58), NOT YET PLAYTESTED.** `RebuildGuide` was fully synchronous with no size check; guides
+   above 100,000 voxels now scaffold and stream. The remote-arrival half needs a second player to verify.
+5. **Next playtest focus:** world load with the 8M guide (scaffold → grow-in, no hang); whether 100,000 is
+   the right threshold; a second player watching a large guide arrive.
+
+> **Standing constraint discovered in Session 28 — do not lose this.** Guides are *order-dependent*
+> translucent geometry: Opaque stage, manual alpha blending, depth-tested, double-sided. On a hollow shell
+> the guide overlaps itself at nearly every pixel, so whichever batch draws first wins. The accepted
+> appearance is therefore partly a by-product of voxel emission order, and **any change that regroups
+> primitives changes the picture**. Welding was safe precisely because it regroups nothing.
 
 ### A. Human backlog — queued at Session-16 end — ✅ ALL SEVEN DELIVERED (v0.2.22–v0.2.23)
 
