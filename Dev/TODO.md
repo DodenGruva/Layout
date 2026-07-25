@@ -263,6 +263,41 @@ reports intuitive block dimensions.
 5. **Next playtest focus:** world load with the 8M guide (scaffold → grow-in, no hang); whether 100,000 is
    the right threshold; a second player watching a large guide arrive.
 
+### A12. Open — minor ground z-fighting (reported 2026-07-25, v0.3.6x)
+
+Guide voxels resting **on the ground** show very minor z-fighting. Not reproduced or judged from outside
+the game; the reporter was away from their machine.
+
+**Made tunable rather than guessed at (v0.3.65).** `/layout inset <blocks>` sets the anti-z-fight inset
+live, saves to `layout-client.json` as `zFightInset`, and rebuilds every guide. Default is the historical
+**0.003**, so nothing changes until it is deliberately dialled.
+
+**Read this before picking a value.** The inset was settled by three rounds of playtest — 0.004 rejected as
+"seamy", 0.001 shimmered with distance, 0.003 chosen — but **the objection to 0.004 is obsolete**. That seam
+was between two adjacent guide voxels meeting across a block boundary, and exposed-face meshing (0.2.14) no
+longer emits those faces at all. The inset now only ever separates a guide face from a **world block** face,
+so values above 0.003 are safer today than when the ceiling was set.
+
+**Candidate causes, most to least likely:**
+
+1. **0.003 is simply too small at distance or shallow angles.** Depth precision falls with distance, and the
+   `CameraNudge` (0.003, in `GuideRenderer.SetModelMatrix`) pulls the mesh toward the camera — which helps
+   a horizontal ground face when looking down at it, and barely at all when viewing from far away at a
+   shallow angle. Try `/layout inset 0.006` then `0.01`.
+2. **The custom shader does not implement `extraZOffset`.** `standard.vsh` applies
+   `gl_Position.w += extraZOffset`; the lean shader omits it. If the engine sets a nonzero value for the
+   Opaque stage, guides lost a small depth bias in v0.3.60. **Check first: does `/layout shader off` make
+   the shimmer go away?** That single test separates cause 1 from cause 2, and no code change is needed
+   to run it.
+3. **The lift is not being applied at all on that surface.** The lowest layer's bottom face is only lifted
+   when the solidity probe reports a solid block below (`GuideMeshBuilder`, `fy0`). A guide resting on
+   something the probe reads as non-solid — snow layer, farmland, a slab top — would get no lift. If the
+   shimmer is specific to certain ground types, this is the cause and the fix is in the probe, not the
+   constant.
+
+**Do not raise `CameraNudge` to compensate.** It is view-dependent by design and scales with distance from
+the mesh origin; using it to paper over a face-inset problem would shift every guide, not just ground faces.
+
 > **Standing constraint discovered in Session 28 — do not lose this.** Guides are *order-dependent*
 > translucent geometry: Opaque stage, manual alpha blending, depth-tested, double-sided. On a hollow shell
 > the guide overlaps itself at nearly every pixel, so whichever batch draws first wins. The accepted

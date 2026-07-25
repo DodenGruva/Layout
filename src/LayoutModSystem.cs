@@ -205,6 +205,7 @@ namespace Layout
             GuideMeshBuilder.ConfigureOpacities(
                 ClientConfig.OpacityBody, ClientConfig.OpacityLocked, ClientConfig.OpacityApex,
                 ClientConfig.OpacityAnchor, ClientConfig.OpacityGrabbed, ClientConfig.OpacityHiddenAnchor);
+            GuideMeshBuilder.ConfigureBlockPlaneInset(ClientConfig.ZFightInset);
 
             // The one DraftManager (client tool state), seeded with the remembered defaults. The cap seed is
             // the baked default until the server's bulk sync replaces it below.
@@ -241,6 +242,7 @@ namespace Layout
             // A hand-edited layout-client.json must take effect at login, not only via the command.
             Renderer.SetShaderBrightness(
                 ClientConfig.ShaderGuideBrightness, ClientConfig.ShaderAmbientResponse);
+            Renderer.SetVoxelFrameStrength(ClientConfig.VoxelFrameStrength);
             ClientNet.GuideRenderingChanged += OnGuideRenderingChanged;
 
             // The two dialogs share the same DraftManager + ClientNetworkHandler (the Module-6 contract).
@@ -336,6 +338,20 @@ namespace Layout
                     .WithDescription("Show local Layout guide rendering statistics for the last frame.")
                     .HandleWith(OnClientRenderStatsCommand)
                 .EndSubCommand()
+                .BeginSubCommand("inset")
+                    .WithDescription(
+                        "Set the anti-z-fight inset in blocks (0-0.05, default 0.003). Raise it if guides "
+                        + "resting on the ground shimmer. No argument reports the current value.")
+                    .WithArgs(parsers.OptionalFloat("blocks"))
+                    .HandleWith(OnClientInsetCommand)
+                .EndSubCommand()
+                .BeginSubCommand("voxelframe")
+                    .WithDescription(
+                        "Set how strongly each voxel's boundary is outlined (0 = off, 1 = strongest). "
+                        + "No argument reports the current value.")
+                    .WithArgs(parsers.OptionalFloat("strength"))
+                    .HandleWith(OnClientVoxelFrameCommand)
+                .EndSubCommand()
                 .BeginSubCommand("shaderbrightness")
                     .WithDescription(
                         "Set custom-shader guide brightness (0.2-1.5) and ambient response (0-1). "
@@ -372,6 +388,59 @@ namespace Layout
 
         private TextCommandResult OnClientRenderingOnCommand(TextCommandCallingArgs args) =>
             SetLocalRenderingState(true);
+
+        /// <summary>
+        /// Live tuning for the anti-z-fight inset. Unlike the brightness and frame controls this one is
+        /// baked into the mesh, so every guide is rebuilt when it changes.
+        /// </summary>
+        private TextCommandResult OnClientInsetCommand(TextCommandCallingArgs args)
+        {
+            if (Renderer == null) return TextCommandResult.Error("Layout renderer is not active.");
+
+            bool changed = false;
+            if (args[0] is float inset)
+            {
+                ClientConfig.ZFightInset = inset;
+                ClientConfig.Normalize();
+                SaveClientConfig();
+                GuideMeshBuilder.ConfigureBlockPlaneInset(ClientConfig.ZFightInset);
+                Renderer.RebuildAllForDiagnostics();   // the inset is baked in at build time
+                changed = true;
+            }
+
+            return TextCommandResult.Success(string.Format(
+                "Layout z-fight inset {0:0.0000} blocks.{1}",
+                ClientConfig.ZFightInset,
+                changed
+                    ? " Saved, guides rebuilt."
+                    : " (Pass a value 0-0.05 to change; raise it if ground voxels shimmer.)"));
+        }
+
+        /// <summary>
+        /// Live tuning for the voxel boundary frame, saved immediately to layout-client.json.
+        /// </summary>
+        private TextCommandResult OnClientVoxelFrameCommand(TextCommandCallingArgs args)
+        {
+            if (Renderer == null) return TextCommandResult.Error("Layout renderer is not active.");
+
+            bool changed = false;
+            if (args[0] is float strength)
+            {
+                ClientConfig.VoxelFrameStrength = strength;
+                ClientConfig.Normalize();
+                SaveClientConfig();
+                Renderer.SetVoxelFrameStrength(ClientConfig.VoxelFrameStrength);
+                changed = true;
+            }
+
+            float current = ClientConfig.VoxelFrameStrength;
+            string state = current <= 0f ? "off" : string.Format("{0:0.00}", current);
+            return TextCommandResult.Success(
+                changed
+                    ? $"Layout voxel frame {state}. Saved."
+                    : $"Layout voxel frame {state}. (Pass a value 0-1 to change; requires the custom "
+                      + "shader — /layout shader on.)");
+        }
 
         /// <summary>
         /// Live tuning for the custom shader's brightness, saved immediately to layout-client.json. Meant to

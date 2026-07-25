@@ -162,6 +162,32 @@ namespace Layout.Config
         [JsonProperty("shaderAmbientResponse")]
         public float ShaderAmbientResponse { get; set; } = 0.55f;
 
+        /// <summary>
+        /// Darkens each voxel's boundary so individual cells are legible on a large guide surface.
+        /// 0 disables it; 1 would be a fully black frame. Default 0.25 is a light pencil line.
+        /// </summary>
+        /// <remarks>
+        /// Drawn procedurally in the fragment shader — no extra vertices, indices, or draw calls — so it
+        /// costs a few arithmetic operations per pixel and nothing per voxel. Custom shader only; with
+        /// <c>/layout shader off</c> there is no frame. Tune live with <c>/layout voxelframe</c>.
+        /// </remarks>
+        [JsonProperty("voxelFrameStrength")]
+        public float VoxelFrameStrength { get; set; } = 0.25f;
+
+        /// <summary>
+        /// How far a guide face sitting exactly on a block-grid plane is pulled off it, in world blocks,
+        /// to stop it z-fighting the world block behind it. Default 0.003. Raise it if guide voxels
+        /// resting on the ground shimmer; lower it if guides look like they float.
+        /// </summary>
+        /// <remarks>
+        /// Clamped to 0–0.05. Playtest history: 0.004 was rejected as seamy, 0.001 shimmered with distance,
+        /// 0.003 was chosen. The "seamy" objection is obsolete — that seam was between adjacent guide
+        /// voxels, and exposed-face meshing no longer emits those faces — so values above 0.003 are safer
+        /// now than when this was settled. Tune live with <c>/layout inset</c>.
+        /// </remarks>
+        [JsonProperty("zFightInset")]
+        public float ZFightInset { get; set; } = 0.003f;
+
         /// <summary>Folds out-of-range values (e.g. from a hand-edited file) back to safe defaults.</summary>
         public void Normalize()
         {
@@ -178,6 +204,10 @@ namespace Layout.Config
             if (ShaderGuideBrightness > 1.5f) ShaderGuideBrightness = 1.5f;
             if (ShaderAmbientResponse < 0f) ShaderAmbientResponse = 0f;
             if (ShaderAmbientResponse > 1f) ShaderAmbientResponse = 1f;
+            if (VoxelFrameStrength < 0f) VoxelFrameStrength = 0f;
+            if (VoxelFrameStrength > 1f) VoxelFrameStrength = 1f;
+            if (ZFightInset < 0f) ZFightInset = 0f;
+            if (ZFightInset > 0.05f) ZFightInset = 0.05f;
 
             if (DefaultDivisions < 0) DefaultDivisions = 0;
             if (DefaultDivisions > Shapes.DivisionMarks.MaxDivisions) DefaultDivisions = Shapes.DivisionMarks.MaxDivisions;

@@ -271,7 +271,25 @@ namespace Layout.Systems
         // with distance); 0.003 per the human's call (0.2.14). NOTE: since exposed-face meshing (0.2.14),
         // faces BETWEEN adjacent guide voxels no longer exist at all — this inset now only ever separates
         // a guide face from a world block face, so it produces no interior seams whatsoever.
-        private const float BlockPlaneInset = 0.003f;
+        /// <remarks>
+        /// TUNABLE SINCE v0.3.65 — a field, not a const, so <c>/layout inset</c> can dial it in play. A
+        /// reported ground z-fight cannot be reproduced or judged from outside the game, and this value was
+        /// settled by three rounds of playtest; guessing at a new one blind is how the Session 25–26
+        /// regressions happened.
+        ///
+        /// Worth knowing before raising it: the reason 0.004 was rejected as "seamy" no longer applies. That
+        /// seam was between two guide voxels meeting across a block boundary, and exposed-face meshing means
+        /// those faces are not emitted at all any more (see the note above). The inset now only ever
+        /// separates a guide face from a WORLD BLOCK face, so the old ceiling on it is obsolete and larger
+        /// values are safer than they were when this was tuned.
+        /// </remarks>
+        private static float BlockPlaneInset = 0.003f;
+
+        /// <summary>Sets the anti-z-fight inset, in world blocks. Meshes must be rebuilt to take effect.</summary>
+        public static void ConfigureBlockPlaneInset(float inset) => BlockPlaneInset = inset;
+
+        /// <summary>Current anti-z-fight inset, in world blocks.</summary>
+        public static float CurrentBlockPlaneInset => BlockPlaneInset;
 
         // Coplanarity tolerance, world blocks. Anchors placed by voxel/block targeting (and Shift-to-constrain)
         // land on exact grid coordinates, so an effectively-exact epsilon is right: a clean foot reads clean, a
@@ -476,18 +494,32 @@ namespace Layout.Systems
                     // (the 0.2.14 seam bug); where the neighbour is AIR there is nothing to z-fight, so
                     // the face stays exactly on the grid and stair-steps never open slits either (the
                     // 0.2.15 filled-volume seam finding).
+                    // GRID-COPLANAR TEST REMOVED (v0.3.66). Each face used to require its coordinate to be a
+                    // multiple of 16 — i.e. to sit on a whole-block plane — before it could be inset. That
+                    // was a proxy for "might be coplanar with a world surface", and it is wrong for every
+                    // block that is not full height: slabs, chiseled blocks, snow layers, stair treads. A
+                    // guide voxel resting on a slab mid-guide sits at a NON-grid Y, failed the test, and
+                    // z-fought no matter how far the inset was raised.
+                    //
+                    // The one condition that fired off-grid was `v.Y == minY`, the guide's lowest layer —
+                    // which is exactly why raising the inset appeared to move only the bottom of the guide.
+                    //
+                    // The solidity probe is the accurate test on its own: it asks whether a solid world
+                    // block actually occupies the cell across that face. A face bordering air still gets
+                    // nothing, so stair-step faces never open slits, and faces between adjacent guide
+                    // voxels are not emitted at all, so no interior seam is possible.
                     Func<int, int, int, bool> solid = options.IsNeighborSolid;
-                    float fx0 = expXn && (v.X & 15) == 0
+                    float fx0 = expXn
                         && (solid == null || solid(v.X - scale, v.Y, v.Z)) ? BlockPlaneInset : 0f;
-                    float fx1 = expXp && ((v.X + scale) & 15) == 0
+                    float fx1 = expXp
                         && (solid == null || solid(v.X + scale, v.Y, v.Z)) ? BlockPlaneInset : 0f;
-                    float fy0 = expYn && ((v.Y & 15) == 0 || v.Y == minY)
+                    float fy0 = expYn
                         && (solid == null || solid(v.X, v.Y - scale, v.Z)) ? BlockPlaneInset : 0f;
-                    float fy1 = expYp && ((v.Y + scale) & 15) == 0
+                    float fy1 = expYp
                         && (solid == null || solid(v.X, v.Y + scale, v.Z)) ? BlockPlaneInset : 0f;
-                    float fz0 = expZn && (v.Z & 15) == 0
+                    float fz0 = expZn
                         && (solid == null || solid(v.X, v.Y, v.Z - scale)) ? BlockPlaneInset : 0f;
-                    float fz1 = expZp && ((v.Z + scale) & 15) == 0
+                    float fz1 = expZp
                         && (solid == null || solid(v.X, v.Y, v.Z + scale)) ? BlockPlaneInset : 0f;
 
                     // The inset box this voxel occupies. CANONICAL LATTICE DERIVATION (0.3.57): each bound

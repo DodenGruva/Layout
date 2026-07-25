@@ -281,12 +281,23 @@ namespace Layout.Systems
             public readonly int Indices;
             public readonly long Bytes;
 
-            public MeshCost(int triangles, int vertices, int indices, long bytes)
+            /// <summary>
+            /// Voxel scale this mesh was built at, or 0 for geometry with no voxel lattice (remote draft
+            /// markers). Recorded at upload so the voxel-boundary frame works on EVERY mesh set — draft
+            /// ghost, cursor precision bands, materialization batches, pending placement — without each
+            /// path having to remember to carry the scale to the render loop. The precision bands in
+            /// particular are deliberately built at differing scales, so a single per-guide value would
+            /// draw the wrong grid on them.
+            /// </summary>
+            public readonly int VoxelScale;
+
+            public MeshCost(int triangles, int vertices, int indices, long bytes, int voxelScale)
             {
                 Triangles = triangles;
                 Vertices = vertices;
                 Indices = indices;
                 Bytes = bytes;
+                VoxelScale = voxelScale;
             }
 
             /// <summary>
@@ -297,7 +308,7 @@ namespace Layout.Systems
             /// driver padding and alignment are not modelled, and it is meant for A/B comparison between
             /// builds rather than as an absolute.
             /// </summary>
-            public static MeshCost Measure(MeshData data)
+            public static MeshCost Measure(MeshData data, int voxelScale)
             {
                 if (data == null) return default;
 
@@ -312,7 +323,8 @@ namespace Layout.Systems
 
                 return new MeshCost(
                     indices / 3, vertices, indices,
-                    (long)vertices * perVertex + (long)indices * 4L);
+                    (long)vertices * perVertex + (long)indices * 4L,
+                    voxelScale);
             }
         }
 
@@ -537,6 +549,12 @@ namespace Layout.Systems
 
         private float _shaderBrightness = 0.78f;
         private float _shaderAmbientResponse = 0.55f;
+        private float _voxelFrameStrength = 0.25f;
+
+        /// <summary>How strongly each voxel's boundary is darkened, 0 = off. Custom shader only.</summary>
+        public float VoxelFrameStrength => _voxelFrameStrength;
+
+        public void SetVoxelFrameStrength(float strength) => _voxelFrameStrength = strength;
 
         /// <summary>
         /// Sets the custom shader's brightness controls. Both are clamped by the config's Normalize().
@@ -698,8 +716,11 @@ namespace Layout.Systems
                 activeProg = prog;
             }
 
-            foreach (GuideMesh gm in _guideMeshes.Values)
+            if (useCustom) _guideShader.Uniform("layoutFrameStrengthIn", _voxelFrameStrength);
+
+            foreach (KeyValuePair<Guid, GuideMesh> entry in _guideMeshes)
             {
+                GuideMesh gm = entry.Value;
                 MeshRef primary = gm.GrabRef ?? gm.TransitionRef ?? gm.Ref;
                 Vec3d origin = gm.GrabRef != null ? gm.GrabOrigin
                     : gm.TransitionRef != null ? gm.TransitionOrigin : gm.Origin;
@@ -720,12 +741,19 @@ namespace Layout.Systems
                 stats.VisiblePlacedGuides++;
                 SetModelMatrix(origin.X - camPos.X, origin.Y - camPos.Y, origin.Z - camPos.Z);
                 ApplyModelMatrix(useCustom, prog);
+                ApplyVoxelFrame(useCustom, GuideVoxelScale(entry.Key), origin);
                 RenderMeshTracked(rpi, primary, stats);
                 List<MeshRef> auxiliary = gm.GrabRef != null ? gm.GrabAuxiliary
                     : gm.TransitionRef != null ? gm.TransitionAuxiliary : gm.Auxiliary;
                 for (int i = 0; i < auxiliary.Count; i++)
                     RenderMeshTracked(rpi, auxiliary[i], stats);
             }
+
+            // The draft ghost, its cursor precision bands, and its materialization batches all share the
+            // draft origin. Group scale 0 means each mesh uses the scale it recorded at upload — which is
+            // required here, because the precision bands are deliberately built at DIFFERENT scales from
+            // the ghost around them, and a single group scale would draw the wrong grid on them.
+            ApplyVoxelFrame(useCustom, 0, _draftPreviewOrigin);
 
             bool draftVisible = VisibleToPlayer(
                 camPos, _draftCullCenter, _draftCullRadius, viewDistance, frustumCuller);
@@ -773,6 +801,9 @@ namespace Layout.Systems
                     pendingPlacement.Origin.Y - camPos.Y,
                     pendingPlacement.Origin.Z - camPos.Z);
                 ApplyModelMatrix(useCustom, prog);
+                // The handoff visual between the final click and the guide being adopted. Without this the
+                // frame would vanish for the duration of a local placement's materialization, then pop in.
+                ApplyVoxelFrame(useCustom, 0, pendingPlacement.Origin);
                 for (int i = 0; i < pendingPlacement.Meshes.Count; i++)
                 {
                     if (pendingPlacement.Meshes[i] == null) continue;
@@ -789,6 +820,9 @@ namespace Layout.Systems
 
             if (_markerMesh != null)
             {
+                // Remote draft anchors are 0.25-block cubes, not voxel geometry - a cell grid on them
+                // would be meaningless. Null origin switches the frame off for the rest of the pass.
+                ApplyVoxelFrame(useCustom, 0, null);
                 foreach (Vec3d anchor in _remoteAnchors.Values)
                 {
                     if (!VisibleToPlayer(
@@ -818,6 +852,68 @@ namespace Layout.Systems
             if (useCustom) _guideShader.UniformMatrix("modelMatrix", _modelMat);
             else standardProg.ModelMatrix = _modelMat;
         }
+
+        /// <summary>
+        /// Sets the voxel-frame grid for the mesh about to be drawn. <paramref name="voxelScale"/> of 0
+        /// disables the frame, which is what non-voxel geometry (remote draft markers) passes.
+        /// </summary>
+        /// <remarks>
+        /// The grid must line up with the WORLD voxel lattice, but mesh vertices are relative to an
+        /// arbitrary per-guide origin that is not itself on a voxel boundary. Passing the origin whole would
+        /// destroy float precision at world scale, so only its remainder within one cell is sent: the
+        /// discarded whole cells are an integer offset, which <c>fract()</c> in the shader ignores.
+        ///
+        /// Looked up per draw rather than cached on GuideMesh deliberately — the scale lives on GuideData,
+        /// and every mesh path (rebuild, materialization, transition, grab) would otherwise need to
+        /// remember to copy it. One dictionary probe for a handful of visible guides is not worth that risk.
+        /// </remarks>
+        private bool _frameUseCustom;
+        private Vec3d _frameOrigin;
+        private int _frameGroupScale;
+        private int _frameAppliedScale = -1;
+
+        /// <summary>
+        /// Begins a group of meshes sharing one origin. <paramref name="groupScale"/> is the fallback for
+        /// meshes that did not record their own scale at upload; pass 0 to let each mesh decide.
+        /// </summary>
+        private void ApplyVoxelFrame(bool useCustom, int groupScale, Vec3d origin)
+        {
+            _frameUseCustom = useCustom;
+            _frameOrigin = origin;
+            _frameGroupScale = groupScale;
+            _frameAppliedScale = -1;   // force the next mesh to push uniforms
+        }
+
+        /// <summary>
+        /// Pushes the frame uniforms for one mesh, preferring the scale recorded when it was uploaded and
+        /// falling back to the group's. Redundant updates are skipped: a large guide draws ~128 batches at
+        /// one scale, and re-sending identical uniforms 128 times a frame is pure waste.
+        /// </summary>
+        private void ApplyMeshVoxelFrame(MeshRef mesh, MeshCost cost)
+        {
+            if (!_frameUseCustom) return;
+
+            int scale = cost.VoxelScale > 0 ? cost.VoxelScale : _frameGroupScale;
+            if (_frameOrigin == null || _voxelFrameStrength <= 0f) scale = 0;
+            if (scale == _frameAppliedScale) return;
+            _frameAppliedScale = scale;
+
+            if (scale <= 0)
+            {
+                _guideShader.Uniform("layoutVoxelSizeIn", 0f);
+                return;
+            }
+
+            double cell = scale / 16.0;
+            _guideShader.Uniform("layoutVoxelSizeIn", (float)cell);
+            _guideShader.Uniform("layoutGridOffsetIn", new Vec3f(
+                (float)(_frameOrigin.X - Math.Floor(_frameOrigin.X / cell) * cell),
+                (float)(_frameOrigin.Y - Math.Floor(_frameOrigin.Y / cell) * cell),
+                (float)(_frameOrigin.Z - Math.Floor(_frameOrigin.Z / cell) * cell)));
+        }
+
+        private int GuideVoxelScale(Guid id) =>
+            _network.Guides.TryGetValue(id, out GuideData guide) && guide != null ? guide.VoxelScale : 0;
 
         private void SetModelMatrix(double dx, double dy, double dz)
         {
@@ -892,9 +988,10 @@ namespace Layout.Systems
         private void RenderMeshTracked(IRenderAPI render, MeshRef mesh, RenderFrameStats stats)
         {
             if (mesh == null) return;
+            _meshCosts.TryGetValue(mesh, out MeshCost cost);
+            ApplyMeshVoxelFrame(mesh, cost);
             render.RenderMesh(mesh);
             stats.MeshDrawCalls++;
-            if (_meshCosts.TryGetValue(mesh, out MeshCost cost))
             {
                 stats.SubmittedTriangles += cost.Triangles;
                 stats.SubmittedVertices += cost.Vertices;
@@ -1857,7 +1954,7 @@ namespace Layout.Systems
             AssignAnchors(result.Shape.ControlPoints, options);
             MeshData data = GuideMeshBuilder.Build(voxels, options);
 
-            ReplaceDraftMesh(data, result.Origin);
+            ReplaceDraftMesh(data, result.Origin, result.RenderScale);
             DraftPreviewCompleted?.Invoke(this, new DraftPreviewCompletedEventArgs(
                 result.Spec.Generation, result.RenderScale, result.VoxelCount,
                 result.Extent, result.WorkMilliseconds));
@@ -1892,7 +1989,7 @@ namespace Layout.Systems
             };
             AssignAnchors(shape.ControlPoints, options);
             SetDraftCullBounds(shape, renderScale);
-            ReplaceDraftMesh(GuideMeshBuilder.Build(voxels, options), origin);
+            ReplaceDraftMesh(GuideMeshBuilder.Build(voxels, options), origin, options.Scale);
         }
 
         private void UploadAuxiliaryPreviewVoxels(
@@ -1921,15 +2018,16 @@ namespace Layout.Systems
                 IsNeighborSolid = NeighborSolidProbe
             };
             AssignAnchors(shape.ControlPoints, options);
-            _draftPrecisionMeshes.Add(UploadTrackedMesh(GuideMeshBuilder.Build(voxels, options)));
+            _draftPrecisionMeshes.Add(
+                UploadTrackedMesh(GuideMeshBuilder.Build(voxels, options), options));
             _draftPreviewOrigin = origin;
         }
 
-        private void ReplaceDraftMesh(MeshData data, Vec3d origin)
+        private void ReplaceDraftMesh(MeshData data, Vec3d origin, int voxelScale)
         {
             ClearDraftPrecisionMeshes();
             ClearDraftMaterialization();
-            MeshRef replacement = UploadTrackedMesh(data);
+            MeshRef replacement = UploadTrackedMesh(data, voxelScale);
             MeshRef previous = _draftPreviewMesh;
             _draftPreviewMesh = replacement;
             _draftPreviewOrigin = origin;
@@ -1990,7 +2088,7 @@ namespace Layout.Systems
 
             if (scaffoldReady.TryTake(out MeshData scaffoldData))
             {
-                MeshRef selectedScaleScaffold = UploadTrackedMesh(scaffoldData);
+                MeshRef selectedScaleScaffold = UploadTrackedMesh(scaffoldData, build.Spec?.Settings.Scale ?? 0);
                 MeshRef previous = _draftPreviewMesh;
                 _draftPreviewMesh = selectedScaleScaffold;
                 _draftPreviewOrigin = build.Origin;
@@ -2007,13 +2105,13 @@ namespace Layout.Systems
             bool uploaded = false;
             if (cleanReady.TryTake(out MeshData cleanData))
             {
-                _draftCleanMaterializationMeshes.Add(UploadTrackedMesh(cleanData));
+                _draftCleanMaterializationMeshes.Add(UploadTrackedMesh(cleanData, build.Spec?.Settings.Scale ?? 0));
                 uploaded = true;
             }
             if (ready.TryTake(out MeshData previewData))
             {
                 RemoveDraftScaffoldForOrganicGrowth(build);
-                _draftMaterializationMeshes.Add(UploadTrackedMesh(previewData));
+                _draftMaterializationMeshes.Add(UploadTrackedMesh(previewData, build.Spec?.Settings.Scale ?? 0));
                 uploaded = true;
             }
             if (uploaded)
@@ -2294,7 +2392,7 @@ namespace Layout.Systems
 
             if (scaffoldReady.TryTake(out MeshData scaffoldData))
             {
-                MeshRef selectedScaleScaffold = UploadTrackedMesh(scaffoldData);
+                MeshRef selectedScaleScaffold = UploadTrackedMesh(scaffoldData, build.Spec?.Settings.Scale ?? 0);
                 DeletePendingProvisionalMeshes(pending);
                 pending.ProvisionalMeshes.Add(selectedScaleScaffold);
                 pending.Origin = build.Origin;
@@ -2308,14 +2406,14 @@ namespace Layout.Systems
             bool uploadedPending = false;
             if (cleanReady.TryTake(out MeshData cleanData))
             {
-                pending.CleanMeshes.Add(UploadTrackedMesh(cleanData));
+                pending.CleanMeshes.Add(UploadTrackedMesh(cleanData, build.Spec?.Settings.Scale ?? 0));
                 uploadedPending = true;
             }
             if (ready.TryTake(out MeshData previewData))
             {
                 if (build.Spec?.Settings.Wireframe != true)
                     DeletePendingProvisionalMeshes(pending);
-                MeshRef uploadedPreview = UploadTrackedMesh(previewData);
+                MeshRef uploadedPreview = UploadTrackedMesh(previewData, build.Spec?.Settings.Scale ?? 0);
                 pending.Meshes.Add(uploadedPreview);
                 uploadedPending = true;
             }
@@ -2563,7 +2661,7 @@ namespace Layout.Systems
 
             MeshData data = GuideMeshBuilder.Build(voxels, options);
             DeleteTrackedMesh(_draftPreviewMesh);
-            _draftPreviewMesh = UploadTrackedMesh(data);
+            _draftPreviewMesh = UploadTrackedMesh(data, options);
             _draftPreviewOrigin = origin;
             SetDraftCullBounds(shape, renderScale);
             return true;
@@ -2998,7 +3096,7 @@ namespace Layout.Systems
                 bool uploaded = false;
                 if (cleanReady.TryTake(out MeshData cleanData))
                 {
-                    MeshRef clean = UploadTrackedMesh(cleanData);
+                    MeshRef clean = UploadTrackedMesh(cleanData, build.Guide?.VoxelScale ?? 0);
                     if (mesh.TransitionCleanRef == null)
                         mesh.TransitionCleanRef = clean;
                     else
@@ -3007,7 +3105,7 @@ namespace Layout.Systems
                 }
                 if (ready.TryTake(out MeshData previewData))
                 {
-                    MeshRef preview = UploadTrackedMesh(previewData);
+                    MeshRef preview = UploadTrackedMesh(previewData, build.Guide?.VoxelScale ?? 0);
                     if (mesh.TransitionRef == null)
                     {
                         mesh.TransitionRef = preview;
@@ -3354,7 +3452,8 @@ namespace Layout.Systems
                         band = FlattenToPlaneLayer(band, guide.Plane, scale, out bandSlabSide, out _);
                     GuideMeshOptions bandOptions = GrabWireOptions(
                         guide, points, origin, scale, isSurface, bandSlabSide, aim);
-                    mesh.GrabAuxiliary.Add(UploadTrackedMesh(GuideMeshBuilder.Build(band, bandOptions)));
+                    mesh.GrabAuxiliary.Add(
+                        UploadTrackedMesh(GuideMeshBuilder.Build(band, bandOptions), bandOptions));
                 }
             }
 
@@ -3749,7 +3848,7 @@ namespace Layout.Systems
             bool uploadedAny = false;
             if (cleanReady.TryTake(out MeshData cleanData))
             {
-                MeshRef uploadedClean = UploadTrackedMesh(cleanData);
+                MeshRef uploadedClean = UploadTrackedMesh(cleanData, build.Guide?.VoxelScale ?? 0);
                 if (mesh.GrabCleanRef == null)
                     mesh.GrabCleanRef = uploadedClean;
                 else
@@ -3758,7 +3857,7 @@ namespace Layout.Systems
             }
             if (ready.TryTake(out MeshData next))
             {
-                MeshRef uploaded = UploadTrackedMesh(next);
+                MeshRef uploaded = UploadTrackedMesh(next, build.Guide?.VoxelScale ?? 0);
                 if (mesh.GrabRef == null)
                 {
                     mesh.GrabRef = uploaded;
@@ -4011,13 +4110,21 @@ namespace Layout.Systems
             return chosen;
         }
 
-        private MeshRef UploadTrackedMesh(MeshData data)
+        /// <param name="voxelScale">
+        /// The scale the mesh was built at, so the voxel-boundary frame can align its grid. 0 means "no
+        /// voxel lattice" and disables the frame for that mesh — the safe default, since an unknown scale
+        /// drawing a wrong-sized grid would be worse than drawing none.
+        /// </param>
+        private MeshRef UploadTrackedMesh(MeshData data, int voxelScale = 0)
         {
             MeshRef mesh = _capi.Render.UploadMesh(data);
             if (mesh != null)
-                _meshCosts[mesh] = MeshCost.Measure(data);
+                _meshCosts[mesh] = MeshCost.Measure(data, voxelScale);
             return mesh;
         }
+
+        private MeshRef UploadTrackedMesh(MeshData data, GuideMeshOptions options) =>
+            UploadTrackedMesh(data, options?.Scale ?? 0);
 
         private void DeleteTrackedMesh(MeshRef mesh)
         {

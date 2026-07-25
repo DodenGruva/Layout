@@ -43,10 +43,17 @@ out vec4 layoutColor;
 out vec4 layoutFogColor;
 out float layoutFogAmount;
 
+// Mesh-local position, forwarded so the fragment stage can work out where it sits inside its voxel cell
+// and draw the boundary frame. Local rather than world: these values stay small (origin-relative), which
+// keeps float precision fine for a grid whose period can be as little as 1/16 of a block.
+out vec3 layoutLocalPos;
+
 void main(void)
 {
     vec4 layoutWorldPos = modelMatrix * vec4(layoutPositionIn, 1.0);
     vec4 layoutCamPos = viewMatrix * layoutWorldPos;
+
+    layoutLocalPos = layoutPositionIn;
 
     // GuideMeshBuilder already resolved every role colour and alpha on the CPU. The only thing applied
     // here is the ambient/brightness multiplier - rgb only, so guide transparency is never affected.
