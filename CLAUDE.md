@@ -14,7 +14,15 @@ on servers without Layout and, when permitted, alongside public guides. The tool
 (SESSION_21), on top of exposed-face meshing (SESSION_16, Stage A). 3D volumes can persist as either a
 hollow **Shell** or a structural **Wireframe**.
 The catalog is **15 shape types / 21 picker tiles** (SESSION_20 added straight/tapered Polygonal Prisms).
-Status: **v0.3.53 final release, in real play.**
+Status: **v0.3.58 on the `beta` branch** (v0.3.53 was the last `main` release; the mod is public).
+
+> **Renderer note — read before any rendering work.** Guides are **order-dependent translucent geometry**
+> (Opaque stage, manual alpha blending, depth-tested, double-sided). On a hollow shell the guide overlaps
+> itself at nearly every pixel, so whichever mesh batch draws first wins and writes depth. The accepted
+> appearance is therefore partly a by-product of voxel emission order, and **any change that regroups
+> primitives changes the picture** — this is why the Session 25–26 experiments failed. v0.3.57 vertex
+> welding was safe precisely because it regroups nothing. See `SESSION_28.md` and
+> `PLAN_RENDER_PERFORMANCE.md`; note that `SESSION_26.md` carries a correction banner.
 
 ## Build & run
 - **Build:** `dotnet build` from the repo root (the folder with `Layout.csproj`).
@@ -44,6 +52,11 @@ Status: **v0.3.53 final release, in real play.**
   locked-in design choices; **do not reopen those without the human explicitly asking.** Its per-revision
   deltas live in **`CHANGELOG_ARCHITECTURE.md`** (an archive — rarely needed).
 - **`TODO.md`** — the live punch-list: open bug, deferred requests, flagged decisions, future features.
+- **`PLAN_RENDER_PERFORMANCE.md`** — the Session-28 rendering plan, with every measurement taken. Read
+  before any renderer work; it also records why the Session 25–26 conclusions were wrong.
+- **`PLAN_BLOCK_OCCUPANCY.md`** — **the next feature, not yet started.** Guide voxels that have been filled
+  with material turn a "built" colour and outset slightly, so a player over-filling and chiselling back down
+  can see exactly where to stop. Feasibility is verified against the shipped assemblies.
 - **`PROJECT_STATUS.md`** — where things stand and what each module does.
 - **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix (candidate for 0.2.0).
 - **`PLAN_CHALKING_KIT.md`** — the F5 chalking-kit design rationale, now marked ✅ implemented with its
@@ -70,11 +83,16 @@ Status: **v0.3.53 final release, in real play.**
   and off-state Chalking Kit lockout**, and SESSION_27 the **v0.3.53 per-player cumulative-cap override and
   final release**.
 
-## ✅ Docs verified & consolidated to v0.3.53 final release (2026-07-23)
-The authoritative prose docs are consistent with **v0.3.53, DataVersion 12, protocol 16, 77 source files,
-15 shape types / 21 tiles**. `ARCHITECTURE.md` is **v3.14**; `SESSION_27.md` is the latest record
-(mesh: `SESSION_16.md`, F5: `SESSION_15.md`); `HANDOFF.md` is the consolidated brief. Prefer source for exact
-identifiers, but no from-scratch doc audit is needed before ordinary work.
+## ✅ Docs updated to v0.3.58 (2026-07-24)
+Consistent with **v0.3.58, DataVersion 12, protocol 16, 77 source files, 15 shape types / 21 tiles**.
+`SESSION_28.md` is the latest record (mesh: `SESSION_16.md` + `SESSION_28.md`, F5: `SESSION_15.md`).
+`ARCHITECTURE.md` is **v3.14** and `PROJECT_STATUS.md` predate the Session-28 renderer work — they are not
+wrong about anything they describe, but they do not yet mention vertex welding or settled-shell streaming;
+`SESSION_28.md` and `PLAN_RENDER_PERFORMANCE.md` are authoritative for those. Prefer source for exact
+identifiers.
+
+⚠️ **`SESSION_26.md` carries a correction banner** — three of its claims were disproved in Session 28,
+including the 140→80 FPS regression that closed the rendering arc. Do not plan renderer work from it alone.
 
 ## How to work on this project (the human's established workflow)
 - **The human is not a programmer** and does not read code. They validate by *playing the mod* and describing
@@ -98,6 +116,32 @@ identifiers, but no from-scratch doc audit is needed before ordinary work.
 settings-only: left-click **selects** a guide and the GUI's setting rows then act on THAT guide (no
 reshaping — geometry stays in Create); this replaced the old panel-expanding "selected-guide section".
 **Delete** dispels. `ToolMode` is client-only (never wired), so it's safe to reorder.
+
+## Session-28 additions (v0.3.55–v0.3.69)
+**v0.3.55–v0.3.58 are on `beta`; v0.3.59–v0.3.69 are on `beta-shader`, not yet merged.**
+- **Custom guide shader** (`assets/layout/shaders/guide.vsh`/`.fsh`, v0.3.60): guides no longer use
+  `PreparedStandardShader`. **8M-voxel guide: 8.2 ms → 1.8 ms across the session, 78% removed.** Guides are
+  now self-lit — no shadow darkening, no ambient tint — approximated back by `shaderGuideBrightness` /
+  `shaderAmbientResponse`. `/layout shader off` restores the old look and cost.
+  **Shader sources must be pure ASCII**; packaging refuses anything else.
+- **Voxel outlines** (v0.3.62–v0.3.63): per-cell boundaries drawn procedurally in the fragment shader, no
+  extra geometry. `/layout voxelframe`. The mesh's voxel scale is recorded at upload so every path gets it.
+- **Sphere/dome wireframes**: 4 sectors → 8 (v0.3.64).
+- **Fixes** (v0.3.65–v0.3.69): inset now reaches partial blocks, not just whole-block planes; outlines no
+  longer vanish on inset layers; the cap clamp no longer builds an invisible wall from one aim direction;
+  volumetric guides re-probe after terrain loads. `/layout inset` tunes the anti-z-fight gap.
+
+## Earlier Session-28 additions (v0.3.55–v0.3.58, `beta`)
+- **Vertex welding** (`GuideMeshOptions.WeldVertices`, v0.3.57): guide meshes share vertices between faces
+  meeting at one position with one colour. **Deduplication, not merging** — the triangle stream is provably
+  identical (10/10 harness comparing both index buffers in submission order). −72.9% vertices, −58.4% mesh
+  data, −41.5% frame cost on an 8M-voxel guide; human A/B found it indistinguishable. Running at ~1.0
+  vertices per quad, the theoretical floor, so **this lever is spent**.
+- **Settled-shell streaming** (`SettledStreamingVoxelThreshold`, v0.3.58): guides over 100,000 voxels
+  scaffold and stream instead of building synchronously. Fixes a multi-second client hang on world load and
+  makes large guides materialize for *other* players, not just the placer. **Not yet playtested.**
+- **Commands:** `.layout renderstats` now reports vertices/indices/bytes; `/layout weld on|off` is a
+  diagnostic A/B switch.
 
 ## Current priorities (detail in TODO.md; final-release record in SESSION_27.md)
 F4 (client-only/private guides) and F5 (Chalking Kit durability) are both feature-complete. Public/private

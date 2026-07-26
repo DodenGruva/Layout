@@ -256,24 +256,49 @@ namespace Layout.Shapes
 
         // --- IGuideShape: curve queries (targeting wireframe) ----------------------------------------
 
-        // Base circle (full loop from A) → arc A→apex→B → base quarter B→P(+m̂) → arc P→apex→P′(−m̂).
-        // Every junction lies on the wireframe, so no phantom chords.
+        /// <summary>
+        /// Ribs over the apex in the targeting/structural wireframe. Each rib is a half-arc joining two
+        /// opposite base points through the apex, so N ribs cut the dome into 2N sectors: 4 gives the
+        /// eight-piece read (v0.3.64, human request — two ribs was too coarse on a large dome).
+        /// </summary>
+        private const int RibCount = 4;
+
+        // Base circle (full loop from A) → each rib in turn, reached by walking ALONG the base circle from
+        // where the previous rib landed. Every junction lies on the wireframe, so no phantom chords.
+        // Re-walking the base costs a little marching but no voxels: ShapeWireframe dedupes cells.
         private List<Vec3d> Wireframe(int samplesPerLoop)
         {
             var pts = new List<Vec3d>();
             if (!TryGetFrame(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n)) return pts;
             int nn = Math.Max(24, samplesPerLoop);
+            int half = Math.Max(12, nn / 2);
 
             Vec3d At(Vec3d e1, Vec3d e2, double ang) => new Vec3d(
                 c.X + e1.X * r * Math.Cos(ang) + e2.X * r * Math.Sin(ang),
                 c.Y + e1.Y * r * Math.Cos(ang) + e2.Y * r * Math.Sin(ang),
                 c.Z + e1.Z * r * Math.Cos(ang) + e2.Z * r * Math.Sin(ang));
 
-            for (int i = 0; i <= nn; i++) pts.Add(At(u, m, Math.PI + 2.0 * Math.PI * i / nn));   // base, from A
-            for (int i = 0; i <= nn / 2; i++) pts.Add(At(u, n, Math.PI - Math.PI * i / (nn / 2.0)));  // A→apex→B
-            int q = Math.Max(6, nn / 4);
-            for (int i = 0; i <= q; i++) pts.Add(At(u, m, 0.5 * Math.PI * i / q));               // B→P
-            for (int i = 0; i <= nn / 2; i++) pts.Add(At(m, n, Math.PI * i / (nn / 2.0)));       // P→apex→P′
+            Vec3d Base(double ang) => At(u, m, ang);
+
+            for (int i = 0; i <= nn; i++) pts.Add(Base(Math.PI + 2.0 * Math.PI * i / nn));   // base, from A
+
+            double current = Math.PI;   // the base loop ends where it began, at A
+            for (int k = 0; k < RibCount; k++)
+            {
+                // Starting at PI keeps the first rib exactly the historical A→apex→B arc.
+                double lon = Math.PI + Math.PI * k / RibCount;
+
+                SphereShape.BridgeAlongRing(pts, Base, current, lon, nn);
+
+                // Base direction for this rib; the arc runs base(lon) → apex → base(lon + 180).
+                var d = new Vec3d(
+                    u.X * Math.Cos(lon) + m.X * Math.Sin(lon),
+                    u.Y * Math.Cos(lon) + m.Y * Math.Sin(lon),
+                    u.Z * Math.Cos(lon) + m.Z * Math.Sin(lon));
+
+                for (int i = 0; i <= half; i++) pts.Add(At(d, n, Math.PI * i / half));
+                current = lon + Math.PI;
+            }
             return pts;
         }
 

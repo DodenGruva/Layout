@@ -205,6 +205,7 @@ namespace Layout
             GuideMeshBuilder.ConfigureOpacities(
                 ClientConfig.OpacityBody, ClientConfig.OpacityLocked, ClientConfig.OpacityApex,
                 ClientConfig.OpacityAnchor, ClientConfig.OpacityGrabbed, ClientConfig.OpacityHiddenAnchor);
+            GuideMeshBuilder.ConfigureBlockPlaneInset(ClientConfig.ZFightInset);
 
             // The one DraftManager (client tool state), seeded with the remembered defaults. The cap seed is
             // the baked default until the server's bulk sync replaces it below.
@@ -238,6 +239,10 @@ namespace Layout
             // Renderer over the mirror (constructed here, disposed in Dispose — the seam Module 5 left open).
             Renderer = new GuideRenderer(capi, ClientNet);
             Renderer.SetRenderingEnabled(ClientConfig.GuideRenderingEnabled);
+            // A hand-edited layout-client.json must take effect at login, not only via the command.
+            Renderer.SetShaderBrightness(
+                ClientConfig.ShaderGuideBrightness, ClientConfig.ShaderAmbientResponse);
+            Renderer.SetVoxelFrameStrength(ClientConfig.VoxelFrameStrength);
             ClientNet.GuideRenderingChanged += OnGuideRenderingChanged;
 
             // The two dialogs share the same DraftManager + ClientNetworkHandler (the Module-6 contract).
@@ -333,6 +338,41 @@ namespace Layout
                     .WithDescription("Show local Layout guide rendering statistics for the last frame.")
                     .HandleWith(OnClientRenderStatsCommand)
                 .EndSubCommand()
+                .BeginSubCommand("inset")
+                    .WithDescription(
+                        "Set the anti-z-fight inset in blocks (0-0.05, default 0.003). Raise it if guides "
+                        + "resting on the ground shimmer. No argument reports the current value.")
+                    .WithArgs(parsers.OptionalFloat("blocks"))
+                    .HandleWith(OnClientInsetCommand)
+                .EndSubCommand()
+                .BeginSubCommand("voxelframe")
+                    .WithDescription(
+                        "Set how strongly each voxel's boundary is outlined (0 = off, 1 = strongest). "
+                        + "No argument reports the current value.")
+                    .WithArgs(parsers.OptionalFloat("strength"))
+                    .HandleWith(OnClientVoxelFrameCommand)
+                .EndSubCommand()
+                .BeginSubCommand("shaderbrightness")
+                    .WithDescription(
+                        "Set custom-shader guide brightness (0.2-1.5) and ambient response (0-1). "
+                        + "No arguments reports the current values.")
+                    .WithArgs(
+                        parsers.OptionalFloat("brightness"),
+                        parsers.OptionalFloat("ambient-response"))
+                    .HandleWith(OnClientShaderBrightnessCommand)
+                .EndSubCommand()
+                .BeginSubCommand("shader")
+                    .WithDescription(
+                        "Toggle the lean custom guide shader against the game's standard shader.")
+                    .WithArgs(parsers.Word("on-or-off"))
+                    .HandleWith(OnClientShaderCommand)
+                .EndSubCommand()
+                .BeginSubCommand("weld")
+                    .WithDescription(
+                        "Diagnostic: toggle guide vertex welding to compare the meshes side by side.")
+                    .WithArgs(parsers.Word("on-or-off"))
+                    .HandleWith(OnClientWeldCommand)
+                .EndSubCommand()
                 .BeginSubCommand("off")
                     .WithDescription("Turn off all Layout guide rendering for yourself.")
                     .HandleWith(OnClientRenderingOffCommand)
@@ -348,6 +388,156 @@ namespace Layout
 
         private TextCommandResult OnClientRenderingOnCommand(TextCommandCallingArgs args) =>
             SetLocalRenderingState(true);
+
+        /// <summary>
+        /// Live tuning for the anti-z-fight inset. Unlike the brightness and frame controls this one is
+        /// baked into the mesh, so every guide is rebuilt when it changes.
+        /// </summary>
+        private TextCommandResult OnClientInsetCommand(TextCommandCallingArgs args)
+        {
+            if (Renderer == null) return TextCommandResult.Error("Layout renderer is not active.");
+
+            bool changed = false;
+            if (args[0] is float inset)
+            {
+                ClientConfig.ZFightInset = inset;
+                ClientConfig.Normalize();
+                SaveClientConfig();
+                GuideMeshBuilder.ConfigureBlockPlaneInset(ClientConfig.ZFightInset);
+                Renderer.RebuildAllForDiagnostics();   // the inset is baked in at build time
+                changed = true;
+            }
+
+            return TextCommandResult.Success(string.Format(
+                "Layout z-fight inset {0:0.0000} blocks.{1}",
+                ClientConfig.ZFightInset,
+                changed
+                    ? " Saved, guides rebuilt."
+                    : " (Pass a value 0-0.05 to change; raise it if ground voxels shimmer.)"));
+        }
+
+        /// <summary>
+        /// Live tuning for the voxel boundary frame, saved immediately to layout-client.json.
+        /// </summary>
+        private TextCommandResult OnClientVoxelFrameCommand(TextCommandCallingArgs args)
+        {
+            if (Renderer == null) return TextCommandResult.Error("Layout renderer is not active.");
+
+            bool changed = false;
+            if (args[0] is float strength)
+            {
+                ClientConfig.VoxelFrameStrength = strength;
+                ClientConfig.Normalize();
+                SaveClientConfig();
+                Renderer.SetVoxelFrameStrength(ClientConfig.VoxelFrameStrength);
+                changed = true;
+            }
+
+            float current = ClientConfig.VoxelFrameStrength;
+            string state = current <= 0f ? "off" : string.Format("{0:0.00}", current);
+            return TextCommandResult.Success(
+                changed
+                    ? $"Layout voxel frame {state}. Saved."
+                    : $"Layout voxel frame {state}. (Pass a value 0-1 to change; requires the custom "
+                      + "shader — /layout shader on.)");
+        }
+
+        /// <summary>
+        /// Live tuning for the custom shader's brightness, saved immediately to layout-client.json. Meant to
+        /// be dialled against <c>/layout shader off</c> until the two look alike, rather than guessed.
+        /// </summary>
+        private TextCommandResult OnClientShaderBrightnessCommand(TextCommandCallingArgs args)
+        {
+            if (Renderer == null) return TextCommandResult.Error("Layout renderer is not active.");
+
+            bool changed = false;
+            if (args[0] is float brightness)
+            {
+                ClientConfig.ShaderGuideBrightness = brightness;
+                changed = true;
+            }
+            if (args[1] is float response)
+            {
+                ClientConfig.ShaderAmbientResponse = response;
+                changed = true;
+            }
+
+            if (changed)
+            {
+                ClientConfig.Normalize();   // folds out-of-range values back to the safe band
+                SaveClientConfig();
+                Renderer.SetShaderBrightness(
+                    ClientConfig.ShaderGuideBrightness, ClientConfig.ShaderAmbientResponse);
+            }
+
+            return TextCommandResult.Success(string.Format(
+                "Layout guide brightness {0:0.00}, ambient response {1:0.00}.{2}",
+                ClientConfig.ShaderGuideBrightness, ClientConfig.ShaderAmbientResponse,
+                changed ? " Saved." : " (Pass values to change; 1.0 / 0.0 is the raw palette.)"));
+        }
+
+        /// <summary>
+        /// A/B switch between the lean custom guide shader and the game's standard shader. Unlike the weld
+        /// toggle this is expected to look DIFFERENT: the standard shader runs guide colour through ambient
+        /// lighting and shadow-map brightness, so guides currently darken in shadow, while the custom
+        /// shader emits the palette verbatim. Reproducing that needs samplers the modding API does not
+        /// expose, so the difference is a decision, not a defect to fix.
+        /// </summary>
+        private TextCommandResult OnClientShaderCommand(TextCommandCallingArgs args)
+        {
+            if (Renderer == null) return TextCommandResult.Error("Layout renderer is not active.");
+
+            string word = (args[0] as string)?.Trim().ToLowerInvariant();
+            bool enable;
+            switch (word)
+            {
+                case "on": case "true": case "1": enable = true; break;
+                case "off": case "false": case "0": enable = false; break;
+                default: return TextCommandResult.Error("Use /layout shader on or /layout shader off.");
+            }
+
+            if (enable && !Renderer.CustomShaderAvailable)
+                return TextCommandResult.Error(
+                    "The custom guide shader failed to compile — see client-main.log. "
+                    + "Layout is using the standard shader.");
+
+            Renderer.SetCustomShaderEnabled(enable);
+            return TextCommandResult.Success(
+                enable
+                    ? "Layout custom guide shader ON — lean shader, guides are fully self-lit."
+                    : "Layout custom guide shader OFF — standard shader, guides take ambient light "
+                      + "and shadow.");
+        }
+
+        /// <summary>
+        /// Diagnostic A/B switch for v0.3.57 vertex welding. Welding is proven to emit an identical triangle
+        /// stream, so this should show no visible difference — it exists so that claim can be checked in
+        /// play, on one guide, from one camera position, instead of by swapping builds and comparing from
+        /// memory. Not persisted: welding is always on again next launch.
+        /// </summary>
+        private TextCommandResult OnClientWeldCommand(TextCommandCallingArgs args)
+        {
+            string word = (args[0] as string)?.Trim().ToLowerInvariant();
+            bool enable;
+            switch (word)
+            {
+                case "on": case "true": case "1": enable = true; break;
+                case "off": case "false": case "0": enable = false; break;
+                default: return TextCommandResult.Error("Use /layout weld on or /layout weld off.");
+            }
+
+            if (Systems.GuideMeshBuilder.WeldByDefault == enable)
+                return TextCommandResult.Success(
+                    $"Layout vertex welding is already {(enable ? "on" : "off")}.");
+
+            Systems.GuideMeshBuilder.WeldByDefault = enable;
+            Renderer?.RebuildAllForDiagnostics();
+            return TextCommandResult.Success(
+                enable
+                    ? "Layout vertex welding ON — shared vertices (the v0.3.57 default)."
+                    : "Layout vertex welding OFF — pre-v0.3.57 unshared vertices. "
+                      + "Expect the same picture at roughly 2.4x the mesh data.");
+        }
 
         private TextCommandResult OnClientRenderStatsCommand(TextCommandCallingArgs args)
         {

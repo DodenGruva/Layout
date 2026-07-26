@@ -1,5 +1,28 @@
 # SESSION 26 — v0.3.44–v0.3.52: meshing experiments, rollback, persistent visibility, and voxel budgets
 
+> ## ⚠️ CORRECTED BY SESSION 28 (2026-07-24) — read this first
+>
+> **Three claims below are wrong. Do not use this record to decide renderer work without `SESSION_28.md`.**
+>
+> 1. **The 140 → 80 FPS regression in §1 was a double-mesh draw bug, not a cost of greedy merging.** The
+>    agent doing the work reported drawing two mesh sets. Merging on its own appeared to *help*. The
+>    performance case against these experiments does not stand.
+> 2. **Several visual defects in §1 and §2 are also consistent with that double draw** — "excessive
+>    brightness" in particular is exactly what two coincident translucent shells look like. The later
+>    face/depth variants may have been chasing artifacts the bug created.
+> 3. **§3's claim that the rollback retained "reload-scaffold behavior" is false.** That behaviour belonged
+>    to the reverted v0.3.43 spatial work and was lost with it. `RebuildGuide` was left fully synchronous
+>    with no size check, which is why loading a world with a large guide hung the client until v0.3.58.
+>
+> Also note that every frame-time figure in Sessions 25–27 was taken against a **238 FPS frame cap**. The
+> "4.3 ms off-screen" baseline is the cap, not a floor; the true baseline is ~1.0 ms.
+>
+> **What survives:** both experiments were rejected for **appearance**, and that judgement stands. Session 28
+> traced both visual failures to one cause — guides are order-dependent translucent geometry, so any change
+> that regroups primitives changes the picture. The v0.3.43 seams were *not* a meshing error: that build
+> passed guide-wide occupancy, one shared `MinimumVoxelY`, and one shared origin, and was geometrically
+> identical to the monolithic mesh.
+
 **Checkpoint:** Layout v0.3.52 is built, packaged, playtested, and human-approved. DataVersion remains
 **12**, wire protocol remains **16**, and the source tree remains **77 C# files**. The runnable package is
 `..\LayoutZips\Layout0.3.52.zip`.

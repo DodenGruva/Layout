@@ -767,6 +767,11 @@ namespace Layout.Client
         private sealed class CapClampTracker
         {
             private const int StepsPerTick = 2;             // fit-checks a single tick may spend
+
+            // Unit-direction components are floored onto this many buckets per axis to form part of the
+            // context key. Coarse on purpose: fine buckets would reset the bracket on every small cursor
+            // jitter and make the ghost hunt, while coarse ones keep a normal drag in one context.
+            private const double DirectionBuckets = 8.0;
             private const double Tolerance = 1.0 / 32.0;    // sub-voxel: tighter than this is not visible
 
             private long _key = long.MinValue;
@@ -781,18 +786,36 @@ namespace Layout.Client
             public Vec3d Clamp(long key, Vec3d reference, Vec3d aim, System.Func<Vec3d, bool> fits,
                 int maxSteps = StepsPerTick)
             {
-                if (key != _key) { _key = key; _lo = 0; _hi = double.MaxValue; }
-
                 double full = Dist(reference, aim);
                 if (full < 1e-6) return Copy(aim);
-
-                // Inside the reach already proven to fit: a smaller shape cannot cost more, so the ghost
-                // follows the cursor exactly, for free. This is the whole sub-cap path — zero checks.
-                if (full <= _lo) return Copy(aim);
 
                 double dx = (aim.X - reference.X) / full;
                 double dy = (aim.Y - reference.Y) / full;
                 double dz = (aim.Z - reference.Z) / full;
+
+                // AIM DIRECTION IS PART OF THE CONTEXT (v0.3.68 fix). _lo and _hi are distances along the
+                // reference→aim ray, and both are only meaningful for THAT ray: the same reach in a
+                // different direction can be a wholly different voxel count, because shapes are not
+                // spherically symmetric. The key covered shape, scale, stage and anchor but NOT direction,
+                // so a failure recorded while aiming one way became a permanent ceiling for every other
+                // way — an invisible wall at an arbitrary distance, unrelated to the real cap. It gave way
+                // only once the reference drifted far enough to change the key, which is exactly why
+                // pushing at it repeatedly eventually broke through, and why a fresh draft helped until its
+                // own first failure set a new ceiling.
+                //
+                // Direction is BUCKETED, not exact, so an ordinary drag keeps one context and still
+                // converges for free. Cost stays bounded either way: the per-tick step budget caps the work
+                // whether the bracket is fresh or settled, so resetting more often costs a little latency,
+                // never frame time — which is the property the tracker was introduced to protect.
+                key ^= ((long)Math.Floor(dx * DirectionBuckets) * 73856093L)
+                     ^ ((long)Math.Floor(dy * DirectionBuckets) * 19349663L)
+                     ^ ((long)Math.Floor(dz * DirectionBuckets) * 83492791L);
+
+                if (key != _key) { _key = key; _lo = 0; _hi = double.MaxValue; }
+
+                // Inside the reach already proven to fit FOR THIS RAY: a shorter reach along the same ray
+                // cannot cost more, so the ghost follows the cursor exactly, for free.
+                if (full <= _lo) return Copy(aim);
                 Vec3d At(double d) => new Vec3d(reference.X + dx * d, reference.Y + dy * d, reference.Z + dz * d);
 
                 maxSteps = Math.Max(0, Math.Min(StepsPerTick, maxSteps));

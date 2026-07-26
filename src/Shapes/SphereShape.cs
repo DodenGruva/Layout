@@ -221,30 +221,57 @@ namespace Layout.Shapes
 
         // --- IGuideShape: curve queries (the targeting wireframe) -----------------------------------
 
-        // The wireframe polyline: equator (full loop) → meridian A (full loop, sharing the equator's +X
-        // start point) → a quarter of the equator over to +Z → meridian B (full loop from +Z). Every
-        // consecutive segment lies ON the wireframe, so targeting never hits a phantom chord.
+        /// <summary>
+        /// Meridians in the targeting/structural wireframe. Each meridian is a full great circle through
+        /// both poles, so N of them cut the ball into 2N sectors: 4 gives the eight-piece read (v0.3.64,
+        /// human request — two was too coarse to judge a large sphere's form).
+        /// </summary>
+        private const int MeridianCount = 4;
+
+        // The wireframe polyline: equator (full loop) then each meridian in turn, reached by walking ALONG
+        // the equator from the previous meridian. Every consecutive segment therefore lies ON the wireframe
+        // and targeting never hits a phantom chord — the invariant this routing exists to preserve.
         private List<Vec3d> Wireframe(Vec3d c, double r, int samplesPerLoop)
         {
             int n = Math.Max(24, samplesPerLoop);
-            var pts = new List<Vec3d>(3 * n + n / 4 + 4);
-
-            void Loop(Func<double, Vec3d> at)
-            {
-                for (int i = 0; i <= n; i++) pts.Add(at(2.0 * Math.PI * i / n));
-            }
+            var pts = new List<Vec3d>((MeridianCount + 2) * n);
 
             Vec3d Equator(double t) => new Vec3d(c.X + r * Math.Cos(t), c.Y, c.Z + r * Math.Sin(t));
-            Vec3d MeridianXY(double t) => new Vec3d(c.X + r * Math.Cos(t), c.Y + r * Math.Sin(t), c.Z);
-            Vec3d MeridianZY(double t) => new Vec3d(c.X, c.Y + r * Math.Sin(t), c.Z + r * Math.Cos(t));
 
-            Loop(Equator);                                        // +X … back to +X
-            Loop(MeridianXY);                                     // starts/ends at +X too — no chord
-            int q = Math.Max(6, n / 4);
-            for (int i = 0; i <= q; i++)                          // bridge along the equator +X → +Z
-                pts.Add(Equator(2.0 * Math.PI * i / (4.0 * q)));
-            Loop(MeridianZY);                                     // starts/ends at +Z — no chord
+            // Great circle through both poles at longitude `lon`. At t = 0 it is exactly Equator(lon), so a
+            // meridian always starts and ends on the equator at its own longitude.
+            Vec3d Meridian(double lon, double t) => new Vec3d(
+                c.X + r * Math.Cos(t) * Math.Cos(lon),
+                c.Y + r * Math.Sin(t),
+                c.Z + r * Math.Cos(t) * Math.Sin(lon));
+
+            for (int i = 0; i <= n; i++) pts.Add(Equator(2.0 * Math.PI * i / n));   // +X … back to +X
+
+            double current = 0.0;
+            for (int k = 0; k < MeridianCount; k++)
+            {
+                // Meridians only need half the circle of longitudes: one great circle covers lon and
+                // lon+180 at once. 4 meridians therefore span 0/45/90/135 degrees.
+                double lon = Math.PI * k / MeridianCount;
+                BridgeAlongRing(pts, Equator, current, lon, n);
+                for (int i = 0; i <= n; i++) pts.Add(Meridian(lon, 2.0 * Math.PI * i / n));
+                current = lon;   // a full meridian loop returns to where it started
+            }
             return pts;
+        }
+
+        /// <summary>
+        /// Walks along a ring from one angle to another, sampled at the ring's own density so the voxel
+        /// march follows the arc instead of cutting a chord across it. Emits nothing for a zero-length hop.
+        /// </summary>
+        internal static void BridgeAlongRing(
+            List<Vec3d> pts, Func<double, Vec3d> ring, double from, double to, int loopSamples)
+        {
+            double delta = to - from;
+            if (Math.Abs(delta) < 1e-9) return;
+            int steps = Math.Max(4,
+                (int)Math.Ceiling(Math.Abs(delta) / (2.0 * Math.PI) * loopSamples));
+            for (int i = 1; i <= steps; i++) pts.Add(ring(from + delta * i / steps));
         }
 
         public List<Vec3d> SampleCurve(int samples)
