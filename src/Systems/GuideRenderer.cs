@@ -239,6 +239,21 @@ namespace Layout.Systems
         // and rebuilds each once its neighbourhood loads — fixing the "guide sinks behind the face after
         // reload" bug with no wire/persistence change. A guide sits here only while its chunk is unloaded.
         private readonly HashSet<Guid> _deferredSurface = new HashSet<Guid>();
+
+        /// <summary>
+        /// Guides whose z-fight solidity probe ran against UNLOADED chunks, so their per-face insets are
+        /// provisional. The same low-frequency tick that fixes deferred Surface guides rebuilds these once
+        /// the terrain arrives.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="NeighborSolidProbe"/> reports "solid" for an unloaded chunk — conservative, because a
+        /// missing inset shimmers while a spurious one is a 0.003-block shrink nobody can see. That was
+        /// narrow until v0.3.66 removed the grid-coplanar gate; now EVERY exposed face consults the probe,
+        /// so a guide built before its terrain loaded gets every face inset instead of only the ones
+        /// actually touching something. It never self-corrected: only Surface guides were re-probed, and a
+        /// volumetric guide stayed provisional until something else happened to rebuild it.
+        /// </remarks>
+        private readonly HashSet<Guid> _deferredSolidity = new HashSet<Guid>();
         private long _reprobeListenerId;
         private const int ReprobeIntervalMs = 500;
 
@@ -2814,6 +2829,24 @@ namespace Layout.Systems
             return block != null && block.Id != 0;
         }
 
+        /// <summary>
+        /// <see cref="NeighborSolidProbe"/> wrapped so the caller learns whether any answer was a guess
+        /// against an unloaded chunk. Returns the same conservative "solid" as the bare probe; the flag
+        /// only decides whether the guide is queued for a re-probe once terrain arrives.
+        /// </summary>
+        private System.Func<int, int, int, bool> TrackedSolidProbe(System.Action onUnreliable)
+        {
+            IBlockAccessor accessor = _capi.World?.BlockAccessor;
+            return (x16, y16, z16) =>
+            {
+                if (accessor == null) { onUnreliable(); return true; }
+                var pos = new BlockPos(x16 >> 4, y16 >> 4, z16 >> 4);
+                if (accessor.GetChunkAtBlockPos(pos) == null) { onUnreliable(); return true; }
+                var block = accessor.GetBlock(pos);
+                return block != null && block.Id != 0;
+            };
+        }
+
         private int CountSolidProbes(List<VoxelPosition> voxels, PlaneAxis axis, int layer, int scale, ref bool reliable)
         {
             var accessor = _capi.World.BlockAccessor;
@@ -2864,11 +2897,33 @@ namespace Layout.Systems
         // rebuild churn — and self-correct the moment you walk into range.
         private void OnReprobeTick(float dt)
         {
-            if (_disposed || _deferredSurface.Count == 0) return;
+            if (_disposed || (_deferredSurface.Count == 0 && _deferredSolidity.Count == 0)) return;
             IBlockAccessor accessor = _capi.World?.BlockAccessor;
             if (accessor == null) return;
 
             List<Guid> ready = null;
+            foreach (Guid id in _deferredSolidity)
+            {
+                if (_deferredSurface.Contains(id)) continue;   // handled by the pass below
+                if (_network.Guides.TryGetValue(id, out GuideData g) && g != null)
+                {
+                    Vec3d a = FirstRealAnchor(g.ControlPoints);
+                    if (a != null)
+                    {
+                        var bp = new BlockPos((int)Math.Floor(a.X), (int)Math.Floor(a.Y), (int)Math.Floor(a.Z));
+                        if (accessor.GetChunkAtBlockPos(bp) == null) continue;   // still not loaded
+                    }
+                }
+                (ready ??= new List<Guid>()).Add(id);
+            }
+            if (ready != null)
+                for (int i = 0; i < ready.Count; i++)
+                {
+                    _deferredSolidity.Remove(ready[i]);
+                    RebuildGuideById(ready[i]);
+                }
+            ready = null;
+
             foreach (Guid id in _deferredSurface)
             {
                 bool rebuild = true;   // drop-and-rebuild if the guide is gone, has no anchor, or has loaded
@@ -3325,11 +3380,17 @@ namespace Layout.Systems
                 GrabbedPoint = ResolveGrabbedPoint(guide, points),
                 PrivateAnchors = _network.ServerLayoutAvailable
                     && _network.IsLocalGuide(guide.Id),
-                IsNeighborSolid = NeighborSolidProbe
             };
             AssignAnchors(points, options);
 
+            bool solidityBlind = false;
+            options.IsNeighborSolid = TrackedSolidProbe(() => solidityBlind = true);
+
             MeshData data = GuideMeshBuilder.Build(voxels, options);
+
+            // Insets computed against unloaded terrain are provisional — queue a rebuild for when it loads.
+            if (solidityBlind) _deferredSolidity.Add(guide.Id);
+            else _deferredSolidity.Remove(guide.Id);
             if (locallyGrabbed) UploadOrReplaceGrab(guide.Id, data, origin);
             else UploadOrReplace(guide.Id, data, origin);
             if (_guideMeshes.TryGetValue(guide.Id, out GuideMesh rendered))
@@ -4169,6 +4230,7 @@ namespace Layout.Systems
         private void RemoveGuideMesh(Guid id)
         {
             _deferredSurface.Remove(id);
+            _deferredSolidity.Remove(id);   // a deleted guide must not be queued for a re-probe
             if (_settledMaterializations.TryGetValue(id, out SettledMaterializationBuild build))
             {
                 build.Cancellation?.Cancel();
@@ -4359,6 +4421,7 @@ namespace Layout.Systems
             _guideShader?.Dispose();
             _guideShader = null;
             _deferredSurface.Clear();
+            _deferredSolidity.Clear();
 
             if (!_whiteTexBorrowed) _whiteTex?.Dispose();   // engine-cached fallback textures stay alive
             _whiteTex = null;

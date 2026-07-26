@@ -4,6 +4,65 @@ All notable changes to Layout will be recorded in this file going forward.
 
 ## Unreleased
 
+## 0.3.69 - 2026-07-25
+
+### Fixed
+
+- Guides loaded before the surrounding terrain finished loading no longer keep provisional edge spacing.
+  They are now corrected automatically once the terrain arrives.
+
+## 0.3.68 - 2026-07-25
+
+### Fixed
+
+- Removed an invisible limit that could randomly stop a guide from being dragged or drawn any larger, even
+  with plenty of voxel budget remaining. The size check remembered a failed reach from one aiming direction
+  and wrongly applied it to every other direction.
+
+## 0.3.66 - 0.3.67 - 2026-07-25
+
+### Fixed
+
+- Guide edges resting against slabs, chiselled blocks, snow layers and other partial blocks no longer
+  shimmer. The spacing that prevents it previously only applied to faces sitting on whole-block boundaries,
+  so raising it appeared to affect only the bottom of a guide.
+- The voxel outline no longer goes missing on the layer of a guide that rests against blocks.
+
+## 0.3.65 - 2026-07-25
+
+### Added
+
+- `/layout inset` adjusts the small gap between a guide and the blocks it touches, saved as `zFightInset`
+  in `layout-client.json`. Raise it if guides shimmer against a surface.
+
+## 0.3.64 - 2026-07-25
+
+### Changed
+
+- Sphere and dome wireframes are now divided into eight sections instead of four, making a large volume's
+  form much easier to read.
+
+## 0.3.62 - 0.3.63 - 2026-07-24
+
+### Added
+
+- **Voxel outlines.** Each voxel's boundary is now lightly outlined so individual cells are legible on a
+  large guide surface. Strength is `voxelFrameStrength` in `layout-client.json`, adjustable live with
+  `/layout voxelframe` (0 turns it off). Costs no measurable performance. Requires the custom shader.
+- Outlines appear everywhere: placed guides, the draft you are drawing, materialization, and while dragging.
+
+## 0.3.59 - 0.3.61 - 2026-07-24
+
+### Changed
+
+- **Guides render through a purpose-built shader.** A large guide costs roughly **a quarter** of what it did
+  before this session (measured: 8.2 ms down to 1.8 ms on an 8-million-voxel guide). Guides no longer run
+  through the game's full world shader, which was doing shadow, lighting and texture work that a flat
+  translucent overlay never needed.
+- As a result guides are self-lit: they no longer dim in shadow or tint with the time of day. Brightness and
+  how much they follow ambient light are adjustable via `/layout shaderbrightness`, saved in
+  `layout-client.json`. `/layout shader off` restores the old appearance at the old cost.
+
 ## 0.3.58 - 2026-07-24
 
 ### Fixed

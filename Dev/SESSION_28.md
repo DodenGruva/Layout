@@ -170,6 +170,74 @@ the remote-arrival half needs a second player and is unverified.
 
 ---
 
+## 5a. Continuation — v0.3.59–v0.3.69 (custom shader, voxel outlines, playtest fixes)
+
+### v0.3.59–v0.3.61 — custom guide shader (Stage 2a)
+
+Guides rendered through `PreparedStandardShader`, Vintage Story's **full world shader**. Setting
+`RgbaLightIn`, `NormalShaded` and a white texture neutralised its *effects* but not its *instructions*:
+every guide vertex still ran wind warping, shadow-map coordinates, an unread normal transform and full
+light mixing, and every fragment sampled a white texture, took a 3×3 PCF shadow lookup, and evaluated
+murkiness, glow, damage and overlay branches.
+
+`assets/layout/shaders/guide.vsh` / `.fsh` do only what a guide needs. **Measured on the 8M-voxel guide:**
+
+| Build | Guide cost |
+|---|---:|
+| v0.3.55 baseline | 8.2 ms |
+| v0.3.57 welding | 4.8 ms |
+| **v0.3.60 custom shader** | **1.8 ms** |
+
+**78% of the original cost removed.** The shader alone accounted for ~3 ms of the remaining 4.8 — so most of
+what was left was shader *execution*, not data movement, which contradicts the bandwidth analysis in §2 of
+`PLAN_RENDER_PERFORMANCE.md`. **The suggestion to try a custom shader came from an external developer and
+was correct**; the initial recommendation to defer it considered only vertex format and was wrong.
+
+**Deliberate appearance change.** The standard shader ran guide colour through `applyLight()` and multiplied
+by shadow-map brightness — so guides were always darker than their palette and varied with light, despite
+the "full-bright" comment in `GuideRenderer`. A mod shader cannot sample the shadow map. `shaderGuideBrightness`
+(0.78) and `shaderAmbientResponse` (0.55) approximate the visible result for one multiply per vertex;
+playtest independently landed on 0.8 / 0.5. Per-pixel shadowing and torch response are not restored.
+
+**Shader sources must be pure ASCII.** v0.3.59 failed to compile because em-dashes in the comments reached
+the GLSL compiler, which reported a syntax error at a line pointing nowhere useful. Packaging now refuses
+non-ASCII shader assets.
+
+### v0.3.62–v0.3.64 — voxel outlines and denser round-volume wires
+
+Per-voxel boundary outlines, drawn procedurally in the fragment shader: no extra vertices, indices or draw
+calls, and no measurable cost. The face normal is identified by **screen-space derivative** (zero across a
+flat face) rather than by any stored normal, which this mesh format deliberately lacks. Line width is in
+pixels via `fwidth`, and the effect fades before cells reach pixel size so scale 1 does not alias at range.
+
+The voxel scale now travels with each mesh, recorded at upload beside the cost tracking, so every path gets
+outlines — required because cursor precision bands are built at *different* scales from the ghost around
+them.
+
+Sphere and dome wireframes went from 4 sectors to 8. Rib count is a named constant per shape; the routing
+invariant (every rib reached by walking *along* the equator or base circle, never jumping) is preserved so
+the voxel march never cuts a phantom chord through the interior. Harness: 4/4.
+
+### v0.3.65–v0.3.69 — playtest fixes
+
+1. **Inset reached only the bottom of a guide (v0.3.66).** Each face required its coordinate to be a
+   multiple of 16 before it could be inset — a proxy for "might touch a world surface" that is wrong for
+   every partial block. The one condition that fired off-grid was the lowest layer, which is exactly why
+   raising the inset appeared to move only the guide's bottom. The solidity probe now decides alone.
+2. **A layer never showed its outline (v0.3.67).** The frame took the second-smallest of three axis
+   distances, assuming the normal axis would always be smallest. A z-fight inset displaces the face off the
+   boundary, making it the *largest*, so second-smallest returned `max(tangent, tangent)` instead of `min`.
+   It failed on precisely the layer that gets inset. Same root cause as (1) seen from the other side.
+3. **Invisible wall while dragging (v0.3.68).** `CapClampTracker` keyed its fit/fail bracket on shape,
+   scale, stage and anchor but **not aim direction**, so a failure recorded aiming one way became a ceiling
+   for every direction. Direction is now bucketed into the key; the per-tick step budget keeps cost bounded.
+4. **Provisional insets never corrected (v0.3.69).** `NeighborSolidProbe` reports "solid" for unloaded
+   chunks. That was narrow until (1) removed the grid gate; now every face consults it, so a guide built
+   before its terrain loaded got every face inset. Only Surface guides were ever re-probed — volumetric
+   guides now queue in `_deferredSolidity` and rebuild on the same tick.
+
+---
+
 ## 6. Next
 
 `PLAN_RENDER_PERFORMANCE.md` is the live plan. Stage 1 is delivered and spent. Remaining levers, with

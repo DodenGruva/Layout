@@ -346,13 +346,23 @@ cost an entire arc, a rollback, and the credibility of the performance evidence.
 
 Measured, not projected — Stage 1 is delivered:
 
-| Stage | Bytes/frame, 8M guide | Geometry term | Total 8M cost | Visual risk |
-|---|---:|---:|---:|---|
-| v0.3.55 baseline (measured) | 1.81 GB | 6.1 ms | **8.2 ms** | — |
-| **v0.3.57 welding (measured)** | **771 MB** | **3.1 ms** | **4.8 ms** | **none** |
-| Stage 2, if ever built | ~537 MB | ~2.2 ms | ~3.9 ms | fog |
+| Stage | Bytes/frame, 8M guide | Total 8M cost | Visual risk |
+|---|---:|---:|---|
+| v0.3.55 baseline (measured) | 1.81 GB | **8.2 ms** | — |
+| v0.3.57 welding (measured) | 771 MB | **4.8 ms** | none |
+| **v0.3.60 custom shader (measured)** | 771 MB | **1.8 ms** | self-lit; tuned back by config |
 
-**Stage 1 alone removed 41% of the total cost and 58% of the mesh traffic, with nothing visible changed.**
+**78% of the original cost removed.** Welding took 41% with a provably identical picture; the shader took
+most of the remainder.
+
+**The shader result refutes §2 of this plan.** Cutting shader work removed ~3 ms while touching no mesh
+data at all, so the dominant cost was **shader execution**, not vertex-fetch bandwidth. The bandwidth
+arithmetic in §2 was plausible and wrong, and the conclusion it produced — deferring the custom shader —
+would have left the largest single win unclaimed. It was reinstated only because an external developer
+pushed back. **Treat §2's reasoning as a cautionary record, not a method.**
+
+**Stage 2b (per-face records) is not worth pursuing at 1.8 ms** unless field reports demand it; it remains
+the only lever that reaches index data, and the most likely to need raw GL.
 
 **Where the remaining cost sits (8M guide, 4.8 ms):**
 

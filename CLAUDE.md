@@ -52,6 +52,11 @@ Status: **v0.3.58 on the `beta` branch** (v0.3.53 was the last `main` release; t
   locked-in design choices; **do not reopen those without the human explicitly asking.** Its per-revision
   deltas live in **`CHANGELOG_ARCHITECTURE.md`** (an archive — rarely needed).
 - **`TODO.md`** — the live punch-list: open bug, deferred requests, flagged decisions, future features.
+- **`PLAN_RENDER_PERFORMANCE.md`** — the Session-28 rendering plan, with every measurement taken. Read
+  before any renderer work; it also records why the Session 25–26 conclusions were wrong.
+- **`PLAN_BLOCK_OCCUPANCY.md`** — **the next feature, not yet started.** Guide voxels that have been filled
+  with material turn a "built" colour and outset slightly, so a player over-filling and chiselling back down
+  can see exactly where to stop. Feasibility is verified against the shipped assemblies.
 - **`PROJECT_STATUS.md`** — where things stand and what each module does.
 - **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix (candidate for 0.2.0).
 - **`PLAN_CHALKING_KIT.md`** — the F5 chalking-kit design rationale, now marked ✅ implemented with its
@@ -112,7 +117,21 @@ settings-only: left-click **selects** a guide and the GUI's setting rows then ac
 reshaping — geometry stays in Create); this replaced the old panel-expanding "selected-guide section".
 **Delete** dispels. `ToolMode` is client-only (never wired), so it's safe to reorder.
 
-## Session-28 additions (v0.3.55–v0.3.58, `beta`)
+## Session-28 additions (v0.3.55–v0.3.69)
+**v0.3.55–v0.3.58 are on `beta`; v0.3.59–v0.3.69 are on `beta-shader`, not yet merged.**
+- **Custom guide shader** (`assets/layout/shaders/guide.vsh`/`.fsh`, v0.3.60): guides no longer use
+  `PreparedStandardShader`. **8M-voxel guide: 8.2 ms → 1.8 ms across the session, 78% removed.** Guides are
+  now self-lit — no shadow darkening, no ambient tint — approximated back by `shaderGuideBrightness` /
+  `shaderAmbientResponse`. `/layout shader off` restores the old look and cost.
+  **Shader sources must be pure ASCII**; packaging refuses anything else.
+- **Voxel outlines** (v0.3.62–v0.3.63): per-cell boundaries drawn procedurally in the fragment shader, no
+  extra geometry. `/layout voxelframe`. The mesh's voxel scale is recorded at upload so every path gets it.
+- **Sphere/dome wireframes**: 4 sectors → 8 (v0.3.64).
+- **Fixes** (v0.3.65–v0.3.69): inset now reaches partial blocks, not just whole-block planes; outlines no
+  longer vanish on inset layers; the cap clamp no longer builds an invisible wall from one aim direction;
+  volumetric guides re-probe after terrain loads. `/layout inset` tunes the anti-z-fight gap.
+
+## Earlier Session-28 additions (v0.3.55–v0.3.58, `beta`)
 - **Vertex welding** (`GuideMeshOptions.WeldVertices`, v0.3.57): guide meshes share vertices between faces
   meeting at one position with one colour. **Deduplication, not merging** — the triangle stream is provably
   identical (10/10 harness comparing both index buffers in submission order). −72.9% vertices, −58.4% mesh
