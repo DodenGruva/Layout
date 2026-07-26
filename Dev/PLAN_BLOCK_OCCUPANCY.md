@@ -2,6 +2,12 @@
 
 > **Status:** proposed, not started. Written 2026-07-25. Feasibility **verified by reflection against the
 > shipped assemblies** before any design work — see §1, which was the question that could have killed it.
+>
+> **Read §4 before §4b.** This plan was drafted twice and simplified twice, both times by the human
+> correcting an assumption of mine. It is now a **one-shot scan**, not a live overlay: fill the area, scan
+> once, chisel until marked voxels appear, stop. Roughly two thirds of the original design — the buried-voxel
+> x-ray and the whole automatic-invalidation stage — turned out to be solving problems the real workflow
+> does not have. Build the small version.
 
 ---
 
@@ -97,7 +103,43 @@ chiselled blocks, which is the case that matters most here since chiselling is t
 
 ---
 
-## 4. The actually hard part: keeping it current
+## 4. A one-shot scan is enough — there is no live overlay to maintain
+
+**This supersedes the "keeping it current" section below, which is retained only as a record of a problem
+that turned out not to exist.**
+
+The workflow does not need continuous updating, because **the scan result does not change while the player
+chisels**. Fill the area, scan once, and every guide voxel is inside material — all marked. The material
+being removed from then on is *excess*, which is not guide voxels; the guide voxels stay filled right up to
+the moment the player would be cutting too deep. Nothing invalidates.
+
+That deletes the entire hardest part of this plan: no block-change subscriptions, no debounced dirty
+regions, no bounded re-probe lane running in the background, no stutter while chiselling.
+
+**Rescanning at the end is a verification pass.** Any guide voxel that comes back *unfilled* is somewhere
+the player cut too deep or never filled at all. That is a correctness check the mod cannot currently offer
+in any form, and it falls out of the same one-shot command for free.
+
+**Two consequences worth designing around:**
+
+- **A stale mark after over-chiselling is acceptable**, and is the mechanism behind the verification pass
+  above. Do not treat it as a bug to engineer away.
+- **The scan is expensive once**, not cheap continuously: an 8M-voxel guide means 8M probes plus a full mesh
+  rebuild. That is fine for a deliberate command, but it must run through the existing bounded
+  materialization lane rather than blocking the main thread. v0.3.58's scaffold-and-stream path already
+  handles a rebuild of that size gracefully and should be reused as-is.
+
+### Note on which half does the work
+
+If the player fills everything before scanning, **every** guide voxel is marked, so the colour distinguishes
+nothing at that moment and the **outset is doing all of the real work** — it is what removes the z-fighting
+and makes "stop here" unambiguous. The colour earns its place in the other two cases: partial fills (built
+vs still to do) and the verification pass. Worth knowing that if the new colour turns out to clash with the
+existing palette, dropping it and keeping the outset alone still delivers most of the value.
+
+---
+
+## 4b. Superseded — the invalidation problem (kept as a record)
 
 Every existing `VoxelRenderType` is a property of the **guide** — anchors, locks, apex, divisions. They
 change only when the guide changes. This one is a property of the **world**, which changes with every block
@@ -152,10 +194,10 @@ actually help you chisel?*
 **Stage 2 — precision.** Path B fast path via `GetVoxelMaterialAt` for micro-blocks, so a half-chiselled
 block reports per-voxel truth rather than a whole-block approximation. Purely additive.
 
-**Stage 3 — automatic invalidation.** Debounced dirty regions feeding the existing bounded rebuild lane.
-**This matters more here than the first draft assumed:** the refresh happens *during* chiselling, which is
-the exact moment friction is least welcome. If Stage 1 shows that reaching for a command every few swings
-breaks the flow, this stops being optional.
+**Stage 3 — DROPPED.** Automatic invalidation was the largest and riskiest part of this plan and it is not
+needed; see §4. Do not build it speculatively. Reopen only if real use shows the one-shot scan is genuinely
+insufficient — and note that "the mark went stale after I over-chiselled" is not that evidence, since that
+is the verification pass working as intended.
 
 ---
 
