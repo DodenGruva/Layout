@@ -125,7 +125,7 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── assets/layout/              ← itemtypes, textures, lang
 ├── assets/layout/shaders/      ← guide.vsh / guide.fsh — MUST be pure ASCII
 ├── src/                        ← all 78 .cs files (see §6)
-└── Dev/                        ← ALL PROSE DOCS live here (NOT the code)
+└── dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
     ├── SESSION_9.md … SESSION_27.md  SESSION_28.md  SESSION_29.md
     ├── CHANGELOG_ARCHITECTURE.md   ← ARCHITECTURE.md's per-revision deltas (archive)
@@ -134,13 +134,15 @@ Layout/                         ← repo root = git root; holds the MOD CODE
     └── PLAN_BLOCK_OCCUPANCY.md     ← delivered; its §0 records the disproved first draft
 ```
 
-**Gotcha for tooling:** the docs are in the docs folder; the code is one level up in `src/`. A glob rooted at
-the docs folder will not see the source. The mod project was flattened to the repo root on 2026-07-06 (it
-used to be nested in a versioned subfolder).
+**Gotcha for tooling:** the docs are in `dev/`; the code is one level up in `src/`. A glob rooted at `dev/`
+will not see the source. The mod project was flattened to the repo root on 2026-07-06 (it used to be nested
+in a versioned subfolder).
 
-**Gotcha, case:** git tracks the docs folder as **`Dev/`** while the working copy on Windows is `dev` and
-most prose (including `CLAUDE.md`) writes `dev/`. Harmless on a case-insensitive filesystem, but on Linux or
-GitHub the tracked name is the capitalised one — add new docs as `Dev/…` or you will create a second folder.
+**Folder case, now fixed (2026-07-26):** git used to track this folder as `Dev/` while the working copy on
+Windows was `dev` and all prose wrote `dev/`. Windows' case-insensitivity hid the split, but on Linux and
+GitHub the capitalised name was the real one, and a doc added as `dev/…` would have created a second folder.
+Renamed in git to lowercase throughout, so disk, index and prose now agree. Historical note only —
+`dev/SESSION_10.md` still contains one pre-flattening `Dev/` reference that means the old repo root.
 
 ---
 
