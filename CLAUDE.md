@@ -14,9 +14,9 @@ on servers without Layout and, when permitted, alongside public guides. The tool
 (SESSION_21), on top of exposed-face meshing (SESSION_16, Stage A). 3D volumes can persist as either a
 hollow **Shell** or a structural **Wireframe**.
 The catalog is **15 shape types / 21 picker tiles** (SESSION_20 added straight/tapered Polygonal Prisms).
-Guide voxels that already hold world material can be drawn in a "built" colour, live (SESSION_29).
-Status: **v0.3.85 on the `beta-shader` branch, uncommitted** (v0.3.58 was the last `beta` build; v0.3.53
-the last `main` release; the mod is public).
+Guide voxels that already hold world material can be drawn in a "built" colour, live (SESSION_29). A whole
+guide can be slid into place without reshaping it (**Move mode**, SESSION_30).
+Status: **v0.3.89 on the `beta` branch** (v0.3.53 is the last `main` release; the mod is public).
 
 > **Renderer note — read before any rendering work.** Guides are **order-dependent translucent geometry**
 > (Opaque stage, manual alpha blending, depth-tested, double-sided). On a hollow shell the guide overlaps
@@ -42,13 +42,19 @@ the last `main` release; the mod is public).
 - **Versioning rule (standing, human-set):** EVERY revision bumps `modinfo.json` and ships as a NEW
   `Layout<version>.zip` in **`..\LayoutZips\`** (the sibling folder of this repo — human-directed location;
   holds 0.1.10–0.1.27 + the 0.2.x line; the 0.1.28–0.1.53 zips live in `Documents\ChatGPT\LayoutZips\`) —
-  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.3.85.**
+  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.3.89.**
   (The folder's real name has a space: `..\Layout Zips\`.)
+  **Zip layout matters:** entry paths must use FORWARD slashes with no directory entries, root files first.
+  `Compress-Archive` on Windows PowerShell 5.1 writes backslashes and directory entries and is therefore
+  wrong; build the zip through `System.IO.Compression.ZipFile` with explicit entry names.
 - **Git:** `main` is the mainline, published at **github.com/DodenGruva/Layout** (the
   `ClientOnlyFallback` branch was merged via PR #1). **The repo is published at release** — no personal
   paths, no personal usernames in tracked files. Commit/push ONLY when the human instructs.
 
 ## The documents (read these before large work)
+- **`CHANGELOG.md`** (repo root) — the player-facing release log, newest first. **Short, plain entries**
+  under Added / Changed / Fixed: what a player would notice, never implementation detail. Consecutive
+  versions may share one heading (`## 0.3.72 - 0.3.74 - <date>`). Part of the doc-update set below.
 - **`HANDOFF.md`** (repo root) — the consolidated current-state brief (scope · status · direction ·
   performance characteristics), written for external analysis; the fastest way to get oriented.
 - **`ARCHITECTURE.md`** (in `dev/`, v3.14) — the authoritative plan. Its **Settled Decisions Register** lists
@@ -88,17 +94,19 @@ the last `main` release; the mod is public).
   final release**, and SESSION_28 the **v0.3.55–v0.3.69 rendering arc** (vertex welding, settled-shell
   streaming, the custom guide shader, voxel outlines), and SESSION_29 the **v0.3.70–v0.3.85 block-occupancy
   arc** (the face outset, the settings page, sub-block world reads, the built-voxel colour, and its live
-  per-batch updates).
+  per-batch updates), and SESSION_30 the **v0.3.86–v0.3.89 F6 Move arc** (whole-guide translation, the
+  arrow pad and free-move, the materialization hold, and the graduated precision floor).
 
-## ✅ Docs updated to v0.3.85 (2026-07-26)
-Consistent with **v0.3.85, DataVersion 12, protocol 16, 78 source files, 15 shape types / 21 tiles**.
-`SESSION_29.md` is the latest record (occupancy: `SESSION_29.md` + `PLAN_BLOCK_OCCUPANCY.md`, mesh:
-`SESSION_16.md` + `SESSION_28.md`, F5: `SESSION_15.md`).
+## ✅ Docs updated to v0.3.89 (2026-07-27)
+Consistent with **v0.3.89, DataVersion 12, protocol 17, 79 source files, 15 shape types / 21 tiles**.
+`SESSION_30.md` is the latest record (Move: `SESSION_30.md`, occupancy: `SESSION_29.md` +
+`PLAN_BLOCK_OCCUPANCY.md`, mesh: `SESSION_16.md` + `SESSION_28.md`, F5: `SESSION_15.md`).
+`CHANGELOG.md` is current through v0.3.89 (0.3.70–0.3.85 were backfilled in Session 30).
 
-⚠️ **`ARCHITECTURE.md` (v3.14), `PROJECT_STATUS.md` and `HANDOFF.md` predate Sessions 28–29.** They are not
-wrong about what they describe, but they do not know about vertex welding, settled-shell streaming, the
-custom shader, or block occupancy. The session records and plans are authoritative for those. Prefer source
-for exact identifiers.
+⚠️ **`ARCHITECTURE.md` (v3.14) and `PROJECT_STATUS.md` predate Sessions 28–30.** They are not wrong about
+what they describe, but they do not know about vertex welding, settled-shell streaming, the custom shader,
+block occupancy, or Move mode. `HANDOFF.md`, the session records and the plans are authoritative for those.
+Prefer source for exact identifiers.
 
 ⚠️ **`SESSION_26.md` carries a correction banner** — three of its claims were disproved in Session 28,
 including the 140→80 FPS regression that closed the rendering arc. Do not plan renderer work from it alone.
@@ -116,18 +124,38 @@ Its §0 records the disproved conclusions so they are not re-derived.
   After changes, still run `dotnet build` to catch compile errors before the human playtests.
 - Give a **short summary of the request before doing significant work**, and ask if anything is unclear.
 - **DOCS ONLY ON REQUEST (standing, human-set, Session 11 — token discipline):** per code iteration do
-  code → build → version bump → new zip, and NOTHING else. Do **not** update TODO/ARCHITECTURE/
+  code → build → version bump → new zip, and NOTHING else. Do **not** update CHANGELOG/TODO/ARCHITECTURE/
   PROJECT_STATUS/SESSION files or memory until the human explicitly says to (e.g. "update the documents" /
   "finalize the session"). The playtest loop iterates fast; per-iteration doc churn wastes tokens.
+  **When that request comes, `CHANGELOG.md` is part of the set** — it was missed at the end of Session 29
+  and had to be backfilled in Session 30. Cover every version shipped since its last entry.
   **Exception:** if the conversation is close to a context trim while docs are stale, WARN the human first
   so nothing is lost to the trim un-recorded.
 - **Commit only when the human instructs.** `main` is the mainline; never push without direction.
 
-## Tool modes (Session 10): Create · Edit · Delete
+## Tool modes: Create · Edit · Move · Delete
 **Create** owns all geometry (place, grab/reshape, insert, lock; right-click = cancel/lock). **Edit** is
 settings-only: left-click **selects** a guide and the GUI's setting rows then act on THAT guide (no
 reshaping — geometry stays in Create); this replaced the old panel-expanding "selected-guide section".
-**Delete** dispels. `ToolMode` is client-only (never wired), so it's safe to reorder.
+**Move** (Session 30) selects the same way and slides the whole guide, never reshaping it. **Delete**
+dispels. `ToolMode` is client-only (never wired), so it's safe to reorder — Move was inserted before
+Delete for exactly that reason.
+
+## Session-30 additions (v0.3.86–v0.3.89, `beta`) — full detail in `SESSION_30.md`
+- **F6 Move mode:** a fourth `ToolMode`. Select a guide, then slide it whole from the GUI's arrow pad or on
+  the crosshair (free-move). Shape untouched; locked points travel with it; no chalk charged.
+- **Protocol 16 → 17** (`GuideTranslatePacket`). DataVersion unchanged — nothing new is persisted.
+- **`GuideManager.TranslateGuide` enforces whole-voxel deltas** and refuses anything finer. That is what
+  makes the count provably unchanged (so the cached count is reused, never a rescan) and the rendered cells
+  an exact one-for-one remap. Claims ARE re-checked; a move is a placement.
+- **Free-move previews via the model matrix** — no re-meshing, no regrouping of primitives, so an 8M-voxel
+  guide drags as cheaply as a small one.
+- **Moving an immense guide holds its wireframe for 2.5 s** before rebuilding, restarting on every nudge;
+  the bottom of that wireframe is drawn at true scale, stepping up to the coarse scale in graduated layers
+  (the same idea as the dragged-point precision bands).
+- ⚠️ **`OnGuideAddedOrUpdated` starts the shell materialization BEFORE it reaches `RebuildGuide`**, and that
+  path never touches the scaffold mesh — leaving a stale wireframe at the old pose. Fixed for the Move path
+  only; the general case is still live. See `SESSION_30.md` §5 and §7.
 
 ## Session-28 additions (v0.3.55–v0.3.69)
 **v0.3.55–v0.3.58 are on `beta`; v0.3.59–v0.3.69 are on `beta-shader`, not yet merged.**
@@ -191,7 +219,11 @@ Mesh **Stage A** shipped and filled 3D volumes were retired. Normal public multi
 4. **Performance follow-up only from a new measured bottleneck and a fidelity-preserving design.** Immense
    placement/sculpt work still uses one below-normal worker plus bounded claim ticks; do not assume spatial
    subdivision or greedy merging is the next step.
-5. If asked: **Roof / Tunnel** volumes; concave-safe Free-Shape fill; F3 re-constrain op. Remaining
+5. **The queued feature set (TODO F6–F11).** **F6 Move is DELIVERED (Session 30).** Recommended order for
+   the rest is **F8 (copy a guide) → F9 (settings panel) → F7 (mirror/flip)**, with F10 (redraw the gear
+   glyph) and F11 (colour-blind-safe palette) alongside. Copy is nearly free now that Move exists and the
+   two compose: copy, then nudge into place.
+6. If asked: **Roof / Tunnel** volumes; concave-safe Free-Shape fill; F3 re-constrain op. Remaining
    flagged decisions are cosmetic.
 
 ## Project layout (namespaces match folders)
@@ -202,5 +234,7 @@ Mesh **Stage A** shipped and filled 3D volumes were retired. Normal public multi
 lives in `Items/ItemGuideTool.cs` (helpers + fill-state rendering) + `Items/ItemChalkingPowder.cs` (refill)
 + `Systems/ChalkEffects.cs` (puffs/snap). Large-guide work is centred in `Systems/GuideRenderer.cs`,
 `Systems/DraftPreviewSpec.cs`, `Shapes/ShapeWireframe.cs`, and `Shapes/LargeVolumeShellFallback.cs`.
-Sub-block world material lives in `Systems/BlockOccupancy.cs`.
-(Filenames verified against the tree on 2026-07-26 — 78 source files.)
+Sub-block world material lives in `Systems/BlockOccupancy.cs`. F6 Move spans
+`Systems/GuideManager.TranslateGuide`, `Undo/Commands/TranslateGuideCommand.cs`, `GuideTranslatePacket`,
+the Move section of `UI/GuideToolGui.cs`, and the free-move session in `Client/GuideToolController.cs`.
+(Filenames verified against the tree on 2026-07-27 — 79 source files.)

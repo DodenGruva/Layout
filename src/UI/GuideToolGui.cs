@@ -78,9 +78,9 @@ namespace Layout.UI
         private readonly LayoutClientConfig _config;
 
         // ---- Tile row tables (code kept stable; display names are short tile labels) ----
-        // Order matches the ToolMode enum (Create · Edit · Delete) so (int)Mode indexes the row.
-        private static readonly string[] ModeCodes  = { "create", "edit", "delete" };
-        private static readonly string[] ModeNames  = { "Create", "Edit (selected guide)", "Delete" };
+        // Order matches the ToolMode enum (Create · Edit · Move · Delete) so (int)Mode indexes the row.
+        private static readonly string[] ModeCodes  = { "create", "edit", "move", "delete" };
+        private static readonly string[] ModeNames  = { "Create", "Edit (selected guide)", "Move (selected guide)", "Delete" };
 
         // The shape catalog — the primitives+modifiers model, in the order players think of them
         // (0.1.15: thirteen entries with Polygon + Free-Shape, shown in the EXPANDED picker as a grid of
@@ -130,7 +130,23 @@ namespace Layout.UI
             LayoutToolIcons.Sphere, LayoutToolIcons.Dome, LayoutToolIcons.Cylinder,
             LayoutToolIcons.TaperedCylinder, LayoutToolIcons.PolygonalPrism,
             LayoutToolIcons.TaperedPolygonalPrism, LayoutToolIcons.Cone, LayoutToolIcons.Box };
-        private static readonly string[] ModeIcons = { LayoutToolIcons.ModeCreate, LayoutToolIcons.ModeEdit, LayoutToolIcons.ModeDelete };
+        private static readonly string[] ModeIcons =
+            { LayoutToolIcons.ModeCreate, LayoutToolIcons.ModeEdit, LayoutToolIcons.ModeMove, LayoutToolIcons.ModeDelete };
+
+        // F6 Move pad. Away/Toward/Left/Right are horizontal and resolve against the player's facing at the
+        // moment of the click; Up/Down are world vertical. Codes are what OnMoveArrowTile switches on.
+        private static readonly string[] MoveArrowCodes =
+            { "away", "toward", "left", "right", "up", "down" };
+        private static readonly string[] MoveArrowIcons =
+        {
+            LayoutToolIcons.MoveAway, LayoutToolIcons.MoveToward, LayoutToolIcons.MoveLeft,
+            LayoutToolIcons.MoveRight, LayoutToolIcons.MoveUp, LayoutToolIcons.MoveDown
+        };
+        private static readonly string[] MoveArrowNames =
+        {
+            "Away from you", "Toward you", "To your left", "To your right",
+            "Up", "Down"
+        };
         private static readonly string[] ProjIcons = { LayoutToolIcons.ProjVolumetric, LayoutToolIcons.ProjSurface };
         private static readonly string[] FillIcons = { LayoutToolIcons.FillHollow, LayoutToolIcons.FillFilled };
         private static readonly string[] FormIcons = { LayoutToolIcons.FormShell, LayoutToolIcons.FormWireframe };
@@ -196,9 +212,14 @@ namespace Layout.UI
         // mesh. True while a rebuild is already queued behind the debounce timer.
         private bool _opacityApplyPending;
 
+        // Parks a nudged guide on its wireframe for a beat (GuideRenderer.HoldMoveMaterialization) so a
+        // string of arrow clicks doesn't restart an immense shell rebuild between every one of them.
+        private readonly Action<Guid> _holdMoveMaterialization;
+
         public GuideToolGui(ICoreClientAPI capi, DraftManager tool, ClientNetworkHandler net,
             LayoutClientConfig config, Action saveConfig, Action applyOpacities,
-            System.Func<bool, bool> applyOccupancy, Action refreshOccupancy) : base(capi)
+            System.Func<bool, bool> applyOccupancy, Action refreshOccupancy,
+            Action<Guid> holdMoveMaterialization) : base(capi)
         {
             _tool = tool;
             _net = net;
@@ -207,6 +228,7 @@ namespace Layout.UI
             _applyOpacities = applyOpacities;
             _applyOccupancy = applyOccupancy;
             _refreshOccupancy = refreshOccupancy;
+            _holdMoveMaterialization = holdMoveMaterialization;
         }
 
         /// <summary>True if <paramref name="code"/> is one of the shape picker's catalog codes — the
@@ -281,7 +303,9 @@ namespace Layout.UI
         // holds the mouse, the selection can't change while composed, so it's safe to resolve once per compose.
         private GuideData ResolveSelectedGuide()
         {
-            if (_tool.Mode != ToolMode.Edit) return null;
+            // Move (F6) selects a guide exactly as Edit does; the two modes then do different things with
+            // it — Edit drives the setting rows, Move drives the arrow pad — but resolution is shared.
+            if (_tool.Mode != ToolMode.Edit && _tool.Mode != ToolMode.Move) return null;
             Guid? sel = _tool.SelectedGuideId;
             if (sel == null) return null;
             if (_net.Guides.TryGetValue(sel.Value, out GuideData g) && g != null) return g;
@@ -394,6 +418,7 @@ namespace Layout.UI
             // the same panel is reused — no separate expanding section. When Edit has no selection, those rows
             // grey out with a "click a guide" prompt. Create/Delete use the tool defaults exactly as before.
             bool editMode = _tool.Mode == ToolMode.Edit;
+            bool moveMode = _tool.Mode == ToolMode.Move;
             bool editNoSel = editMode && selected == null;
             bool settingsInert = deleteMode || editNoSel;           // setting rows disabled + ghosted
             CairoFont settingLabelFont = settingsInert ? ghostFont : font;
@@ -408,7 +433,7 @@ namespace Layout.UI
             // (the guide-body colour), so a selection that isn't on the favorite slots is still visible at
             // a glance. Status only — clicks are swallowed. Hidden in Edit (the tool's next-guide shape
             // isn't what that mode is about); dimmed in Delete like the other shape controls.
-            if (!editMode)
+            if (!editMode && !moveMode)
             {
                 int curIdx = ClampIndex(CurrentShapeIndex(), ShapeCodes.Length);
                 string chipIcon = ShapeIcons[curIdx] + LayoutToolIcons.CurrentSuffix
@@ -422,6 +447,17 @@ namespace Layout.UI
                 c.AddInteractiveElement(chip, "curshape");
                 c.AddAutoSizeHoverText("Current shape: " + ShapeNames[curIdx],
                     CairoFont.WhiteDetailText(), 260, chipB.FlatCopy(), "curshape:ht");
+            }
+
+            // MOVE mode owns the whole panel below the mode row: no setting rows at all, because a move
+            // changes position and nothing else. It ends the composition itself.
+            if (moveMode)
+            {
+                BuildMoveSection(c, font, ghostFont, selected,
+                    ref y, labelW, pad, tile, tileGap, rowGap, headerH, contentW);
+                SingleComposer = c.EndChildElements().Compose();
+                LightInitialTiles();
+                return;
             }
 
             if (editMode && selected != null)
@@ -549,6 +585,189 @@ namespace Layout.UI
         }
 
         // ---------------------------------------------------------------------------------
+        //  Move section (F6, v0.3.86)
+        // ---------------------------------------------------------------------------------
+        // The whole panel below the mode row, because a move changes POSITION and nothing else — none of
+        // the setting rows apply. Two controls: how far one step travels, and which way to go.
+        //
+        // The pad is laid out as a cross (away / left / right / toward) with the free-move toggle in its
+        // centre, and the world-vertical Up/Down pair in the column at the far right. The horizontal four
+        // resolve against the player's facing at click time; the dialog holds the mouse cursor, so the
+        // facing physically cannot drift between two clicks of the pad.
+        private void BuildMoveSection(
+            GuiComposer c, CairoFont font, CairoFont ghostFont, GuideData selected,
+            ref double y, double labelW, double pad, double tile, double tileGap, double rowGap,
+            double headerH, double contentW)
+        {
+            CairoFont detail = CairoFont.WhiteDetailText();
+
+            // With nothing selected the controls stay PUT and grey out, exactly as Edit's setting rows do —
+            // a panel whose contents appear and vanish makes the mode look broken before you have used it.
+            // The header carries the prompt ("Move Mode - Select a guide to move it.").
+            bool inert = selected == null;
+            CairoFont labelFont = inert ? ghostFont : font;
+
+            if (!inert)
+            {
+                c.AddDynamicText(BuildSelectedHeaderText(selected), font,
+                    ElementBounds.Fixed(0, y + 2, contentW - 80, headerH), "gheader");
+                c.AddSmallButton("Deselect", OnDeselectClicked,
+                    ElementBounds.Fixed(contentW - 76, y, 76, 22));
+                y += headerH + rowGap;
+            }
+
+            // ---- Step row: multiples of THIS guide's own voxel, never anything finer ----
+            int[] steps = DraftManager.MoveStepMultipliers;
+            c.AddStaticText("Step", Centered(labelFont),
+                ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20));
+            int litStep = 0;
+            for (int i = 0; i < steps.Length; i++)
+            {
+                if (steps[i] == _tool.MoveStep) litStep = i;
+                string code = steps[i].ToString();
+                string tileKey = "movestep:" + i;
+                ElementBounds tb = ElementBounds.Fixed(labelW + pad + i * (tile + tileGap), y, tile, tile);
+                c.AddToggleButton("x" + steps[i], inert ? ghostFont : font,
+                    on => OnTileToggled("movestep", code, tileKey, on, OnMoveStepTile), tb, tileKey);
+                // The step is a property of the guide being moved, so with none selected there is no
+                // distance to quote — the multiplier alone is all the tile can honestly say.
+                if (!inert)
+                    c.AddAutoSizeHoverText(
+                        StepDescription(selected.VoxelScale, steps[i]),
+                        detail, 260, tb.FlatCopy(), tileKey + ":ht");
+            }
+            if (inert) _inertRows.Add("movestep");
+            else _initialLight.Add(("movestep", litStep));
+            y += tile + rowGap;
+
+            // ---- Direction pad ----
+            double x0 = labelW + pad;
+            double col1 = x0 + (tile + tileGap);
+            double col2 = x0 + 2 * (tile + tileGap);
+            double vcol = x0 + 4 * (tile + tileGap);      // the Up/Down column, flush with the panel edge
+
+            c.AddStaticText("Move", Centered(labelFont),
+                ElementBounds.Fixed(0, y + tile + tileGap + (tile - 16) / 2, labelW, 20));
+
+            AddMoveTile(c, detail, LayoutToolIcons.MoveAway, MoveArrowNames[0], "away",
+                ElementBounds.Fixed(col1, y, tile, tile), !inert);
+            AddMoveTile(c, detail, LayoutToolIcons.MoveUp, MoveArrowNames[4], "up",
+                ElementBounds.Fixed(vcol, y, tile, tile), !inert);
+            y += tile + tileGap;
+
+            AddMoveTile(c, detail, LayoutToolIcons.MoveLeft, MoveArrowNames[2], "left",
+                ElementBounds.Fixed(x0, y, tile, tile), !inert);
+            AddFreeMoveTile(c, detail, ElementBounds.Fixed(col1, y, tile, tile), !inert);
+            AddMoveTile(c, detail, LayoutToolIcons.MoveRight, MoveArrowNames[3], "right",
+                ElementBounds.Fixed(col2, y, tile, tile), !inert);
+            y += tile + tileGap;
+
+            AddMoveTile(c, detail, LayoutToolIcons.MoveToward, MoveArrowNames[1], "toward",
+                ElementBounds.Fixed(col1, y, tile, tile), !inert);
+            AddMoveTile(c, detail, LayoutToolIcons.MoveDown, MoveArrowNames[5], "down",
+                ElementBounds.Fixed(vcol, y, tile, tile), !inert);
+            y += tile + rowGap;
+        }
+
+        // A momentary pad tile: it fires on press and pops straight back up, so the pad can be clicked
+        // repeatedly without a recompose between nudges (an arrow is an action, not a selection).
+        private void AddMoveTile(
+            GuiComposer c, CairoFont hoverFont, string icon, string hover, string code,
+            ElementBounds bounds, bool enabled)
+        {
+            string tileKey = "movearrow:" + code;
+            var btn = new GuiElementToggleButton(
+                capi, enabled ? icon : icon + LayoutToolIcons.GhostSuffix, "",
+                CairoFont.WhiteSmallText(),
+                on =>
+                {
+                    if (_suppress || !on || !enabled) return;
+                    _suppress = true;
+                    try { SingleComposer?.GetToggleButton(tileKey)?.SetValue(false); }
+                    finally { _suppress = false; }
+                    OnMoveArrowTile(code);
+                },
+                bounds, toggleable: true)
+            { Enabled = enabled };
+            c.AddInteractiveElement(btn, tileKey);
+            c.AddAutoSizeHoverText(hover, hoverFont, 260, bounds.FlatCopy(), tileKey + ":ht");
+        }
+
+        private void AddFreeMoveTile(
+            GuiComposer c, CairoFont hoverFont, ElementBounds bounds, bool enabled)
+        {
+            var btn = new GuiElementToggleButton(
+                capi, enabled ? LayoutToolIcons.MoveFree : LayoutToolIcons.MoveFree + LayoutToolIcons.GhostSuffix,
+                "", CairoFont.WhiteSmallText(),
+                on => { if (!_suppress && enabled) _tool.SetFreeMove(on); },
+                bounds, toggleable: true)
+            { Enabled = enabled };
+            c.AddInteractiveElement(btn, "movefree");
+            c.AddAutoSizeHoverText(
+                "Free-move: close this panel and the guide follows your crosshair, snapped to its own "
+                + "voxel scale. Left-click places it; right-click puts it back where it started.",
+                hoverFont, 280, bounds.FlatCopy(), "movefree:ht");
+        }
+
+        // Plain-language "how far is one click", from the guide's own scale times the chosen multiplier.
+        private static string StepDescription(int voxelScale, int multiplier)
+        {
+            int sixteenths = voxelScale * multiplier;
+            string distance = sixteenths % 16 == 0
+                ? (sixteenths / 16) + (sixteenths / 16 == 1 ? " block" : " blocks")
+                : sixteenths + "/16 of a block";
+            return "One step moves " + distance + " - " + multiplier
+                + (multiplier == 1 ? " voxel" : " voxels") + " at this guide's scale ("
+                + voxelScale + "/16 each).";
+        }
+
+        private void OnMoveStepTile(string rowKey, string code)
+        {
+            if (int.TryParse(code, out int multiplier)) _tool.SetMoveStep(multiplier);
+        }
+
+        private void OnMoveArrowTile(string code)
+        {
+            GuideData g = ResolveSelectedGuide();
+            if (g == null) return;
+
+            int step = g.VoxelScale * _tool.MoveStep;                 // in 1/16-block units
+            (int dx, int dy, int dz) = MoveOffset(code, step);
+            if (dx == 0 && dy == 0 && dz == 0) return;
+            _holdMoveMaterialization?.Invoke(g.Id);
+            _net.SendTranslate(g.Id, dx, dy, dz);
+        }
+
+        // Resolves a pad direction to a world offset in 1/16-block units. Up/Down are world vertical; the
+        // other four are read from the player's facing, snapped to whichever horizontal axis they are
+        // closest to. Vintage Story is Y-up with +X east and +Z south, so for a forward of (fx, fz) the
+        // player's left is (fz, -fx) and their right is (-fz, fx).
+        private (int dx, int dy, int dz) MoveOffset(string code, int step)
+        {
+            if (code == "up") return (0, step, 0);
+            if (code == "down") return (0, -step, 0);
+
+            (int fx, int fz) = FacingAxis();
+            return code switch
+            {
+                "away"   => (fx * step, 0, fz * step),
+                "toward" => (-fx * step, 0, -fz * step),
+                "left"   => (fz * step, 0, -fx * step),
+                "right"  => (-fz * step, 0, fx * step),
+                _        => (0, 0, 0)
+            };
+        }
+
+        private (int fx, int fz) FacingAxis()
+        {
+            Vec3f view = capi?.World?.Player?.Entity?.Pos?.GetViewVector();
+            if (view == null) return (0, 1);
+            return Math.Abs(view.X) >= Math.Abs(view.Z)
+                ? (view.X >= 0 ? 1 : -1, 0)
+                : (0, view.Z >= 0 ? 1 : -1);
+        }
+
+        // ---------------------------------------------------------------------------------
         //  Settings tab (v0.3.72)
         // ---------------------------------------------------------------------------------
         // Client display settings, changeable in play instead of by hand-editing layout-client.json and
@@ -561,35 +780,20 @@ namespace Layout.UI
         private void BuildSettingsSection(
             GuiComposer c, CairoFont font, ref double y, double contentW, double rowGap)
         {
-            CairoFont detail = CairoFont.WhiteDetailText();
-
+            // Explanatory paragraphs removed in v0.3.87 — they overflowed the dialog bounds. The labels and
+            // controls carry the meaning for now; the prose is a candidate for hover text later.
             c.AddStaticText("Guide opacity", font, ElementBounds.Fixed(0, y, contentW, 20));
             y += 20 + 2;
 
             c.AddSlider(OnOpacityBodySlider, ElementBounds.Fixed(0, y, contentW, 22), "opacitybody");
-            y += 22 + 2;
-
-            c.AddStaticText(
-                "How solid the guide body looks. Lower it to see material through the guide while "
-                + "chiselling. Anchors and control points keep their own opacity.",
-                detail, ElementBounds.Fixed(0, y, contentW, 46));
-            y += 46 + rowGap;
+            y += 22 + rowGap;
 
             // ---- Built-voxel colouring (v0.3.79) ----
             c.AddStaticText("Show built voxels", font, ElementBounds.Fixed(0, y, contentW, 20));
             y += 20 + 2;
 
             c.AddSwitch(OnOccupancyToggled, ElementBounds.Fixed(0, y, 30, 22), "occupancy", 22);
-            c.AddStaticText(
-                "Guide voxels that already hold material turn cyan.",
-                detail, ElementBounds.Fixed(38, y + 3, contentW - 38, 20));
-            y += 22 + 2;
-
-            c.AddStaticText(
-                "Colours follow the blocks you place and chisel. Very large guides are the exception — "
-                + "they are too costly to update live, so re-read them by hand.",
-                detail, ElementBounds.Fixed(0, y, contentW, 46));
-            y += 46 + 2;
+            y += 22 + rowGap;
 
             c.AddSmallButton("Re-read the world", OnOccupancyRefresh, ElementBounds.Fixed(0, y, 140, 22));
             y += 22 + rowGap;
@@ -1257,6 +1461,9 @@ namespace Layout.UI
                 // The current-shape chip is ALWAYS lit — it's a status light, not a control.
                 SingleComposer.GetToggleButton("curshape")?.SetValue(true);
 
+                // Move mode's free-move arm is a standalone toggle, not an exclusive row.
+                SingleComposer.GetToggleButton("movefree")?.SetValue(_tool.FreeMove);
+
                 // Configure the number inputs: whole numbers, ±1 per wheel notch / spinner click.
                 foreach ((string fieldKey, _, _, _) in _divWheelFields)
                 {
@@ -1489,6 +1696,7 @@ namespace Layout.UI
                 // this left half only backstops any other caller.
                 ToolMode.Create => "Create Mode",
                 ToolMode.Edit => "Edit Mode - Select a guide to edit it.",
+                ToolMode.Move => "Move Mode - Select a guide to move it.",
                 ToolMode.Delete => "Delete Mode - Click a guide to remove it.",
                 _ => "Layout tool"
             };
@@ -1584,6 +1792,7 @@ namespace Layout.UI
         {
             "create" => ToolMode.Create,
             "edit"   => ToolMode.Edit,
+            "move"   => ToolMode.Move,
             "delete" => ToolMode.Delete,
             _        => ToolMode.Create
         };

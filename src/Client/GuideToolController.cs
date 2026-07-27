@@ -138,6 +138,27 @@ namespace Layout.Client
         }
         private GrabSession _grab;
 
+        // --- Free-move session (F6, v0.3.86) -------------------------------------------------------
+        //
+        // Armed from the Move panel's crosshair toggle and engaged the moment the panel closes. Unlike a
+        // grab it takes NO edit lock and sends NOTHING until it is committed: the whole gesture is a local
+        // render offset (see GuideRenderer.SetMoveOffset), so dragging an immense guide around costs one
+        // matrix translation per frame. The committed move is a single translate packet, one undo step.
+        private sealed class MoveSession
+        {
+            public Guid GuideId;
+            public double Depth;          // held distance along the view ray, as an interior grab does
+            public Vec3d Anchor;          // where the ray-at-depth sat when the drag began
+            public int OffsetX, OffsetY, OffsetZ;   // current snapped offset, in 1/16-block units
+        }
+        private MoveSession _move;
+
+        // A committed move whose authority answer has not landed yet; its render offset is held until it
+        // does (or until PendingMoveCommitTimeoutMs, so a lost packet cannot strand a guide off-position).
+        private Guid _pendingMoveCommit = Guid.Empty;
+        private long _pendingMoveCommitMs;
+        private const long PendingMoveCommitTimeoutMs = 5000;
+
         /// <summary>
         /// True when the tool is at rest — no draft in progress and no grabbed point. Gates the
         /// ground-storage set-down gesture (SHIFT+right-click) so it can never fire mid-edit.
@@ -321,8 +342,14 @@ namespace Layout.Client
             if (_draft.Mode != _lastMode)
             {
                 if (_grab != null && !_grab.Suspended) FinishRelease();
+                CancelFreeMove();          // leaving Move mode abandons an un-committed drag
                 _lastMode = _draft.Mode;
             }
+
+            UpdateFreeMove();
+            if (_pendingMoveCommit != Guid.Empty
+                && _capi.World.ElapsedMilliseconds - _pendingMoveCommitMs > PendingMoveCommitTimeoutMs)
+                ClearPendingMoveCommit();
 
             // Stale pending insert (packet lost / rejected) simply expires.
             if (_hasPendingInsert && _capi.World.ElapsedMilliseconds - _pendingInsertMs > PendingInsertTimeoutMs)
@@ -492,6 +519,9 @@ namespace Layout.Client
             {
                 // Suspend, don't end: the draft keeps its anchor, the grab keeps its lock (comatose).
                 if (_grab != null) _grab.Suspended = true;
+                // A free-move has no lock and nothing pending, so it simply ends — putting the guide
+                // straight back rather than leaving a phantom offset behind while the tool is away.
+                CancelFreeMove();
 
                 _hud.SetExaminedGuide(null);
                 _currentTargetGuide = null;
@@ -541,9 +571,144 @@ namespace Layout.Client
             }
         }
 
+        // ==========================================================================================
+        //  Free-move (F6): the selected guide rides the crosshair until a click settles it
+        // ==========================================================================================
+
+        /// <summary>True while a guide is riding the crosshair, so clicks mean settle/put-back.</summary>
+        private bool FreeMoving => _move != null;
+
+        // Engages when the Move panel armed it and then closed; updates the render offset every tick.
+        private void UpdateFreeMove()
+        {
+            // A commit still in flight blocks a new drag: its anchor would be measured against the guide's
+            // old data position while the screen already shows the new one, so the second move would be
+            // wrong by exactly the first one.
+            bool wanted = _draft.Mode == ToolMode.Move
+                && _draft.FreeMove
+                && _draft.SelectedGuideId != null
+                && _pendingMoveCommit == Guid.Empty
+                && !_gui.IsOpened();
+
+            if (!wanted) { CancelFreeMove(); return; }
+
+            Guid guideId = _draft.SelectedGuideId.Value;
+            if (!_net.Guides.TryGetValue(guideId, out GuideData g)) { CancelFreeMove(); return; }
+
+            if (_move == null || _move.GuideId != guideId)
+            {
+                CancelFreeMove();
+                Vec3d centre = GuideAnchorCentre(g);
+                double depth = Math.Max(1.0, Dist(EyePos(), centre));
+                Vec3d eye = EyePos(), dir = ViewDir();
+                _move = new MoveSession
+                {
+                    GuideId = guideId,
+                    Depth = depth,
+                    // Deep-copied by construction — the ray point is a fresh Vec3d, never a guide's own.
+                    Anchor = new Vec3d(
+                        eye.X + dir.X * depth, eye.Y + dir.Y * depth, eye.Z + dir.Z * depth)
+                };
+            }
+
+            Vec3d e = EyePos(), d = ViewDir();
+            double px = e.X + d.X * _move.Depth;
+            double py = e.Y + d.Y * _move.Depth;
+            double pz = e.Z + d.Z * _move.Depth;
+
+            // Snap to whole voxels of THIS guide — the authority refuses anything finer, and a sub-voxel
+            // offset would move cells by a whole cell wherever it happened to cross a quantise boundary.
+            int step = Math.Max(1, g.VoxelScale);
+            int ox = SnapSixteenths(px - _move.Anchor.X, step);
+            int oy = SnapSixteenths(py - _move.Anchor.Y, step);
+            int oz = SnapSixteenths(pz - _move.Anchor.Z, step);
+            if (ox == _move.OffsetX && oy == _move.OffsetY && oz == _move.OffsetZ) return;
+
+            _move.OffsetX = ox;
+            _move.OffsetY = oy;
+            _move.OffsetZ = oz;
+            _renderer.SetMoveOffset(guideId, ox / 16.0, oy / 16.0, oz / 16.0);
+        }
+
+        private static int SnapSixteenths(double worldDelta, int step) =>
+            (int)Math.Round(worldDelta * 16.0 / step) * step;
+
+        // Commits the drag as ONE translate — one undo step — and disarms. Disarming matters: leaving it
+        // armed would re-engage on the very next tick and the guide would start following the crosshair
+        // again the instant it was put down.
+        private void CommitFreeMove()
+        {
+            if (_move == null) return;
+            MoveSession session = _move;
+            _move = null;
+            _draft.SetFreeMove(false);
+
+            if (session.OffsetX == 0 && session.OffsetY == 0 && session.OffsetZ == 0)
+            {
+                _renderer.ClearMoveOffset();
+                return;
+            }
+
+            // Deliberately NOT clearing the render offset here: it stays until the authority answers, so a
+            // remote server's round trip cannot make the guide snap back and then jump forward again. The
+            // timeout is only a safety net for an answer that never arrives.
+            _pendingMoveCommit = session.GuideId;
+            _pendingMoveCommitMs = _capi.World.ElapsedMilliseconds;
+            _renderer.HoldMoveMaterialization(session.GuideId);
+            _net.SendTranslate(
+                session.GuideId, session.OffsetX, session.OffsetY, session.OffsetZ);
+        }
+
+        private void ClearPendingMoveCommit()
+        {
+            if (_pendingMoveCommit == Guid.Empty) return;
+            _pendingMoveCommit = Guid.Empty;
+            _renderer.ClearMoveOffset();
+        }
+
+        // Abandons the drag with nothing sent — the guide simply draws where its data always said it was.
+        private void CancelFreeMove()
+        {
+            if (_move == null) return;
+            _move = null;
+            _draft.SetFreeMove(false);
+            _renderer.ClearMoveOffset();
+        }
+
+        // The middle of a guide's real anchors — good enough to pick a held distance from, and cheap
+        // (control points only, never voxels: this must not touch a behemoth's shell).
+        private static Vec3d GuideAnchorCentre(GuideData g)
+        {
+            double sx = 0, sy = 0, sz = 0;
+            int n = 0;
+            List<ControlPoint> points = g.ControlPoints;
+            if (points != null)
+            {
+                for (int i = 0; i < points.Count; i++)
+                {
+                    ControlPoint cp = points[i];
+                    if (cp == null || cp.IsPhantom || cp.WorldPosition == null) continue;
+                    sx += cp.WorldPosition.X; sy += cp.WorldPosition.Y; sz += cp.WorldPosition.Z;
+                    n++;
+                }
+            }
+            return n == 0 ? new Vec3d() : new Vec3d(sx / n, sy / n, sz / n);
+        }
+
         private void UpdateAim()
         {
             BlockSelection blockSel = _capi.World.Player.CurrentBlockSelection;
+
+            // A guide riding the crosshair is DRAWN offset but its data has not moved, so a raycast would
+            // still hit where it used to be — reporting a guide the player can no longer see there. Nothing
+            // is targetable mid-drag anyway (the click means "put it down"), so skip the cast entirely.
+            if (FreeMoving)
+            {
+                _currentTargetGuide = null;
+                _springBackAvailable = false;
+                _hud.SetExaminedGuide(null);
+                return;
+            }
 
             // 1) Guide under the crosshair → HUD examine seam (id, lock status, count, cap bar).
             TargetHit hit = FindTarget(includeLockedPoints: true);
@@ -1229,6 +1394,18 @@ namespace Layout.Client
                 return;
             }
 
+            // MOVE mode: a live free-move settles here; otherwise a click SELECTS the guide to move (and an
+            // empty click deselects), exactly as Edit does. Geometry is never touched in this mode.
+            if (_draft.Mode == ToolMode.Move)
+            {
+                if (FreeMoving) { CommitFreeMove(); return; }
+                TargetHit moveHit = FindTarget(includeLockedPoints: true);
+                if (moveHit.Found) _draft.SelectGuide(moveHit.GuideId);
+                else _draft.ClearSelection();
+                _gui.RefreshSelection();
+                return;
+            }
+
             // 1. Grabbing → release.
             if (_grab != null && !_grab.Suspended)
             {
@@ -1314,6 +1491,19 @@ namespace Layout.Client
             // without mutating the guide, matching the cancel/backtrack gesture used in Create.
             if (_draft.Mode == ToolMode.Edit)
             {
+                if (_draft.SelectedGuideId != null)
+                {
+                    _draft.ClearSelection();
+                    _gui.RefreshSelection();
+                }
+                return;
+            }
+
+            // MOVE mode: right-click is the same backtrack gesture as everywhere else — first it puts an
+            // in-progress free-move back where it started, and only then does it drop the selection.
+            if (_draft.Mode == ToolMode.Move)
+            {
+                if (FreeMoving) { CancelFreeMove(); return; }
                 if (_draft.SelectedGuideId != null)
                 {
                     _draft.ClearSelection();
@@ -2004,6 +2194,8 @@ namespace Layout.Client
         private void OnGuideRemoved(Guid guideId)
         {
             if (_grab != null && _grab.GuideId == guideId) DropGrabLocally();
+            if (_move != null && _move.GuideId == guideId) CancelFreeMove();
+            if (_pendingMoveCommit == guideId) ClearPendingMoveCommit();
             if (_draft.SelectedGuideId == guideId) _draft.ClearSelection();
             if (_currentTargetGuide == guideId) _currentTargetGuide = null;
             if (_hasPendingInsert && _pendingInsertGuide == guideId)
@@ -2019,11 +2211,12 @@ namespace Layout.Client
             _capi.ShowChatMessage("[Layout] " + description);
         }
 
-        /// <summary>Describes the selected Edit guide first, then a grabbed or crosshair-targeted guide.</summary>
+        /// <summary>Describes the selected Edit/Move guide first, then a grabbed or crosshair-targeted one.</summary>
         public string DescribeCurrentGuide(out bool found)
         {
             Guid? guideId = null;
-            if (_draft.Mode == ToolMode.Edit && _draft.SelectedGuideId != null
+            if ((_draft.Mode == ToolMode.Edit || _draft.Mode == ToolMode.Move)
+                && _draft.SelectedGuideId != null
                 && _net.Guides.ContainsKey(_draft.SelectedGuideId.Value))
                 guideId = _draft.SelectedGuideId;
             else if (_grab != null && _net.Guides.ContainsKey(_grab.GuideId))
@@ -2051,6 +2244,12 @@ namespace Layout.Client
         // IS the inserted point (the shape contract) — grab it without a further SendGrab.
         private void OnGuideAddedOrUpdated(GuideData g)
         {
+            // A committed free-move keeps its render offset until the authority's answer lands, so the
+            // guide does not flash back to its old position for the round trip. This fires for the accepted
+            // move AND for the corrective resync of a refused one, which is exactly when the offset stops
+            // being the truth either way.
+            if (_pendingMoveCommit != Guid.Empty && g.Id == _pendingMoveCommit) ClearPendingMoveCommit();
+
             if (!_hasPendingInsert || g.Id != _pendingInsertGuide) return;
             if (!_net.LockHolders.TryGetValue(g.Id, out string holder) || holder != MyUid)
             {

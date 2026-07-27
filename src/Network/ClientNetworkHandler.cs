@@ -922,6 +922,24 @@ namespace Layout.Network
             _channel.SendPacket(new GuideSetSidesPacket(guideId, sides));
         }
 
+        /// <summary>
+        /// F6 Move: slide a whole guide by a delta given in 1/16-block units. The authority validates that
+        /// the delta is a whole number of the guide's own voxels and refuses anything finer, so callers must
+        /// step by the guide's scale — see <c>GuideManager.TranslateGuide</c>. Nothing is applied optimistically:
+        /// both authorities answer with a full-state upsert, and a move can be refused by a land claim.
+        /// </summary>
+        public void SendTranslate(Guid guideId, int deltaX, int deltaY, int deltaZ)
+        {
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation)
+            {
+                _local.Translate(guideId, new Vec3d(deltaX / 16.0, deltaY / 16.0, deltaZ / 16.0));
+                return;
+            }
+            _channel.SendPacket(new GuideTranslatePacket(guideId, deltaX, deltaY, deltaZ));
+        }
+
         /// <summary>Session 11: spring a guide back to its as-placed form (SHIFT+click).</summary>
         public void SendSpringBack(Guid guideId)
         {

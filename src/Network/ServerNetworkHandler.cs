@@ -229,6 +229,7 @@ namespace Layout.Network
                 .SetMessageHandler<GuideSetDivisionsPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetDivisions(p, x)))
                 .SetMessageHandler<GuideSetSidesPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetSides(p, x)))
                 .SetMessageHandler<GuideSpringBackPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSpringBack(p, x)))
+                .SetMessageHandler<GuideTranslatePacket>((p, x) => WithPlayerVoxelCap(p, () => OnTranslate(p, x)))
                 .SetMessageHandler<DraftStartPacket>(OnDraftStart)
                 .SetMessageHandler<DraftCancelPacket>(OnDraftCancel)
                 .SetMessageHandler<UndoRequestPacket>((p, x) => WithPlayerVoxelCap(p, () => OnUndo(p, x)))
@@ -2474,6 +2475,31 @@ namespace Layout.Network
                     id, beforeConstraint, beforePoints,
                     result.Guide.Constraint, result.Guide.ControlPoints));
                 StampLastSculptor(fromPlayer, result.Guide, broadcastIncremental: false);
+                _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
+            }
+            else HandleNonSuccessToggle(fromPlayer, id, result, g);
+        }
+
+        // F6 Move (0.3.86): slide a whole guide. Geometry is rewritten wholesale, so — exactly like
+        // spring-back — the broadcast is the generic full-state upsert and the full-exclusivity edit lock
+        // applies. No chalk is charged: chalk is a PLACEMENT cost (F5) and repositioning an existing guide
+        // is not a placement. No cap check either — a rigid translation cannot change the voxel count.
+        private void OnTranslate(IServerPlayer fromPlayer, GuideTranslatePacket p)
+        {
+            if (DeniedByPrivilege(fromPlayer)) return;
+            Guid id = p.GuideId();
+            if (!_guides.TryGetGuide(id, out GuideData g)) { _channel.SendPacket(new GuideDeletePacket(id), fromPlayer); return; }
+            if (BlockedByEditLock(fromPlayer, id)) return;
+
+            Vec3d delta = p.ResolveDelta();
+            GuideOperationResult result = _guides.TranslateGuide(id, delta);
+            if (result.Status == GuideOpStatus.Success)
+            {
+                if (p.DeltaX != 0 || p.DeltaY != 0 || p.DeltaZ != 0)
+                {
+                    _undo.Record(fromPlayer.PlayerUID, new TranslateGuideCommand(id, delta));
+                    StampLastSculptor(fromPlayer, result.Guide, broadcastIncremental: false);
+                }
                 _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
             }
             else HandleNonSuccessToggle(fromPlayer, id, result, g);

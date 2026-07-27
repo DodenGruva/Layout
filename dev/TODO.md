@@ -1,4 +1,4 @@
-# Layout — TODO / Outstanding Items (current: v0.3.85 on `beta-shader`, uncommitted)
+# Layout — TODO / Outstanding Items (current: v0.3.89 on `beta`)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
@@ -7,14 +7,19 @@
 
 ## ⭐ Top of the list (v0.3.53 final release → field reports)
 
-> **QUEUED 2026-07-26 — four new human-requested features, not started:** **F6 Move mode** (translate a
-> whole guide in steps), **F7 mirror/flip**, **F8 copy a guide**, **F9 in-game settings panel**. Full
-> Since extended with **F10** (redraw the settings gear glyph) and **F11** (configurable voxel colour
-> scheme, for colour-blind accessibility — the red locked point and green apex are the problem pair).
-> Full write-ups in the feature ledger below. Recommended order is **F6 → F8 → F9 → F7**: Move first because it
-> answers a real reported pain and is cheaper than it looks, Copy next because it is nearly free once Move
-> exists and the two compose (copy, then nudge into place), the settings panel when convenient, and Mirror
-> last — it shares a tool mode with Move but not its difficulty.
+> **✅ F6 MOVE DELIVERED — v0.3.86–v0.3.89 (SESSION_30).** A fourth tool mode: select a guide, then slide it
+> whole from the GUI's arrow pad or on the crosshair. Shape untouched, locked points travel with it, no
+> chalk charged, one undo step. **Protocol 16 → 17**; DataVersion unchanged. Full record in `SESSION_30.md`;
+> its §7 carries six flagged items, of which the live one is that `OnGuideAddedOrUpdated` can still strand a
+> stale wireframe outside Move mode.
+>
+> **QUEUED 2026-07-26 — the rest of the human-requested set, not started:** **F7 mirror/flip**,
+> **F8 copy a guide**, **F9 in-game settings panel**, plus **F10** (redraw the settings gear glyph) and
+> **F11** (configurable voxel colour scheme, for colour-blind accessibility — the red locked point and green
+> apex are the problem pair).
+> Full write-ups in the feature ledger below. Remaining order is **F8 → F9 → F7**: Copy next because it is
+> nearly free now that Move exists and the two compose (copy, then nudge into place), the settings panel
+> when convenient, and Mirror last — it shares a tool mode with Move but not its difficulty.
 
 > **✅ BLOCK OCCUPANCY DELIVERED — v0.3.70–v0.3.85 (SESSION_29).** Guide voxels holding world material are
 > drawn cyan and update live as you build. Playtest verdict: *"the color difference is incredibly helpful."*
@@ -789,28 +794,30 @@ The inverse of a break: a menu action to snap a free shape back under a constrai
 ellipse → circle, triangle → equilateral, rectangle → square) with a best-fit. Natural undo pairing exists.
 Park until asked.
 
-### F6. "Move" tool mode — translate a whole guide (human-requested 2026-07-26)
-A fourth tool mode beside Create · Edit · Delete. Select a guide, then nudge the ENTIRE guide in
-incremental steps along any axis, its shape untouched. **The motivating case: a guide sculpted over a long
-session that turns out to be one voxel off.** Today the only recovery is to reshape it point by point or
-throw it away and start over.
+### F6. "Move" tool mode — ✅ DELIVERED (Session 30, v0.3.86–v0.3.89)
+A fourth tool mode beside Create · Edit · Delete. Select a guide, then slide the ENTIRE guide, its shape
+untouched. **The motivating case: a guide sculpted over a long session that turns out to be one voxel off.**
 
-Why it should be cheap: a guide is defined ENTIRELY by `GuideData.ControlPoints` (a list of `Vec3d`
-world positions) plus scalars — there is no stored voxel data, voxels are regenerated from the shape. A
-translation is therefore "add a delta to every control point". `RescaleGuideCommand` (36 lines) +
-`GuideRescalePacket` are the exact precedent for a whole-guide, undoable, networked operation.
+**Shipped as:** an arrow pad in the GUI (steps of ×1/×2/×4/×8/×16 of the moved guide's own voxel; the four
+horizontal arrows read from the player's facing snapped to the nearest world axis, Up/Down are world
+vertical) plus a free-move toggle that drags the guide on the crosshair. One nudge or one drag is one undo
+step. No chalk charged; claims re-checked at the destination.
 
-Design points to settle before building:
-- **Step size.** One voxel at the guide's own `VoxelScale` is the obvious unit; a scale-16 guide would then
-  nudge a whole block at a time. Offer a modifier for one-voxel-at-scale-1 regardless, or not?
-- **`OriginalControlPoints` must move too.** Spring-back stores the pre-sculpt pose; translate only the
-  live points and a later spring-back teleports the guide back to where it used to be.
-- **Locked points and lock markers.** Session-20 adjacent locks tie a point to a neighbouring guide.
-  Moving the guide breaks that relationship. Cheapest honest answer: refuse to move a guide with live
-  locks, or drop the locks and say so. Do not silently drag them.
-- **Server validation.** The destination must re-check claims and placement policy — a move is a placement.
-  Cumulative voxel budget is unchanged (same guide, same voxel count).
-- Undo/redo pairs naturally (a move is its own inverse with a negated delta).
+**Plan-vs-shipped deltas — read these before touching it:**
+- **The locked-point worry was wrong.** This entry claimed Session-20 adjacent locks "tie a point to a
+  neighbouring guide" and recommended refusing to move a locked guide. **No such relationship exists** —
+  `IsLocked`/`IsLockMarker` are plain per-control-point flags; B-S9-1 was a click-*targeting* defect, not
+  stored data. Locks travel with the guide, which matters because a long-sculpted guide is exactly the one
+  covered in them. (`UpdateControlPoints` does refuse locked points, so the translate needed its own seam.)
+- **No modifier for a finer step.** A move must be a WHOLE number of the guide's own voxels; `TranslateGuide`
+  enforces it and refuses anything finer, because a sub-voxel delta moves cells by a whole cell wherever it
+  crosses a quantise boundary and by nothing elsewhere. That restriction is also what makes the count
+  provably unchanged, so no cap check and no rescan of a behemoth.
+- **`OriginalControlPoints` does move too**, as this entry required.
+- The precedent used was `SpringBackCommand`/`OnSpringBack` (wholesale rewrite + full-state broadcast)
+  rather than `RescaleGuideCommand`; `GuideManager.RestoreControlPoints` was the seam to copy.
+
+Full record, including the two-round rendering defect it exposed, in `SESSION_30.md`.
 
 ### F11. Configurable voxel colour scheme — accessibility (human-requested 2026-07-26)
 Let players change the guide colour palette from the settings page. **Motivation is accessibility, not
@@ -872,10 +879,11 @@ point reflection will produce a mirrored shape whose settings still describe the
 per-shape work, and expect a symmetric shape (sphere, box) to be free while a tapered prism is not.
 Also undecided: mirror about the guide's own centre, or about a plane the player picks?
 
-### F8. Copy an existing guide (human-requested 2026-07-26)
+### F8. Copy an existing guide (human-requested 2026-07-26) — NEXT UP
 Duplicate a guide, presumably placing the copy offset by a step so it is immediately visible, then let F6
 move it into position. **The cheapest of the three** — `GuideData.DeepClone()` already exists; a copy is a
-clone with a fresh `Guid`.
+clone with a fresh `Guid`. **F6 has shipped**, so the compose story is now real: copy, then nudge into
+place. The Move mode's selection, arrow pad and grey-out behaviour are all reusable as-is.
 
 Two decisions that are policy, not code:
 - **Does a copy cost chalk?** It is a new placement and F5 charges 2D −1 / 3D −2 on completed placements.
@@ -917,13 +925,14 @@ the inventory refill remains (Top of the list).
 ## Next session — start here
 
 **The agenda is "⭐ Top of the list" at the top of this file** — it is not repeated here. Current state:
-v0.3.53 is the built, packaged, and documented final release. The v0.3.42 renderer baseline is restored;
-field-soak persistent visibility, `/layout totalvoxelcap`, and the off-state Chalking Kit lockout, then
-respond to field reports or explicit new feature requests.
+v0.3.89 is built, packaged and documented on `beta`. F6 Move shipped this session; **F8 (copy a guide) is
+the recommended next feature.** The open verification items from Session 29 (block occupancy) and the six
+flagged items in `SESSION_30.md` §7 are the standing backlog.
 
-**Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\LayoutZips\`;
-docs are updated ONLY when the human says so; commits/pushes only when the human instructs. `main` is the
-mainline.
+**Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;
+docs are updated ONLY when the human says so — and **`CHANGELOG.md` is part of that set** (it was missed at
+the end of Session 29 and backfilled in Session 30); commits/pushes only when the human instructs. `main` is
+the mainline.
 
 ---
 

@@ -1239,6 +1239,7 @@ namespace Layout.Systems
             double frameMs = Math.Max(1.0, Math.Min(250.0, deltaTime * 1000.0));
             _smoothedFrameMilliseconds += (frameMs - _smoothedFrameMilliseconds) * 0.08;
             AdvanceRetiredMaterializationDeletes();
+            AdvanceMoveHolds();
             AdvanceDraftMaterialization();
             AdvancePendingPlacementMaterialization();
             AdvanceSettledMaterializations();
@@ -1321,8 +1322,21 @@ namespace Layout.Systems
                     : gm.TransitionRef != null ? gm.TransitionOrigin : gm.Origin;
                 if (primary == null || origin == null) continue;
                 stats.PlacedGuides++;
+
+                // F6 free-move: this guide is being dragged, so shift where it draws. Both the cull test
+                // and the voxel-frame grid follow the shift, or a guide moved to the screen edge would be
+                // culled against where it used to be and its cell grid would slide across its own faces.
+                bool shifted = _moveOffsetGuide != Guid.Empty && _moveOffsetGuide == entry.Key;
+                Vec3d drawOrigin = shifted
+                    ? new Vec3d(origin.X + _moveOffsetX, origin.Y + _moveOffsetY, origin.Z + _moveOffsetZ)
+                    : origin;
+                Vec3d cullCenter = shifted && gm.CullCenter != null
+                    ? new Vec3d(gm.CullCenter.X + _moveOffsetX, gm.CullCenter.Y + _moveOffsetY,
+                                gm.CullCenter.Z + _moveOffsetZ)
+                    : gm.CullCenter;
+
                 VisibilityResult visibility = ClassifyVisibility(
-                    camPos, gm.CullCenter, gm.CullRadius, viewDistance, frustumCuller);
+                    camPos, cullCenter, gm.CullRadius, viewDistance, frustumCuller);
                 if (visibility == VisibilityResult.BeyondViewDistance)
                 {
                     stats.DistanceCulledGuides++;
@@ -1334,9 +1348,10 @@ namespace Layout.Systems
                     continue;
                 }
                 stats.VisiblePlacedGuides++;
-                SetModelMatrix(origin.X - camPos.X, origin.Y - camPos.Y, origin.Z - camPos.Z);
+                SetModelMatrix(
+                    drawOrigin.X - camPos.X, drawOrigin.Y - camPos.Y, drawOrigin.Z - camPos.Z);
                 ApplyModelMatrix(useCustom, prog);
-                ApplyVoxelFrame(useCustom, GuideVoxelScale(entry.Key), origin);
+                ApplyVoxelFrame(useCustom, GuideVoxelScale(entry.Key), drawOrigin);
                 RenderMeshTracked(rpi, primary, stats);
                 List<MeshRef> auxiliary = gm.GrabRef != null ? gm.GrabAuxiliary
                     : gm.TransitionRef != null ? gm.TransitionAuxiliary : gm.Auxiliary;
@@ -1650,6 +1665,14 @@ namespace Layout.Systems
                 if (fingerprint == _cancelRestoreFingerprint) return;
             }
 
+            // BEING MOVED (F6): the ordinary path below would start the shell straight away and return
+            // WITHOUT rebuilding the wireframe — TryStartSettledShellMaterialization succeeds off the
+            // existing RenderedWireframe flag and never touches the scaffold mesh. That left the scaffold
+            // drawn at the guide's OLD position while the shell streamed in at the new one, and meant the
+            // rebuild's move-hold branch (which draws the true-scale floor band) was never reached at all.
+            // A held guide therefore goes straight to the rebuild.
+            if (MoveHoldActive(guide.Id)) { RebuildGuide(guide); return; }
+
             if (TryStartSettledShellMaterialization(guide)) return;
             RebuildGuide(guide);
         }
@@ -1702,6 +1725,90 @@ namespace Layout.Systems
         /// Marks a control point as actively dragged so its voxels render White. Rebuilds the affected guide
         /// (and any previously-grabbed one) so the highlight moves cleanly between points.
         /// </summary>
+        // ---- F6 free-move preview (v0.3.86) ------------------------------------------------------
+        //
+        // A whole-guide translation is a pure change of WHERE the mesh is drawn, so the preview is a change
+        // to the per-mesh model-matrix translation and nothing else. No re-meshing, no re-upload, no
+        // regrouping of primitives — an eight-million-voxel guide previews its move exactly as cheaply as a
+        // small one, and the drawn primitive order is untouched (the standing renderer constraint).
+        private Guid _moveOffsetGuide = Guid.Empty;
+        private double _moveOffsetX, _moveOffsetY, _moveOffsetZ;
+
+        /// <summary>Draws one guide shifted by a world offset until cleared. Purely visual — no mesh changes.</summary>
+        public void SetMoveOffset(Guid guideId, double dx, double dy, double dz)
+        {
+            _moveOffsetGuide = guideId;
+            _moveOffsetX = dx;
+            _moveOffsetY = dy;
+            _moveOffsetZ = dz;
+        }
+
+        /// <summary>Drops any free-move preview offset, so guides draw where their data says they are.</summary>
+        public void ClearMoveOffset()
+        {
+            _moveOffsetGuide = Guid.Empty;
+            _moveOffsetX = _moveOffsetY = _moveOffsetZ = 0;
+        }
+
+        // ---- Move materialization hold (v0.3.86) -------------------------------------------------
+        //
+        // A moved immense guide drops to its cheap wireframe scaffold and then immediately starts streaming
+        // its exact shell back in. That is right for a settling guide and wrong for a moving one: the player
+        // is usually mid-adjustment, and each further nudge would throw the part-built shell away and start
+        // over. Nudging therefore parks the shell for a beat; the hold restarts on every nudge, so the
+        // rebuild only happens once the player has actually stopped.
+        private const long MoveMaterializationHoldMs = 2500;
+
+        // Total height of the graduated precision band along the bottom of a held wireframe, in blocks.
+        // The true scale occupies its lowest part and the transition up to the scaffold's own coarse scale
+        // fills the rest — see BuildFloorPrecisionLayers.
+        private const double MoveWireframeFloorBandBlocks = 1.0;
+
+        private readonly Dictionary<Guid, long> _moveHolds = new Dictionary<Guid, long>();
+
+        /// <summary>
+        /// Parks a moved guide on its wireframe for <see cref="MoveMaterializationHoldMs"/>, restarting the
+        /// clock if it is already held. Any shell already streaming for the old position is abandoned — it
+        /// describes where the guide used to be.
+        /// </summary>
+        public void HoldMoveMaterialization(Guid guideId)
+        {
+            // Only guides that actually stream are worth holding. A small guide rebuilds synchronously in
+            // well under a frame and never shows a wireframe at all, so holding one would buy nothing and
+            // cost an extra rebuild when the hold expired.
+            if (!_network.Guides.TryGetValue(guideId, out GuideData guide)
+                || !ShouldStreamSettledShell(guide)) return;
+
+            _moveHolds[guideId] = (_capi.World?.ElapsedMilliseconds ?? 0) + MoveMaterializationHoldMs;
+            CancelSettledMaterialization(guideId);
+        }
+
+        private bool MoveHoldActive(Guid guideId) =>
+            _moveHolds.TryGetValue(guideId, out long until)
+            && (_capi.World?.ElapsedMilliseconds ?? 0) < until;
+
+        // Releases guides whose hold has run out: the shell they were holding off now streams in normally.
+        private void AdvanceMoveHolds()
+        {
+            if (_moveHolds.Count == 0) return;
+            long now = _capi.World?.ElapsedMilliseconds ?? 0;
+
+            List<Guid> expired = null;
+            foreach (KeyValuePair<Guid, long> hold in _moveHolds)
+                if (now >= hold.Value) (expired ??= new List<Guid>()).Add(hold.Key);
+            if (expired == null) return;
+
+            for (int i = 0; i < expired.Count; i++)
+            {
+                Guid id = expired[i];
+                _moveHolds.Remove(id);
+                if (!_network.Guides.TryGetValue(id, out GuideData guide) || guide == null) continue;
+                // Rebuild rather than only starting the stream: this also drops the precise floor band the
+                // held scaffold carried, and covers a guide that stopped qualifying for streaming.
+                RebuildGuide(guide);
+            }
+        }
+
         public void SetGrabbedPoint(Guid guideId, int controlPointIndex)
         {
             Guid previous = _grabbedGuide;
@@ -3846,6 +3953,16 @@ namespace Layout.Systems
             // players — previously only the local placer saw a guide materialize.
             if (!locallyGrabbed && allowStreaming && ShouldStreamSettledShell(guide))
             {
+                // BEING MOVED: hold the scaffold and start nothing. The player is still adjusting, and each
+                // further nudge would only discard a part-built shell. The floor band is drawn at the
+                // guide's true scale here so the bottom edge can be lined up voxel-exactly while it moves.
+                if (MoveHoldActive(guide.Id))
+                {
+                    RebuildSettledScaffold(
+                        guide, shape, points, cullCenter, cullRadius, preciseFloorBand: true);
+                    return;
+                }
+
                 // Already streaming this exact pose: leave it alone. Re-scaffolding every rebuild would
                 // restart the animation and throw away completed batches.
                 if (_settledMaterializations.TryGetValue(
@@ -3936,9 +4053,24 @@ namespace Layout.Systems
         /// Deliberately NOT the grab wireframe path: no adaptive motion scale, no cursor precision hole, no
         /// grab mesh slot. This is a static stand-in for a guide nobody is touching.
         /// </remarks>
+        /// <param name="preciseFloorBand">
+        /// Replaces the bottom of the coarse wireframe with graduated true-scale layers, exactly as a
+        /// moving draft does around the dragged point. The scaffold body is deliberately coarse — that is
+        /// what makes it cheap — but a coarse bottom edge is useless for lining a guide up while moving it,
+        /// because the edge you are aiming at is not where the real shell's edge will land.
+        /// </summary>
+        /// <remarks>
+        /// The coarse wire is CUT AWAY under the band rather than merely overdrawn. That cut is the whole
+        /// trick, and its absence was the v0.3.88 defect: fine voxels were added along the bottom while the
+        /// block-sized coarse cubes stayed exactly where they were, and since guides are order-dependent
+        /// translucent geometry the primary mesh drew first and won the depth test. The result read as
+        /// "1/16 voxels that are somehow a full block across" — the fine geometry was there and invisible
+        /// inside the coarse geometry. <c>ShowMovingDraft</c> removes its coarse cells inside the precision
+        /// radius for the same reason.
+        /// </remarks>
         private void RebuildSettledScaffold(
             GuideData guide, IGuideShape shape, List<ControlPoint> points,
-            Vec3d cullCenter, double cullRadius)
+            Vec3d cullCenter, double cullRadius, bool preciseFloorBand = false)
         {
             List<Vec3d> curve = shape.SampleCurve(128);
             int scaffoldScale = ChooseMovingWireframeScale(curve, guide.VoxelScale);
@@ -3951,6 +4083,20 @@ namespace Layout.Systems
                 VoxelRenderType type = point.IsLocked ? VoxelRenderType.Locked
                     : point.IsPrimary ? VoxelRenderType.Primary : VoxelRenderType.Anchor;
                 ShapeGeometry.ClaimMarker(coarse, scaffoldScale, point.WorldPosition, type);
+            }
+
+            // Markers are claimed BEFORE the cut so a base anchor's coarse cell is removed with everything
+            // else down there; the layers re-claim it at their own finer scale.
+            List<(int Scale, List<VoxelPosition> Voxels)> floorLayers = null;
+            if (preciseFloorBand && scaffoldScale > guide.VoxelScale)
+            {
+                floorLayers = BuildFloorPrecisionLayers(
+                    curve, points, guide.VoxelScale, scaffoldScale, out double bandTop);
+                if (floorLayers.Count > 0)
+                {
+                    double halfCoarse = scaffoldScale / 32.0;
+                    coarse.RemoveAll(v => v.Y / 16.0 + halfCoarse <= bandTop);
+                }
             }
 
             Vec3d origin = ComputeOrigin(points);
@@ -3967,10 +4113,169 @@ namespace Layout.Systems
             };
             AssignAnchors(points, options);
 
-            UploadOrReplace(guide.Id, GuideMeshBuilder.Build(coarse, options), origin);
+            UploadOrReplace(
+                guide.Id, GuideMeshBuilder.Build(coarse, options), origin, scaffoldScale);
             if (_guideMeshes.TryGetValue(guide.Id, out GuideMesh mesh))
+            {
                 mesh.RenderedWireframe = true;
+
+                // Added AFTER UploadOrReplace, which clears the auxiliary list as part of replacing the
+                // primary mesh — building the layers first would only have them deleted again.
+                if (floorLayers != null)
+                {
+                    for (int i = 0; i < floorLayers.Count; i++)
+                    {
+                        var layerOptions = new GuideMeshOptions
+                        {
+                            Scale = floorLayers[i].Scale,
+                            Mode = ProjectionMode.Volumetric,
+                            Plane = guide.Plane,
+                            Origin = origin,
+                            Hidden = guide.IsHidden,
+                            PrivateAnchors = options.PrivateAnchors
+                        };
+                        AssignAnchors(points, layerOptions);
+                        MeshRef layerMesh = UploadTrackedMesh(
+                            GuideMeshBuilder.Build(floorLayers[i].Voxels, layerOptions),
+                            floorLayers[i].Scale);
+                        if (layerMesh != null) mesh.Auxiliary.Add(layerMesh);
+                    }
+                }
+            }
             SetGuideCullBounds(guide.Id, cullCenter, cullRadius);
+        }
+
+        /// <summary>
+        /// Builds the graduated floor layers: finest at the very bottom, stepping one valid scale coarser
+        /// per layer until it meets the scaffold's own scale. Mirrors <see cref="UploadPrecisionLayers"/>,
+        /// which does the same around a dragged point — the difference is only that the distance measured
+        /// here is HEIGHT above the shape's lowest point rather than radius from an aim position, so the
+        /// precision sits where the player is lining the guide up.
+        /// </summary>
+        /// <param name="bandTop">
+        /// World Y below which the coarse wire must be cut away. Negative infinity when no layers were
+        /// produced, so a caller cutting on it removes nothing.
+        /// </param>
+        private static List<(int Scale, List<VoxelPosition> Voxels)> BuildFloorPrecisionLayers(
+            List<Vec3d> curve, List<ControlPoint> points, int fineScale, int coarseScale, out double bandTop)
+        {
+            bandTop = double.NegativeInfinity;
+            var layers = new List<(int, List<VoxelPosition>)>();
+            if (curve == null || curve.Count == 0 || fineScale <= 0 || coarseScale <= fineScale)
+                return layers;
+
+            double minY = double.MaxValue;
+            for (int i = 0; i < curve.Count; i++)
+                if (curve[i] != null && curve[i].Y < minY) minY = curve[i].Y;
+            if (minY == double.MaxValue) return layers;
+
+            var scales = new List<int>();
+            for (int i = 0; i < GuideData.ValidVoxelScales.Length; i++)
+            {
+                int scale = GuideData.ValidVoxelScales[i];
+                if (scale >= fineScale && scale < coarseScale) scales.Add(scale);
+            }
+            if (scales.Count == 0) return layers;
+
+            // A solid core of four selected voxels at the true scale, then the transition above it — the
+            // same shape of rule the dragged-point bands use for their inner radius.
+            double inner = Math.Max(fineScale * 4.0 / 16.0, fineScale / 16.0);
+            double outer = Math.Max(MoveWireframeFloorBandBlocks, inner);
+            double extra = Math.Max(0.0, outer - inner);
+            if (extra <= 1e-6 && scales.Count > 1) scales.RemoveRange(1, scales.Count - 1);
+            bandTop = minY + outer;
+
+            for (int i = 0; i < scales.Count; i++)
+            {
+                int scale = scales[i];
+                double lower = i == 0
+                    ? double.NegativeInfinity
+                    : inner + extra * i / scales.Count;
+                double upper = inner + extra * (i + 1) / scales.Count;
+
+                List<VoxelPosition> band = BuildFloorWireBand(curve, scale, minY, lower, upper);
+                ClaimFloorMarkers(band, points, scale, minY, lower, upper);
+                if (band.Count > 0) layers.Add((scale, band));
+            }
+            return layers;
+        }
+
+        // One height slice of the curve, marched at `scale`. Segments are CLIPPED at the slice ceiling
+        // before marching, so a shape with one long near-vertical run cannot quietly turn a thin band into
+        // a full-resolution wireframe.
+        private static List<VoxelPosition> BuildFloorWireBand(
+            List<Vec3d> curve, int scale, double minY, double lowerHeight, double upperHeight)
+        {
+            var marched = new List<VoxelPosition>();
+            var seen = new HashSet<(int, int, int)>();
+            double guardTop = minY + upperHeight + scale * 0.125;
+
+            if (curve.Count == 1)
+            {
+                if (curve[0] != null && curve[0].Y <= guardTop)
+                    VoxelMarch.MarchInto(marched, seen, curve, scale);
+            }
+            else
+            {
+                for (int i = 1; i < curve.Count; i++)
+                {
+                    Vec3d a = curve[i - 1], b = curve[i];
+                    if (a == null || b == null) continue;
+                    if (a.Y > guardTop && b.Y > guardTop) continue;
+
+                    Vec3d p = a, q = b;
+                    if (a.Y > guardTop || b.Y > guardTop)
+                    {
+                        double span = b.Y - a.Y;
+                        if (Math.Abs(span) < 1e-9) continue;
+                        double t = (guardTop - a.Y) / span;
+                        if (t < 0.0) t = 0.0; else if (t > 1.0) t = 1.0;
+                        Vec3d crossing = new Vec3d(
+                            a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, a.Z + (b.Z - a.Z) * t);
+                        if (a.Y > guardTop) p = crossing; else q = crossing;
+                    }
+
+                    VoxelMarch.MarchSegmentInto(marched, seen, p, q, scale);
+                }
+            }
+
+            // Trim to the slice by CELL CENTRE, with half a cell of overlap at each edge so neighbouring
+            // layers meet without a seam of missing wire between them.
+            double half = scale / 32.0;
+            double overlap = scale / 32.0;
+            double low = double.IsNegativeInfinity(lowerHeight)
+                ? double.NegativeInfinity : minY + lowerHeight - overlap;
+            double high = minY + upperHeight + overlap;
+            marched.RemoveAll(v =>
+            {
+                double centreY = v.Y / 16.0 + half;
+                return centreY < low || centreY > high;
+            });
+            return marched;
+        }
+
+        // Re-claims control-point markers that fall inside a layer, at that layer's scale — they were
+        // removed from the coarse wire by the floor cut, and a base anchor is exactly the thing a player
+        // lines up against.
+        private static void ClaimFloorMarkers(
+            List<VoxelPosition> band, List<ControlPoint> points, int scale,
+            double minY, double lowerHeight, double upperHeight)
+        {
+            if (points == null) return;
+            double low = double.IsNegativeInfinity(lowerHeight)
+                ? double.NegativeInfinity : minY + lowerHeight;
+            double high = minY + upperHeight;
+
+            for (int i = 0; i < points.Count; i++)
+            {
+                ControlPoint point = points[i];
+                Vec3d world = point?.WorldPosition;
+                if (world == null || point.IsPhantom) continue;
+                if (world.Y < low || world.Y > high) continue;
+                VoxelRenderType type = point.IsLocked ? VoxelRenderType.Locked
+                    : point.IsPrimary ? VoxelRenderType.Primary : VoxelRenderType.Anchor;
+                ShapeGeometry.ClaimMarker(band, scale, world, type);
+            }
         }
 
         private void RebuildGrabWireframe(GuideData guide, IGuideShape shape, List<ControlPoint> points)
@@ -4722,18 +5027,28 @@ namespace Layout.Systems
             _capi.Render.DeleteMesh(mesh);
         }
 
-        private void UploadOrReplace(Guid id, MeshData data, Vec3d origin)
+        /// <param name="voxelScale">
+        /// The scale this mesh was actually built at, when it differs from the guide's own. Recorded so the
+        /// voxel-boundary frame draws the right grid: a coarse wireframe scaffold is NOT at the guide's
+        /// scale, and leaving this 0 made the frame fall back to the guide's, painting a 1/16 grid over
+        /// block-sized cubes and reading as "fine voxels that are somehow a whole block across".
+        /// </param>
+        private void UploadOrReplace(Guid id, MeshData data, Vec3d origin, int voxelScale = 0)
         {
             if (_guideMeshes.TryGetValue(id, out GuideMesh existing))
             {
                 DeleteTrackedMesh(existing.Ref);
                 DeleteAuxiliaryMeshes(existing);
-                existing.Ref = UploadTrackedMesh(data);
+                existing.Ref = UploadTrackedMesh(data, voxelScale);
                 existing.Origin = origin;
             }
             else
             {
-                _guideMeshes[id] = new GuideMesh { Ref = UploadTrackedMesh(data), Origin = origin };
+                _guideMeshes[id] = new GuideMesh
+                {
+                    Ref = UploadTrackedMesh(data, voxelScale),
+                    Origin = origin
+                };
             }
         }
 

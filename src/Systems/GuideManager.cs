@@ -1085,6 +1085,104 @@ namespace Layout.Systems
             return GuideOperationResult.Success(g, count);
         }
 
+        /// <summary>
+        /// F6 Move: slides the WHOLE guide by <paramref name="delta"/> world units, shape untouched. Every
+        /// control point moves — locked ones included, because a lock constrains the guide's own geometry
+        /// against reshaping and carries no relationship to anything outside the guide (the Session-20
+        /// "adjacent lock" trouble was click targeting, not stored data). The as-placed spring-back snapshot
+        /// moves with it, or a later spring-back would teleport the guide back to where it used to stand.
+        /// </summary>
+        /// <remarks>
+        /// THE DELTA MUST BE A WHOLE NUMBER OF THE GUIDE'S OWN VOXELS, and this is enforced here rather than
+        /// merely assumed at the call site. That restriction is what makes the operation cheap AND exact:
+        /// cells quantise to <c>Floor(world*16/scale)*scale</c>, so shifting by an exact multiple of the
+        /// scale remaps every cell one-for-one and the voxel count provably cannot change — the cached count
+        /// is reused instead of rescanning a behemoth. A sub-voxel delta would instead move cells by a whole
+        /// cell wherever it happened to cross a quantise boundary and by nothing elsewhere, deforming the
+        /// rendered shell; it is refused, not rounded.
+        ///
+        /// A Surface guide's plane offset travels too. The points are flattened onto that plane when drawn,
+        /// so moving them along the flattened axis without the plane would look like nothing happened.
+        /// </remarks>
+        public GuideOperationResult TranslateGuide(Guid id, Vec3d delta)
+        {
+            if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
+            if (delta == null) return GuideOperationResult.Invalid(g);
+
+            int cached = _voxelCounts.TryGetValue(id, out int existing) ? existing : 0;
+            if (!TryQuantiseTranslation(delta, g.VoxelScale, out int sx, out int sy, out int sz))
+                return GuideOperationResult.Invalid(g);
+            if (sx == 0 && sy == 0 && sz == 0) return GuideOperationResult.Success(g, cached);
+
+            IGuideShape shape = _shapes[id];
+            GuideData accessBefore = AccessSnapshot(g);
+            ProjectionPlane planeBefore = g.Plane;
+
+            OffsetPoints(g.ControlPoints, delta);
+            OffsetPoints(g.OriginalControlPoints, delta);
+            g.Plane = OffsetPlane(g.Plane, sx, sy, sz);
+            shape.RecalculatePhantomPoints();
+
+            // No cap check: the count is unchanged by construction (see remarks), so a move can never push a
+            // guide over a budget it was already inside. The CLAIM check is the real gate — the destination
+            // is new ground and a move is a placement.
+            if (AccessDenied(accessBefore, g, shape, out BlockPos deniedPosition))
+            {
+                // Undo by translating BACK rather than restoring a snapshot: the snapshot path recounts, and
+                // rescanning a behemoth to reject a move it never made would be the expensive half of nothing.
+                var back = new Vec3d(-delta.X, -delta.Y, -delta.Z);
+                OffsetPoints(g.ControlPoints, back);
+                OffsetPoints(g.OriginalControlPoints, back);
+                g.Plane = planeBefore;
+                shape.RecalculatePhantomPoints();
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
+            }
+
+            StoreCount(id, cached);
+            Persist();
+            return GuideOperationResult.Success(g, cached);
+        }
+
+        // Expresses a translation in whole 1/16 units and verifies each axis is a whole number of the guide's
+        // own voxels. Returns false for anything finer, so a malformed or stale packet cannot deform a shell.
+        private static bool TryQuantiseTranslation(Vec3d delta, int scale, out int sx, out int sy, out int sz)
+        {
+            sx = sy = sz = 0;
+            if (scale <= 0) return false;
+            return TryAxis(delta.X, scale, out sx)
+                && TryAxis(delta.Y, scale, out sy)
+                && TryAxis(delta.Z, scale, out sz);
+
+            static bool TryAxis(double world, int scale, out int sixteenths)
+            {
+                double exact = world * 16.0;
+                sixteenths = (int)Math.Round(exact);
+                return Math.Abs(exact - sixteenths) <= 1e-6 && sixteenths % scale == 0;
+            }
+        }
+
+        private static void OffsetPoints(List<ControlPoint> points, Vec3d delta)
+        {
+            if (points == null) return;
+            foreach (ControlPoint cp in points)
+            {
+                if (cp?.WorldPosition == null) continue;
+                Vec3d w = cp.WorldPosition;
+                cp.SetPosition(w.X + delta.X, w.Y + delta.Y, w.Z + delta.Z);
+            }
+        }
+
+        private static ProjectionPlane OffsetPlane(ProjectionPlane plane, int sx, int sy, int sz)
+        {
+            int along = plane.FlattenedAxis switch
+            {
+                PlaneAxis.X => sx,
+                PlaneAxis.Z => sz,
+                _ => sy
+            };
+            return along == 0 ? plane : new ProjectionPlane(plane.FlattenedAxis, plane.PlaneOffset + along);
+        }
+
         /// <summary>Sets a guide's filled flag (hollow vs filled). Cap re-checked for forward-safety, as in <see cref="SetProjection"/>.</summary>
         /// <summary>
         /// Clears the guide's constraint, demoting it to its free parent shape (Session-8 absorb-or-break;

@@ -4,6 +4,112 @@ All notable changes to Layout will be recorded in this file going forward.
 
 ## Unreleased
 
+## 0.3.89 - 2026-07-27
+
+### Fixed
+
+- The bottom of a moving guide's wireframe is now genuinely drawn at the guide's own voxel scale, stepping
+  up to the coarse scale gradually. The fine detail was previously hidden inside the block-sized wireframe
+  drawn over the top of it.
+- A coarse wireframe no longer draws its voxel outlines at the wrong size, which made block-sized cubes look
+  like fine voxels.
+
+## 0.3.88 - 2026-07-27
+
+### Fixed
+
+- A large guide's wireframe no longer stays behind at its old position while the guide rebuilds at the new
+  one.
+
+### Changed
+
+- The Move controls now grey out when no guide is selected, instead of disappearing.
+
+## 0.3.87 - 2026-07-27
+
+### Changed
+
+- Moving a large guide waits 2.5 seconds before rebuilding it, so a run of nudges is not interrupted by a
+  rebuild between each one. While it waits, the bottom of the wireframe is drawn at the guide's own scale so
+  you can line it up precisely.
+- Removed explanatory text that overflowed the tool window on the Move and Settings pages.
+
+## 0.3.86 - 2026-07-27
+
+### Added
+
+- **Move mode.** A fourth tool mode beside Create, Edit and Delete. Select a guide and slide the whole thing
+  without changing its shape — for the guide that turns out to be one voxel off after a long session.
+- Arrows in the tool panel move the selected guide one step at a time, in steps of 1, 2, 4, 8 or 16 of that
+  guide's own voxels. Arrows are read from where you are standing: the top arrow pushes the guide away from
+  you. Up and Down are separate.
+- Free-move: arm the crosshair button, close the panel, and the guide follows your aim snapped to its own
+  voxel scale. Left-click places it, right-click puts it back.
+- Locked points travel with the guide, and moving costs no chalk. A move can still be refused by a land
+  claim at the destination, and undoes in one step.
+
+## 0.3.83 - 0.3.85 - 2026-07-26
+
+### Fixed
+
+- Built-voxel colours no longer cause a frame stutter when you place or chisel a block near a guide. Only
+  the affected part of a guide is rebuilt, and the work happens in the background.
+
+## 0.3.81 - 0.3.82 - 2026-07-26
+
+### Added
+
+- Built-voxel colours update live as you build, instead of only when refreshed by hand.
+
+## 0.3.79 - 0.3.80 - 2026-07-26
+
+### Added
+
+- **Built voxels.** Guide voxels that already hold material are drawn cyan, so you can see at a glance how
+  much of a guide you have filled in. Off by default — turn it on with the gear in the tool panel, or
+  `/layout built on`. `/layout built refresh` re-reads the world by hand.
+
+## 0.3.78 - 2026-07-26
+
+### Fixed
+
+- `/layout inset`, `/layout voxelframe` and `/layout shaderbrightness` now report the current value when
+  used with no argument, as they always claimed to. They were instead silently setting it to 0 and saving
+  that.
+
+## 0.3.76 - 0.3.77 - 2026-07-26
+
+### Added
+
+- `/layout occupancy` and `/layout occupancyscan` report what Layout reads as material in the world,
+  including inside chiselled blocks.
+
+## 0.3.75 - 2026-07-26
+
+### Added
+
+- `/layout blockevents` reports the block changes Layout is receiving — a diagnostic for the built-voxel
+  colouring.
+
+## 0.3.72 - 0.3.74 - 2026-07-26
+
+### Added
+
+- **Settings page** in the tool panel, behind a gear in the title bar. Guide opacity can be changed in play
+  instead of editing `layout-client.json` and restarting.
+
+## 0.3.70 - 0.3.71 - 2026-07-26
+
+### Changed
+
+- Guide faces now sit a hair outside their voxel instead of inside it, so a guide stays visible against a
+  surface you have just chiselled flat to it. The gap is five times smaller than before.
+
+### Fixed
+
+- Rebuilding a guide after filling its volume can no longer flip its faces inward and hide it — exactly when
+  the guide is most needed.
+
 ## 0.3.69 - 2026-07-25
 
 ### Fixed

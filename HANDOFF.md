@@ -2,18 +2,18 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-26 against the built/package checkpoint
-> **v0.3.85 on the `beta` branch** (v0.3.69 is live on `main`). Where this file and the code
+> and the performance-relevant mechanics. Updated 2026-07-27 against the built/package checkpoint
+> **v0.3.89 on the `beta` branch** (v0.3.53 is live on `main`). Where this file and the code
 > disagree, **the code wins** — treat this as a map, then read the `.cs` files it points at.
 >
-> ⚠️ **`dev/ARCHITECTURE.md` (v3.14) and `dev/PROJECT_STATUS.md` predate Sessions 28–29** and do not know
-> about vertex welding, the custom shader, or block occupancy. This file and the session records are ahead
-> of them.
+> ⚠️ **`dev/ARCHITECTURE.md` (v3.14) and `dev/PROJECT_STATUS.md` predate Sessions 28–30** and do not know
+> about vertex welding, the custom shader, block occupancy, or Move mode. This file and the session records
+> are ahead of them.
 >
-> **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.14),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/29.md` (per-session
-> history), `dev/PLAN_RENDER_PERFORMANCE.md` (the live rendering plan + measurements),
-> `dev/PLAN_BLOCK_OCCUPANCY.md` (the delivered occupancy feature + its disproved first draft),
+> **Deeper docs:** `CHANGELOG.md` (player-facing release log), `dev/ARCHITECTURE.md` (the authoritative
+> plan + Settled Decisions Register, v3.14), `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list),
+> `dev/SESSION_9/…/30.md` (per-session history), `dev/PLAN_RENDER_PERFORMANCE.md` (the live rendering plan +
+> measurements), `dev/PLAN_BLOCK_OCCUPANCY.md` (the delivered occupancy feature + its disproved first draft),
 > `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
 
@@ -47,7 +47,9 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** **v0.3.85** built and packaged; v0.3.69 is the live `main` release. Sessions 28–29 added a
+- **Status:** **v0.3.89** built and packaged; v0.3.53 is the live `main` release. Session 30 added **F6 Move
+  mode** — a fourth tool mode that slides a whole guide without touching its shape, driven by an arrow pad
+  in the GUI or by a crosshair drag (see §4 and §8). Sessions 28–29 added a
   **custom guide shader** (guide frame cost 8.2 ms → 1.8 ms on an 8M-voxel guide), **vertex welding**
   (−72.9% vertices, no visible change), **settled-shell streaming**, procedural **voxel outlines**, and the
   **block-occupancy recolour** — guide voxels already holding world material are drawn cyan and update live
@@ -63,11 +65,12 @@ guides on servers without Layout and, when server policy permits, alongside publ
   durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
   **mesh pass Stage A (exposed-face meshing) has shipped** and filled 3D interiors are retired. Volumes may
   persist as their hollow **Shell** or canonical structural **Wireframe**.
-- **Size:** **78 source files** (`src/`), ~one asset tree (now including `assets/layout/shaders/`), one
+- **Size:** **79 source files** (`src/`), ~one asset tree (now including `assets/layout/shaders/`), one
   `.csproj`.
 - **Data schema:** **DataVersion 12** (creator/Last Sculptor attribution; v11 `IsWireframe`; v10 cached metadata).
-- **Wire protocol:** **16** (personal render state; explicit immense-placement rejection; player moderation
-  policy; `/layout who` query; v12 attribution metadata; v11 wireframe state;
+  Move changes nothing here — a translated guide persists through the fields it already had.
+- **Wire protocol:** **17** (whole-guide translation; 16 personal render state; explicit immense-placement
+  rejection; player moderation policy; `/layout who` query; v12 attribution metadata; v11 wireframe state;
   protocol 9 polygon orientation; earlier append-only fields remain compatible with matching builds).
 - **Catalog:** **15 shape types**, shown as **21 picker tiles** — a full 2D family plus an eight-volume 3D family.
 - **The tool:** the **Chalking Kit** — 32-chalk durability (2D −1 / 3D −2, completed placements only; no
@@ -124,10 +127,11 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── Layout.csproj  modinfo.json  modicon.png
 ├── assets/layout/              ← itemtypes, textures, lang
 ├── assets/layout/shaders/      ← guide.vsh / guide.fsh — MUST be pure ASCII
-├── src/                        ← all 78 .cs files (see §6)
+├── CHANGELOG.md                ← player-facing release log (part of the doc-update set)
+├── src/                        ← all 79 .cs files (see §6)
 └── dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
-    ├── SESSION_9.md … SESSION_27.md  SESSION_28.md  SESSION_29.md
+    ├── SESSION_9.md … SESSION_27.md  SESSION_28.md  SESSION_29.md  SESSION_30.md
     ├── CHANGELOG_ARCHITECTURE.md   ← ARCHITECTURE.md's per-revision deltas (archive)
     ├── PLAN_CLIENT_ONLY.md  PLAN_CHALKING_KIT.md  BUILD_INSTRUCTIONS.txt
     ├── PLAN_RENDER_PERFORMANCE.md  ← Session-28 rendering plan + every measurement taken
@@ -159,11 +163,19 @@ Renamed in git to lowercase throughout, so disk, index and prose now agree. Hist
   custom item cannot exist on a vanilla server). Interaction is entirely **first-person clicks + crosshair
   raycast** — no transform gizmos. Guides are **visible but untargetable when the tool is not held** (pure mesh draws, no
   selection/collision/entity backing), so they never interfere with the blocks underneath.
-- **Three tool modes** (`ToolMode`, client-only, never wired): **Create** owns ALL geometry (place, grab &
+- **Four tool modes** (`ToolMode`, client-only, never wired): **Create** owns ALL geometry (place, grab &
   reshape, insert, lock; right-click = cancel / lock-in-place). **Edit** is settings-only: left-click
   **selects** a guide and the GUI's setting rows then act on THAT guide (no reshaping); right-click deselects.
+  **Move** (F6, v0.3.86) selects the same way and then translates the whole guide — never reshaping it —
+  either by clicking the GUI's direction pad or by arming free-move and dragging on the crosshair.
   **Delete** dispels. The fixed HUD names the current action, uses a contextual shape tile, and shows exact
   settings/dimensions/count/cap without resizing. `/layout who` reports Creator and Last Sculptor on demand.
+- **Move mechanics.** Steps are whole multiples of the MOVED GUIDE's own voxel scale (×1/×2/×4/×8/×16) and
+  the authority refuses anything finer — see §7. The four horizontal arrows resolve against the player's
+  facing snapped to the nearest world axis (the panel holds the mouse cursor, so the facing cannot drift
+  between clicks); Up/Down are world vertical. Locked points and the as-placed spring-back snapshot both
+  travel with the guide. Moving charges no chalk (chalk is a placement cost) and cannot breach a voxel cap,
+  but the destination IS re-checked against land claims.
 - **Placement** is **two clicks for most shapes**, with deliberately-reopened exceptions: free/right/
   isosceles triangles and Cylinder/Polygonal Prism/Cone/Box take **three clicks** (base + height);
   Tapered Cylinder and Tapered Polygonal Prism take a **fourth** click for the top radius; the
@@ -232,7 +244,7 @@ Pure, dependency-light layers under a server-authoritative core. Namespaces matc
 | `Config/` | `Layout.Config` | `LayoutServerConfig` (`layout.json`), `LayoutClientConfig` (`layout-client.json`). |
 | `Items/` | `Layout.Items` | `ItemGuideTool` — stateless glue; routes clicks to the controller. |
 | `Client/` | `Layout.Client` | `GuideToolController` plus `LocalGuideAuthority`, authority mode, vanilla-item gate, and per-world/per-UID private persistence. |
-| `Undo/` + `Undo/Commands/` | `Layout.Undo[.Commands]` | `IGuideCommand`, `UndoStack`, and 14 command types (Create/Delete/Move/Insert/Lock/RemoveLockMarker/Rescale/Hide/SetProjection/SetFilled/SetDivisions/SetSides/SpringBack/BreakConstraint). |
+| `Undo/` + `Undo/Commands/` | `Layout.Undo[.Commands]` | `IGuideCommand`, `UndoStack`, and 15 command types (Create/Delete/MoveControlPoint/Insert/Lock/RemoveLockMarker/Rescale/Hide/SetProjection/SetFilled/SetDivisions/SetSides/SetWireframe/SpringBack/BreakConstraint/TranslateGuide). |
 
 **Data-flow (networked mode):** client `GuideToolController`/GUI/HUD → `ClientNetworkHandler.Send*` →
 protobuf packet → `ServerNetworkHandler` → `GuideManager` validates + persists + records undo → **broadcasts
@@ -271,6 +283,16 @@ mode decides only where a new guide is created.
   `LocalGuideAuthority` does so for private placement. Full private snapshots cross the wire only for the
   explicit `/layout client push all` publication operation. **Tool state is client-side.** `CreatorUid` is
   public-server bookkeeping, never ownership, and ordinary guide DTOs still do not wire it.
+
+- **A whole-guide translation is quantise-exact by construction (F6, v0.3.86).** `GuideManager.TranslateGuide`
+  ENFORCES that the delta is a whole number of the guide's own voxels and refuses anything finer. Because
+  cells quantise to `Floor(world·16/scale)·scale`, an exact multiple of the scale remaps every cell
+  one-for-one, so the voxel count provably cannot change — the cached count is reused instead of rescanning
+  a behemoth, and no cap check is performed at all. A sub-voxel delta would move cells by a WHOLE cell
+  wherever it crossed a quantise boundary and by nothing elsewhere, deforming the shell. The wire carries
+  the delta as integers in 1/16 units, so a fractional nudge cannot even be expressed. Land claims are
+  still re-checked: the destination is new ground. Surface guides translate their `Plane.PlaneOffset` too,
+  or moving along the flattened axis would look like nothing happened.
 
 Key struct: `VoxelPosition` is a `readonly struct : IEquatable<VoxelPosition>` (hashes all of X/Y/Z/Type),
 generated in large quantities and de-duplicated through a `HashSet` — deliberately boxing-free in that hot
@@ -348,6 +370,25 @@ path.
 - **Persistent structural form (v0.3.7):** a 3D guide may be saved as Shell or Wireframe. Persistent wires
   use canonical topology at the selected scale and have their own exact count/cap semantics; they are distinct
   from the temporary adaptive/coarse preview used while moving a Shell guide.
+- **Whole-guide translation is a MODEL-MATRIX change, not a mesh change (F6, v0.3.86).** Every guide mesh is
+  already drawn through a per-mesh translation, so the free-move preview offsets that number and nothing
+  else — no re-meshing, no re-upload, and **no regrouping of primitives**, which is the standing renderer
+  constraint. An 8M-voxel guide previews its drag exactly as cheaply as a small one. The cull centre and the
+  voxel-frame origin follow the offset, or a dragged guide would be culled against where it used to be.
+- **Move materialization hold (v0.3.87–v0.3.89).** A nudged guide that streams (`ShouldStreamSettledShell`)
+  parks on its wireframe scaffold for **2.5 s**, restarting on every nudge, so consecutive nudges do not each
+  discard a part-built shell. While held, the bottom of the scaffold is rebuilt in **graduated precision
+  layers** — finest at the lowest point of the shape's curve, one valid scale coarser per layer until it
+  meets the scaffold's own scale — mirroring the dragged-point precision bands, but measuring HEIGHT rather
+  than radius. **The coarse wire is CUT AWAY under the band, not overdrawn:** guides are order-dependent
+  translucent geometry, so a block-sized coarse cube drawn first wins the depth test and hides the fine
+  geometry inside it entirely (the v0.3.88 defect). `ShowMovingDraft` cuts the same kind of hole.
+  Scaffold meshes now record the scale they were built at, so the voxel outline stops drawing a 1/16 grid
+  across full-block cubes.
+- ⚠️ **`OnGuideAddedOrUpdated` starts the shell materialization BEFORE reaching `RebuildGuide`**, and that
+  early return never touches the scaffold mesh — leaving a stale wireframe at the guide's OLD pose while the
+  shell streams at the new one. Fixed for the Move path only (a held guide goes straight to the rebuild);
+  **the general case is still live.** See `dev/SESSION_30.md` §5/§7.
 
 ---
 
@@ -575,7 +616,11 @@ cell; an adjacent first-hit body cell now receives a distinct passive marker. Hu
    (3M voxels) the feature stops updating **silently**.
 4. **Keep the broader multiplayer matrix as future regression coverage.** The v0.2.35 public/private pass
    succeeded and is not a release blocker.
-5. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill (fill is currently inert on Free-Shapes);
+5. **The queued feature set (`dev/TODO.md` F6–F11).** **F6 Move is DELIVERED (Session 30, v0.3.86–v0.3.89).**
+   Recommended order for the rest: **F8 copy a guide → F9 in-game settings panel → F7 mirror/flip**, with
+   F10 (redraw the gear glyph) and F11 (colour-blind-safe palette) alongside. Copy is nearly free now that
+   Move exists and the two compose — copy, then nudge into place.
+6. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill (fill is currently inert on Free-Shapes);
    an F3 re-constrain op; broadcasting the whole Free-Shape draft chain to other players.
 
 **Settled decisions — do NOT reopen without the human explicitly asking** (full list in
@@ -618,7 +663,8 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   SESSION_26 records v0.3.44–v0.3.52, the renderer rollback, persistent visibility, cumulative creator caps,
   and the off-state tool lockout; SESSION_27 records v0.3.53's cumulative-cap override and final release;
   SESSION_28 records the v0.3.55–v0.3.69 rendering arc — welding, settled-shell streaming, the custom shader,
-  voxel outlines; SESSION_29 records the v0.3.70–v0.3.85 block-occupancy arc). For
+  voxel outlines; SESSION_29 records the v0.3.70–v0.3.85 block-occupancy arc; SESSION_30 records the
+  v0.3.86–v0.3.89 F6 Move arc). For
   current state, trust `HANDOFF.md` / the code, not a mid-session checklist inside a
   session record — and note that `ARCHITECTURE.md` and `PROJECT_STATUS.md` now trail this file by two
   sessions.

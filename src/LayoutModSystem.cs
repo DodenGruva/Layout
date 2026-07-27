@@ -256,7 +256,8 @@ namespace Layout
             // immediately (B-24-2 fix — not relying on Dispose firing on exit-to-title).
             ToolGui = new GuideToolGui(capi, Draft, ClientNet, ClientConfig, SaveClientConfig,
                 ApplyOpacitiesAndRebuild, ApplyOccupancyRecolour,
-                () => Renderer?.RefreshOccupancy());
+                () => Renderer?.RefreshOccupancy(),
+                id => Renderer?.HoldMoveMaterialization(id));
             Hud = new GuideHud(capi, Draft, ClientNet);
 
             // The aim-controller: per-tick raycast + click routing while the tool is held. It (not the

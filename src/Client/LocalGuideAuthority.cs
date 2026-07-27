@@ -638,6 +638,26 @@ namespace Layout.Client
             else HandleFailure(id, result);
         }
 
+        /// <summary>
+        /// F6 Move: slide a whole private guide. Geometry is rewritten wholesale, so the mirror gets the
+        /// full-state upsert rather than an incremental patch — the same shape as <see cref="SpringBack"/>.
+        /// </summary>
+        public void Translate(Guid id, Vec3d delta)
+        {
+            if (!TryGet(id, out _)) return;
+            GuideOperationResult result = _guides.TranslateGuide(id, delta);
+            if (result.IsSuccess)
+            {
+                if (delta.X != 0 || delta.Y != 0 || delta.Z != 0)
+                {
+                    _undo.Record(PlayerUid, new TranslateGuideCommand(id, delta));
+                    StampLastSculptor(result.Guide, publishIncremental: false);
+                }
+                ApplyFull(result.Guide);
+            }
+            else HandleFailure(id, result);
+        }
+
         public void Undo() => ApplyUndoRedo(_undo.Undo(PlayerUid));
         public void Redo() => ApplyUndoRedo(_undo.Redo(PlayerUid));
 

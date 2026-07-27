@@ -93,6 +93,9 @@ namespace Layout.UI
             Edit,
             EditTarget,
             Editing,
+            Move,
+            MoveTarget,
+            Moving,
             Delete,
             Deleting
         }
@@ -394,7 +397,8 @@ namespace Layout.UI
 
             SetText("status", (_comatoseDraft ? "Creating - Paused" : StatusText(_composedState))
                 + (_showClientOnlyIndicator ? " · Private" : ""));
-            GuideData settingsGuide = _tool.Mode == ToolMode.Edit ? ResolveSelectedGuide() : null;
+            GuideData settingsGuide =
+                _tool.Mode == ToolMode.Edit || _tool.Mode == ToolMode.Move ? ResolveSelectedGuide() : null;
             int scale = settingsGuide?.VoxelScale ?? _tool.Scale;
             GuideShapeType shapeType = settingsGuide?.ShapeType ?? _tool.Shape;
             bool wireframe = settingsGuide?.IsWireframe ?? _tool.Wireframe;
@@ -476,6 +480,11 @@ namespace Layout.UI
                 if (ResolveSelectedGuide() != null) return HudVisualState.Editing;
                 return ResolveExaminedGuide() != null ? HudVisualState.EditTarget : HudVisualState.Edit;
             }
+            if (_tool.Mode == ToolMode.Move)
+            {
+                if (ResolveSelectedGuide() != null) return HudVisualState.Moving;
+                return ResolveExaminedGuide() != null ? HudVisualState.MoveTarget : HudVisualState.Move;
+            }
             return ResolveExaminedGuide() != null ? HudVisualState.Deleting : HudVisualState.Delete;
         }
 
@@ -487,6 +496,8 @@ namespace Layout.UI
                 HudVisualState.Sculpting => ResolveGrabbedGuide(),
                 HudVisualState.EditTarget => ResolveExaminedGuide(),
                 HudVisualState.Editing => ResolveSelectedGuide(),
+                HudVisualState.MoveTarget => ResolveExaminedGuide(),
+                HudVisualState.Moving => ResolveSelectedGuide(),
                 HudVisualState.Deleting => ResolveExaminedGuide(),
                 _ => null
             };
@@ -502,7 +513,11 @@ namespace Layout.UI
                 HudVisualState.EditTarget or HudVisualState.Editing =>
                     (GuideToolGui.CurrentShapeIconName(context.ShapeType, context.Constraint),
                      GuideToolGui.ShapeDisplayName(context.ShapeType, context.Constraint)),
+                HudVisualState.MoveTarget or HudVisualState.Moving =>
+                    (GuideToolGui.CurrentShapeIconName(context.ShapeType, context.Constraint),
+                     GuideToolGui.ShapeDisplayName(context.ShapeType, context.Constraint)),
                 HudVisualState.Edit => (LayoutToolIcons.ModeEdit, "Edit"),
+                HudVisualState.Move => (LayoutToolIcons.ModeMove, "Move"),
                 HudVisualState.Deleting =>
                     (GuideToolGui.CurrentShapeIconName(context.ShapeType, context.Constraint),
                      GuideToolGui.ShapeDisplayName(context.ShapeType, context.Constraint)),
@@ -513,7 +528,8 @@ namespace Layout.UI
         private GuideData ResolveContextGuide()
         {
             if (_composedState == HudVisualState.Sculpting) return ResolveGrabbedGuide();
-            if (_tool.Mode == ToolMode.Edit) return ResolveSelectedGuide() ?? ResolveExaminedGuide();
+            if (_tool.Mode == ToolMode.Edit || _tool.Mode == ToolMode.Move)
+                return ResolveSelectedGuide() ?? ResolveExaminedGuide();
             return ResolveExaminedGuide();
         }
 
@@ -540,6 +556,8 @@ namespace Layout.UI
             HudVisualState.Sculpting => "Sculpting",
             HudVisualState.Edit or HudVisualState.EditTarget => "Edit",
             HudVisualState.Editing => "Editing",
+            HudVisualState.Move or HudVisualState.MoveTarget => "Move",
+            HudVisualState.Moving => "Moving",
             HudVisualState.Delete => "Delete",
             HudVisualState.Deleting => "Deleting",
             _ => ""
@@ -548,7 +566,7 @@ namespace Layout.UI
         private static double[] AccentColor(HudVisualState state) => state switch
         {
             HudVisualState.Creating => CreatingColor,
-            HudVisualState.Sculpting or HudVisualState.Editing => ModifyingColor,
+            HudVisualState.Sculpting or HudVisualState.Editing or HudVisualState.Moving => ModifyingColor,
             HudVisualState.Deleting => DeletingColor,
             _ => null
         };

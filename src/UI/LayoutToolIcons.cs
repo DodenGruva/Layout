@@ -73,7 +73,19 @@ namespace Layout.UI
 
         public const string ModeCreate = "layout-mode-create";
         public const string ModeEdit = "layout-mode-edit";
+        public const string ModeMove = "layout-mode-move";
         public const string ModeDelete = "layout-mode-delete";
+
+        // F6 Move pad. Away/Toward/Left/Right are the four HORIZONTAL directions, read relative to the
+        // player's facing; Up/Down are vertical and wear a ground bar so they cannot be mistaken for the
+        // plain arrows beside them.
+        public const string MoveAway = "layout-move-away";
+        public const string MoveToward = "layout-move-toward";
+        public const string MoveLeft = "layout-move-left";
+        public const string MoveRight = "layout-move-right";
+        public const string MoveUp = "layout-move-up";
+        public const string MoveDown = "layout-move-down";
+        public const string MoveFree = "layout-move-free";
         public const string ProjVolumetric = "layout-proj-vol";
         public const string ProjSurface = "layout-proj-surf";
         public const string FillHollow = "layout-fill-hollow";
@@ -169,7 +181,16 @@ namespace Layout.UI
 
             reg[ModeCreate] = DrawModeCreate;
             reg[ModeEdit] = DrawModeEdit;
+            reg[ModeMove] = DrawModeMove;
             reg[ModeDelete] = DrawModeDelete;
+
+            reg[MoveAway] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, 0, false);
+            reg[MoveRight] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, Math.PI / 2, false);
+            reg[MoveToward] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, Math.PI, false);
+            reg[MoveLeft] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, -Math.PI / 2, false);
+            reg[MoveUp] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, 0, true);
+            reg[MoveDown] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, Math.PI, true);
+            reg[MoveFree] = DrawMoveFree;
             reg[ProjVolumetric] = DrawProjVolumetric;
             reg[ProjSurface] = DrawProjSurface;
             reg[FillHollow] = DrawFillHollow;
@@ -622,6 +643,69 @@ namespace Layout.UI
             ctx.MoveTo(c.X(14), c.Y(40)); ctx.LineTo(c.X(19), c.Y(46)); ctx.Stroke();
             // eraser: a band across the body near the upper-right end; the segment beyond it is the eraser
             ctx.MoveTo(c.X(31), c.Y(21)); ctx.LineTo(c.X(39), c.Y(29)); ctx.Stroke();
+        }
+
+        private static void DrawModeMove(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            // The universal "move" glyph: a four-way arrow cross.
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(2.6));
+            ctx.MoveTo(c.X(30), c.Y(12)); ctx.LineTo(c.X(30), c.Y(48)); ctx.Stroke();
+            ctx.MoveTo(c.X(12), c.Y(30)); ctx.LineTo(c.X(48), c.Y(30)); ctx.Stroke();
+            Head(ctx, c, 30, 12, 0);                  // up
+            Head(ctx, c, 30, 48, Math.PI);            // down
+            Head(ctx, c, 12, 30, -Math.PI / 2);       // left
+            Head(ctx, c, 48, 30, Math.PI / 2);        // right
+
+            // A chevron pair at a design point, pointing along `rotation` (0 = up).
+            static void Head(Context g, Canvas cv, double ux, double uy, double rotation)
+            {
+                double spread = cv.L(6), drop = cv.L(8);
+                g.Save();
+                g.Translate(cv.X(ux), cv.Y(uy));
+                g.Rotate(rotation);
+                g.MoveTo(-spread, drop); g.LineTo(0, 0); g.LineTo(spread, drop);
+                g.Stroke();
+                g.Restore();
+            }
+        }
+
+        // One Move-pad arrow, drawn pointing up and rotated into place. `groundBar` adds a floor line under
+        // a shortened arrow — the vertical Up/Down pair, so they read differently from Away/Toward.
+        private static void DrawMoveArrow(
+            Context ctx, int x, int y, float w, float h, double[] rgba, double rotation, bool groundBar)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(3.2));
+
+            double half = c.L(groundBar ? 12 : 16);
+            double spread = c.L(9), drop = c.L(11);
+            ctx.Save();
+            ctx.Translate(c.X(30), c.Y(groundBar ? 25 : 30));
+            ctx.Rotate(rotation);
+            ctx.MoveTo(0, half); ctx.LineTo(0, -half); ctx.Stroke();
+            ctx.MoveTo(-spread, -half + drop); ctx.LineTo(0, -half); ctx.LineTo(spread, -half + drop);
+            ctx.Stroke();
+            ctx.Restore();
+
+            if (!groundBar) return;
+            ctx.MoveTo(c.X(14), c.Y(48)); ctx.LineTo(c.X(46), c.Y(48)); ctx.Stroke();
+        }
+
+        private static void DrawMoveFree(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            // A crosshair: free-move follows where you are aiming, not a fixed axis.
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(2.4));
+            ctx.Arc(c.X(30), c.Y(30), c.L(13), 0, 2 * Math.PI);
+            ctx.Stroke();
+            ctx.MoveTo(c.X(30), c.Y(10)); ctx.LineTo(c.X(30), c.Y(21)); ctx.Stroke();
+            ctx.MoveTo(c.X(30), c.Y(39)); ctx.LineTo(c.X(30), c.Y(50)); ctx.Stroke();
+            ctx.MoveTo(c.X(10), c.Y(30)); ctx.LineTo(c.X(21), c.Y(30)); ctx.Stroke();
+            ctx.MoveTo(c.X(39), c.Y(30)); ctx.LineTo(c.X(50), c.Y(30)); ctx.Stroke();
+            SetColor(ctx, rgba, 1.0);
+            ctx.Arc(c.X(30), c.Y(30), c.L(3), 0, 2 * Math.PI);
+            ctx.Fill();
         }
 
         private static void DrawModeDelete(Context ctx, int x, int y, float w, float h, double[] rgba)

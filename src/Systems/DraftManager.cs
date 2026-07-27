@@ -8,18 +8,20 @@ namespace Layout.Systems
 {
     /// <summary>
     /// What the Layout tool's clicks mean. Client-side only; never crosses the wire (safe to reorder).
-    /// THREE modes (Session 10): in <b>Create</b>, the two mouse buttons build guides contextually —
+    /// FOUR modes: in <b>Create</b>, the two mouse buttons build guides contextually —
     /// left-click drafts anchors / grabs points / grabs the body (implicit insert) / releases; right-click
     /// cancels or toggles a point's lock. <b>Edit</b> is the same guide-manipulation minus placement (empty
     /// clicks just deselect) — while in it, the GUI's setting rows act on the SELECTED guide instead of the
-    /// tool defaults, so per-guide editing no longer needs a separate expanding panel section. <b>Delete</b>
-    /// is the deliberately separated destructive mode. Order is Create · Edit · Delete (matches the mode-row
-    /// tiles via <c>(int)Mode</c>).
+    /// tool defaults, so per-guide editing no longer needs a separate expanding panel section.
+    /// <b>Move</b> (F6, 0.3.86) selects a guide the same way and then slides it whole, from the GUI's arrow
+    /// pad or on the crosshair; it never reshapes. <b>Delete</b> is the deliberately separated destructive
+    /// mode, kept last. Order matches the mode-row tiles via <c>(int)Mode</c>.
     /// </summary>
     public enum ToolMode
     {
         Create,
         Edit,
+        Move,
         Delete
     }
 
@@ -316,6 +318,34 @@ namespace Layout.Systems
         public Guid? SelectedGuideId => _selectedGuideId;
         public void SelectGuide(Guid guideId) => _selectedGuideId = guideId;
         public void ClearSelection() => _selectedGuideId = null;
+
+        // --- Tool state: Move mode (F6) ---------------------------------------------------------
+
+        /// <summary>The step multipliers offered by the Move pad. A step is always a whole number of the
+        /// MOVED GUIDE's own voxels — never finer — so these multiply that guide's scale, not a fixed unit.</summary>
+        public static readonly int[] MoveStepMultipliers = { 1, 2, 4, 8, 16 };
+
+        private int _moveStep = 1;
+        private bool _freeMove;
+
+        /// <summary>How many of the guide's own voxels one arrow click travels.</summary>
+        public int MoveStep => _moveStep;
+
+        /// <summary>Sets the arrow-pad step multiplier. Ignores values outside the offered set.</summary>
+        public bool SetMoveStep(int multiplier)
+        {
+            for (int i = 0; i < MoveStepMultipliers.Length; i++)
+            {
+                if (MoveStepMultipliers[i] != multiplier) continue;
+                _moveStep = multiplier;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>Armed by the GUI toggle: the selected guide follows the crosshair once the panel closes.</summary>
+        public bool FreeMove => _freeMove;
+        public void SetFreeMove(bool enabled) => _freeMove = enabled;
 
         /// <summary>
         /// Assembles a render-settings bundle from the current (live) tool state plus a resolved projection plane.

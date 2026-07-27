@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 16;
+        public const int ProtocolVersion = 17;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -878,6 +878,36 @@ namespace Layout.Network
         public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
     }
 
+    /// <summary>
+    /// Both directions (F6 Move, protocol 17). Slides a whole guide by a world delta, shape untouched.
+    /// The delta is carried in 1/16-block units as INTEGERS, not doubles: a move is only legal at a whole
+    /// number of the guide's own voxels, so integers are both the exact representation and a free
+    /// well-formedness check — a fractional nudge cannot even be expressed on the wire.
+    /// </summary>
+    [ProtoContract]
+    public class GuideTranslatePacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public int DeltaX;
+        [ProtoMember(3)] public int DeltaY;
+        [ProtoMember(4)] public int DeltaZ;
+
+        public GuideTranslatePacket() { }
+
+        public GuideTranslatePacket(Guid guideId, int deltaX, int deltaY, int deltaZ)
+        {
+            GuideIdBytes = NetIds.ToBytes(guideId);
+            DeltaX = deltaX;
+            DeltaY = deltaY;
+            DeltaZ = deltaZ;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+
+        /// <summary>The delta as world units (sixteenths / 16). A fresh instance every call — never aliased.</summary>
+        public Vec3d ResolveDelta() => new Vec3d(DeltaX / 16.0, DeltaY / 16.0, DeltaZ / 16.0);
+    }
+
     /// <summary>Both directions. Set a guide's projection mode and plane together.</summary>
     [ProtoContract]
     public class GuideSetProjectionPacket
@@ -1114,7 +1144,9 @@ namespace Layout.Network
             // 0.3.27: explicit rejection for provisional immense placements (protocol 15)
             typeof(GuidePlacementRejectedPacket),
             // 0.3.33: personal /layout on|off rendering control (protocol 16)
-            typeof(GuideRenderingPacket)
+            typeof(GuideRenderingPacket),
+            // 0.3.86: F6 Move mode — whole-guide translation (protocol 17)
+            typeof(GuideTranslatePacket)
         };
     }
 }
