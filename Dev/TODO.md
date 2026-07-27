@@ -1,4 +1,4 @@
-# Layout — TODO / Outstanding Items (current: v0.3.58 on `beta`)
+# Layout — TODO / Outstanding Items (current: v0.3.85 on `beta-shader`, uncommitted)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
@@ -6,6 +6,32 @@
 ---
 
 ## ⭐ Top of the list (v0.3.53 final release → field reports)
+
+> **QUEUED 2026-07-26 — four new human-requested features, not started:** **F6 Move mode** (translate a
+> whole guide in steps), **F7 mirror/flip**, **F8 copy a guide**, **F9 in-game settings panel**. Full
+> Since extended with **F10** (redraw the settings gear glyph) and **F11** (configurable voxel colour
+> scheme, for colour-blind accessibility — the red locked point and green apex are the problem pair).
+> Full write-ups in the feature ledger below. Recommended order is **F6 → F8 → F9 → F7**: Move first because it
+> answers a real reported pain and is cheaper than it looks, Copy next because it is nearly free once Move
+> exists and the two compose (copy, then nudge into place), the settings panel when convenient, and Mirror
+> last — it shares a tool mode with Move but not its difficulty.
+
+> **✅ BLOCK OCCUPANCY DELIVERED — v0.3.70–v0.3.85 (SESSION_29).** Guide voxels holding world material are
+> drawn cyan and update live as you build. Playtest verdict: *"the color difference is incredibly helpful."*
+> Off by default; GUI settings page or `/layout built on|off|refresh`. Client-side only.
+>
+> Full record in **`SESSION_29.md`**; the design and everything disproved along the way in
+> **`PLAN_BLOCK_OCCUPANCY.md` §0**, which should be read before touching any of it.
+>
+> **Open verification, all quick and all needing play:**
+> 1. **Coarser scales** — exact at scale 1; above that the voxel's centre cell is sampled, never looked at.
+> 2. **Client-only mode** — should be free (nothing touches the server), unconfirmed.
+> 3. **Unloaded chunks** — they deliberately read as EMPTY; check that walking away and back does not leave
+>    guides looking wrongly unbuilt.
+> 4. **Event noise** — `/layout blockevents on` in a busy base would show how hard the filter really works.
+>
+> **Open gap:** above `OccupancyBatchVoxelCeiling` (3M voxels) the feature silently stops updating, with
+> nothing said to the player. Needs a message. The ceiling itself is a guess — see `SESSION_29.md` §7.
 
 > **Session-16 playtest results (human-confirmed):** the v0.2.21 **inventory refill and hotbar refill both
 > work** — the MouseDown-hook ordering and the `InventoryID` round-trip both hold, closing `SESSION_16.md` §8.
@@ -762,6 +788,118 @@ release-candidate regression pass listed below.
 The inverse of a break: a menu action to snap a free shape back under a constraint (arch → half-circle,
 ellipse → circle, triangle → equilateral, rectangle → square) with a best-fit. Natural undo pairing exists.
 Park until asked.
+
+### F6. "Move" tool mode — translate a whole guide (human-requested 2026-07-26)
+A fourth tool mode beside Create · Edit · Delete. Select a guide, then nudge the ENTIRE guide in
+incremental steps along any axis, its shape untouched. **The motivating case: a guide sculpted over a long
+session that turns out to be one voxel off.** Today the only recovery is to reshape it point by point or
+throw it away and start over.
+
+Why it should be cheap: a guide is defined ENTIRELY by `GuideData.ControlPoints` (a list of `Vec3d`
+world positions) plus scalars — there is no stored voxel data, voxels are regenerated from the shape. A
+translation is therefore "add a delta to every control point". `RescaleGuideCommand` (36 lines) +
+`GuideRescalePacket` are the exact precedent for a whole-guide, undoable, networked operation.
+
+Design points to settle before building:
+- **Step size.** One voxel at the guide's own `VoxelScale` is the obvious unit; a scale-16 guide would then
+  nudge a whole block at a time. Offer a modifier for one-voxel-at-scale-1 regardless, or not?
+- **`OriginalControlPoints` must move too.** Spring-back stores the pre-sculpt pose; translate only the
+  live points and a later spring-back teleports the guide back to where it used to be.
+- **Locked points and lock markers.** Session-20 adjacent locks tie a point to a neighbouring guide.
+  Moving the guide breaks that relationship. Cheapest honest answer: refuse to move a guide with live
+  locks, or drop the locks and say so. Do not silently drag them.
+- **Server validation.** The destination must re-check claims and placement policy — a move is a placement.
+  Cumulative voxel budget is unchanged (same guide, same voxel count).
+- Undo/redo pairs naturally (a move is its own inverse with a negated delta).
+
+### F11. Configurable voxel colour scheme — accessibility (human-requested 2026-07-26)
+Let players change the guide colour palette from the settings page. **Motivation is accessibility, not
+taste:** the current palette can be unreadable for colour-blind players.
+
+The concrete problem. Today's roles and hues (`GuideMeshBuilder`, "Colour table"):
+
+| Role | Colour |
+|---|---|
+| Normal body | yellow |
+| Locked point | **red** |
+| Primary / apex | **green** |
+| Anchor (aligned / far off-shade) | blue / indigo |
+| Private anchor (aligned / far off-shade) | orange / burnt orange |
+| Grabbed | white |
+| Division mark | magenta |
+
+**Red and green are the two that matter.** They mark locked points and apex points — different meanings,
+both control-point markers, seen side by side — and red/green is exactly the pair that deuteranopia and
+protanopia collapse (around 8% of men). A player with that deficiency cannot tell a locked point from an
+apex. Yellow body vs orange private-anchor is a weaker second case; blue/indigo and orange/burnt-orange are
+deliberately close (same role, off-shade) and are fine.
+
+Implementation notes:
+- **The plumbing precedent exists.** Alphas are already client-configurable through
+  `GuideMeshBuilder.ConfigureOpacities()`, which writes the `[3]` slot of each colour array at client start.
+  A sibling `ConfigureColors()` writing `[0..2]` follows the identical shape. The RGBs are currently
+  `static readonly float[]` described in-code as "the settled colour language" — that comment is what this
+  item overturns.
+- **Prefer presets over six colour pickers.** A short list (default / deuteranopia-safe / protanopia-safe /
+  high contrast) is far less UI and colour-blind-safe palettes are a solved design problem — Okabe-Ito is
+  the usual starting point. Individual pickers can come later if anyone asks.
+- **Colours are baked into vertex data**, so changing them rebuilds every guide, exactly like opacity. Reuse
+  the debounce added for the v0.3.72 opacity slider (`QueueOpacityApply` in `GuideToolGui`) rather than
+  rebuilding per interaction.
+- ⚠ **Watch the shared-static hazard.** The colour arrays are static and are mutated in place, while
+  materialization batches build on background threads. `ConfigureOpacities` is documented as "called once at
+  client start, before any mesh is built" — the v0.3.72 opacity slider already breaks that assumption and
+  can in principle produce one guide meshed with two palettes until the rebuild settles. Transient and
+  probably invisible, but it should be handled properly rather than inherited.
+
+Interacts with **F9** (the settings page this lives on) and with `PLAN_BLOCK_OCCUPANCY.md` §7.4, whose
+"green is already taken" risk is softened considerably by a palette the player can change.
+
+### F10. Redraw the settings gear glyph (human-requested 2026-07-26, deferred by the human)
+`LayoutToolIcons.DrawGear` is eight radial spokes around a ring — legible at 18 px but it does not read as
+a real gear. The human accepted it as "good enough for now" and explicitly asked that it be redrawn later.
+Wants: an actual toothed gear silhouette. Watch the size — this draws at 18 px in the title bar, which is
+why the first attempt avoided real teeth; a filled/solid form will probably survive small sizes better
+than a stroked outline.
+
+### F7. Mirror / flip a guide across an axis (human-requested 2026-07-26)
+Reflect a guide across one of its own axes. Rides in the same Move mode.
+
+Harder than F6 and worth separating from it. Reflecting the control points is trivial; the orientation
+state around them is not — `ShapePlaneAxis`, `ProjectionPlane`, `FlatSideAligned`, and the apex/primary
+point of directional shapes (arch, tapered cylinder, cone, polygonal prism) all carry handedness. A naive
+point reflection will produce a mirrored shape whose settings still describe the old orientation. Expect
+per-shape work, and expect a symmetric shape (sphere, box) to be free while a tapered prism is not.
+Also undecided: mirror about the guide's own centre, or about a plane the player picks?
+
+### F8. Copy an existing guide (human-requested 2026-07-26)
+Duplicate a guide, presumably placing the copy offset by a step so it is immediately visible, then let F6
+move it into position. **The cheapest of the three** — `GuideData.DeepClone()` already exists; a copy is a
+clone with a fresh `Guid`.
+
+Two decisions that are policy, not code:
+- **Does a copy cost chalk?** It is a new placement and F5 charges 2D −1 / 3D −2 on completed placements.
+  Charging is consistent; not charging makes copy the obvious way to dodge durability. Recommend charging.
+- **It counts against the cumulative creator cap** (a copy is genuinely a second guide's worth of voxels),
+  so copying a large guide can be refused. That refusal must read clearly, not fail silently.
+
+### F9. In-game settings panel in the GUI (human-requested 2026-07-26)
+Let players change client settings from the GUI instead of editing `layout-client.json` and restarting.
+
+**The lowest-risk of the four and largely UI work over plumbing that already exists.** Every candidate is
+already a live client-side value: the six `Opacity*` values, `ShaderGuideBrightness`,
+`ShaderAmbientResponse`, `VoxelFrameStrength`, `ZFightInset`, `GuideRenderingEnabled`, and the `Default*`
+placement preferences. Several already have runtime commands (`/layout inset`, `/layout voxelframe`,
+`/layout shader`), which is proof the values can be changed live — the panel is a second front end onto
+the same setters, plus a write back to `layout-client.json`.
+
+Scope notes:
+- **Client settings only.** Server config (voxel caps, claims, refill policy, moderation) must stay out of
+  a player-facing panel; those are already admin commands and should remain so.
+- `ForceClientOnly` and the chalk-refill preferences are client-side but change *behaviour*, not looks —
+  decide deliberately whether they belong in the same panel as opacity sliders.
+- A "reset to defaults" action is cheap here and worth having, since sliders invite experimenting.
+- Anything requiring a mesh rebuild to take effect (`ZFightInset`) should say so, or trigger one.
 
 ### F5. Chalking-kit durability + refill loop — ✅ DELIVERED AND CONFIRMED (Session 15, v0.2.0–v0.2.9)
 Shipped as designed with human-directed refinements during the build: 32 chalk, 2D −1 / 3D −2 on completed

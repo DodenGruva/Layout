@@ -55,6 +55,9 @@ namespace Layout.UI
         /// <summary>An empty favorite slot (0.1.15): a faint placeholder square.</summary>
         public const string EmptySlot = "layout-empty-slot";
 
+        /// <summary>Settings gear — the title-bar button that swaps the panel to its settings page.</summary>
+        public const string Gear = "layout-gear";
+
         /// <summary>
         /// Suffix variants registered for every shape glyph (0.1.15): "&lt;name&gt;-star" draws the glyph
         /// with a small ★ badge (a pinned favorite in the catalog); "&lt;name&gt;-current" draws it in the
@@ -134,6 +137,7 @@ namespace Layout.UI
             reg[ExpandDown] = (ctx, x, y, w, h, rgba) => DrawExpandChevron(ctx, x, y, w, h, rgba, down: true);
             reg[ExpandUp] = (ctx, x, y, w, h, rgba) => DrawExpandChevron(ctx, x, y, w, h, rgba, down: false);
             reg[EmptySlot] = DrawEmptySlot;
+            reg[Gear] = DrawGear;
 
             // 0.1.15: per-shape "-star" (pinned badge) and "-current" (always-yellow chip) variants.
             foreach (string shapeName in new[]
@@ -386,6 +390,30 @@ namespace Layout.UI
         }
 
         // The shape picker's expand tile: a bold chevron (▾ collapsed / ▴ expanded).
+        // Settings gear. Eight radial spokes around a ring rather than a true toothed outline — at title-bar
+        // size (18 px) real teeth turn into a grey smudge, while spokes stay legible.
+        private static void DrawGear(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(3.4));
+
+            const double cx = 30, cy = 30;
+            for (int i = 0; i < 8; i++)
+            {
+                double a = i * Math.PI / 4.0;
+                double ca = Math.Cos(a), sa = Math.Sin(a);
+                ctx.MoveTo(c.X(cx + ca * 14), c.Y(cy + sa * 14));
+                ctx.LineTo(c.X(cx + ca * 23), c.Y(cy + sa * 23));
+            }
+            ctx.Stroke();
+
+            ctx.Arc(c.X(cx), c.Y(cy), c.L(14), 0, Math.PI * 2);
+            ctx.Stroke();
+
+            ctx.Arc(c.X(cx), c.Y(cy), c.L(5.5), 0, Math.PI * 2);
+            ctx.Stroke();
+        }
+
         private static void DrawExpandChevron(Context ctx, int x, int y, float w, float h, double[] rgba, bool down)
         {
             var c = new Canvas(x, y, w, h, 60);

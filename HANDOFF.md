@@ -2,13 +2,18 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-24 against the built/package checkpoint
-> **v0.3.58 on the `beta` branch** (v0.3.53 was the last `main` release). Where this file and the code
+> and the performance-relevant mechanics. Updated 2026-07-26 against the built/package checkpoint
+> **v0.3.85 on the `beta` branch** (v0.3.69 is live on `main`). Where this file and the code
 > disagree, **the code wins** — treat this as a map, then read the `.cs` files it points at.
 >
+> ⚠️ **`dev/ARCHITECTURE.md` (v3.14) and `dev/PROJECT_STATUS.md` predate Sessions 28–29** and do not know
+> about vertex welding, the custom shader, or block occupancy. This file and the session records are ahead
+> of them.
+>
 > **Deeper docs:** `dev/ARCHITECTURE.md` (the authoritative plan + Settled Decisions Register, v3.14),
-> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/28.md` (per-session
+> `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list), `dev/SESSION_9/…/29.md` (per-session
 > history), `dev/PLAN_RENDER_PERFORMANCE.md` (the live rendering plan + measurements),
+> `dev/PLAN_BLOCK_OCCUPANCY.md` (the delivered occupancy feature + its disproved first draft),
 > `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
 
@@ -42,7 +47,12 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** v0.3.53 final release built, packaged, and documented. The v0.3 arc is playtest-driven: behemoth motion stays
+- **Status:** **v0.3.85** built and packaged; v0.3.69 is the live `main` release. Sessions 28–29 added a
+  **custom guide shader** (guide frame cost 8.2 ms → 1.8 ms on an 8M-voxel guide), **vertex welding**
+  (−72.9% vertices, no visible change), **settled-shell streaming**, procedural **voxel outlines**, and the
+  **block-occupancy recolour** — guide voxels already holding world material are drawn cyan and update live
+  as the player builds. See §8, §9, `dev/SESSION_28.md`, `dev/SESSION_29.md`.
+  The earlier v0.3 arc is playtest-driven: behemoth motion stays
   wireframe-cheap; immense placement and final sculpt validation use a single low-priority server lane;
   selected-scale shells stream to the client in bounded, organic neighbour-growth batches; old GPU batches
   retire across frames; and persistent Shell/Wireframe mode works. The HUD is fixed-size and action-aware;
@@ -53,7 +63,8 @@ guides on servers without Layout and, when server policy permits, alongside publ
   durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
   **mesh pass Stage A (exposed-face meshing) has shipped** and filled 3D interiors are retired. Volumes may
   persist as their hollow **Shell** or canonical structural **Wireframe**.
-- **Size:** **77 source files** (`src/`), ~one asset tree, one `.csproj`.
+- **Size:** **78 source files** (`src/`), ~one asset tree (now including `assets/layout/shaders/`), one
+  `.csproj`.
 - **Data schema:** **DataVersion 12** (creator/Last Sculptor attribution; v11 `IsWireframe`; v10 cached metadata).
 - **Wire protocol:** **16** (personal render state; explicit immense-placement rejection; player moderation
   policy; `/layout who` query; v12 attribution metadata; v11 wireframe state;
@@ -112,17 +123,24 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── HANDOFF.md                  ← THIS FILE
 ├── Layout.csproj  modinfo.json  modicon.png
 ├── assets/layout/              ← itemtypes, textures, lang
-├── src/                        ← all 77 .cs files (see §6)
-└── dev/                        ← ALL PROSE DOCS live here (NOT the code)
+├── assets/layout/shaders/      ← guide.vsh / guide.fsh — MUST be pure ASCII
+├── src/                        ← all 78 .cs files (see §6)
+└── Dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
-    ├── SESSION_9.md … SESSION_19.md  SESSION_20.md  SESSION_21.md  SESSION_22.md  SESSION_23.md  SESSION_24.md  SESSION_25.md  SESSION_26.md  SESSION_27.md
+    ├── SESSION_9.md … SESSION_27.md  SESSION_28.md  SESSION_29.md
     ├── CHANGELOG_ARCHITECTURE.md   ← ARCHITECTURE.md's per-revision deltas (archive)
     ├── PLAN_CLIENT_ONLY.md  PLAN_CHALKING_KIT.md  BUILD_INSTRUCTIONS.txt
+    ├── PLAN_RENDER_PERFORMANCE.md  ← Session-28 rendering plan + every measurement taken
+    └── PLAN_BLOCK_OCCUPANCY.md     ← delivered; its §0 records the disproved first draft
 ```
 
-**Gotcha for tooling:** the docs are in `dev/`; the code is one level up in `src/`. A glob rooted at `dev/`
-will not see the source. The mod project was flattened to the repo root on 2026-07-06 (it used to be nested
-in a versioned subfolder).
+**Gotcha for tooling:** the docs are in the docs folder; the code is one level up in `src/`. A glob rooted at
+the docs folder will not see the source. The mod project was flattened to the repo root on 2026-07-06 (it
+used to be nested in a versioned subfolder).
+
+**Gotcha, case:** git tracks the docs folder as **`Dev/`** while the working copy on Windows is `dev` and
+most prose (including `CLAUDE.md`) writes `dev/`. Harmless on a case-insensitive filesystem, but on Linux or
+GitHub the tracked name is the capitalised one — add new docs as `Dev/…` or you will create a second folder.
 
 ---
 
@@ -267,15 +285,49 @@ path.
   OIT); `PreparedStandardShader` forced full-bright; a **real white 2×2 texture** (texture id 0 samples
   garbage); the full **pos + uv + rgba** vertex layout with uv (0,0); color carried purely by packed vertex
   RGBA.
+- **Custom guide shader (v0.3.60, `assets/layout/shaders/guide.vsh`/`.fsh`):** guides no longer use
+  `PreparedStandardShader` by default. Drops vertex warping, shadow-map coords, per-vertex light mixing and
+  the 3×3 PCF shadow lookup — **8.2 ms → 1.8 ms on an 8M-voxel guide across Session 28**. Guides become
+  genuinely self-lit (no shadow darkening), approximated back by `shaderGuideBrightness` /
+  `shaderAmbientResponse`. `/layout shader off` restores the old path. **Shader sources must be pure ASCII.**
+  A compile failure is non-fatal: the loader logs and falls back to the standard shader.
+- **Voxel outlines (v0.3.62–v0.3.63):** per-cell boundaries drawn procedurally in the fragment shader from
+  mesh-local position — no extra geometry. `/layout voxelframe`. Notably, the fragment stage therefore
+  already knows which voxel cell a pixel belongs to, and identifies the face-normal axis by its screen-space
+  derivative rather than a normal (the mesh format carries none).
+- **Vertex welding (v0.3.57, `GuideMeshOptions.WeldVertices`):** faces meeting at one position **with one
+  colour** share a vertex. **Deduplication, not merging** — the triangle stream is provably identical.
+  −72.9% vertices, −58.4% mesh data, −41.5% frame cost on an 8M guide; at ~1.0 vertices per quad this lever
+  is spent. **Colour is part of the weld key**, which is why a colour cannot be changed in place afterwards
+  (see §8's occupancy note).
+- **Block-occupancy recolour (v0.3.79+):** body voxels whose own cell holds world material are drawn CYAN.
+  The colour is **baked into vertex data**, so updates re-mesh rather than re-tint. Live updates re-mesh only
+  the affected **batch**: a guide gets a batch context built once in the background (X-sorted voxel list,
+  cross-batch occupancy set, mesh options, and the voxel range behind each uploaded mesh), after which a
+  block change re-meshes only the batches its X span overlaps, on a worker, uploaded incrementally.
+  > This is **not** the rejected Session 25–26 spatial partitioning. Guide meshes draw in list order
+  > (primary, then `Auxiliary` in sequence) and every batch is a contiguous run of ONE sorted list, so the
+  > concatenation is the same primitive sequence wherever the boundaries fall. Moving a boundary reorders
+  > nothing — which is what makes re-meshing one batch safe.
 - **Exposed-face meshing (Stage A, v0.2.14–v0.2.16):** the Volumetric cube path builds a presence set of
   rendered cells, pre-counts the faces with no neighbour, allocates exactly, and emits **only those faces**
   (4 verts / 6 indices each) — per-voxel role colours preserved. Interior and shared faces vanish, so a
   hollow shell draws only its skin. The Surface tile/slab path stays on the legacy whole-box builder.
-- **Anti-z-fight is a per-face geometry inset** (`BlockPlaneInset = 0.003`), not a camera nudge: a voxel
-  face is pulled off a block-grid plane ONLY when it is **exposed** *and* a **solid world block** sits across
-  the plane (`GuideMeshOptions.IsNeighborSolid`, a `GuideRenderer` world probe). Faces flush against a
-  neighbour voxel, or bordering air, stay exactly on grid — so the inset never opens a seam between two guide
-  voxels, only clears a guide face from a real block face. Surface guides additionally render as thin slabs
+- **Anti-z-fight is a per-face geometry OUTSET** (`BlockPlaneInset = 0.0006`; the name is historical), not a
+  camera nudge. **Rewritten in v0.3.70 — the pre-v0.3.70 description below is obsolete.** Every EXPOSED face
+  of a volumetric guide is pushed a hair OUT of its voxel; faces shared with a neighbouring guide voxel stay
+  exactly flush, so no interior seam is possible. The offset is a property of the **guide alone** — exposure
+  was always decided against the guide's own voxel set, and since v0.3.70 nothing consults the world either.
+  `GuideMeshOptions.IsNeighborSolid`, `NeighborSolidProbe`, `TrackedSolidProbe` and `_deferredSolidity` are
+  all deleted, along with the per-face world block lookup a large guide used to make for every exposed face.
+  > **Why the direction flipped.** The old inset pulled a face away from a solid world block. That is exactly
+  > backwards for the workflow this serves — over-fill a guide with material, then chisel back down to it —
+  > because the guide face is then coplanar with the surface just cut and must sit PROUD of it. Critically, a
+  > world-driven offset also *cannot* be rebuilt safely: a rebuild after the player fills the volume would see
+  > solid neighbours everywhere and flip those faces inward, breaking the guide exactly when it is needed.
+  > The magnitude fell 5× with the direction (0.003 → 0.0006): an inset had to open a gap wide enough to see
+  > past the surface in front of it, an outset only has to win the depth comparison. Both playtest-settled.
+  Surface guides are untouched by this and additionally render as thin slabs
   hugging the **air-side** cell face (world-solidity probe, majority fallback); the probe tolerates the
   world-load race (a re-probe tick rebuilds once unloaded chunks arrive — fix for B-S10-1). A deterministic
   mesh-count harness locks the face counts and flush/inset invariants (15/15).
@@ -471,6 +523,15 @@ Mostly never synced, with one exception: the hotbar flag is **reported to the se
 `ChalkRefillPrefsPacket`, because `ItemChalkingPowder`'s held-interact runs on both sides and the server is
 what mutates the stacks — without it the toggle would be a no-op.
 `guideRenderingEnabled` defaults true and is saved immediately by either public or client-only on/off command.
+Sessions 28–29 added `shaderGuideBrightness` (0.78), `shaderAmbientResponse` (0.55), `voxelFrameStrength`
+(0.25), `zFightInset` (**0.0006** — an OUTSET since v0.3.70, see §8), and `occupancyRecolour` (false).
+All are tunable live and reachable from the **GUI settings page** behind a gear in the tool panel's title bar
+(guide-opacity slider, built-voxel switch, re-read button), as well as by command.
+
+⚠️ **Optional command arguments:** `parsers.OptionalFloat` / `OptionalInt` return their DEFAULT when the
+argument is absent, **not null**, so an `args[0] is float` test always passes. This silently broke three
+shipped commands — a bare `/layout inset` SET the inset to 0 and saved it. Every optional float now defaults
+to `NaN` and goes through `LayoutModSystem.Supplied()`. Do not reintroduce the `is float` idiom.
 
 **Private guide data** is separate from both config files and the world save:
 `Layout/ClientOnlyGuides/<world-key>-<player-key>.json`, with atomic `.tmp` replacement, one `.bak`, and
@@ -500,9 +561,16 @@ cell; an adjacent first-hit body cell now receives a distinct passive marker. Hu
    itself**; (b) **1.22.x support is declared, not tested** — the code was built against 1.22.3, so nothing
    confirms every API used exists in 1.22.0.
 2. **Protect the v0.3.42 renderer baseline restored in v0.3.49.** Spatial chunks and greedy merging were
-   deliberately rejected; read `SESSION_26.md` before proposing more renderer work.
+   deliberately rejected — but read `SESSION_28.md` **with** `SESSION_26.md`: three of Session 26's claims,
+   including the 140→80 FPS regression that closed the arc, were later disproved. `SESSION_26.md` carries a
+   correction banner. The operative test for new renderer work is **"does it regroup primitives?"**
 3. **Field-soak the v0.3.53 final release.** Cover persistent visibility across reconnect/restart,
    `/layout totalvoxelcap` during multiplayer mutation/undo/delete, and the off-state Chalking Kit lockout.
+3b. **Block-occupancy verification (Session 29).** Four quick in-play checks remain: the read at voxel
+   scales above 1 (exact at scale 1, centre-sampled above it, never looked at); client-only mode; that
+   unloaded chunks reading as EMPTY does not leave returning players with wrongly-unbuilt guides; and how
+   noisy `BlockChanged` really is in a built-up base. One known gap: above `OccupancyBatchVoxelCeiling`
+   (3M voxels) the feature stops updating **silently**.
 4. **Keep the broader multiplayer matrix as future regression coverage.** The v0.2.35 public/private pass
    succeeded and is not a release blocker.
 5. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill (fill is currently inert on Free-Shapes);
@@ -518,13 +586,24 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
 ## 13. Known documentation / code gotchas (so an analyst isn't misled)
 
 - **Guide colours have one source of truth:** `Systems/GuideMeshBuilder.cs`. Primary/apex is Green;
-  public/fallback anchors are Blue/Indigo; mixed-server private anchors are Orange/Burnt Orange. Ownership is
-  render-only state from `ClientNetworkHandler`'s ID sets—never add it to `GuideData` just to color a mesh.
+  public/fallback anchors are Blue/Indigo; mixed-server private anchors are Orange/Burnt Orange; "built"
+  (occupancy) is Cyan. Ownership is render-only state from `ClientNetworkHandler`'s ID sets—never add it to
+  `GuideData` just to color a mesh.
+- **Those colour arrays are static and mutated in place.** `ConfigureOpacities` is documented as "called once
+  at client start, before any mesh is built" — the v0.3.72 opacity slider and the occupancy toggle both break
+  that assumption while background materialization batches are building. Transient and so far invisible, but
+  it is a real hazard and `dev/TODO.md` **F11** would make it worse.
+- **A colour cannot be changed in place after meshing.** Vertex welding keys on (x, y, z, **colour**), so a
+  voxel changing colour beside one that does not requires the shared vertex to split — a topology change.
+  This is why occupancy updates re-mesh a batch rather than re-uploading a colour buffer, even though
+  `IRenderAPI.UpdateMesh` explicitly supports partial (non-null-only) updates. Note this does NOT mean
+  welding is incompatible with multi-colour guides: guides already carry seven colours and weld to ~1.08
+  vertices per quad; only vertices *on* a colour boundary duplicate.
 - **`ToolMode` is client-only and never wired**, so its enum order is safe to change (unlike the on-wire
   `GuideShapeType` / `ShapeConstraint` / projection enums, which are pinned append-only).
 - **`UndoManager` folder ≠ namespace:** it lives in `src/Systems/` but is `Layout.Systems.UndoManager` —
   the one file where folder and namespace diverge.
-- **The Session docs are historical.** `SESSION_9`…`SESSION_27.md` are point-in-time narratives (SESSION_12
+- **The Session docs are historical.** `SESSION_9`…`SESSION_29.md` are point-in-time narratives (SESSION_12
   covers F4 through v0.1.45; SESSION_13 covers v0.1.46–v0.1.52; SESSION_14 is the v0.1.53 mesh handoff;
   SESSION_15 is the v0.2.0–v0.2.9 Chalking Kit arc; SESSION_16 is the v0.2.10–v0.2.21 mesh + polish arc;
   SESSION_17 is the v0.2.22–v0.2.23 seven-item backlog; SESSION_18/19 cover the Tapered Cylinder and dust;
@@ -535,8 +614,11 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   covers v0.3.35–v0.3.40 materialization completion, clean-shell transitions, timing, polygonal scan
   optimization, and intrinsic HUD dimensions; SESSION_25 covers the v0.3.41–v0.3.43 spatial experiment;
   SESSION_26 records v0.3.44–v0.3.52, the renderer rollback, persistent visibility, cumulative creator caps,
-  and the off-state tool lockout; SESSION_27 records v0.3.53's cumulative-cap override and final release). For
-  current state, trust `HANDOFF.md` / `ARCHITECTURE.md` / the code, not a mid-session checklist inside a
-  session record.
+  and the off-state tool lockout; SESSION_27 records v0.3.53's cumulative-cap override and final release;
+  SESSION_28 records the v0.3.55–v0.3.69 rendering arc — welding, settled-shell streaming, the custom shader,
+  voxel outlines; SESSION_29 records the v0.3.70–v0.3.85 block-occupancy arc). For
+  current state, trust `HANDOFF.md` / the code, not a mid-session checklist inside a
+  session record — and note that `ARCHITECTURE.md` and `PROJECT_STATUS.md` now trail this file by two
+  sessions.
 - **`dev/BUILD_INSTRUCTIONS.txt`** is the original v0.1.0 first-build doc; its build/run steps are still
   valid but its file count (35) and version are historical — it now carries a header note saying so.

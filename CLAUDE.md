@@ -14,7 +14,9 @@ on servers without Layout and, when permitted, alongside public guides. The tool
 (SESSION_21), on top of exposed-face meshing (SESSION_16, Stage A). 3D volumes can persist as either a
 hollow **Shell** or a structural **Wireframe**.
 The catalog is **15 shape types / 21 picker tiles** (SESSION_20 added straight/tapered Polygonal Prisms).
-Status: **v0.3.58 on the `beta` branch** (v0.3.53 was the last `main` release; the mod is public).
+Guide voxels that already hold world material can be drawn in a "built" colour, live (SESSION_29).
+Status: **v0.3.85 on the `beta-shader` branch, uncommitted** (v0.3.58 was the last `beta` build; v0.3.53
+the last `main` release; the mod is public).
 
 > **Renderer note — read before any rendering work.** Guides are **order-dependent translucent geometry**
 > (Opaque stage, manual alpha blending, depth-tested, double-sided). On a hollow shell the guide overlaps
@@ -40,7 +42,8 @@ Status: **v0.3.58 on the `beta` branch** (v0.3.53 was the last `main` release; t
 - **Versioning rule (standing, human-set):** EVERY revision bumps `modinfo.json` and ships as a NEW
   `Layout<version>.zip` in **`..\LayoutZips\`** (the sibling folder of this repo — human-directed location;
   holds 0.1.10–0.1.27 + the 0.2.x line; the 0.1.28–0.1.53 zips live in `Documents\ChatGPT\LayoutZips\`) —
-  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.3.53.**
+  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.3.85.**
+  (The folder's real name has a space: `..\Layout Zips\`.)
 - **Git:** `main` is the mainline, published at **github.com/DodenGruva/Layout** (the
   `ClientOnlyFallback` branch was merged via PR #1). **The repo is published at release** — no personal
   paths, no personal usernames in tracked files. Commit/push ONLY when the human instructs.
@@ -54,9 +57,10 @@ Status: **v0.3.58 on the `beta` branch** (v0.3.53 was the last `main` release; t
 - **`TODO.md`** — the live punch-list: open bug, deferred requests, flagged decisions, future features.
 - **`PLAN_RENDER_PERFORMANCE.md`** — the Session-28 rendering plan, with every measurement taken. Read
   before any renderer work; it also records why the Session 25–26 conclusions were wrong.
-- **`PLAN_BLOCK_OCCUPANCY.md`** — **the next feature, not yet started.** Guide voxels that have been filled
-  with material turn a "built" colour and outset slightly, so a player over-filling and chiselling back down
-  can see exactly where to stop. Feasibility is verified against the shipped assemblies.
+- **`PLAN_BLOCK_OCCUPANCY.md`** — **✅ DELIVERED (v0.3.70–v0.3.85, SESSION_29).** Fully redrafted on
+  2026-07-26 after playtesting disproved three conclusions in the first draft. **Read its §0 before touching
+  anything here** — it records what was tried and why the design looks as it does. Retained because the
+  feature has open verification items and one escape hatch (the shader-lookup route) still on the table.
 - **`PROJECT_STATUS.md`** — where things stand and what each module does.
 - **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix (candidate for 0.2.0).
 - **`PLAN_CHALKING_KIT.md`** — the F5 chalking-kit design rationale, now marked ✅ implemented with its
@@ -81,18 +85,26 @@ Status: **v0.3.58 on the `beta` branch** (v0.3.53 was the last `main` release; t
   SESSION_25 the **v0.3.41–v0.3.43 measured frustum/spatial-culling experiment**, and SESSION_26 the
   **v0.3.44–v0.3.52 meshing experiments, renderer rollback, persistent visibility, cumulative creator cap,
   and off-state Chalking Kit lockout**, and SESSION_27 the **v0.3.53 per-player cumulative-cap override and
-  final release**.
+  final release**, and SESSION_28 the **v0.3.55–v0.3.69 rendering arc** (vertex welding, settled-shell
+  streaming, the custom guide shader, voxel outlines), and SESSION_29 the **v0.3.70–v0.3.85 block-occupancy
+  arc** (the face outset, the settings page, sub-block world reads, the built-voxel colour, and its live
+  per-batch updates).
 
-## ✅ Docs updated to v0.3.58 (2026-07-24)
-Consistent with **v0.3.58, DataVersion 12, protocol 16, 77 source files, 15 shape types / 21 tiles**.
-`SESSION_28.md` is the latest record (mesh: `SESSION_16.md` + `SESSION_28.md`, F5: `SESSION_15.md`).
-`ARCHITECTURE.md` is **v3.14** and `PROJECT_STATUS.md` predate the Session-28 renderer work — they are not
-wrong about anything they describe, but they do not yet mention vertex welding or settled-shell streaming;
-`SESSION_28.md` and `PLAN_RENDER_PERFORMANCE.md` are authoritative for those. Prefer source for exact
-identifiers.
+## ✅ Docs updated to v0.3.85 (2026-07-26)
+Consistent with **v0.3.85, DataVersion 12, protocol 16, 78 source files, 15 shape types / 21 tiles**.
+`SESSION_29.md` is the latest record (occupancy: `SESSION_29.md` + `PLAN_BLOCK_OCCUPANCY.md`, mesh:
+`SESSION_16.md` + `SESSION_28.md`, F5: `SESSION_15.md`).
+
+⚠️ **`ARCHITECTURE.md` (v3.14), `PROJECT_STATUS.md` and `HANDOFF.md` predate Sessions 28–29.** They are not
+wrong about what they describe, but they do not know about vertex welding, settled-shell streaming, the
+custom shader, or block occupancy. The session records and plans are authoritative for those. Prefer source
+for exact identifiers.
 
 ⚠️ **`SESSION_26.md` carries a correction banner** — three of its claims were disproved in Session 28,
 including the 140→80 FPS regression that closed the rendering arc. Do not plan renderer work from it alone.
+
+⚠️ **The first draft of `PLAN_BLOCK_OCCUPANCY.md` was substantially wrong** and was replaced, not amended.
+Its §0 records the disproved conclusions so they are not re-derived.
 
 ## How to work on this project (the human's established workflow)
 - **The human is not a programmer** and does not read code. They validate by *playing the mod* and describing
@@ -130,6 +142,24 @@ reshaping — geometry stays in Create); this replaced the old panel-expanding "
 - **Fixes** (v0.3.65–v0.3.69): inset now reaches partial blocks, not just whole-block planes; outlines no
   longer vanish on inset layers; the cap clamp no longer builds an invisible wall from one aim direction;
   volumetric guides re-probe after terrain loads. `/layout inset` tunes the anti-z-fight gap.
+
+## Session-29 additions (v0.3.70–v0.3.85, `beta-shader`) — full detail in `SESSION_29.md`
+- **Block-occupancy recolour:** guide body voxels holding world material are drawn **cyan**, updating live
+  as you build. Off by default; toggle on the GUI settings page or `/layout built on|off|refresh`.
+  Client-side only — no protocol, save, or DataVersion change, and other players are unaffected.
+- **`BlockOccupancy`** (`src/Systems/`) reads sub-block material at 1/16 from collision boxes: one state per
+  block, a 4096-bit brick only for partial ones. **Unloaded chunks read as EMPTY** (deliberate).
+- **Live updates** via `IClientEventAPI.BlockChanged` (confirmed in play to fire for chisel edits), filtered
+  by player radius → guide cull sphere → 80 ms settle, then a **per-batch rebuild**: only the batches
+  overlapping the changed block are re-meshed, on a worker, uploaded incrementally.
+- **Face offset is now an OUTSET** (v0.3.70), derived from the guide's own voxel set and consulting the
+  world not at all. The solidity probe and `_deferredSolidity` are gone. `ZFightInset` default is now
+  **0.0006**, five times smaller than the old inset — playtest-settled.
+- **GUI settings page** behind a gear in the title bar: guide-opacity slider, built-voxel switch, re-read.
+- **Commands:** `/layout built`, `/layout occupancy`, `/layout occupancyscan <r>`, `/layout blockevents`.
+- ⚠️ **Optional command arguments:** `parsers.OptionalFloat/OptionalInt` return their DEFAULT when absent,
+  not null. Three shipped commands were silently broken by this. Optional floats here default to `NaN`; use
+  `Supplied()` in `LayoutModSystem` rather than an `is float` test.
 
 ## Earlier Session-28 additions (v0.3.55–v0.3.58, `beta`)
 - **Vertex welding** (`GuideMeshOptions.WeldVertices`, v0.3.57): guide meshes share vertices between faces
@@ -172,4 +202,5 @@ Mesh **Stage A** shipped and filled 3D volumes were retired. Normal public multi
 lives in `Items/ItemGuideTool.cs` (helpers + fill-state rendering) + `Items/ItemChalkingPowder.cs` (refill)
 + `Systems/ChalkEffects.cs` (puffs/snap). Large-guide work is centred in `Systems/GuideRenderer.cs`,
 `Systems/DraftPreviewSpec.cs`, `Shapes/ShapeWireframe.cs`, and `Shapes/LargeVolumeShellFallback.cs`.
-(Filenames verified against the tree on 2026-07-23 — 77 source files.)
+Sub-block world material lives in `Systems/BlockOccupancy.cs`.
+(Filenames verified against the tree on 2026-07-26 — 78 source files.)

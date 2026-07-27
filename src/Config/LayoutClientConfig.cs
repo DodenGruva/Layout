@@ -175,18 +175,37 @@ namespace Layout.Config
         public float VoxelFrameStrength { get; set; } = 0.25f;
 
         /// <summary>
-        /// How far a guide face sitting exactly on a block-grid plane is pulled off it, in world blocks,
-        /// to stop it z-fighting the world block behind it. Default 0.003. Raise it if guide voxels
-        /// resting on the ground shimmer; lower it if guides look like they float.
+        /// How far a guide's exposed faces are pushed OUT of the voxel, in world blocks, so they cannot
+        /// z-fight a world block surface lying in the same plane. Default 0.0006. Raise it if guide voxels
+        /// shimmer against material; lower it if guides look inflated or float off their own cells.
         /// </summary>
         /// <remarks>
-        /// Clamped to 0–0.05. Playtest history: 0.004 was rejected as seamy, 0.001 shimmered with distance,
-        /// 0.003 was chosen. The "seamy" objection is obsolete — that seam was between adjacent guide
-        /// voxels, and exposed-face meshing no longer emits those faces — so values above 0.003 are safer
-        /// now than when this was settled. Tune live with <c>/layout inset</c>.
+        /// Clamped to 0–0.05. The name is historical: until v0.3.69 this was an INSET pulling faces off the
+        /// grid plane, and it kept the name through the v0.3.70 flip so the config key, the command, and the
+        /// playtest history all still line up.
+        ///
+        /// Playtest history. As an inset: 0.004 seamy, 0.001 shimmered with distance, 0.003 chosen (0.2.14).
+        /// As an outset (v0.3.71): **0.0006**, five times smaller, confirmed in play. That is the expected
+        /// direction — an inset had to open a visible gap to escape the surface behind it, while an outset
+        /// only has to win the depth comparison, so it needs barely more than the depth buffer's precision.
+        /// Tune live with <c>/layout inset</c>.
         /// </remarks>
         [JsonProperty("zFightInset")]
-        public float ZFightInset { get; set; } = 0.003f;
+        public float ZFightInset { get; set; } = 0.0006f;
+
+        /// <summary>
+        /// Draw guide body voxels that already hold world material in the "built" colour (cyan), so you can
+        /// see which parts of the plan exist. Off by default. Purely local — see PLAN_BLOCK_OCCUPANCY §2.3;
+        /// other players are unaffected by your setting.
+        /// </summary>
+        /// <remarks>
+        /// The colour is baked into the guide mesh, so switching this rebuilds every guide — instant on
+        /// ordinary guides, a few seconds of re-streaming on very large ones. At this stage the colours are
+        /// STATIC: they read the world when the guide is built and do not follow blocks placed afterwards.
+        /// <c>/layout occupancy refresh</c> re-reads. Live updating is the next stage of that plan.
+        /// </remarks>
+        [JsonProperty("occupancyRecolour")]
+        public bool OccupancyRecolour { get; set; } = false;
 
         /// <summary>Folds out-of-range values (e.g. from a hand-edited file) back to safe defaults.</summary>
         public void Normalize()

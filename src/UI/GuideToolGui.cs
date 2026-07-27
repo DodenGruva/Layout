@@ -177,13 +177,36 @@ namespace Layout.UI
         // Dispose firing on exit-to-title (which it may not).
         private readonly Action _saveConfig;
 
+        // Re-bakes the opacity values into every guide mesh (LayoutModSystem.ApplyOpacitiesAndRebuild).
+        // Opacity lives in vertex colours, so the config alone changes nothing until this runs.
+        private readonly Action _applyOpacities;
+
+        // Sets the block-occupancy recolour and rebuilds (LayoutModSystem.ApplyOccupancyRecolour).
+        private readonly System.Func<bool, bool> _applyOccupancy;
+
+        // Re-reads the world and rebuilds ONCE. The button used to toggle off then on, which rebuilt every
+        // guide twice and wrote the config twice — half of the refresh lag spike reported at v0.3.79.
+        private readonly Action _refreshOccupancy;
+
+        // Settings tab (v0.3.72): when true the panel shows client display settings instead of the tool
+        // rows. Session-local like _shapeGridExpanded — the panel always opens on the tool.
+        private bool _settingsTab;
+
+        // A slider drag fires its handler per step, and each step would otherwise rebuild every guide
+        // mesh. True while a rebuild is already queued behind the debounce timer.
+        private bool _opacityApplyPending;
+
         public GuideToolGui(ICoreClientAPI capi, DraftManager tool, ClientNetworkHandler net,
-            LayoutClientConfig config, Action saveConfig) : base(capi)
+            LayoutClientConfig config, Action saveConfig, Action applyOpacities,
+            System.Func<bool, bool> applyOccupancy, Action refreshOccupancy) : base(capi)
         {
             _tool = tool;
             _net = net;
             _config = config;
             _saveConfig = saveConfig;
+            _applyOpacities = applyOpacities;
+            _applyOccupancy = applyOccupancy;
+            _refreshOccupancy = refreshOccupancy;
         }
 
         /// <summary>True if <paramref name="code"/> is one of the shape picker's catalog codes — the
@@ -200,6 +223,7 @@ namespace Layout.UI
         {
             base.OnGuiOpened();
             _shapeGridExpanded = false;      // the panel always opens compact (Session-11 flag 11e)
+            _settingsTab = false;            // ...and always on the tool, not the settings page
             Subscribe();
             SetupDialog();
         }
@@ -311,14 +335,40 @@ namespace Layout.UI
             GuiComposer c = capi.Gui
                 .CreateCompo("layout:toolgui", dialogBounds)
                 .AddShadedDialogBG(bgBounds)
-                .AddDialogTitleBar("Layout Tool", OnTitleBarClose)
-                .BeginChildElements(bgBounds);
+                .AddDialogTitleBar("Layout Tool", OnTitleBarClose);
+
+            // ---- Settings gear, IN the title bar (v0.3.73, human-requested) ----
+            // Added BEFORE BeginChildElements deliberately, so its bounds are in DIALOG space and it cannot
+            // drag bgBounds' FitToChildren sizing around (a child at the negative y the title bar occupies
+            // would). Dialog space: the bar spans y 0..TitleBarHeight, and the dialog's own width is the
+            // content width plus one ElementToDialogPadding on each side, so contentW + 2*pad is the right
+            // edge.
+            //
+            // GearRightOffset was 60 in v0.3.73 and overlapped the fixed/movable icon (human screenshot).
+            // The stock pair takes roughly the last 50 px, so the gear is pushed clear of it — measured
+            // from the RIGHT edge, since that is what the stock icons are anchored to.
+            const double gearSize = 18;
+            const double gearRightOffset = 76;
+            double gearX = contentW + 2 * GuiStyle.ElementToDialogPadding - gearRightOffset;
+            double gearY = (GuiStyle.TitleBarHeight - gearSize) / 2.0;
+            ElementBounds gearBounds = ElementBounds.Fixed(gearX, gearY, gearSize, gearSize);
+            c.AddInteractiveElement(
+                new BareIconElement(capi, LayoutToolIcons.Gear, ToggleSettingsTab, gearBounds),
+                "settingsgear");
+            c.AddAutoSizeHoverText(_settingsTab ? "Back to the tool" : "Settings",
+                CairoFont.WhiteDetailText(), 200, gearBounds.FlatCopy(), "settingsgear:ht");
+
+            c.BeginChildElements(bgBounds);
 
             // Context header — a dynamic-text line so mode flips can refresh it cheaply. In CREATE the
             // shape name is split out and RIGHT-ALIGNED (0.1.16, human-requested) so it sits naturally
             // above the Current Shape chip at the row's right edge.
             ElementBounds headerBounds = ElementBounds.Fixed(0, y, contentW, headerH);
-            if (_tool.Mode == ToolMode.Create)
+            if (_settingsTab)
+            {
+                c.AddDynamicText("Settings", font, headerBounds, "header");
+            }
+            else if (_tool.Mode == ToolMode.Create)
             {
                 c.AddDynamicText("Create Mode", font, headerBounds, "header");
                 CairoFont rightFont = CairoFont.WhiteSmallText();
@@ -331,6 +381,14 @@ namespace Layout.UI
                 c.AddDynamicText(BuildHeaderText(), font, headerBounds, "header");
             }
             y += headerH + rowGap;
+
+            if (_settingsTab)
+            {
+                BuildSettingsSection(c, font, ref y, contentW, rowGap);
+                SingleComposer = c.EndChildElements().Compose();
+                ApplySettingsWidgetValues();
+                return;
+            }
 
             // Mode context. In EDIT the setting rows act on the SELECTED guide (via the network senders) and
             // the same panel is reused — no separate expanding section. When Edit has no selection, those rows
@@ -488,6 +546,146 @@ namespace Layout.UI
             // from OnGuiOpened or the deferred-recompose timer, never from inside a composer
             // callback, and toggle SetValue does not fire the toggle handler.
             LightInitialTiles();
+        }
+
+        // ---------------------------------------------------------------------------------
+        //  Settings tab (v0.3.72)
+        // ---------------------------------------------------------------------------------
+        // Client display settings, changeable in play instead of by hand-editing layout-client.json and
+        // restarting. Deliberately client-only: server settings (voxel caps, claims, moderation) stay on
+        // their admin commands and must not appear in a player-facing panel.
+        //
+        // Currently just guide opacity — added to answer a specific question, whether a fainter guide makes
+        // it easier to see material inside it while chiselling. The alternative under consideration is
+        // colouring filled voxels differently, which is a much larger change (see PLAN_BLOCK_OCCUPANCY).
+        private void BuildSettingsSection(
+            GuiComposer c, CairoFont font, ref double y, double contentW, double rowGap)
+        {
+            CairoFont detail = CairoFont.WhiteDetailText();
+
+            c.AddStaticText("Guide opacity", font, ElementBounds.Fixed(0, y, contentW, 20));
+            y += 20 + 2;
+
+            c.AddSlider(OnOpacityBodySlider, ElementBounds.Fixed(0, y, contentW, 22), "opacitybody");
+            y += 22 + 2;
+
+            c.AddStaticText(
+                "How solid the guide body looks. Lower it to see material through the guide while "
+                + "chiselling. Anchors and control points keep their own opacity.",
+                detail, ElementBounds.Fixed(0, y, contentW, 46));
+            y += 46 + rowGap;
+
+            // ---- Built-voxel colouring (v0.3.79) ----
+            c.AddStaticText("Show built voxels", font, ElementBounds.Fixed(0, y, contentW, 20));
+            y += 20 + 2;
+
+            c.AddSwitch(OnOccupancyToggled, ElementBounds.Fixed(0, y, 30, 22), "occupancy", 22);
+            c.AddStaticText(
+                "Guide voxels that already hold material turn cyan.",
+                detail, ElementBounds.Fixed(38, y + 3, contentW - 38, 20));
+            y += 22 + 2;
+
+            c.AddStaticText(
+                "Colours follow the blocks you place and chisel. Very large guides are the exception — "
+                + "they are too costly to update live, so re-read them by hand.",
+                detail, ElementBounds.Fixed(0, y, contentW, 46));
+            y += 46 + 2;
+
+            c.AddSmallButton("Re-read the world", OnOccupancyRefresh, ElementBounds.Fixed(0, y, 140, 22));
+            y += 22 + rowGap;
+
+            c.AddSmallButton("Reset to default", OnResetOpacity, ElementBounds.Fixed(0, y, 130, 22));
+            // Belt and braces: the gear is the intended way back, but it lives inside the stock title bar
+            // and shares that space with the bar's own drag handling. This button guarantees a way out even
+            // if the gear's hit area turns out to be contested there.
+            c.AddSmallButton("< Back to tool", OnBackToTool,
+                ElementBounds.Fixed(contentW - 110, y, 110, 22));
+            y += 22 + rowGap;
+        }
+
+        // Post-compose value push for the settings widgets, mirroring what LightInitialTiles does for the
+        // tool rows. Runs under _suppress because SetValue fires the change handler on some builds.
+        private void ApplySettingsWidgetValues()
+        {
+            if (SingleComposer == null) return;
+            _suppress = true;
+            try
+            {
+                // Floor of 5%: a guide at 0 is invisible, which reads as a bug rather than a setting.
+                SingleComposer.GetSlider("opacitybody")?.SetValues(
+                    OpacityPercent(_config.OpacityBody), 5, 100, 1, "%");
+                SingleComposer.GetSwitch("occupancy")?.SetValue(_config.OccupancyRecolour);
+            }
+            catch (Exception e) { capi.Logger.Warning("[Layout] settings widgets: {0}", e.Message); }
+            finally { _suppress = false; }
+        }
+
+        private static int OpacityPercent(float alpha) =>
+            Math.Min(100, Math.Max(5, (int)Math.Round(alpha * 100f)));
+
+        // The title-bar gear: a plain switch between the tool page and the settings page.
+        private void ToggleSettingsTab()
+        {
+            _settingsTab = !_settingsTab;
+            DeferRecompose();      // never recompose from inside a composer callback
+        }
+
+        private bool OnBackToTool()
+        {
+            _settingsTab = false;
+            DeferRecompose();
+            return true;
+        }
+
+        private bool OnOpacityBodySlider(int value)
+        {
+            if (_suppress) return true;
+            _config.OpacityBody = value / 100f;
+            QueueOpacityApply();
+            return true;
+        }
+
+        // Rebuilds every guide, so it runs straight away rather than through the opacity debounce — this is
+        // a deliberate click, not a drag, and coalescing would only delay the feedback.
+        private void OnOccupancyToggled(bool on)
+        {
+            if (_suppress) return;
+            _applyOccupancy?.Invoke(on);
+        }
+
+        private bool OnOccupancyRefresh()
+        {
+            if (!_config.OccupancyRecolour) return true;   // nothing to re-read while it is off
+            _refreshOccupancy?.Invoke();
+            return true;
+        }
+
+        private bool OnResetOpacity()
+        {
+            _config.OpacityBody = DefaultBodyOpacity;
+            QueueOpacityApply();
+            DeferRecompose();      // move the slider handle back under the new value
+            return true;
+        }
+
+        // The shipped default for OpacityBody in LayoutClientConfig. Duplicated as a constant rather than
+        // read from a fresh config instance so Reset cannot drag along every other default with it.
+        private const float DefaultBodyOpacity = 0.5f;
+
+        // Opacity is baked into vertex colours, so applying it means rebuilding every guide mesh — far too
+        // expensive to do per slider step on a large guide. Coalesce into one rebuild once the slider goes
+        // quiet. The value itself is already live in _config, so nothing is lost if several steps collapse.
+        private void QueueOpacityApply()
+        {
+            if (_opacityApplyPending) return;
+            _opacityApplyPending = true;
+            capi.Event.RegisterCallback(_ =>
+            {
+                _opacityApplyPending = false;
+                _config.Normalize();
+                _applyOpacities?.Invoke();
+                _saveConfig?.Invoke();
+            }, 250);
         }
 
         // A labelled number-input row (Session 10's Divisions control, generalised in Session 11 for the
@@ -690,6 +888,50 @@ namespace Layout.UI
             c.AddInteractiveElement(btn, tileKey);
             if (!string.IsNullOrEmpty(hover))
                 c.AddAutoSizeHoverText(hover, CairoFont.WhiteDetailText(), 260, bounds.FlatCopy(), tileKey + ":ht");
+        }
+
+        // A registered Layout glyph drawn BARE — no button plate behind it (v0.3.74). AddIconButton paints
+        // the game's button chrome, which reads as a tile; the stock close and fixed/movable icons beside it
+        // in the title bar are bare glyphs, so a plated one is the odd element out.
+        //
+        // The press is claimed as well as the release: the title bar sits under these bounds and would
+        // otherwise start a window drag from a click meant for the icon.
+        private sealed class BareIconElement : GuiElement
+        {
+            private readonly ICoreClientAPI _capi;
+            private readonly string _icon;
+            private readonly Action _onClick;
+
+            public BareIconElement(ICoreClientAPI capi, string icon, Action onClick, ElementBounds bounds)
+                : base(capi, bounds)
+            {
+                _capi = capi;
+                _icon = icon;
+                _onClick = onClick;
+            }
+
+            public override void ComposeElements(Context ctx, ImageSurface surface)
+            {
+                Bounds.CalcWorldBounds();
+                var icons = _capi?.Gui?.Icons?.CustomIcons;
+                if (icons == null || !icons.ContainsKey(_icon)) return;
+                icons[_icon](ctx, (int)Bounds.drawX, (int)Bounds.drawY,
+                    (float)Bounds.InnerWidth, (float)Bounds.InnerHeight,
+                    new double[] { 1, 1, 1, 0.85 });
+            }
+
+            public override void OnMouseDownOnElement(ICoreClientAPI api, MouseEvent args)
+            {
+                if (args.Button != EnumMouseButton.Left) { base.OnMouseDownOnElement(api, args); return; }
+                args.Handled = true;
+            }
+
+            public override void OnMouseUpOnElement(ICoreClientAPI api, MouseEvent args)
+            {
+                if (args.Button != EnumMouseButton.Left) { base.OnMouseUpOnElement(api, args); return; }
+                _onClick?.Invoke();
+                args.Handled = true;
+            }
         }
 
         // A plain white rule (0.1.16): separates the pinned favorite slots from the unfolded catalog.

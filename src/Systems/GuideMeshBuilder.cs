@@ -100,14 +100,26 @@ namespace Layout.Systems
         public bool Hidden = false;
 
         /// <summary>
-        /// World-solidity probe for the z-fight clearances (0.2.16): given the CELL-space (1/16) coords of
-        /// the cell just beyond an exposed grid-coplanar face, returns whether a solid (non-air) world block
-        /// occupies it. Only such faces are pulled off the grid plane — a face bordering AIR has nothing to
-        /// z-fight and stays exactly on the grid, so stair-step faces at block lines never open slits (the
-        /// filled-volume seam finding). Null = treat every neighbour as solid (conservative: clearances
-        /// everywhere), which is also the deterministic default the mesh tests rely on.
+        /// Block-occupancy recolour probe (v0.3.79): given CELL-space (1/16) coordinates, returns whether
+        /// world material occupies that cell. Body voxels that come back true are drawn in the "built"
+        /// colour. Null disables the feature entirely, which is what the player's toggle does — so a guide
+        /// built with the toggle off is byte-identical to one built before the feature existed.
         /// </summary>
-        public Func<int, int, int, bool> IsNeighborSolid = null;
+        /// <remarks>
+        /// Called once per body voxel during the build, including on background materialization threads, so
+        /// whatever backs it must tolerate concurrent calls. <see cref="BlockOccupancy"/> locks for this.
+        ///
+        /// This is NOT a return of the retired z-fight probe. That one asked about a voxel's NEIGHBOUR and
+        /// fed geometry, which is exactly why it had to go (v0.3.70): a rebuild after the player filled the
+        /// volume would have flipped face offsets inward. This one asks about the voxel's OWN cell and feeds
+        /// colour only, so a rebuild simply re-reads the truth — the failure mode that killed the old probe
+        /// does not exist here.
+        /// </remarks>
+        public Func<int, int, int, bool> OccupancyProbe = null;
+
+        // REMOVED v0.3.70 — `IsNeighborSolid`, the world-solidity probe that drove the z-fight clearance
+        // from 0.2.16. The face offset is now a uniform outward push decided by the guide's own voxel set;
+        // see the face-offset note in the cube path below for why the world must not influence it.
 
         /// <summary>
         /// Optional complete voxel occupancy used when meshing only one materialization subset. Neighbour
@@ -238,6 +250,14 @@ namespace Layout.Systems
         // (yellow/red/green/blue/indigo/white). [Flagged: color choice open to review.]
         private static readonly float[] ColMagenta = { 0.90f, 0.20f, 0.90f, 0.80f }; // Division mark
 
+        // "Built" — a body voxel whose own cell already holds world material (v0.3.79).
+        // CYAN, chosen against the constraint in PLAN_BLOCK_OCCUPANCY §7.4: it must not be confusable with
+        // green (the apex marker) and must read at 50% alpha over arbitrary stone. Cyan is yellow's
+        // complement, so built-vs-unbuilt is the maximum separation available from the body colour, and it
+        // is clear of every other role (red, green, blue, indigo, orange, white, magenta).
+        // Alpha here is unused — the role colour's alpha is kept; see the recolour note in the build loop.
+        private static readonly float[] ColBuilt = { 0.10f, 0.95f, 0.95f, 0.50f };
+
         // Hidden guides show their anchors only at this alpha; the public/private RGB palette is preserved.
         private static float HiddenAnchorAlpha = 0.35f;
 
@@ -260,17 +280,23 @@ namespace Layout.Systems
             HiddenAnchorAlpha = hiddenAnchor;
         }
 
-        // World-block inset applied to any voxel FACE that lies exactly on a block-grid plane (its 1/16
-        // coordinate is a multiple of 16) — those are the only faces that can be coplanar with world block
-        // faces and z-fight them (jarring at scale 16, where every face is grid-coplanar). Insetting ONLY
-        // grid-coplanar faces sidesteps the Module-7 all-axes-shrink mistake almost entirely: the seam it
-        // can open between two guide voxels meeting across a block boundary is 2×0.004 blocks — a hairline
-        // the human has accepted (0.2.11). The lowest layer's bottom face is additionally always lifted,
-        // covering guides resting on non-grid tops (slabs, chiseled blocks). Tuned by playtest: 0.004 was
-        // safe but seamy; 0.001 shimmered when moving toward/away from the guide (depth precision falls
-        // with distance); 0.003 per the human's call (0.2.14). NOTE: since exposed-face meshing (0.2.14),
-        // faces BETWEEN adjacent guide voxels no longer exist at all — this inset now only ever separates
-        // a guide face from a world block face, so it produces no interior seams whatsoever.
+        // Anti-z-fight face clearance, in world blocks. SINCE v0.3.70 THIS IS AN OUTSET, not an inset: it
+        // is applied outward to every exposed face of a volumetric guide (the name is kept so `/layout
+        // inset`, the client config key, and the playtest history all still line up). Magnitude semantics
+        // are unchanged, so the value below is still the one three rounds of playtest settled on.
+        //
+        // Tuned by playtest twice, once per direction. As an INSET: 0.004 was safe but seamy; 0.001
+        // shimmered when moving toward/away from the guide (depth precision falls with distance); 0.003 was
+        // the human's call (0.2.14). As an OUTSET: 0.0006, confirmed in play (v0.3.71) — five times smaller.
+        //
+        // The drop is the expected consequence of the flip, not a re-tune of the same problem. An inset had
+        // to open a gap WIDE ENOUGH TO SEE PAST the world surface sitting in front of it, so it paid for
+        // depth precision and for the surface's own thickness. An outset only has to land in front of that
+        // surface and win the depth comparison, so it needs barely more than the depth buffer's resolution
+        // at the distances guides are read from. Anything larger just inflates the guide off its own cells.
+        //
+        // Since exposed-face meshing (0.2.14) faces BETWEEN adjacent guide voxels are not emitted at all,
+        // so the clearance produces no interior seams whatsoever.
         /// <remarks>
         /// TUNABLE SINCE v0.3.65 — a field, not a const, so <c>/layout inset</c> can dial it in play. A
         /// reported ground z-fight cannot be reproduced or judged from outside the game, and this value was
@@ -283,7 +309,7 @@ namespace Layout.Systems
         /// separates a guide face from a WORLD BLOCK face, so the old ceiling on it is obsolete and larger
         /// values are safer than they were when this was tuned.
         /// </remarks>
-        private static float BlockPlaneInset = 0.003f;
+        private static float BlockPlaneInset = 0.0006f;
 
         /// <summary>Sets the anti-z-fight inset, in world blocks. Meshes must be rebuilt to take effect.</summary>
         public static void ConfigureBlockPlaneInset(float inset) => BlockPlaneInset = inset;
@@ -431,6 +457,30 @@ namespace Layout.Systems
                                  options.PrivateAnchors,
                                  out r, out g, out b, out a);
                     if (options.Hidden) a = HiddenAnchorAlpha; // only anchor voxels reach here when hidden
+
+                    // BLOCK-OCCUPANCY RECOLOUR (v0.3.79, PLAN_BLOCK_OCCUPANCY stage 2). A voxel whose own
+                    // cell already holds world material is drawn in the "built" colour instead of its role
+                    // colour, so the player can see at a glance which parts of the plan exist.
+                    //
+                    // Alpha is deliberately kept from the role colour: the guide's transparency is a
+                    // separate, player-tuned setting, and changing it here would read as the guide fading
+                    // rather than as a state change. Only the hue moves.
+                    //
+                    // The probe is skipped for anchors and the grabbed point — those mark the GUIDE's own
+                    // structure, not the world's, and recolouring them would lose information the player
+                    // needs while placing. Body voxels are the ones this is about.
+                    if (options.OccupancyProbe != null && v.Type == VoxelRenderType.Normal)
+                    {
+                        // Sample the CENTRE cell of the voxel. At scale 1 that is the voxel itself and the
+                        // correspondence with a chisel voxel is exact; at coarser scales one guide voxel
+                        // spans many world cells and the centre is the cheapest defensible verdict (plan
+                        // §2.1 — revisit if it reads badly at scale 16).
+                        int mid = scale >> 1;
+                        if (options.OccupancyProbe(v.X + mid, v.Y + mid, v.Z + mid))
+                        {
+                            r = ColBuilt[0]; g = ColBuilt[1]; b = ColBuilt[2];
+                        }
+                    }
                 }
 
                 int color = PackRgba(r, g, b, a);
@@ -486,41 +536,49 @@ namespace Layout.Systems
                     bool expZn = !present.Contains((v.X, v.Y, v.Z - scale));
                     bool expZp = !present.Contains((v.X, v.Y, v.Z + scale));
 
-                    // Z-fight clearance: inset a face sitting exactly on a block-grid plane (`& 15` ==
-                    // "multiple of 16", valid for negatives; min face = v coord, max face = v coord +
-                    // scale), plus the lowest layer's bottom face — but ONLY when that face is EXPOSED
-                    // and a SOLID world block sits across the plane. Where a neighbour cell is present,
-                    // the box must run flush or the surviving faces open a slit along every block line
-                    // (the 0.2.14 seam bug); where the neighbour is AIR there is nothing to z-fight, so
-                    // the face stays exactly on the grid and stair-steps never open slits either (the
-                    // 0.2.15 filled-volume seam finding).
-                    // GRID-COPLANAR TEST REMOVED (v0.3.66). Each face used to require its coordinate to be a
-                    // multiple of 16 — i.e. to sit on a whole-block plane — before it could be inset. That
-                    // was a proxy for "might be coplanar with a world surface", and it is wrong for every
-                    // block that is not full height: slabs, chiseled blocks, snow layers, stair treads. A
-                    // guide voxel resting on a slab mid-guide sits at a NON-grid Y, failed the test, and
-                    // z-fought no matter how far the inset was raised.
+                    // Z-fight clearance — UNIFORM OUTSET (v0.3.70). Every exposed face is pushed a hair
+                    // OUT of the voxel. The offset is a property of the GUIDE ALONE: exposure is already
+                    // decided against the guide's own voxel set (expXn..expZp above), and nothing here
+                    // consults the world.
                     //
-                    // The one condition that fired off-grid was `v.Y == minY`, the guide's lowest layer —
-                    // which is exactly why raising the inset appeared to move only the bottom of the guide.
+                    // WHAT THIS REPLACES. From 0.2.16 to v0.3.69 the offset was driven by a world-solidity
+                    // probe: "is a solid block across this face?" → if so, pull the face INWARD off the
+                    // shared plane. Correct for a guide standing beside blocks, and exactly backwards for
+                    // the workflow this now serves — over-fill the guide volume with material, then chisel
+                    // back down until guide voxels appear and stop there. In that case the guide face is
+                    // coplanar with the surface just cut, and it must sit PROUD of it to read at all.
                     //
-                    // The solidity probe is the accurate test on its own: it asks whether a solid world
-                    // block actually occupies the cell across that face. A face bordering air still gets
-                    // nothing, so stair-step faces never open slits, and faces between adjacent guide
-                    // voxels are not emitted at all, so no interior seam is possible.
-                    Func<int, int, int, bool> solid = options.IsNeighborSolid;
-                    float fx0 = expXn
-                        && (solid == null || solid(v.X - scale, v.Y, v.Z)) ? BlockPlaneInset : 0f;
-                    float fx1 = expXp
-                        && (solid == null || solid(v.X + scale, v.Y, v.Z)) ? BlockPlaneInset : 0f;
-                    float fy0 = expYn
-                        && (solid == null || solid(v.X, v.Y - scale, v.Z)) ? BlockPlaneInset : 0f;
-                    float fy1 = expYp
-                        && (solid == null || solid(v.X, v.Y + scale, v.Z)) ? BlockPlaneInset : 0f;
-                    float fz0 = expZn
-                        && (solid == null || solid(v.X, v.Y, v.Z - scale)) ? BlockPlaneInset : 0f;
-                    float fz1 = expZp
-                        && (solid == null || solid(v.X, v.Y, v.Z + scale)) ? BlockPlaneInset : 0f;
+                    // WHY NOTHING NEEDS REBUILDING. The offset cannot go stale, because it never depended
+                    // on the world in the first place: no re-probe queue, no block-change subscription, no
+                    // invalidation. This is load-bearing, not merely convenient — a rebuild triggered after
+                    // the player fills the volume would see solid neighbours everywhere and flip these
+                    // faces inward, breaking the guide at exactly the moment it is needed.
+                    //
+                    // A guide drawn THROUGH pre-existing terrain therefore gets outset faces from the
+                    // start, and they appear the instant the player chisels down to them — the probing
+                    // version got that case wrong until something happened to rebuild it.
+                    //
+                    // THE COST, accepted deliberately: a guide face flush against a pre-existing block now
+                    // sits a hair inside it and is hidden, where the inset used to hold it visible in a
+                    // hairline gap. Those are faces viewed from the far side anyway — a guide's underside
+                    // resting on the ground, its back against a wall. Flagged for playtest.
+                    //
+                    // Side effect on welding: every exposed face now takes the SAME offset, so coplanar
+                    // faces of adjacent voxels always agree and the v0.3.57 welder can share them. The
+                    // probe-driven version varied face to face and blocked some of those welds.
+                    //
+                    // Surface guides are untouched — they run the slab/decal path above with their own
+                    // plane-axis inset, and still need it not to z-fight the wall they are drawn on.
+                    // The offsets below are NEGATIVE — every exposed face is pushed OUTWARD, growing the
+                    // box by a hair. Faces shared with a neighbouring guide voxel keep 0 and stay exactly
+                    // flush; any offset there reopens the 0.2.14 seam.
+                    float outset = -BlockPlaneInset;
+                    float fx0 = expXn ? outset : 0f;
+                    float fx1 = expXp ? outset : 0f;
+                    float fy0 = expYn ? outset : 0f;
+                    float fy1 = expYp ? outset : 0f;
+                    float fz0 = expZn ? outset : 0f;
+                    float fz1 = expZp ? outset : 0f;
 
                     // The inset box this voxel occupies. CANONICAL LATTICE DERIVATION (0.3.57): each bound
                     // is computed from ITS OWN integer voxel coordinate rather than as "min corner + edge".
