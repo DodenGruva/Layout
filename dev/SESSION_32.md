@@ -1,8 +1,8 @@
 # SESSION 32 — v0.4.2–v0.4.14: the settings page (F9, F10, F11, T2)
 
 **Checkpoint:** Layout **v0.4.14** built and packaged on the `beta` branch. **DataVersion remains 12**;
-**wire protocol remains 19** — nothing here touches the wire. Packages: `Layout0.4.2.zip` … `Layout0.4.14.zip`
-(there is no `Layout0.4.3.zip`; that number was consumed by a broken intermediate, see §8).
+**wire protocol remains 19** — nothing here touches the wire.
+Packages: `Layout0.4.2.zip` … `Layout0.4.14.zip`, thirteen zips with no gaps.
 **82 source files** (one added: `src/Systems/GuidePalette.cs`).
 
 This session emptied the queued backlog around the settings page. **F9** (in-game settings panel), **T2**
@@ -251,12 +251,13 @@ inside the engine (`NullReferenceException` in `ClientPlatformWindows.LoadOrUpda
 the moment the settings page composed, so the whole panel was unusable, and it **built clean**. Always
 `if (tex == null) tex = new LoadedTexture(capi);` first. Every custom element added this session now does.
 
-**The lost 0.4.3 zip.** A PowerShell `Get-Content -Raw | Set-Content -Encoding utf8` round-trip over
+**The encoding round-trip.** A PowerShell `Get-Content -Raw | Set-Content -Encoding utf8` over
 `GuideToolGui.cs` double-encoded every non-ASCII character in the file (em-dashes, arrows, the ▾/▴ glyphs in
-comments). Caught, reversed, and verified against `git diff` that no region outside the intended edits had
-changed. Nothing shipped in that state, but the version number was spent. **Do not round-trip source files
-through PowerShell text cmdlets** — use the editor tools, or `[System.IO.File]::ReadAllText/WriteAllText`
-with an explicit encoding on both ends.
+comments) — `Get-Content` decoded as ANSI, `Set-Content` re-encoded as UTF-8. Caught before packaging,
+reversed by decoding the text back through code page 1252, and verified against `git diff` that every changed
+hunk was one of the intended edits with no drift elsewhere in the 2000-line file. **Nothing shipped in that
+state and no version number was lost.** **Do not round-trip source files through PowerShell text cmdlets** —
+use the editor tools, or `[System.IO.File]::ReadAllText/WriteAllText` with an explicit encoding at both ends.
 
 ---
 

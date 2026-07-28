@@ -133,6 +133,10 @@ Its §0 records the disproved conclusions so they are not re-derived.
 - **Correctness over performance** unless the human says otherwise.
 - **Playtest beats compile-checks:** the important bugs here are runtime/feel issues a compiler can't catch.
   After changes, still run `dotnet build` to catch compile errors before the human playtests.
+- **The human playtests EVERY iteration as it ships** — that is what the per-revision zip is for. Treat each
+  shipped version as tested unless they say otherwise, and never write "not playtested" into the docs on the
+  assumption it wasn't. (Session 32 recorded exactly that, wrongly, and it had to be corrected across four
+  files; an untrue "unverified" banner would have sent a later session re-testing settled work.)
 - Give a **short summary of the request before doing significant work**, and ask if anything is unclear.
 - **DOCS ONLY ON REQUEST (standing, human-set, Session 11 — token discipline):** per code iteration do
   code → build → version bump → new zip, and NOTHING else. Do **not** update CHANGELOG/TODO/ARCHITECTURE/
