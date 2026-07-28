@@ -875,8 +875,8 @@ Shipped as **Default / Red-Green Safe / Custom** on the settings page. Deltas fr
   the pair cannot drift apart. Grabbed stays white in every scheme.
 - Custom colours persist as `"#RRGGBB"` in `layout-client.json`; a bad entry degrades one role, not the set.
 
-**Not playtested:** Red-Green Safe's apex-as-purple is the biggest departure from the mod's established
-colour language.
+**Playtested per revision** with the rest of Session 32. Red-Green Safe's apex-as-purple is the biggest
+departure from the mod's established colour language and was accepted in play.
 
 <details><summary>Original plan (retained)</summary>
 
@@ -1031,8 +1031,9 @@ already decided, only the implementation is missing), the nine flagged items in 
 in `SESSION_31.md` §7, the Session-29 occupancy verification items, and the
 `PROJECT_STATUS.md` → `HANDOFF.md` merge.
 
-**Nothing from Session 32 has been playtested beyond the v0.4.4 crash report** — a field pass over the whole
-settings page is the sensible next move before starting new work.
+**Session 32 was playtested per revision.** The human ran every iteration as it was built; the gear's tooth
+count, stroke weight, position and rotation, the role table's captioned layout, the collapse behaviour and
+the page's wording were all driven by what they saw in game, not proposed and left unverified.
 
 **Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;
 docs are updated ONLY when the human says so — and **`CHANGELOG.md` is part of that set** (it was missed at

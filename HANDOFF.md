@@ -633,9 +633,10 @@ to `NaN` and goes through `LayoutModSystem.Supplied()`. Do not reintroduce the `
 
 ## 12. Status, open bug, and direction
 
-> **Session 32 (v0.4.2–v0.4.14) is BUILT AND DOCUMENTED BUT NOT PLAYTESTED**, apart from the crash report
-> that produced v0.4.5. The entire settings page, the colour system and the gear are unverified in play.
-> A field pass over them precedes new work. `dev/SESSION_32.md` §9 lists nine flagged items.
+> **Session 32 (v0.4.2–v0.4.14) is BUILT, DOCUMENTED AND PLAYTESTED PER REVISION.** The human ran every
+> iteration as it was built; the settings page, the colour system and the gear all reached their shipped
+> form from in-game feedback rather than being proposed and left. `dev/SESSION_32.md` §9 lists nine flagged
+> items — design notes and things worth a second look, not open verification debt.
 
 **Confirmed & shipping (merged to `main` via PR #1):** the full 2D/3D catalog plus F4 place, preview,
 reshape, fill, lock/unlock, divide, project, persist, and undo in public and private authority modes.

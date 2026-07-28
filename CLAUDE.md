@@ -255,8 +255,8 @@ Mesh **Stage A** shipped and filled 3D volumes were retired. Normal public multi
    (Transform); F9/T2/F10/F11 shipped in Session 32 (the settings page, its formatting, the gear, and the
    colour schemes). The only queued item left is **T1** (CTRL surface-snap on free-move; its contact rule
    is decided, not built).
-   **Nothing in Session 32 has been playtested** beyond the crash that produced v0.4.5 — a field pass over
-   the settings page comes before new work.
+   **Session 32 was playtested per revision** — the human ran every iteration and drove the settings page,
+   the colour table and the gear to their shipped form from what they saw in game.
 6. If asked: **Roof / Tunnel** volumes; concave-safe Free-Shape fill; F3 re-constrain op. Remaining
    flagged decisions are cosmetic.
 

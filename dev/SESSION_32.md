@@ -12,6 +12,11 @@ scheme) are all delivered. What remains from the old queue is **T1** alone.
 The page went from five controls to a two-section panel with a master switch, a colour editor, a two-sided
 privacy slider and a publish action — driven entirely by human direction, one revision at a time.
 
+**Every revision was playtested as it shipped.** This was a tight build-and-look loop: the gear's tooth
+count, stroke weight, position and half-tooth rotation, the role table's captioned layout, the collapse
+behaviour and most of the page's wording all came from the human running the build and saying what was
+wrong. Nothing here is a proposal left unverified.
+
 ---
 
 ## 1. The arc, in order
@@ -268,8 +273,8 @@ with an explicit encoding on both ends.
 5. **A third policy string** — `Client-Only: Always Private` — covers the no-Layout-server case the human's
    two-string request did not.
 6. **Colouring the policy line green/red** was not requested; it matches the master switch.
-7. **Red-Green Safe's apex-as-purple** is the biggest departure from the mod's established colour language
-   and has not been playtested.
+7. **Red-Green Safe's apex-as-purple** is the biggest departure from the mod's established colour language.
+   Accepted in play, but worth a second look against varied stone.
 8. **Swatch coverage.** If none of the sixteen works against some material, adjust the set rather than
    widening it blindly — the legibility constraint is what ruled out a free picker.
 9. `occupancyRecolour` **keeps its British spelling permanently.** It is a JSON key; renaming it would
