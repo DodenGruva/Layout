@@ -4,6 +4,7 @@ using Cairo;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
+using Layout.Client;
 using Layout.Config;
 using Layout.Guide;
 using Layout.Network;
@@ -204,9 +205,8 @@ namespace Layout.UI
         // Sets the block-occupancy recolour and rebuilds (LayoutModSystem.ApplyOccupancyRecolour).
         private readonly System.Func<bool, bool> _applyOccupancy;
 
-        // Re-reads the world and rebuilds ONCE. The button used to toggle off then on, which rebuilt every
-        // guide twice and wrote the config twice — half of the refresh lag spike reported at v0.3.79.
-        private readonly Action _refreshOccupancy;
+        // NOTE: the "Re-read the world" button was removed in v0.4.3 (human-directed). The rebuild it
+        // triggered is still reachable through /layout occupancy refresh; only the button is gone.
 
         // Settings tab (v0.3.72): when true the panel shows client display settings instead of the tool
         // rows. Session-local like _shapeGridExpanded — the panel always opens on the tool.
@@ -216,14 +216,23 @@ namespace Layout.UI
         // mesh. True while a rebuild is already queued behind the debounce timer.
         private bool _opacityApplyPending;
 
+        // The personal rendering gate, mirrored here so composition can read it (v0.4.2). Pushed by the
+        // controller rather than read from _config: ApplyGuideRendering notifies the controller BEFORE it
+        // writes the config, so reading the config here would see the old value.
+        private bool _renderingOff;
+
         // Parks a nudged guide on its wireframe for a beat (GuideRenderer.HoldMoveMaterialization) so a
         // string of arrow clicks doesn't restart an immense shell rebuild between every one of them.
         private readonly Action<Guid> _holdMoveMaterialization;
 
+        // Turns this client's guide rendering on or off (LayoutModSystem.ApplyGuideRendering) — the same
+        // setter /layout on|off uses, so the switch and the command can never disagree.
+        private readonly Action<bool> _applyRendering;
+
         public GuideToolGui(ICoreClientAPI capi, DraftManager tool, ClientNetworkHandler net,
             LayoutClientConfig config, Action saveConfig, Action applyOpacities,
-            System.Func<bool, bool> applyOccupancy, Action refreshOccupancy,
-            Action<Guid> holdMoveMaterialization) : base(capi)
+            System.Func<bool, bool> applyOccupancy,
+            Action<Guid> holdMoveMaterialization, Action<bool> applyRendering) : base(capi)
         {
             _tool = tool;
             _net = net;
@@ -231,8 +240,8 @@ namespace Layout.UI
             _saveConfig = saveConfig;
             _applyOpacities = applyOpacities;
             _applyOccupancy = applyOccupancy;
-            _refreshOccupancy = refreshOccupancy;
             _holdMoveMaterialization = holdMoveMaterialization;
+            _applyRendering = applyRendering;
         }
 
         /// <summary>True if <paramref name="code"/> is one of the shape picker's catalog codes — the
@@ -250,6 +259,7 @@ namespace Layout.UI
             base.OnGuiOpened();
             _shapeGridExpanded = false;      // the panel always opens compact (Session-11 flag 11e)
             _settingsTab = false;            // ...and always on the tool, not the settings page
+            _customColorsExpanded = false;   // ...and the color table starts folded away
             Subscribe();
             SetupDialog();
         }
@@ -321,7 +331,12 @@ namespace Layout.UI
         // ---------------------------------------------------------------------------------
         private void SetupDialog()
         {
-            bool deleteMode = _tool.Mode == ToolMode.Delete;
+            // Guides hidden (v0.4.2): the tool genuinely does nothing, so every tool control composes
+            // exactly as Delete mode ghosts them — same ghost fonts, same dead tiles. Reusing deleteMode
+            // rather than threading a second flag through nine call sites is deliberate: every one of its
+            // uses is already "ghost this control", so one is never accidentally left live.
+            bool renderingOff = _renderingOff;
+            bool deleteMode = _tool.Mode == ToolMode.Delete || renderingOff;
             GuideData selected = ResolveSelectedGuide();
 
             CairoFont font = CairoFont.WhiteSmallText();
@@ -376,10 +391,14 @@ namespace Layout.UI
             // GearRightOffset was 60 in v0.3.73 and overlapped the fixed/movable icon (human screenshot).
             // The stock pair takes roughly the last 50 px, so the gear is pushed clear of it — measured
             // from the RIGHT edge, since that is what the stock icons are anchored to.
-            const double gearSize = 18;
-            const double gearRightOffset = 76;
+            // 18 -> 22 in v0.4.9, with the spoked gear glyph. Rendering the new icon at 18 px closed the
+            // spoke gaps and filled in the bore, so it read as a plain toothed disc; 22 is the smallest size
+            // at which the spokes and the hole survive, and the title bar (about 31 px tall) has the room.
+            const double gearSize = 22;
+            const double gearRightOffset = 84;   // nudged further from the stock icons in v0.4.10
             double gearX = contentW + 2 * GuiStyle.ElementToDialogPadding - gearRightOffset;
-            double gearY = (GuiStyle.TitleBarHeight - gearSize) / 2.0;
+            // +2: centred on the title bar sat a touch high against the stock icons (human-directed, v0.4.10).
+            double gearY = (GuiStyle.TitleBarHeight - gearSize) / 2.0 + 2;
             ElementBounds gearBounds = ElementBounds.Fixed(gearX, gearY, gearSize, gearSize);
             c.AddInteractiveElement(
                 new BareIconElement(capi, LayoutToolIcons.Gear, ToggleSettingsTab, gearBounds),
@@ -396,6 +415,18 @@ namespace Layout.UI
             if (_settingsTab)
             {
                 c.AddDynamicText("Settings", font, headerBounds, "header");
+            }
+            else if (renderingOff)
+            {
+                // Says what is true and where the way out is, because every other control on this page is
+                // dead and the gear is the only thing that still responds.
+                CairoFont offFont = CairoFont.WhiteSmallText();
+                offFont.Color = new double[] { 1, 0.85, 0.55, 1 };
+                c.AddDynamicText("Guides hidden", offFont, headerBounds, "header");
+                y += headerH;
+                c.AddStaticText("Turn them back on with the gear above.", CairoFont.WhiteDetailText(),
+                    ElementBounds.Fixed(0, y, contentW, 18));
+                y += 18 - headerH;
             }
             else if (_tool.Mode == ToolMode.Create)
             {
@@ -428,10 +459,12 @@ namespace Layout.UI
             bool settingsInert = deleteMode || editNoSel;           // setting rows disabled + ghosted
             CairoFont settingLabelFont = settingsInert ? ghostFont : font;
 
-            // ---- Mode row (always live — the way between modes) ----
+            // ---- Mode row (the way between modes — live unless guides are hidden, when there is no mode
+            // worth being in and the only useful control on the dialog is the settings gear) ----
             double modeRowY = y;
-            AddIconRow(c, font, ref y, labelW, pad, tile, tileGap, rowGap,
-                "Mode", ModeCodes, ModeNames, ModeIcons, (int)_tool.Mode, OnModeTile, "mode", inert: false);
+            AddIconRow(c, renderingOff ? ghostFont : font, ref y, labelW, pad, tile, tileGap, rowGap,
+                "Mode", ModeCodes, ModeNames, ModeIcons, (int)_tool.Mode, OnModeTile, "mode",
+                inert: renderingOff);
 
             // ---- Current-shape chip (0.1.15, human-requested) ----
             // A permanently-lit tile at the far right of the Mode row showing the picked shape IN YELLOW
@@ -956,38 +989,319 @@ namespace Layout.UI
         // restarting. Deliberately client-only: server settings (voxel caps, claims, moderation) stay on
         // their admin commands and must not appear in a player-facing panel.
         //
-        // Currently just guide opacity — added to answer a specific question, whether a fainter guide makes
-        // it easier to see material inside it while chiselling. The alternative under consideration is
-        // colouring filled voxels differently, which is a much larger change (see PLAN_BLOCK_OCCUPANCY).
+        // GROUPED IN TWO SECTIONS (v0.4.2). APPEARANCE is what guides look like; BEHAVIOUR is what the mod
+        // does. The split is not decoration — the page tripled in length this revision, and a flat stack of
+        // eight unrelated controls gave no clue that "Show built voxels" and "Private guides" are different
+        // kinds of thing. Every row is now label-left / control-right on ONE line (the old two-line
+        // label-above-control form was what made the page tall), and every row carries hover text.
+        //
+        // The prose that used to sit under each control was removed in v0.3.87 for overflowing the dialog;
+        // hover text was the agreed replacement (TODO T2) and is what the rows now carry.
         private void BuildSettingsSection(
             GuiComposer c, CairoFont font, ref double y, double contentW, double rowGap)
         {
-            // Explanatory paragraphs removed in v0.3.87 — they overflowed the dialog bounds. The labels and
-            // controls carry the meaning for now; the prose is a candidate for hover text later.
+            // ==================== Master switch (above every section) ====================
+            // The mod's own on/off sits ABOVE the section headers because it is not one setting among
+            // others — it gates all of them. Its label states the CURRENT state in the state's own colour,
+            // so the row reads as a status light you can also press.
+            bool layoutOn = !_renderingOff;
+            CairoFont masterFont = CairoFont.WhiteSmallText();
+            masterFont.Color = layoutOn
+                ? new double[] { 0.35, 0.90, 0.40, 1 }      // green — guides are drawing
+                : new double[] { 0.95, 0.35, 0.30, 1 };     // red — guides are hidden
+            AddSettingSwitch(c, masterFont, ref y, contentW, rowGap,
+                layoutOn ? "Layout: On" : "Layout: Off", "showguides", OnShowGuidesToggled,
+                "Turns Layout on or off for you. Off hides every guide and disables the Chalking Kit "
+                + "without deleting anything — the same as /layout off. Other players are unaffected.");
+
+            // ==================== Appearance ====================
+            AddSettingsHeader(c, ref y, contentW, "Appearance");
+
+            // The one control that is not a switch. The slider is shortened to leave its Reset beside it —
+            // a reset belongs next to the thing it resets, not stranded in a button row at the foot of a
+            // page that also holds four settings it does not touch.
+            const double resetW = 76;
+            double sliderW = contentW - resetW - 8;
+
             c.AddStaticText("Guide opacity", font, ElementBounds.Fixed(0, y, contentW, 20));
+            c.AddAutoSizeHoverText(
+                "How solid guides look. Fainter guides make it easier to see the material inside them "
+                + "while you chisel; solid guides are easier to read at a distance.",
+                CairoFont.WhiteDetailText(), 260, ElementBounds.Fixed(0, y, contentW, 20), "ht:opacity");
             y += 20 + 2;
 
-            c.AddSlider(OnOpacityBodySlider, ElementBounds.Fixed(0, y, contentW, 22), "opacitybody");
+            c.AddSlider(OnOpacityBodySlider, ElementBounds.Fixed(0, y, sliderW, 22), "opacitybody");
+            c.AddSmallButton("Reset", OnResetOpacity,
+                ElementBounds.Fixed(contentW - resetW, y, resetW, 22));
             y += 22 + rowGap;
+
+            // ---- Color scheme (F11, v0.4.8) ----
+            // A short list of PRESETS plus Custom, not a color control per role. The presets answer the
+            // accessibility problem — locked and apex points are red and green, the pair deuteranopia and
+            // protanopia collapse — and color-blind-safe palettes are a solved design problem. Custom answers
+            // the other, equally real reason: yellow disappears against sandstone.
+            bool custom = GuidePalette.Normalize(_config.ColorScheme) == GuidePaletteScheme.Custom;
+
+            // The dropdown sits left of the far edge to leave the collapse chevron the right-hand slot every
+            // other control on this page uses (human-directed, v0.4.14).
+            const double schemeW = 150, collapseW = 24, collapseGap = 6;
+            double schemeX = contentW - schemeW - collapseW - collapseGap;
+
+            c.AddStaticText("Colors", font, ElementBounds.Fixed(0, y + 4, schemeX - 8, 20));
+            c.AddDropDown(
+                ColorSchemeCodes, GuidePalette.SchemeNames,
+                Math.Max(0, Array.IndexOf(ColorSchemeCodes, _config.ColorScheme.ToString())),
+                OnColorSchemeSelected, ElementBounds.Fixed(schemeX, y, schemeW, 24), "colorscheme");
+            c.AddAutoSizeHoverText(
+                "Which colors guides are drawn in. Red-Green Safe separates locked points from apex points "
+                + "for red-green color blindness, which the default palette cannot tell apart. Custom lets "
+                + "you set each role yourself. Changing this redraws every guide.",
+                CairoFont.WhiteDetailText(), 260,
+                ElementBounds.Fixed(0, y, schemeX + schemeW, 24), "ht:colorscheme");
+
+            // The chevron only exists when there is something to collapse.
+            if (custom)
+            {
+                ElementBounds chevron = ElementBounds.Fixed(contentW - collapseW, y + 3, 18, 18);
+                c.AddInteractiveElement(
+                    new BareIconElement(capi,
+                        _customColorsExpanded ? LayoutToolIcons.ExpandUp : LayoutToolIcons.ExpandDown,
+                        OnToggleCustomColors, chevron),
+                    "colorexpand");
+                c.AddAutoSizeHoverText(
+                    _customColorsExpanded ? "Hide the color table" : "Show the color table",
+                    CairoFont.WhiteDetailText(), 200, chevron.FlatCopy(), "ht:colorexpand");
+            }
+            y += 24 + rowGap;
+
+            if (custom && _customColorsExpanded)
+                BuildCustomColorPicker(c, font, ref y, contentW, rowGap);
 
             // ---- Built-voxel colouring (v0.3.79) ----
-            c.AddStaticText("Show built voxels", font, ElementBounds.Fixed(0, y, contentW, 20));
-            y += 20 + 2;
+            AddSettingSwitch(c, font, ref y, contentW, rowGap,
+                "Chiseling Highlight", "occupancy", OnOccupancyToggled,
+                "Draws the parts of a guide that already hold material in a different color, so you can "
+                + "see how much of the plan is built. Updates as you chisel. Local to you.");
 
-            c.AddSwitch(OnOccupancyToggled, ElementBounds.Fixed(0, y, 30, 22), "occupancy", 22);
+            // ==================== Behaviour ====================
+            AddSettingsHeader(c, ref y, contentW, "Behaviour");
+
+            // Public/Private is a CHOICE BETWEEN TWO NAMED THINGS, not something you switch on, so it gets
+            // a two-sided slider rather than a switch: both options are always named, and the slider covers
+            // whichever one is not in effect. Colours come straight from the guide anchors the two modes
+            // actually draw — blue for public, orange for private — so the control teaches the world's
+            // colour language rather than inventing a second one.
+            const double toggleW = 150, toggleH = 24;
+
+            // The server's policy goes directly ABOVE the control it governs — right-aligned, so it sits over
+            // the toggle rather than off on the label side. Its bounds still span the full width (the text is
+            // drawn right-aligned inside them), which keeps the longest wording from ever clipping.
+            // Green/red matches the master switch at the top of the page.
+            c.AddInteractiveElement(
+                new AlertTextElement(capi, ElementBounds.Fixed(0, y, contentW, 18),
+                    DescribeServerPrivacyPolicy(), CairoFont.WhiteDetailText(), ServerPolicyColor()),
+                "serverprivacy");
+            y += 18 + 2;
+
+            ElementBounds toggleBounds = ElementBounds.Fixed(contentW - toggleW, y, toggleW, toggleH);
+            c.AddStaticText("New guides", font, ElementBounds.Fixed(0, y + 4, contentW - toggleW - 8, 20));
+            c.AddInteractiveElement(
+                new SlidingChoiceElement(
+                    capi, toggleBounds,
+                    "Public", PublicTint, "Private", PrivateTint,
+                    _config.ForceClientOnly, OnGuidePrivacyChoice),
+                "clientonly");
+            c.AddAutoSizeHoverText(
+                "Where new guides go. Public guides are stored on the server and everyone can see them; "
+                + "private guides are stored on your own machine and only you can see them. A server that "
+                + "denies private guides will bounce the slider back to Public.",
+                CairoFont.WhiteDetailText(), 260,
+                ElementBounds.Fixed(0, y, contentW, toggleH), "ht:clientonly");
+            y += toggleH + 4;
+
+            // Just "Publish" (human-directed): the hover text carries the explanation, and a button label is
+            // not the place to spell out a three-step operation.
+            const double publishW = 90;
+            ElementBounds publishBounds = ElementBounds.Fixed(contentW - publishW, y, publishW, 22);
+            c.AddSmallButton("Publish", OnPublishPrivateGuides, publishBounds);
+            c.AddAutoSizeHoverText(
+                "Publishes every private guide you are holding to the server, where everyone can see them. "
+                + "Publishing requires being public, so this switches you to Public first — the slider "
+                + "above moves with it. Your private copies are removed as the server accepts them.",
+                CairoFont.WhiteDetailText(), 260, publishBounds.FlatCopy(), "ht:publish");
             y += 22 + rowGap;
 
-            c.AddSmallButton("Re-read the world", OnOccupancyRefresh, ElementBounds.Fixed(0, y, 140, 22));
-            y += 22 + rowGap;
+            AddSettingSwitch(c, font, ref y, contentW, rowGap,
+                "Refill from hotbar", "refillhotbar", OnHotbarRefillToggled,
+                "Lets you refill a Chalking Kit by right-clicking with Chalking Powder in hand. Off by "
+                + "default so the powder is not spent by accident. Setting a kit on the ground and "
+                + "Shift+right-clicking it always works regardless of this.");
 
-            c.AddSmallButton("Reset to default", OnResetOpacity, ElementBounds.Fixed(0, y, 130, 22));
-            // Belt and braces: the gear is the intended way back, but it lives inside the stock title bar
-            // and shares that space with the bar's own drag handling. This button guarantees a way out even
-            // if the gear's hit area turns out to be contested there.
-            c.AddSmallButton("< Back to tool", OnBackToTool,
-                ElementBounds.Fixed(contentW - 110, y, 110, 22));
+            AddSettingSwitch(c, font, ref y, contentW, rowGap,
+                "Refill in inventory", "refillinv", OnInventoryRefillToggled,
+                "Lets you refill a Chalking Kit by dropping a held stack of Chalking Powder onto its "
+                + "inventory slot. Off by default. The ground refill always works regardless of this.");
+        }
+
+        // The two guide-anchor hues, tinted for use as a background behind white text. The RGB is the
+        // anchor palette from GuideMeshBuilder verbatim (blue 0.20/0.50/1.00 public, orange 1.00/0.45/0.05
+        // private); only the alpha is ours. At full strength both fight the white label and read as alert
+        // colours rather than as a setting, so they sit at just under half.
+        // Dropdown values are the pinned GuidePaletteScheme numbers as strings, so the control's selection
+        // and the config key are the same thing and cannot drift. Taken from SchemeValues rather than
+        // written out here, because 2 is a retired number and the sequence has a hole in it.
+        private static readonly string[] ColorSchemeCodes =
+            Array.ConvertAll(GuidePalette.SchemeValues, v => v.ToString());
+
+        private static readonly double[] PublicTint  = { 0.20, 0.50, 1.00, 0.45 };
+        private static readonly double[] PrivateTint = { 1.00, 0.45, 0.05, 0.45 };
+
+        /// <summary>
+        /// The Custom scheme's editor (v0.4.12, tabulated v0.4.13): a captioned table of role chips, then a
+        /// grid of swatches. Pick the role you want to change, then the colour to give it.
+        /// </summary>
+        /// <remarks>
+        /// ONE GRID SHARED BY EVERY ROLE, rather than a colour control per role. Seven rows each carrying
+        /// their own picker would have added roughly 170 px to a page that is already long, and would have
+        /// made comparing two roles' colours impossible — they would never be on screen beside each other at
+        /// the same size. The role table IS the comparison: seven samples together, which is exactly the view
+        /// you need when deciding whether locked and apex are far enough apart.
+        ///
+        /// TWO GRIDS OF COLOURED SQUARES ON ONE PAGE need telling apart, which is why the roles are captioned
+        /// and the swatches carry a heading naming the role they will apply to. Without that, the only
+        /// difference between "choose what to change" and "choose what to change it to" was position.
+        /// </remarks>
+        private void BuildCustomColorPicker(
+            GuiComposer c, CairoFont font, ref double y, double contentW, double rowGap)
+        {
+            float[][] roles = CurrentCustomRoles();
+            const double cell = 22, gap = 4;
+
+            // ---- role table: four columns, two rows, each chip captioned ----
+            // A bare line of seven colour squares was unreadable — nothing on screen said which square was
+            // which, so choosing a colour meant hovering each one in turn to find the role you wanted. The
+            // caption under every chip is the fix (human-directed). Four columns puts the four roles you
+            // touch most on the first row and leaves the labels room not to collide.
+            const int roleCols = 4;
+            const double labelH = 14, rolePitch = cell + 2 + labelH + 6;
+            double colW = contentW / roleCols;
+            CairoFont capFont = Centered(CairoFont.WhiteDetailText());
+            CairoFont capSelFont = Centered(CairoFont.WhiteDetailText());
+            capSelFont.Color = new double[] { 1, 0.85, 0.55, 1 };   // the selected role, in the page accent
+
+            for (int i = 0; i < GuidePalette.RoleCount; i++)
+            {
+                int role = i;
+                double colX = (i % roleCols) * colW;
+                double rowY = y + (i / roleCols) * rolePitch;
+
+                ElementBounds chip = ElementBounds.Fixed(colX + (colW - cell) / 2, rowY, cell, cell);
+                c.AddInteractiveElement(
+                    new ColorCellElement(capi, chip, roles[i], _customRole == i,
+                        () => OnCustomRolePicked(role)),
+                    "role" + i);
+                c.AddStaticText(GuidePalette.RoleShortNames[i], _customRole == i ? capSelFont : capFont,
+                    ElementBounds.Fixed(colX, rowY + cell + 2, colW, labelH));
+                // Hover covers the whole cell, caption included, so the full role name is reachable from
+                // whichever half of it the cursor happens to be over.
+                c.AddAutoSizeHoverText(GuidePalette.RoleNames[i], CairoFont.WhiteDetailText(), 220,
+                    ElementBounds.Fixed(colX, rowY, colW, cell + 2 + labelH), "ht:role" + i);
+            }
+            y += 2 * rolePitch + rowGap;
+
+            // ---- swatch grid: eight across, two down ----
+            // Left-aligned, unlike the captions: this is a heading for the grid, not a cell label.
+            CairoFont swatchHeadFont = CairoFont.WhiteDetailText();
+            swatchHeadFont.Color = new double[] { 1, 0.85, 0.55, 1 };
+            c.AddStaticText("Color for " + GuidePalette.RoleShortNames[_customRole], swatchHeadFont,
+                ElementBounds.Fixed(0, y, contentW, labelH));
+            y += labelH + 3;
+
+            const int perRow = 8;
+            for (int i = 0; i < GuidePalette.Swatches.Length; i++)
+            {
+                int swatch = i;
+                double sx = (i % perRow) * (cell + gap);
+                double sy = y + (i / perRow) * (cell + gap);
+                c.AddInteractiveElement(
+                    new ColorCellElement(capi, ElementBounds.Fixed(sx, sy, cell, cell),
+                        GuidePalette.Swatches[i], false, () => OnCustomSwatchPicked(swatch)),
+                    "swatch" + i);
+            }
+            y += 2 * cell + gap + rowGap;
+
+            c.AddSmallButton("Reset colors", OnResetCustomColors,
+                ElementBounds.Fixed(0, y, 120, 22));
+            c.AddAutoSizeHoverText(
+                "Puts every role back to the Default palette's color.",
+                CairoFont.WhiteDetailText(), 240, ElementBounds.Fixed(0, y, 120, 22), "ht:resetcolors");
             y += 22 + rowGap;
         }
+
+        // The custom roles as they stand, seeded from Default for anything never chosen. Reading through
+        // the palette rather than the raw config keeps the chips showing exactly what the guides show.
+        private float[][] CurrentCustomRoles()
+        {
+            float[][] stored = GuidePalette.ParseRoleColors(_config.CustomColors);
+            float[][] seed = GuidePalette.RoleColorsOf(GuidePaletteScheme.Default);
+            var roles = new float[GuidePalette.RoleCount][];
+            for (int i = 0; i < GuidePalette.RoleCount; i++)
+                roles[i] = stored != null && stored[i] != null ? stored[i] : seed[i];
+            return roles;
+        }
+
+        // A section heading: warm-tinted text over a full-width divider line, with breathing room above it.
+        private void AddSettingsHeader(GuiComposer c, ref double y, double contentW, string title)
+        {
+            y += 8;
+
+            CairoFont headerFont = CairoFont.WhiteSmallText();
+            headerFont.Color = new double[] { 1, 0.85, 0.55, 1 };   // the dialogs' warm accent
+            c.AddStaticText(title, headerFont, ElementBounds.Fixed(0, y, contentW, 20));
+            y += 20;
+
+            // A 1 px inset reads as a rule at this size and costs no new element type.
+            c.AddInset(ElementBounds.Fixed(0, y, contentW, 1), 1, 0.4f);
+            y += 1 + 6;
+        }
+
+        // One settings row: label on the left, switch hard right, hover text over the WHOLE row so the
+        // explanation is reachable from the label as well as the control. Post-compose value push lives in
+        // ApplySettingsWidgetValues — nothing here sets a switch's state.
+        private void AddSettingSwitch(
+            GuiComposer c, CairoFont font, ref double y, double contentW, double rowGap,
+            string label, string key, Action<bool> onToggled, string hoverText)
+        {
+            const double switchSize = 22;
+
+            ElementBounds rowBounds = ElementBounds.Fixed(0, y, contentW, switchSize);
+            c.AddStaticText(label, font,
+                ElementBounds.Fixed(0, y + 3, contentW - switchSize - 8, 20));
+            c.AddSwitch(onToggled,
+                ElementBounds.Fixed(contentW - switchSize, y, switchSize, switchSize), key, switchSize);
+            c.AddAutoSizeHoverText(hoverText, CairoFont.WhiteDetailText(), 260, rowBounds, "ht:" + key);
+
+            y += switchSize + rowGap;
+        }
+
+        // The server's POLICY on private guides — not what the player currently prefers. ServerLayoutAvailable
+        // is checked first because the no-server fallback also reports client-only as "allowed", and calling
+        // that "Private Allowed" would imply a server had granted something when there is no server at all.
+        private string DescribeServerPrivacyPolicy()
+        {
+            // No Layout server: nothing has been "allowed" because nothing was asked. The player is in the
+            // client-only fallback, where private is not a preference but the only thing on offer.
+            if (!_net.ServerLayoutAvailable) return "Client-Only: Always Private";
+            return _net.ServerAllowsClientOnlyMode
+                ? "Server: Private Allowed"
+                : "Server: Private Denied";
+        }
+
+        // Red for the one case that takes an option away; green for both cases that leave the player free.
+        private double[] ServerPolicyColor() =>
+            _net.ServerLayoutAvailable && !_net.ServerAllowsClientOnlyMode
+                ? new double[] { 0.95, 0.35, 0.30, 1 }
+                : new double[] { 0.35, 0.90, 0.40, 1 };
 
         // Post-compose value push for the settings widgets, mirroring what LightInitialTiles does for the
         // tool rows. Runs under _suppress because SetValue fires the change handler on some builds.
@@ -1000,7 +1314,12 @@ namespace Layout.UI
                 // Floor of 5%: a guide at 0 is invisible, which reads as a bug rather than a setting.
                 SingleComposer.GetSlider("opacitybody")?.SetValues(
                     OpacityPercent(_config.OpacityBody), 5, 100, 1, "%");
+                SingleComposer.GetSwitch("showguides")?.SetValue(_config.GuideRenderingEnabled);
                 SingleComposer.GetSwitch("occupancy")?.SetValue(_config.OccupancyRecolour);
+                // "clientonly" is deliberately absent: SlidingChoiceElement takes its state through its
+                // constructor and then owns it, so pushing a value here would fight its animation.
+                SingleComposer.GetSwitch("refillhotbar")?.SetValue(_config.AllowHotbarChalkRefill);
+                SingleComposer.GetSwitch("refillinv")?.SetValue(_config.AllowInventoryChalkRefill);
             }
             catch (Exception e) { capi.Logger.Warning("[Layout] settings widgets: {0}", e.Message); }
             finally { _suppress = false; }
@@ -1009,18 +1328,25 @@ namespace Layout.UI
         private static int OpacityPercent(float alpha) =>
             Math.Min(100, Math.Max(5, (int)Math.Round(alpha * 100f)));
 
+        /// <summary>
+        /// The personal rendering gate changed. Before v0.4.2 the controller CLOSED this dialog when guides
+        /// were hidden; now the dialog stays open with its tool page composed inert, because the switch that
+        /// turns guides back on lives on its settings page — closing it made that switch a one-way trip.
+        /// </summary>
+        public void SetRenderingEnabled(bool enabled)
+        {
+            if (_renderingOff == !enabled) return;
+            _renderingOff = !enabled;
+            if (IsOpened()) DeferRecompose();
+        }
+
         // The title-bar gear: a plain switch between the tool page and the settings page.
         private void ToggleSettingsTab()
         {
             _settingsTab = !_settingsTab;
+            // Every arrival at the settings page starts with the color table folded, not just the first.
+            if (_settingsTab) _customColorsExpanded = false;
             DeferRecompose();      // never recompose from inside a composer callback
-        }
-
-        private bool OnBackToTool()
-        {
-            _settingsTab = false;
-            DeferRecompose();
-            return true;
         }
 
         private bool OnOpacityBodySlider(int value)
@@ -1028,6 +1354,77 @@ namespace Layout.UI
             if (_suppress) return true;
             _config.OpacityBody = value / 100f;
             QueueOpacityApply();
+            return true;
+        }
+
+        // Colours are baked into vertex data exactly as opacity is, so a scheme change rebuilds every guide.
+        // It reuses the opacity debounce for that rebuild — one deliberate pick cannot thrash it the way a
+        // slider drag can, but there is no reason to have two paths doing the same job.
+        private void OnColorSchemeSelected(string code, bool selected)
+        {
+            if (_suppress || !selected) return;
+            if (!int.TryParse(code, out int scheme)) return;
+
+            GuidePaletteScheme picked = GuidePalette.Normalize(scheme);
+            GuidePaletteScheme previous = GuidePalette.Normalize(_config.ColorScheme);
+
+            // SWITCHING TO CUSTOM SEEDS IT from whatever preset was showing, and only the first time. The
+            // player is looking at a palette when they reach for Custom; landing on that same palette ready
+            // to adjust is what they expect, and it means "Custom" never opens on a blank slate. Seeding
+            // again on a later revisit would silently throw away colours they had already chosen.
+            if (picked == GuidePaletteScheme.Custom && previous != GuidePaletteScheme.Custom
+                && _config.CustomColors == null)
+            {
+                _config.CustomColors = GuidePalette.FormatRoleColors(GuidePalette.RoleColorsOf(previous));
+            }
+
+            // Choosing Custom opens the table: it is the one moment the player has actively asked to look at
+            // their colors. Choosing anything else shuts it, so switching away does not leave a table behind
+            // for a scheme that no longer uses it.
+            _customColorsExpanded = picked == GuidePaletteScheme.Custom;
+
+            _config.ColorScheme = (int)picked;
+            QueueOpacityApply();
+            DeferRecompose();      // the picker appears or disappears with the scheme
+        }
+
+        // Which role the swatch grid is currently assigning to. Session state, not config — it is a cursor
+        // in the editor, not a setting, and it always opens on the guide body.
+        private int _customRole = GuidePalette.RoleBody;
+
+        // Whether the Custom color table is showing. Deliberately NOT persisted and deliberately reset every
+        // time the settings page is opened (human-directed, v0.4.14): the table is a third of the page's
+        // height, and someone who set their colors weeks ago should not have to scroll past it to reach the
+        // settings they actually came for. It opens once, at the moment Custom is chosen, because that is
+        // the one time the player definitely wants to see it.
+        private bool _customColorsExpanded;
+
+        private void OnToggleCustomColors()
+        {
+            _customColorsExpanded = !_customColorsExpanded;
+            DeferRecompose();
+        }
+
+        private void OnCustomRolePicked(int role)
+        {
+            _customRole = role;
+            DeferRecompose();      // moves the selection ring
+        }
+
+        private void OnCustomSwatchPicked(int swatch)
+        {
+            float[][] roles = CurrentCustomRoles();
+            roles[_customRole] = GuidePalette.Swatches[swatch];
+            _config.CustomColors = GuidePalette.FormatRoleColors(roles);
+            QueueOpacityApply();   // rebuilds every guide, debounced like the opacity slider
+            DeferRecompose();      // repaints the role chip in its new colour
+        }
+
+        private bool OnResetCustomColors()
+        {
+            _config.CustomColors = null;   // null means "unset", which Build fills from Default per role
+            QueueOpacityApply();
+            DeferRecompose();
             return true;
         }
 
@@ -1039,11 +1436,105 @@ namespace Layout.UI
             _applyOccupancy?.Invoke(on);
         }
 
-        private bool OnOccupancyRefresh()
+        // The master visibility switch — the same setter as /layout on|off, which persists it itself.
+        private void OnShowGuidesToggled(bool on)
         {
-            if (!_config.OccupancyRecolour) return true;   // nothing to re-read while it is off
-            _refreshOccupancy?.Invoke();
+            if (_suppress) return;
+            _applyRendering?.Invoke(on);
+        }
+
+        // Public/Private. The network handler saves the preference (through the ModSystem's
+        // preference-changed hook) and asks the server to switch, so nothing is written here.
+        //
+        // NOTE THE ABSENT RECOMPOSE. Rebuilding the dialog would rebuild the slider at its new resting
+        // position and the slide would never be seen. The one thing that has to change on screen — the
+        // "In force:" line — is dynamic text, updated in place instead. The server's answer is a round trip
+        // away, so RefreshGuidePrivacyState is also called from AuthorityModeChanged when it lands.
+        private void OnGuidePrivacyChoice(bool wantPrivate)
+        {
+            if (_suppress) return;
+
+            // SERVER DENIES PRIVATE: let the slider travel to Private anyway, then send it back
+            // (human-directed). A control that refuses to move looks broken, and the player never gets to
+            // see that "Private" is the thing behind it. Moving and returning says both "this is the option"
+            // and "you cannot have it here" in one gesture. The preference is deliberately NOT touched — a
+            // bounce is a demonstration, not a setting.
+            if (wantPrivate && _net.ServerLayoutAvailable && !_net.ServerAllowsClientOnlyMode)
+            {
+                capi.Event.RegisterCallback(_ =>
+                {
+                    SetPrivacyToggle(false);
+                    // The policy line shakes and flashes AS the slider starts back, so the eye is pulled to
+                    // the reason at the moment the refusal happens rather than having to go looking for it.
+                    AlertServerPolicy();
+                }, PrivacyBounceMs);
+                return;
+            }
+
+            _net.SetClientOnlyPreference(wantPrivate);
+        }
+
+        // Long enough for the slide to finish and land (it eases in roughly 200 ms) before it starts back,
+        // so the eye reads two deliberate movements rather than one twitch.
+        private const int PrivacyBounceMs = 500;
+
+        // Drives the slider from code, animating exactly as a click does. Used by the bounce-back and by the
+        // publish button, which switches the player to Public as a side effect.
+        private void SetPrivacyToggle(bool wantPrivate)
+        {
+            if (!IsOpened() || !_settingsTab || SingleComposer == null) return;
+            try
+            {
+                if (SingleComposer.GetElement("clientonly") is SlidingChoiceElement toggle)
+                    toggle.SetChoice(wantPrivate);
+            }
+            catch (Exception e) { capi.Logger.Warning("[Layout] privacy toggle: {0}", e.Message); }
+        }
+
+        // Both guard on IsOpened(): these are reached from a network event and a timer, either of which can
+        // land after the dialog closed and its elements' textures were disposed. Rebuilding a texture on a
+        // disposed element is exactly the class of mistake that crashed v0.4.4.
+        private void RefreshServerPrivacyPolicy()
+        {
+            if (!IsOpened() || SingleComposer == null) return;
+            if (SingleComposer.GetElement("serverprivacy") is AlertTextElement line)
+                line.SetText(DescribeServerPrivacyPolicy(), ServerPolicyColor());
+        }
+
+        private void AlertServerPolicy()
+        {
+            if (!IsOpened() || SingleComposer == null) return;
+            if (SingleComposer.GetElement("serverprivacy") is AlertTextElement line) line.Alert();
+        }
+
+        // "Publish Private Guides": the settings-page equivalent of /layout client push all, minus the
+        // requirement to have run /layout public first. The network handler owns the ordering (go public,
+        // wait for the server to confirm, then upload); all this does is move the slider to match, since the
+        // player's mode really is changing and the control must not be left telling them otherwise.
+        private bool OnPublishPrivateGuides()
+        {
+            _net.PublishPrivateGuides();
+            // AFTER, not before: a publish that cannot proceed (no Layout server, nothing private to send)
+            // leaves the preference alone, and moving the slider first would have shown a switch to Public
+            // that never happened — visible until the next recompose snapped it back.
+            SetPrivacyToggle(_config.ForceClientOnly);
             return true;
+        }
+
+        // The two chalk-refill shortcuts are read live at the moment of a refill attempt
+        // (LayoutModSystem.HotbarChalkRefillAllowed), so writing the config IS the whole change.
+        private void OnHotbarRefillToggled(bool on)
+        {
+            if (_suppress) return;
+            _config.AllowHotbarChalkRefill = on;
+            _saveConfig?.Invoke();
+        }
+
+        private void OnInventoryRefillToggled(bool on)
+        {
+            if (_suppress) return;
+            _config.AllowInventoryChalkRefill = on;
+            _saveConfig?.Invoke();
         }
 
         private bool OnResetOpacity()
@@ -1304,6 +1795,360 @@ namespace Layout.UI
                 icons[_icon](ctx, (int)Bounds.drawX, (int)Bounds.drawY,
                     (float)Bounds.InnerWidth, (float)Bounds.InnerHeight,
                     new double[] { 1, 1, 1, 0.85 });
+            }
+
+            public override void OnMouseDownOnElement(ICoreClientAPI api, MouseEvent args)
+            {
+                if (args.Button != EnumMouseButton.Left) { base.OnMouseDownOnElement(api, args); return; }
+                args.Handled = true;
+            }
+
+            public override void OnMouseUpOnElement(ICoreClientAPI api, MouseEvent args)
+            {
+                if (args.Button != EnumMouseButton.Left) { base.OnMouseUpOnElement(api, args); return; }
+                _onClick?.Invoke();
+                args.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// A two-sided sliding choice (v0.4.3). Both options are always named and always coloured; an opaque
+        /// slider covers the one NOT in effect, so the visible half is the answer and the covered half is the
+        /// alternative you would get by clicking it.
+        /// </summary>
+        /// <remarks>
+        /// Why not a switch. A switch says on/off, and neither "public" nor "private" is the off state of the
+        /// other — a player reading an unlabelled switch cannot tell which way is which. This names both
+        /// permanently.
+        ///
+        /// The track is drawn once into the composed surface; only the slider is drawn per frame, from its
+        /// own small texture, at an interpolated x. That is what makes the movement free: no recompose and no
+        /// Cairo work per frame. It also means the OWNER MUST NOT RECOMPOSE THE DIALOG ON CLICK — a recompose
+        /// rebuilds this element at its new resting position and the slide never happens.
+        /// </remarks>
+        private sealed class SlidingChoiceElement : GuiElement
+        {
+            private readonly ICoreClientAPI _capi;
+            private readonly string _leftText, _rightText;
+            private readonly double[] _leftColor, _rightColor;
+            private readonly Action<bool> _onChanged;
+
+            private LoadedTexture _sliderTex;
+            private bool _rightChosen;
+            private float _anim;                    // 0 = slider over the LEFT half, 1 = over the RIGHT
+
+            private const double Radius = 4;
+
+            public SlidingChoiceElement(
+                ICoreClientAPI capi, ElementBounds bounds,
+                string leftText, double[] leftColor, string rightText, double[] rightColor,
+                bool rightChosen, Action<bool> onChanged) : base(capi, bounds)
+            {
+                _capi = capi;
+                _leftText = leftText;
+                _rightText = rightText;
+                _leftColor = leftColor;
+                _rightColor = rightColor;
+                _rightChosen = rightChosen;
+                _onChanged = onChanged;
+                _anim = Target;                     // opens at rest; only a click animates
+            }
+
+            // The slider covers the option NOT chosen: choose the right one and it parks over the left.
+            private float Target => _rightChosen ? 0f : 1f;
+
+            public override void ComposeElements(Context ctx, ImageSurface surface)
+            {
+                Bounds.CalcWorldBounds();
+                double x = Bounds.drawX, yy = Bounds.drawY;
+                double w = Bounds.InnerWidth, h = Bounds.InnerHeight, half = w / 2;
+
+                // Track: the two tinted halves, clipped to one rounded outline so the seam between them is
+                // straight but the outer corners are not.
+                ctx.Save();
+                RoundRect(ctx, x, yy, w, h, Radius);
+                ctx.Clip();
+
+                ctx.SetSourceRGBA(_leftColor[0], _leftColor[1], _leftColor[2], _leftColor[3]);
+                ctx.Rectangle(x, yy, half, h);
+                ctx.Fill();
+                ctx.SetSourceRGBA(_rightColor[0], _rightColor[1], _rightColor[2], _rightColor[3]);
+                ctx.Rectangle(x + half, yy, half, h);
+                ctx.Fill();
+                ctx.Restore();
+
+                CenteredText(ctx, _leftText, x, yy, half, h);
+                CenteredText(ctx, _rightText, x + half, yy, half, h);
+
+                // Outline last so it sits over both fills.
+                ctx.SetSourceRGBA(1, 1, 1, 0.35);
+                ctx.LineWidth = 1;
+                RoundRect(ctx, x + 0.5, yy + 0.5, w - 1, h - 1, Radius);
+                ctx.Stroke();
+
+                BuildSliderTexture(half, h);
+            }
+
+            // The slider: a flat dark cover, deliberately opaque enough to hide the tint underneath it
+            // completely — a half-visible "Private" behind the slider would read as the active choice.
+            private void BuildSliderTexture(double w, double h)
+            {
+                int pw = (int)Math.Round(w), ph = (int)Math.Round(h);
+                if (pw <= 0 || ph <= 0) return;
+
+                var surf = new ImageSurface(Format.Argb32, pw, ph);
+                var sctx = new Context(surf);
+
+                RoundRect(sctx, 0.5, 0.5, pw - 1, ph - 1, Radius);
+                sctx.SetSourceRGBA(0.14, 0.13, 0.12, 0.97);
+                sctx.FillPreserve();
+                sctx.SetSourceRGBA(1, 1, 1, 0.30);
+                sctx.LineWidth = 1;
+                sctx.Stroke();
+
+                // Three grip lines — the conventional "this part moves" cue, and the only thing that
+                // distinguishes the slider from a plain dark panel once it is at rest.
+                sctx.SetSourceRGBA(1, 1, 1, 0.28);
+                double cx = pw / 2.0, gh = ph * 0.34;
+                for (int i = -1; i <= 1; i++)
+                {
+                    sctx.Rectangle(cx + i * 4 - 0.5, (ph - gh) / 2, 1, gh);
+                    sctx.Fill();
+                }
+
+                // The ref parameter must already point at a LoadedTexture: the platform layer writes into
+                // the instance rather than creating one, so handing it a null reference throws inside the
+                // engine (NRE in ClientPlatformWindows.LoadOrUpdateCairoTexture, v0.4.4 crash).
+                if (_sliderTex == null) _sliderTex = new LoadedTexture(_capi);
+                _capi.Gui.LoadOrUpdateCairoTexture(surf, true, ref _sliderTex);
+                sctx.Dispose();
+                surf.Dispose();
+            }
+
+            public override void RenderInteractiveElements(float deltaTime)
+            {
+                if (_sliderTex == null || _sliderTex.TextureId == 0) return;
+
+                // Exponential ease toward the target: framerate-independent, no tween bookkeeping, and it
+                // settles in about a fifth of a second at any framerate.
+                float step = Math.Min(1f, deltaTime * 14f);
+                _anim += (Target - _anim) * step;
+                if (Math.Abs(Target - _anim) < 0.001f) _anim = Target;
+
+                double half = Bounds.InnerWidth / 2;
+                _capi.Render.Render2DTexturePremultipliedAlpha(
+                    _sliderTex.TextureId,
+                    Bounds.renderX + _anim * half, Bounds.renderY,
+                    half, Bounds.InnerHeight);
+            }
+
+            public override void OnMouseDownOnElement(ICoreClientAPI api, MouseEvent args)
+            {
+                if (args.Button != EnumMouseButton.Left) { base.OnMouseDownOnElement(api, args); return; }
+                args.Handled = true;
+            }
+
+            public override void OnMouseUpOnElement(ICoreClientAPI api, MouseEvent args)
+            {
+                if (args.Button != EnumMouseButton.Left) { base.OnMouseUpOnElement(api, args); return; }
+                args.Handled = true;
+
+                // Clicking a HALF picks that half, rather than any click flipping the control. With both
+                // options named on screen, clicking the one you want is the obvious gesture — and clicking
+                // the option already in force must not turn it off.
+                // absX, not renderX: absX is what PointInside tests against, so it is the frame the mouse
+                // coordinates are already known to be in. (These bounds carry no padding, so the two agree —
+                // but matching the hit test is the version that stays right if padding is ever added.)
+                bool wantRight = args.X - Bounds.absX >= Bounds.OuterWidth / 2;
+                if (wantRight == _rightChosen) return;
+                _rightChosen = wantRight;
+                _onChanged?.Invoke(wantRight);
+            }
+
+            /// <summary>
+            /// Moves the control from code, animating exactly as a click does. Used for the denied-private
+            /// bounce and by "Publish Private Guides", which switches the player to Public underneath it.
+            /// </summary>
+            public void SetChoice(bool rightChosen) => _rightChosen = rightChosen;
+
+            public override void Dispose()
+            {
+                base.Dispose();
+                _sliderTex?.Dispose();
+            }
+
+            private static void CenteredText(Context ctx, string text, double x, double y, double w, double h)
+            {
+                CairoFont f = CairoFont.WhiteSmallText();
+                f.SetupContext(ctx);
+                TextExtents te = ctx.TextExtents(text);
+                FontExtents fe = ctx.FontExtents;
+                ctx.SetSourceRGBA(1, 1, 1, 0.95);
+                ctx.MoveTo(x + (w - te.Width) / 2 - te.XBearing,
+                           y + (h - fe.Height) / 2 + fe.Ascent);
+                ctx.ShowText(text);
+            }
+
+            private static void RoundRect(Context ctx, double x, double y, double w, double h, double r)
+            {
+                ctx.NewPath();
+                ctx.Arc(x + w - r, y + r, r, -Math.PI / 2, 0);
+                ctx.Arc(x + w - r, y + h - r, r, 0, Math.PI / 2);
+                ctx.Arc(x + r, y + h - r, r, Math.PI / 2, Math.PI);
+                ctx.Arc(x + r, y + r, r, Math.PI, 1.5 * Math.PI);
+                ctx.ClosePath();
+            }
+        }
+
+        /// <summary>
+        /// A right-aligned line of text that can be told to SHAKE AND FLASH (v0.4.7). Used for the server's
+        /// private-guide policy, which has to be able to answer a refused click loudly enough to be noticed
+        /// without a chat message.
+        /// </summary>
+        /// <remarks>
+        /// A stock dynamic text cannot do this: it draws itself at its own bounds with its own colour, and
+        /// nothing outside it can offset or tint that. So this keeps the same trick the sliding toggle uses —
+        /// bake the text into a texture once and move it per frame — and bakes a SECOND, brighter copy for
+        /// the flash, because the 2D texture draw has no colour multiplier to modulate.
+        /// </remarks>
+        private sealed class AlertTextElement : GuiElement
+        {
+            private readonly ICoreClientAPI _capi;
+            private readonly CairoFont _font;
+
+            private LoadedTexture _tex, _hotTex;
+            private string _text;
+            private double[] _color;
+            private float _alert;                       // seconds of alert remaining
+
+            private const float AlertSeconds = 0.55f;
+            private const float ShakeAmplitude = 5f;    // pixels either side at full strength
+            private const float ShakeRate = 26f;        // radians/second — about four shakes over the alert
+
+            public AlertTextElement(ICoreClientAPI capi, ElementBounds bounds,
+                string text, CairoFont font, double[] color) : base(capi, bounds)
+            {
+                _capi = capi;
+                _font = font;
+                _text = text;
+                _color = color;
+            }
+
+            public override void ComposeElements(Context ctx, ImageSurface surface)
+            {
+                Bounds.CalcWorldBounds();
+                Rebuild();
+            }
+
+            public void SetText(string text, double[] color)
+            {
+                if (_text == text && ReferenceEquals(_color, color)) return;
+                _text = text;
+                _color = color;
+                Rebuild();
+            }
+
+            public void Alert() => _alert = AlertSeconds;
+
+            private void Rebuild()
+            {
+                BuildOne(_color, ref _tex);
+                // The flash copy: near-white, so it reads as a flash against either the red or the green.
+                BuildOne(new double[] { 1, 1, 1, 1 }, ref _hotTex);
+            }
+
+            private void BuildOne(double[] color, ref LoadedTexture tex)
+            {
+                int w = (int)Math.Round(Bounds.InnerWidth), h = (int)Math.Round(Bounds.InnerHeight);
+                if (w <= 0 || h <= 0) return;
+
+                var surf = new ImageSurface(Format.Argb32, w, h);
+                var sctx = new Context(surf);
+                _font.SetupContext(sctx);
+
+                TextExtents te = sctx.TextExtents(_text);
+                FontExtents fe = sctx.FontExtents;
+                sctx.SetSourceRGBA(color[0], color[1], color[2], color[3]);
+                sctx.MoveTo(w - te.Width - te.XBearing, (h - fe.Height) / 2 + fe.Ascent);
+                sctx.ShowText(_text);
+
+                if (tex == null) tex = new LoadedTexture(_capi);
+                _capi.Gui.LoadOrUpdateCairoTexture(surf, true, ref tex);
+                sctx.Dispose();
+                surf.Dispose();
+            }
+
+            public override void RenderInteractiveElements(float deltaTime)
+            {
+                LoadedTexture draw = _tex;
+                double dx = 0;
+
+                if (_alert > 0)
+                {
+                    _alert = Math.Max(0, _alert - deltaTime);
+                    float elapsed = AlertSeconds - _alert;
+                    float decay = _alert / AlertSeconds;              // shake dies away rather than stopping
+                    dx = Math.Sin(elapsed * ShakeRate) * ShakeAmplitude * decay;
+                    // Flash on the first half of each full swing, so the brightening reads as part of the
+                    // same motion instead of a separate blink.
+                    if (_hotTex != null && _hotTex.TextureId != 0
+                        && Math.Sin(elapsed * ShakeRate * 0.5f) > 0) draw = _hotTex;
+                }
+
+                if (draw == null || draw.TextureId == 0) return;
+                _capi.Render.Render2DTexturePremultipliedAlpha(
+                    draw.TextureId, Bounds.renderX + dx, Bounds.renderY,
+                    Bounds.InnerWidth, Bounds.InnerHeight);
+            }
+
+            public override void Dispose()
+            {
+                base.Dispose();
+                _tex?.Dispose();
+                _hotTex?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// One clickable colour cell (v0.4.12) — used both for the role chips, which show what a role is
+        /// currently drawn in, and for the swatches that assign a new colour to the selected role.
+        /// </summary>
+        /// <remarks>
+        /// Selection is drawn as a bright ring OUTSIDE the fill rather than a tick or an inset border, so it
+        /// never covers any part of the colour it is marking. On a grid where the whole point is comparing
+        /// colours, a marker that eats into the sample is worse than useless.
+        /// </remarks>
+        private sealed class ColorCellElement : GuiElement
+        {
+            private readonly float[] _rgb;
+            private readonly bool _selected;
+            private readonly Action _onClick;
+
+            public ColorCellElement(ICoreClientAPI capi, ElementBounds bounds,
+                float[] rgb, bool selected, Action onClick) : base(capi, bounds)
+            {
+                _rgb = rgb;
+                _selected = selected;
+                _onClick = onClick;
+            }
+
+            public override void ComposeElements(Context ctx, ImageSurface surface)
+            {
+                Bounds.CalcWorldBounds();
+                double x = Bounds.drawX, y = Bounds.drawY, w = Bounds.InnerWidth, h = Bounds.InnerHeight;
+
+                // Inset the fill by the ring's width so a selected cell is the same size as an unselected
+                // one — the grid must not shift under the cursor as the selection moves.
+                const double ring = 2;
+                ctx.Rectangle(x + ring, y + ring, w - ring * 2, h - ring * 2);
+                ctx.SetSourceRGBA(_rgb[0], _rgb[1], _rgb[2], 1);
+                ctx.Fill();
+
+                ctx.LineWidth = _selected ? ring : 1;
+                ctx.SetSourceRGBA(1, 1, 1, _selected ? 0.95 : 0.30);
+                double o = ctx.LineWidth / 2;
+                ctx.Rectangle(x + ring - o, y + ring - o, w - ring * 2 + o * 2, h - ring * 2 + o * 2);
+                ctx.Stroke();
             }
 
             public override void OnMouseDownOnElement(ICoreClientAPI api, MouseEvent args)
@@ -1795,6 +2640,7 @@ namespace Layout.UI
             if (_subscribed) return;
             _net.GuideAddedOrUpdated += OnGuideAddedOrUpdated;
             _net.LockStateChanged   += OnLockStateChanged;
+            _net.AuthorityModeChanged += OnAuthorityModeChanged;
             _subscribed = true;
         }
 
@@ -1803,8 +2649,13 @@ namespace Layout.UI
             if (!_subscribed) return;
             _net.GuideAddedOrUpdated -= OnGuideAddedOrUpdated;
             _net.LockStateChanged   -= OnLockStateChanged;
+            _net.AuthorityModeChanged -= OnAuthorityModeChanged;
             _subscribed = false;
         }
+
+        // Authority resolved or changed — the server's private-guide policy is only known once it has. Only
+        // that one line is refreshed; recomposing would restart the slider at its resting position mid-slide.
+        private void OnAuthorityModeChanged(ClientAuthorityMode mode) => RefreshServerPrivacyPolicy();
 
         private void OnGuideAddedOrUpdated(GuideData g)
         {
@@ -2085,3 +2936,4 @@ namespace Layout.UI
         private static string ShortId(Guid id) => id.ToString("N").Substring(0, 8);
     }
 }
+

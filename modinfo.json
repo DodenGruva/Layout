@@ -2,7 +2,7 @@
   "type": "code",
   "modid": "layout",
   "name": "Layout",
-  "version": "0.4.1",
+  "version": "0.4.14",
   "requiredOnClient": true,
   "requiredOnServer": false,
   "authors": [ "Doden" ],

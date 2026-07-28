@@ -4,6 +4,74 @@ All notable changes to Layout will be recorded in this file going forward.
 
 ## Unreleased
 
+## 0.4.12 - 0.4.14 - 2026-07-28
+
+### Added
+
+- **Pick your own guide colours.** Choose **Custom** under Colors and a table appears with the seven parts of
+  a guide — body, locked point, apex, anchor, private anchor, division mark and the chiseling highlight.
+  Click the one you want to change, then click a colour from the grid. Starts from whichever palette you were
+  already using, so you are adjusting rather than starting from scratch. **Reset colors** puts it all back.
+- The colour table folds away with the arrow beside the Colors box, and starts folded each time you open the
+  settings page.
+
+### Changed
+
+- Colour names in the interface now use the American spelling, to match the rest of the game.
+
+## 0.4.8 - 0.4.11 - 2026-07-28
+
+### Added
+
+- **Colour schemes.** A new **Colors** setting with a **Red-Green Safe** palette alongside the default one.
+  Locked points and apex points are red and green by default, which is exactly the pair red-green colour
+  blindness cannot tell apart; the new palette moves them to colours that stay distinct. Changing the setting
+  redraws every guide.
+
+### Changed
+
+- **The settings gear is a proper gear now** — a spoked wheel with teeth, drawn a little larger so the spokes
+  are actually visible.
+
+## 0.4.6 - 0.4.7 - 2026-07-28
+
+### Added
+
+- **Publish.** A button on the settings page that uploads all your private guides to the server in one press.
+  Previously this needed you to switch to public mode first and then run a chat command in the right order;
+  now the button does both.
+- The settings page now tells you whether the server you are on **allows or denies private guides**, right
+  above the switch. On a server that denies them, sliding to Private shows you the option and then slides
+  back, and the notice flashes so you can see why.
+
+## 0.4.2 - 0.4.5 - 2026-07-28
+
+The settings page grew from a handful of controls into a real panel.
+
+### Added
+
+- **Layout: On / Off** at the top of the settings page — hide or show all your guides without a chat command.
+- **Public / Private** is now a sliding switch showing both options, in the same blue and orange as the guide
+  anchors themselves.
+- **Chalking Kit refill shortcuts** can be turned on from the settings page. Both were previously only
+  reachable by hand-editing a file, so most players never found them.
+- **Every setting now explains itself** when you hover over it.
+
+### Changed
+
+- The settings page is grouped into **Appearance** and **Behaviour** sections.
+- "Show built voxels" is now called **Chiseling Highlight**.
+- The opacity bar is shorter, with its **Reset** button beside it.
+- Removed the "Back to tool" and "Re-read the world" buttons — the gear returns you to the tool, and the
+  world re-read is still available as a command.
+
+### Fixed
+
+- **Turning guides off no longer locks you out of the tool panel.** The panel stays open with everything
+  greyed out except the settings page, so you can turn them back on. It also no longer slams shut the moment
+  you flip the switch.
+- Fixed a crash that closed the game when opening the settings page in 0.4.4.
+
 ## 0.4.1 - 2026-07-27
 
 ### Fixed

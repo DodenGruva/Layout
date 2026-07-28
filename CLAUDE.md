@@ -16,7 +16,9 @@ hollow **Shell** or a structural **Wireframe**.
 The catalog is **15 shape types / 21 picker tiles** (SESSION_20 added straight/tapered Polygonal Prisms).
 Guide voxels that already hold world material can be drawn in a "built" colour, live (SESSION_29). A finished
 guide can be moved, rotated, copied and mirrored as a whole object (**Transform mode**, SESSION_30/31).
-Status: **v0.4.1 on the `beta` branch** (v0.3.53 is the last `main` release; the mod is public).
+Client display settings live on an in-game **settings page** behind the title-bar gear, including a
+configurable **colour scheme** with per-role custom colours (SESSION_32).
+Status: **v0.4.14 on the `beta` branch** (v0.3.53 is the last `main` release; the mod is public).
 
 > **Renderer note — read before any rendering work.** Guides are **order-dependent translucent geometry**
 > (Opaque stage, manual alpha blending, depth-tested, double-sided). On a hollow shell the guide overlaps
@@ -97,18 +99,25 @@ Status: **v0.4.1 on the `beta` branch** (v0.3.53 is the last `main` release; the
   per-batch updates), and SESSION_30 the **v0.3.86–v0.3.89 F6 Move arc** (whole-guide translation, the
   arrow pad and free-move, the materialization hold, and the graduated precision floor), and SESSION_31 the
   **v0.3.90–v0.4.0 Transform arc** (rotate, copy, mirror, the state-driven pad, span stepping, copy runs,
-  and hiding the development diagnostic commands).
+  and hiding the development diagnostic commands), and SESSION_32 the **v0.4.2–v0.4.14 settings-page arc**
+  (the F9 panel with hover text, the disable-not-block rendering gate, the sliding Public/Private control,
+  Publish, the F11 colour schemes with a custom swatch palette, and the F10 gear redraw).
 
-## ✅ Docs updated to v0.4.1 (2026-07-27)
-Consistent with **v0.4.1, DataVersion 12, protocol 19, 81 source files, 15 shape types / 21 tiles**.
-`SESSION_31.md` is the latest record (Transform: `SESSION_30.md` + `SESSION_31.md`, occupancy:
-`SESSION_29.md` + `PLAN_BLOCK_OCCUPANCY.md`, mesh: `SESSION_16.md` + `SESSION_28.md`, F5: `SESSION_15.md`).
-`CHANGELOG.md` is current through v0.4.1.
+## ✅ Docs updated to v0.4.14 (2026-07-28)
+Consistent with **v0.4.14, DataVersion 12, protocol 19, 82 source files, 15 shape types / 21 tiles**.
+`SESSION_32.md` is the latest record (settings/colours: `SESSION_32.md`, Transform: `SESSION_30.md` +
+`SESSION_31.md`, occupancy: `SESSION_29.md` + `PLAN_BLOCK_OCCUPANCY.md`, mesh: `SESSION_16.md` +
+`SESSION_28.md`, F5: `SESSION_15.md`). `CHANGELOG.md` is current through v0.4.14.
 
-⚠️ **`ARCHITECTURE.md` (v3.14) and `PROJECT_STATUS.md` predate Sessions 28–31.** They are not wrong about
+⚠️ **`ARCHITECTURE.md` (v3.14) and `PROJECT_STATUS.md` predate Sessions 28–32.** They are not wrong about
 what they describe, but they do not know about vertex welding, settled-shell streaming, the custom shader,
-block occupancy, or Transform mode. `HANDOFF.md`, the session records and the plans are authoritative for
-those. Prefer source for exact identifiers.
+block occupancy, Transform mode, or the settings page. `HANDOFF.md`, the session records and the plans are
+authoritative for those. Prefer source for exact identifiers.
+
+⚠️ **Custom GUI elements must allocate their `LoadedTexture` before use.**
+`capi.Gui.LoadOrUpdateCairoTexture(surface, linearMag, ref tex)` writes INTO the instance and does not
+create one — a null ref throws inside the engine and takes the client down. This crashed v0.4.4 and it
+builds clean. See `SESSION_32.md` §8.
 
 ⚠️ **`SESSION_26.md` carries a correction banner** — three of its claims were disproved in Session 28,
 including the 140→80 FPS regression that closed the rendering arc. Do not plan renderer work from it alone.
@@ -242,10 +251,12 @@ Mesh **Stage A** shipped and filled 3D volumes were retired. Normal public multi
 4. **Performance follow-up only from a new measured bottleneck and a fidelity-preserving design.** Immense
    placement/sculpt work still uses one below-normal worker plus bounded claim ticks; do not assume spatial
    subdivision or greedy merging is the next step.
-5. **The queued feature set (TODO F6–F12).** **F6, F7, F8 and F12 are all DELIVERED (Sessions 30–31)** —
-   the Transform category is complete. What remains is **F9** (in-game settings panel, which subsumes T2),
-   **F10** (redraw the gear glyph), **F11** (colour-blind-safe palette) and **T1** (CTRL surface-snap on
-   free-move; its contact rule is decided, not built).
+5. **The queued feature set (TODO F6–F12) is now EMPTY.** F6/F7/F8/F12 shipped in Sessions 30–31
+   (Transform); F9/T2/F10/F11 shipped in Session 32 (the settings page, its formatting, the gear, and the
+   colour schemes). The only queued item left is **T1** (CTRL surface-snap on free-move; its contact rule
+   is decided, not built).
+   **Nothing in Session 32 has been playtested** beyond the crash that produced v0.4.5 — a field pass over
+   the settings page comes before new work.
 6. If asked: **Roof / Tunnel** volumes; concave-safe Free-Shape fill; F3 re-constrain op. Remaining
    flagged decisions are cosmetic.
 
@@ -257,8 +268,11 @@ Mesh **Stage A** shipped and filled 3D volumes were retired. Normal public multi
 lives in `Items/ItemGuideTool.cs` (helpers + fill-state rendering) + `Items/ItemChalkingPowder.cs` (refill)
 + `Systems/ChalkEffects.cs` (puffs/snap). Large-guide work is centred in `Systems/GuideRenderer.cs`,
 `Systems/DraftPreviewSpec.cs`, `Shapes/ShapeWireframe.cs`, and `Shapes/LargeVolumeShellFallback.cs`.
-Sub-block world material lives in `Systems/BlockOccupancy.cs`. F6 Move spans
+Sub-block world material lives in `Systems/BlockOccupancy.cs`; the guide colour table lives in
+`Systems/GuidePalette.cs` (an immutable palette swapped by reference — read it ONCE per mesh build).
+The settings page and its three custom elements (`SlidingChoiceElement`, `AlertTextElement`,
+`ColorCellElement`) are all in `UI/GuideToolGui.cs`. F6 Move spans
 `Systems/GuideManager.TranslateGuide`, `Undo/Commands/TranslateGuideCommand.cs`, `GuideTranslatePacket`,
 the Move section of `UI/GuideToolGui.cs`, and the free-move session in `Client/GuideToolController.cs`.
 Rotate/copy/mirror add `Undo/Commands/RotateGuideCommand.cs` and `TransformGuideCommand.cs` alongside it.
-(Filenames verified against the tree on 2026-07-27 — 81 source files.)
+(Filenames verified against the tree on 2026-07-28 — 82 source files.)

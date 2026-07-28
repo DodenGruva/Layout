@@ -2,17 +2,17 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-27 against the built/package checkpoint
-> **v0.4.1 on the `beta` branch** (v0.3.53 is live on `main`). Where this file and the code
+> and the performance-relevant mechanics. Updated 2026-07-28 against the built/package checkpoint
+> **v0.4.14 on the `beta` branch** (v0.3.53 is live on `main`). Where this file and the code
 > disagree, **the code wins** — treat this as a map, then read the `.cs` files it points at.
 >
-> ⚠️ **`dev/ARCHITECTURE.md` (v3.14) and `dev/PROJECT_STATUS.md` predate Sessions 28–31** and do not know
-> about vertex welding, the custom shader, block occupancy, or Transform mode. This file and the session records
+> ⚠️ **`dev/ARCHITECTURE.md` (v3.14) and `dev/PROJECT_STATUS.md` predate Sessions 28–32** and do not know
+> about vertex welding, the custom shader, block occupancy, Transform mode, or the settings page. This file and the session records
 > are ahead of them.
 >
 > **Deeper docs:** `CHANGELOG.md` (player-facing release log), `dev/ARCHITECTURE.md` (the authoritative
 > plan + Settled Decisions Register, v3.14), `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list),
-> `dev/SESSION_9/…/31.md` (per-session history), `dev/PLAN_RENDER_PERFORMANCE.md` (the live rendering plan +
+> `dev/SESSION_9/…/32.md` (per-session history), `dev/PLAN_RENDER_PERFORMANCE.md` (the live rendering plan +
 > measurements), `dev/PLAN_BLOCK_OCCUPANCY.md` (the delivered occupancy feature + its disproved first draft),
 > `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
@@ -47,7 +47,13 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** **v0.4.1** built and packaged; v0.3.53 is the live `main` release. Sessions 30–31 added the
+- **Status:** **v0.4.14** built and packaged; v0.3.53 is the live `main` release. **Session 32 added the
+  in-game SETTINGS PAGE** behind the title-bar gear: a master Layout on/off, guide opacity, a configurable
+  **colour scheme** (Default / Red-Green Safe / a Custom per-role palette chosen from a swatch grid), the
+  chiseling highlight, a sliding **Public/Private** control with the server's policy and a one-press
+  **Publish** for private guides, and the two chalk-refill shortcuts. Turning guides off now DISABLES the
+  tool rather than blocking it, so the panel stays reachable. Nothing on the wire changed. See
+  `dev/SESSION_32.md`. Sessions 30–31 added the
   **Transform** tool mode — move, rotate, copy and mirror a whole guide without touching its shape, from a
   state-driven direction pad (see §4). Sessions 28–29 added a
   **custom guide shader** (guide frame cost 8.2 ms → 1.8 ms on an 8M-voxel guide), **vertex welding**
@@ -65,11 +71,12 @@ guides on servers without Layout and, when server policy permits, alongside publ
   durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
   **mesh pass Stage A (exposed-face meshing) has shipped** and filled 3D interiors are retired. Volumes may
   persist as their hollow **Shell** or canonical structural **Wireframe**.
-- **Size:** **81 source files** (`src/`), ~one asset tree (now including `assets/layout/shaders/`), one
+- **Size:** **82 source files** (`src/`), ~one asset tree (now including `assets/layout/shaders/`), one
   `.csproj`.
 - **Data schema:** **DataVersion 12** (creator/Last Sculptor attribution; v11 `IsWireframe`; v10 cached metadata).
   Move changes nothing here — a translated guide persists through the fields it already had.
-- **Wire protocol:** **19** (whole-guide rotation and the compound transform/copy; 17 whole-guide
+- **Wire protocol:** **19**, unchanged by Session 32 — the settings page is entirely client-side
+  (whole-guide rotation and the compound transform/copy; 17 whole-guide
   translation; 16 personal render state; explicit immense-placement
   rejection; player moderation policy; `/layout who` query; v12 attribution metadata; v11 wireframe state;
   protocol 9 polygon orientation; earlier append-only fields remain compatible with matching builds).
@@ -601,8 +608,17 @@ what mutates the stacks — without it the toggle would be a no-op.
 `guideRenderingEnabled` defaults true and is saved immediately by either public or client-only on/off command.
 Sessions 28–29 added `shaderGuideBrightness` (0.78), `shaderAmbientResponse` (0.55), `voxelFrameStrength`
 (0.25), `zFightInset` (**0.0006** — an OUTSET since v0.3.70, see §8), and `occupancyRecolour` (false).
-All are tunable live and reachable from the **GUI settings page** behind a gear in the tool panel's title bar
-(guide-opacity slider, built-voxel switch, re-read button), as well as by command.
+Session 32 added **`colorScheme`** (0 Default / 1 Red-Green Safe / 3 Custom; 2 is retired) and
+**`customColors`**, seven `"#RRGGBB"` strings in the pinned role order (body, locked, apex, anchor, private
+anchor, division, built) used only by Custom. A missing or malformed entry falls back to Default **per role**.
+The **GUI settings page** behind the gear now surfaces: the master Layout on/off, the guide-opacity slider
+plus Reset, the colour scheme and its custom swatch table, the chiseling highlight, Public/Private with
+Publish, and both chalk-refill flags. `shaderGuideBrightness`, `shaderAmbientResponse`, `voxelFrameStrength`
+and `zFightInset` are deliberately NOT on the page and keep their `/layout` commands.
+
+⚠️ **The colour table is no longer mutable statics.** `GuidePalette` is immutable and swapped by reference;
+`GuideMeshBuilder.BuildGuideMesh` reads it ONCE per batch so a palette change cannot colour half a mesh one
+way and half the other while workers are building. Do not reintroduce in-place mutation.
 
 ⚠️ **Optional command arguments:** `parsers.OptionalFloat` / `OptionalInt` return their DEFAULT when the
 argument is absent, **not null**, so an `args[0] is float` test always passes. This silently broke three
@@ -616,6 +632,10 @@ to `NaN` and goes through `LayoutModSystem.Supplied()`. Do not reintroduce the `
 ---
 
 ## 12. Status, open bug, and direction
+
+> **Session 32 (v0.4.2–v0.4.14) is BUILT AND DOCUMENTED BUT NOT PLAYTESTED**, apart from the crash report
+> that produced v0.4.5. The entire settings page, the colour system and the gear are unverified in play.
+> A field pass over them precedes new work. `dev/SESSION_32.md` §9 lists nine flagged items.
 
 **Confirmed & shipping (merged to `main` via PR #1):** the full 2D/3D catalog plus F4 place, preview,
 reshape, fill, lock/unlock, divide, project, persist, and undo in public and private authority modes.

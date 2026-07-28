@@ -116,6 +116,30 @@ namespace Layout.Config
         //  markers down to 0.5; anchors and the White grabbed highlight left where they were.
         // ------------------------------------------------------------------------------------------
 
+        /// <summary>
+        /// Which guide colour scheme to draw with, as the pinned <c>GuidePaletteScheme</c> value so a
+        /// hand-edited file stays stable across versions: 0 = Default, 1 = Red-Green Safe, 2 = High Contrast.
+        /// </summary>
+        /// <remarks>
+        /// Accessibility, not taste (F11). In the default scheme locked points are red and apex points are
+        /// green — the exact pair deuteranopia and protanopia collapse — so a player with either cannot tell
+        /// a locked point from an apex at all. Unknown values fall back to Default.
+        /// </remarks>
+        [JsonProperty("colorScheme")]
+        public int ColorScheme { get; set; } = (int)Systems.GuidePaletteScheme.Default;
+
+        /// <summary>
+        /// The player's own per-role colours, used only when <see cref="ColorScheme"/> is Custom (3). Seven
+        /// "#RRGGBB" strings in the pinned role order: body, locked, apex, anchor, private anchor, division,
+        /// built. Null or short means "not chosen" and falls back to the Default palette role by role.
+        /// </summary>
+        /// <remarks>
+        /// Hex rather than numbers so the file stays hand-editable and diffable — this is the one setting a
+        /// player might reasonably want to copy between machines or share.
+        /// </remarks>
+        [JsonProperty("customColors", ObjectCreationHandling = ObjectCreationHandling.Replace)]
+        public string[] CustomColors { get; set; } = null;
+
         /// <summary>Alpha of the Yellow guide body. Default 0.5.</summary>
         [JsonProperty("opacityBody")]
         public float OpacityBody { get; set; } = 0.5f;
@@ -263,7 +287,10 @@ namespace Layout.Config
                 }
             FavoriteShapes = valid;
 
+            ColorScheme = (int)Systems.GuidePalette.Normalize(ColorScheme);
+
             OpacityBody = ClampAlpha(OpacityBody, 0.5f);
+
             OpacityLocked = ClampAlpha(OpacityLocked, 0.5f);
             OpacityApex = ClampAlpha(OpacityApex, 0.5f);
             OpacityAnchor = ClampAlpha(OpacityAnchor, 0.8f);

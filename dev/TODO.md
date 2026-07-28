@@ -1,27 +1,34 @@
-# Layout — TODO / Outstanding Items (current: v0.4.1 on `beta`)
+# Layout — TODO / Outstanding Items (current: v0.4.14 on `beta`)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list (v0.3.53 final release → field reports)
+## ⭐ Top of the list
 
-> **✅ THE TRANSFORM CATEGORY IS COMPLETE — v0.3.86–v0.4.0 (SESSION_30 + SESSION_31).**
-> **F6 Move, F12 Rotate, F8 Copy and F7 Mirror are all delivered**, inside a tool mode renamed from Move to
-> **Transform** because all four act on a finished guide as a WHOLE OBJECT without reshaping it.
-> **Protocol 16 → 19**; DataVersion unchanged; 81 source files.
+> **✅ THE SETTINGS PAGE IS COMPLETE — v0.4.2–v0.4.14 (SESSION_32).**
+> **F9 (in-game settings panel), T2 (its formatting + hover text), F10 (the gear glyph) and F11 (colour
+> schemes) are all delivered.** DataVersion 12 and protocol 19 both unchanged — none of it touches the wire.
+> **82 source files** (one added: `GuidePalette.cs`).
 >
-> The direction pad is **state-driven**: Move/Copy/Mirror toggles change what its six arrows and four rotate
-> corners do. Move and Copy are mutually exclusive, Mirror is independent, at least one is always lit.
-> **Span** steps by the guide's own width — the default for copies and mirrored moves, available everywhere
-> something travels. A run of copies in one direction marches outward into a line.
+> The page is now a two-section panel: a coloured **Layout: On/Off** master switch above the sections, then
+> **Appearance** (opacity + Reset, colour scheme, Chiseling Highlight) and **Behaviour** (a sliding
+> Public/Private control with the server's policy above it and a Publish button below, plus the two chalk
+> refill shortcuts). Every row carries hover text.
 >
-> Full record in `SESSION_31.md`; its §7 carries six flagged items. The one inherited and still live is that
-> `OnGuideAddedOrUpdated` can strand a stale wireframe outside the Transform hold path.
+> **Colours** ship as Default / Red-Green Safe / **Custom**, the last with a seven-role table and a
+> sixteen-swatch grid. The human overrode the preset-only design and was right to: presets answer "I cannot
+> tell these apart", not "yellow disappears against sandstone".
 >
-> **QUEUED, not started:** **F9** in-game settings panel (subsumes T2 below), **F10** redraw the settings
-> gear glyph, **F11** configurable voxel colour scheme for colour-blind accessibility, and **T1** below.
+> Full record in `SESSION_32.md`; its §9 carries nine flagged items, none blocking. **§8 records two
+> mistakes worth not repeating** — the `LoadedTexture` null-ref that crashed v0.4.4, and a PowerShell text
+> round-trip that double-encoded a source file.
+>
+> **QUEUED, not started:** **T1** below. That is the whole of the old F-queue backlog.
+
+> **✅ F9 / T2 DELIVERED (SESSION_32).** The settings panel and its formatting both shipped across
+> v0.4.2–v0.4.14. Detail below under F9; the per-revision record is in `SESSION_32.md`.
 
 > **🔧 OPEN FROM THE TRANSFORM ARC (human-requested 2026-07-27, not started):**
 >
@@ -38,13 +45,9 @@
 > AFTER computing the contact, not before. The controller already has `CtrlHeld()` and the block raycast;
 > the work is the contact rule, not the plumbing.
 >
-> **T2. Settings page: better formatting + mouse-over descriptions.** The page is currently a bare stack of
-> label/control pairs with no explanations at all — the prose was removed in v0.3.87 because it overflowed
-> the dialog, and hover text was the agreed replacement but has not been added. Restore each control's
-> explanation as `AddAutoSizeHoverText` on its bounds (the text is recoverable from the v0.3.86 source or
-> `CHANGELOG.md`), and tidy the layout: consistent row heights, aligned labels, and grouping so the opacity
-> slider and the built-voxel switch read as separate settings rather than one run of controls.
-> **"Better formatted" is the human's judgement** — get their eye on it rather than guessing twice.
+> **T2. Settings page: better formatting + mouse-over descriptions. — ✅ DELIVERED (v0.4.2, SESSION_32).**
+> Every row carries `AddAutoSizeHoverText`, restoring the prose removed in v0.3.87, and the page is grouped
+> into Appearance and Behaviour with consistent label-left / control-right rows.
 
 > **📄 DOC DEBT (human-requested 2026-07-27): merge `PROJECT_STATUS.md` into `HANDOFF.md`.** The two are
 > largely redundant — both are "where the project stands" briefs, and `PROJECT_STATUS.md` has been left to
@@ -855,7 +858,28 @@ Two constraints worth settling early:
 - **About what centre?** The guide's own bounding centre is the obvious default; rotating about a picked
   anchor is the more useful behaviour when aligning to an existing build. Both are cheap; pick one in play.
 
-### F11. Configurable voxel colour scheme — accessibility (human-requested 2026-07-26)
+### F11. Configurable voxel colour scheme — ✅ DELIVERED (SESSION_32, v0.4.8–v0.4.14)
+Shipped as **Default / Red-Green Safe / Custom** on the settings page. Deltas from the plan below:
+
+- **Deuteranopia-safe and protanopia-safe merged into one "Red-Green Safe" preset** — separate palettes would
+  have differed only in ways neither group can see. High Contrast shipped in 0.4.8 and was **removed by the
+  human in 0.4.11**; its scheme number (2) is retired, not reused.
+- **"Prefer presets over pickers" was overruled by the human, correctly.** Presets answer "I cannot tell these
+  roles apart"; they do not answer "yellow disappears against sandstone". **Custom** adds a seven-role table
+  and a **sixteen-swatch grid** — a fixed grid rather than a free picker, because every swatch is guaranteed
+  legible at guide alpha over stone and an arbitrary colour is not.
+- ⚠ **The shared-static hazard was FIXED, not inherited.** The colour arrays became an immutable
+  `GuidePalette` behind one static reference, and `BuildGuideMesh` reads that reference once per batch. A
+  palette change can no longer produce a mesh built from two palettes.
+- Far-anchor off-shades are **derived** from the chosen anchor (a quarter-step toward white), not picked, so
+  the pair cannot drift apart. Grabbed stays white in every scheme.
+- Custom colours persist as `"#RRGGBB"` in `layout-client.json`; a bad entry degrades one role, not the set.
+
+**Not playtested:** Red-Green Safe's apex-as-purple is the biggest departure from the mod's established
+colour language.
+
+<details><summary>Original plan (retained)</summary>
+
 Let players change the guide colour palette from the settings page. **Motivation is accessibility, not
 taste:** the current palette can be unreadable for colour-blind players.
 
@@ -898,12 +922,21 @@ Implementation notes:
 Interacts with **F9** (the settings page this lives on) and with `PLAN_BLOCK_OCCUPANCY.md` §7.4, whose
 "green is already taken" risk is softened considerably by a palette the player can change.
 
-### F10. Redraw the settings gear glyph (human-requested 2026-07-26, deferred by the human)
-`LayoutToolIcons.DrawGear` is eight radial spokes around a ring — legible at 18 px but it does not read as
-a real gear. The human accepted it as "good enough for now" and explicitly asked that it be redrawn later.
-Wants: an actual toothed gear silhouette. Watch the size — this draws at 18 px in the title bar, which is
-why the first attempt avoided real teeth; a filled/solid form will probably survive small sizes better
-than a stroked outline.
+</details>
+
+### F10. Redraw the settings gear glyph — ✅ DELIVERED (SESSION_32, v0.4.8–v0.4.11)
+Shipped as a **spoked wheel-gear** drawn from a reference image the human supplied: 8 trapezoidal teeth with
+rounded valleys, 6 spokes, a bored hub, phased half a tooth so a VALLEY sits at twelve and six o'clock.
+
+- **Filled, not stroked** — the guess in the original note was right, and it is what makes teeth possible at
+  icon size at all.
+- **Three separate fill passes.** Rim, spokes and hub overlap; under one even-odd path every overlap cancels
+  and the spokes punch holes through the hub.
+- **`gearSize` 18 → 22 in `GuideToolGui`.** The spoked design does not survive 18 px — the spoke gaps close
+  and the bore fills in. This was found by porting the glyph to GDI+ and rendering it at 18/22/28/40 px
+  before shipping, which also caught 12 teeth being too many and an 8-tooth variant whose teeth were half
+  again wider than its gaps.
+- ⚠ **Radii are bounded by the Canvas zoom** (box 60 × 1.12): past ~26.8 from centre falls outside the tile.
 
 ### F7. Mirror / flip a guide — ✅ DELIVERED (Session 31, v0.3.93)
 Reflect a guide so it changes handedness. Rides in the Transform mode.
@@ -954,25 +987,25 @@ an unrelated button.
 Actions   [Copy]  [Mirror]
 ```
 
-### F9. In-game settings panel in the GUI (human-requested 2026-07-26) — NEXT UP
-Absorbs **T2** (settings-page formatting + hover descriptions), which is the same work at smaller scope.
+### F9. In-game settings panel in the GUI — ✅ DELIVERED (SESSION_32, v0.4.2–v0.4.14)
+Absorbed **T2** as planned. Full record in `SESSION_32.md`; deltas from the plan:
 
-Let players change client settings from the GUI instead of editing `layout-client.json` and restarting.
-
-**The lowest-risk of the four and largely UI work over plumbing that already exists.** Every candidate is
-already a live client-side value: the six `Opacity*` values, `ShaderGuideBrightness`,
-`ShaderAmbientResponse`, `VoxelFrameStrength`, `ZFightInset`, `GuideRenderingEnabled`, and the `Default*`
-placement preferences. Several already have runtime commands (`/layout inset`, `/layout voxelframe`,
-`/layout shader`), which is proof the values can be changed live — the panel is a second front end onto
-the same setters, plus a write back to `layout-client.json`.
-
-Scope notes:
-- **Client settings only.** Server config (voxel caps, claims, refill policy, moderation) must stay out of
-  a player-facing panel; those are already admin commands and should remain so.
-- `ForceClientOnly` and the chalk-refill preferences are client-side but change *behaviour*, not looks —
-  decide deliberately whether they belong in the same panel as opacity sliders.
-- A "reset to defaults" action is cheap here and worth having, since sliders invite experimenting.
-- Anything requiring a mesh rebuild to take effect (`ZFightInset`) should say so, or trigger one.
+- **Shipped:** the master on/off, guide opacity + Reset, the colour scheme (F11), Chiseling Highlight,
+  Public/Private, Publish, and both chalk-refill shortcuts. All grouped under **Appearance** / **Behaviour**,
+  all carrying hover text.
+- **Deliberately NOT shipped:** `ShaderGuideBrightness`, `ShaderAmbientResponse`, `VoxelFrameStrength` and
+  `ZFightInset`. They keep their `/layout` commands. These are tuning knobs for problems most players will
+  never hit, and the page was already long — **a candidate if anyone asks for them.**
+- **The `Default*` placement preferences were deliberately excluded.** They are ALREADY remembered
+  automatically (the tool writes them back on shutdown), so a second place to set them would create two
+  controls for one value with the tool page silently winning.
+- The plan's open question — whether `ForceClientOnly` and the refill flags belong beside the appearance
+  sliders — resolved as **yes, in their own Behaviour section**.
+- "Reset to defaults" narrowed to **"Reset"** beside the opacity slider, plus **"Reset colors"** in the
+  colour table. One page-wide reset would have implied it touched settings it never did.
+- ⚠ **A settings page that gates itself needs an escape hatch.** The pre-existing rendering lockout closed
+  the dialog when guides went off, stranding the player on the chat command; v0.4.3 changed the gate from
+  BLOCK to DISABLE. Anything else added here that can turn itself off needs the same treatment.
 
 ### F5. Chalking-kit durability + refill loop — ✅ DELIVERED AND CONFIRMED (Session 15, v0.2.0–v0.2.9)
 Shipped as designed with human-directed refinements during the build: 32 chalk, 2D −1 / 3D −2 on completed
@@ -990,10 +1023,16 @@ the inventory refill remains (Top of the list).
 ## Next session — start here
 
 **The agenda is "⭐ Top of the list" at the top of this file** — it is not repeated here. Current state:
-**v0.4.1** is built, packaged and documented on `beta`. The Transform category (F6/F7/F8/F12) is complete.
-**F9 — the in-game settings panel — is the recommended next feature**, since it subsumes T2. The standing
-backlog is T1 (CTRL surface-snap), F10, F11, the six flagged items in `SESSION_31.md` §7, the Session-29
-occupancy verification items, and the `PROJECT_STATUS.md` → `HANDOFF.md` merge.
+**v0.4.14** is built, packaged and documented on `beta`. The Transform category (F6/F7/F8/F12) is complete,
+and so is the settings page (F9/T2/F10/F11).
+
+**The whole F-queue is empty.** What is left is **T1** (CTRL surface-snap on free-move — its contact rule is
+already decided, only the implementation is missing), the nine flagged items in `SESSION_32.md` §9, the six
+in `SESSION_31.md` §7, the Session-29 occupancy verification items, and the
+`PROJECT_STATUS.md` → `HANDOFF.md` merge.
+
+**Nothing from Session 32 has been playtested beyond the v0.4.4 crash report** — a field pass over the whole
+settings page is the sensible next move before starting new work.
 
 **Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;
 docs are updated ONLY when the human says so — and **`CHANGELOG.md` is part of that set** (it was missed at

@@ -256,8 +256,8 @@ namespace Layout
             // immediately (B-24-2 fix — not relying on Dispose firing on exit-to-title).
             ToolGui = new GuideToolGui(capi, Draft, ClientNet, ClientConfig, SaveClientConfig,
                 ApplyOpacitiesAndRebuild, ApplyOccupancyRecolour,
-                () => Renderer?.RefreshOccupancy(),
-                id => Renderer?.HoldMoveMaterialization(id));
+                id => Renderer?.HoldMoveMaterialization(id),
+                ApplyGuideRendering);
             Hud = new GuideHud(capi, Draft, ClientNet);
 
             // The aim-controller: per-tick raycast + click routing while the tool is held. It (not the
@@ -290,8 +290,8 @@ namespace Layout
 
             if (Renderer?.RenderingEnabled == false)
                 _capi.ShowChatMessage(
-                    "[Layout] Guide rendering is currently off. Use /layout on to turn it back on "
-                    + "(or .layout on in client-only mode).");
+                    "[Layout] Guides are currently hidden. Turn them back on with \"Show guides\" on the "
+                    + "tool panel's settings page (F, then the gear), or /layout on.");
 
             if (ClientNet.AuthorityMode != ClientAuthorityMode.Detecting) return;
 
@@ -372,7 +372,7 @@ namespace Layout
                 .EndSubCommand()
                 .BeginSubCommand("built")
                     .WithDescription(
-                        "Colour guide voxels that already hold material (on / off / refresh). Rebuilds "
+                        "Color guide voxels that already hold material (on / off / refresh). Rebuilds "
                         + "your guides; affects nobody else.")
                     .WithArgs(parsers.Word("on-off-or-refresh"))
                     .HandleWith(OnClientBuiltCommand)
@@ -599,16 +599,18 @@ namespace Layout
             if (Renderer == null)
                 return TextCommandResult.Error("Enter a world before changing Layout rendering.");
 
-            Renderer.SetRenderingEnabled(enabled);
-            Controller?.OnRenderingChanged(enabled);
-            ClientConfig.GuideRenderingEnabled = enabled;
-            SaveClientConfig();
+            ApplyGuideRendering(enabled);
             return TextCommandResult.Success(enabled
                 ? "Layout guide rendering is on for you."
                 : "Layout guide rendering is off for you.");
         }
 
-        private void OnGuideRenderingChanged(bool enabled)
+        /// <summary>
+        /// Turns this client's guide rendering on or off and remembers it. The shared back end for
+        /// <c>/layout on|off</c>, the server's rendering packet, and the settings page's "Show guides"
+        /// switch (v0.4.2) — three front ends onto one setter, so they cannot drift.
+        /// </summary>
+        internal void ApplyGuideRendering(bool enabled)
         {
             Renderer?.SetRenderingEnabled(enabled);
             Controller?.OnRenderingChanged(enabled);
@@ -616,6 +618,8 @@ namespace Layout
             ClientConfig.GuideRenderingEnabled = enabled;
             SaveClientConfig();
         }
+
+        private void OnGuideRenderingChanged(bool enabled) => ApplyGuideRendering(enabled);
 
         private TextCommandResult OnClientWhoCommand(TextCommandCallingArgs args)
         {
@@ -724,14 +728,14 @@ namespace Layout
                 case "on": case "true": case "1":
                     return TextCommandResult.Success(
                         ApplyOccupancyRecolour(true)
-                            ? "Built-voxel colouring ON. Guides rebuilt; voxels holding material are cyan."
-                            : "Built-voxel colouring is already on.");
+                            ? "Built-voxel coloring ON. Guides rebuilt; voxels holding material are cyan."
+                            : "Built-voxel coloring is already on.");
 
                 case "off": case "false": case "0":
                     return TextCommandResult.Success(
                         ApplyOccupancyRecolour(false)
-                            ? "Built-voxel colouring OFF. Guides rebuilt."
-                            : "Built-voxel colouring is already off.");
+                            ? "Built-voxel coloring OFF. Guides rebuilt."
+                            : "Built-voxel coloring is already off.");
 
                 case "refresh":
                     if (!ClientConfig.OccupancyRecolour)
@@ -948,19 +952,21 @@ namespace Layout
                 _blockEventCount, _blockEventMicroCount));
         }
 
-        // Pushes the configured guide alphas into the mesh builder's colour table.
+        // Pushes the configured colour scheme and guide alphas into the mesh builder's palette.
         private void PushOpacitiesToMeshBuilder()
         {
-            GuideMeshBuilder.ConfigureOpacities(
+            GuideMeshBuilder.ConfigurePalette(
+                GuidePalette.Normalize(ClientConfig.ColorScheme),
                 ClientConfig.OpacityBody, ClientConfig.OpacityLocked, ClientConfig.OpacityApex,
-                ClientConfig.OpacityAnchor, ClientConfig.OpacityGrabbed, ClientConfig.OpacityHiddenAnchor);
+                ClientConfig.OpacityAnchor, ClientConfig.OpacityGrabbed, ClientConfig.OpacityHiddenAnchor,
+                GuidePalette.ParseRoleColors(ClientConfig.CustomColors));
         }
 
         /// <summary>
-        /// Re-applies the client opacity values and rebuilds every guide mesh. Opacity is baked into vertex
-        /// COLOURS at build time, so changing the config alone changes nothing on screen — the meshes have
-        /// to be rebuilt for it to show. Wired to the GUI's Settings tab; the caller is responsible for
-        /// coalescing rapid changes (a slider drag) so this runs once, not once per step.
+        /// Re-applies the client palette (colour scheme + opacities) and rebuilds every guide mesh. Both are
+        /// baked into vertex COLOURS at build time, so changing the config alone changes nothing on screen —
+        /// the meshes have to be rebuilt for it to show. Wired to the GUI's Settings tab; the caller is
+        /// responsible for coalescing rapid changes (a slider drag) so this runs once, not once per step.
         /// </summary>
         internal void ApplyOpacitiesAndRebuild()
         {

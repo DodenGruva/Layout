@@ -233,51 +233,36 @@ namespace Layout.Systems
         /// </summary>
         public static bool WeldByDefault = true;
 
-        // --- Colour table (RGBA, 0..1). ---------------------------------------------------------------
-        // RGBs are fixed (the settled colour language); ALPHAS are client-configurable via
-        // layout-client.json (Session-8, item 2) — ConfigureOpacities() overwrites the [3] slot of each
-        // array at client start. The values below are only the pre-configuration defaults and MUST match
-        // LayoutClientConfig's defaults (body/locked/apex 0.5; anchor 0.8; grabbed 0.95).
-        private static readonly float[] ColYellow = { 1.00f, 0.85f, 0.10f, 0.50f }; // Normal body
-        private static readonly float[] ColRed    = { 0.90f, 0.15f, 0.15f, 0.50f }; // Locked
-        private static readonly float[] ColGreen  = { 0.20f, 0.90f, 0.30f, 0.50f }; // Primary / apex
-        private static readonly float[] ColBlue   = { 0.20f, 0.50f, 1.00f, 0.80f }; // Anchor (aligned)
-        private static readonly float[] ColIndigo = { 0.45f, 0.45f, 1.00f, 0.80f }; // Anchor far off-shade
-        private static readonly float[] ColOrange = { 1.00f, 0.45f, 0.05f, 0.80f }; // Private anchor (aligned)
-        private static readonly float[] ColBurntOrange = { 0.90f, 0.28f, 0.05f, 0.80f }; // Private far off-shade
-        private static readonly float[] ColWhite  = { 1.00f, 1.00f, 1.00f, 0.95f }; // Grabbed
-        // Session-9 division marks: magenta — the one hue distinct from all six existing roles
-        // (yellow/red/green/blue/indigo/white). [Flagged: color choice open to review.]
-        private static readonly float[] ColMagenta = { 0.90f, 0.20f, 0.90f, 0.80f }; // Division mark
+        // --- Colour table -----------------------------------------------------------------------------
+        // The whole table now lives in GuidePalette, as an IMMUTABLE instance behind one reference. Both the
+        // scheme (which hue each role gets, v0.4.8) and the alphas (layout-client.json, Session-8 item 2)
+        // are client-configurable, and both are applied by rebuilding the palette and swapping this field.
+        //
+        // THE SWAP IS WHY THIS IS A REFERENCE AND NOT MUTABLE ARRAYS. Meshes build on background workers, so
+        // the old in-place mutation could be seen by some batches of a large guide and not others, leaving
+        // one guide wearing two palettes until the rebuild settled. A build reads this field ONCE (see
+        // BuildGuideMesh) and uses that instance throughout, so it is always internally consistent.
+        // The seed matches LayoutClientConfig's defaults (body/locked/apex 0.5; anchor 0.8; grabbed 0.95).
+        private static GuidePalette _palette = GuidePalette.Build(
+            GuidePaletteScheme.Default, 0.50f, 0.50f, 0.50f, 0.80f, 0.95f, 0.35f);
 
-        // "Built" — a body voxel whose own cell already holds world material (v0.3.79).
-        // CYAN, chosen against the constraint in PLAN_BLOCK_OCCUPANCY §7.4: it must not be confusable with
-        // green (the apex marker) and must read at 50% alpha over arbitrary stone. Cyan is yellow's
-        // complement, so built-vs-unbuilt is the maximum separation available from the body colour, and it
-        // is clear of every other role (red, green, blue, indigo, orange, white, magenta).
-        // Alpha here is unused — the role colour's alpha is kept; see the recolour note in the build loop.
-        private static readonly float[] ColBuilt = { 0.10f, 0.95f, 0.95f, 0.50f };
-
-        // Hidden guides show their anchors only at this alpha; the public/private RGB palette is preserved.
-        private static float HiddenAnchorAlpha = 0.35f;
+        /// <summary>The palette meshes are currently being built with.</summary>
+        public static GuidePalette Palette => _palette;
 
         /// <summary>
-        /// Applies the client-configured opacities (see <c>LayoutClientConfig</c>). Called once by
-        /// <c>LayoutModSystem</c> at client start, before any mesh is built; meshes built afterwards pick
-        /// the values up automatically. Values are pre-clamped by the config's <c>Normalize()</c>.
+        /// Applies the client-configured colour scheme and opacities (see <c>LayoutClientConfig</c>). Called
+        /// by <c>LayoutModSystem</c> at client start and again whenever the player changes either on the
+        /// settings page; guides already built keep their old colours until they are rebuilt, which is what
+        /// <c>ApplyOpacitiesAndRebuild</c> then does. Values are pre-clamped by the config's
+        /// <c>Normalize()</c>.
         /// </summary>
-        public static void ConfigureOpacities(
-            float body, float locked, float apex, float anchor, float grabbed, float hiddenAnchor)
+        public static void ConfigurePalette(
+            GuidePaletteScheme scheme,
+            float body, float locked, float apex, float anchor, float grabbed, float hiddenAnchor,
+            float[][] customRoles = null)
         {
-            ColYellow[3] = body;
-            ColRed[3] = locked;
-            ColGreen[3] = apex;
-            ColBlue[3] = anchor;
-            ColIndigo[3] = anchor;   // the off-shade is the same role at the same alpha
-            ColOrange[3] = anchor;
-            ColBurntOrange[3] = anchor;
-            ColWhite[3] = grabbed;
-            HiddenAnchorAlpha = hiddenAnchor;
+            _palette = GuidePalette.Build(
+                scheme, body, locked, apex, anchor, grabbed, hiddenAnchor, customRoles);
         }
 
         // Anti-z-fight face clearance, in world blocks. SINCE v0.3.70 THIS IS AN OUTSET, not an inset: it
@@ -395,6 +380,11 @@ namespace Layout.Systems
             // colours are preserved exactly (each face belongs to its own voxel), and the mesh is allocated
             // EXACTLY from a face pre-count. The Surface tile and slab paths stay on the legacy
             // whole-box/quad path per the staged plan.
+            // Read the palette ONCE for the whole batch. This is the guarantee described on _palette: a
+            // scheme or opacity change landing mid-build cannot colour half of this mesh one way and half
+            // the other, because every voxel below reads from this one captured instance.
+            GuidePalette pal = _palette;
+
             bool cubePath = !surface && options.SurfaceSlabThickness <= 0f;
             HashSet<(int, int, int)> present = null;
             VertexWelder welder = null;
@@ -449,14 +439,14 @@ namespace Layout.Systems
                 float r, g, b, a;
                 if (vi == grabbedIdx)
                 {
-                    r = ColWhite[0]; g = ColWhite[1]; b = ColWhite[2]; a = ColWhite[3];
+                    r = pal.Grabbed[0]; g = pal.Grabbed[1]; b = pal.Grabbed[2]; a = pal.Grabbed[3];
                 }
                 else
                 {
-                    ResolveColor(v.Type, cx, cy, cz, start, far, haveBothAnchors, farAligned,
+                    ResolveColor(pal, v.Type, cx, cy, cz, start, far, haveBothAnchors, farAligned,
                                  options.PrivateAnchors,
                                  out r, out g, out b, out a);
-                    if (options.Hidden) a = HiddenAnchorAlpha; // only anchor voxels reach here when hidden
+                    if (options.Hidden) a = pal.HiddenAnchorAlpha; // only anchors reach here when hidden
 
                     // BLOCK-OCCUPANCY RECOLOUR (v0.3.79, PLAN_BLOCK_OCCUPANCY stage 2). A voxel whose own
                     // cell already holds world material is drawn in the "built" colour instead of its role
@@ -478,7 +468,7 @@ namespace Layout.Systems
                         int mid = scale >> 1;
                         if (options.OccupancyProbe(v.X + mid, v.Y + mid, v.Z + mid))
                         {
-                            r = ColBuilt[0]; g = ColBuilt[1]; b = ColBuilt[2];
+                            r = pal.Built[0]; g = pal.Built[1]; b = pal.Built[2];
                         }
                     }
                 }
@@ -718,21 +708,22 @@ namespace Layout.Systems
         /// </summary>
         public static (float r, float g, float b, float a) BaseColor(VoxelRenderType type)
         {
-            float[] c = ColorArray(type);
+            float[] c = _palette.ForType(type);
             return (c[0], c[1], c[2], c[3]);
         }
 
         // --- colour resolution -----------------------------------------------------------------------------
 
         private static void ResolveColor(
+            GuidePalette pal,
             VoxelRenderType type, double cx, double cy, double cz,
             Vec3d start, Vec3d far, bool haveBothAnchors, bool farAligned,
             bool privateAnchors,
             out float r, out float g, out float b, out float a)
         {
             float[] c = type == VoxelRenderType.Anchor && privateAnchors
-                ? ColOrange
-                : ColorArray(type);
+                ? pal.PrivateAnchor
+                : pal.ForType(type);
 
             // Only Anchor voxels can take the far-foot off-shade, and only when the far foot is not aligned.
             if (type == VoxelRenderType.Anchor && haveBothAnchors && !farAligned)
@@ -740,23 +731,10 @@ namespace Layout.Systems
                 double dStart = Dist2(cx, cy, cz, start);
                 double dFar = Dist2(cx, cy, cz, far);
                 if (dFar < dStart)
-                    c = privateAnchors ? ColBurntOrange : ColIndigo; // this voxel belongs to the far foot
+                    c = privateAnchors ? pal.PrivateAnchorFar : pal.AnchorFar; // belongs to the far foot
             }
 
             r = c[0]; g = c[1]; b = c[2]; a = c[3];
-        }
-
-        private static float[] ColorArray(VoxelRenderType type)
-        {
-            switch (type)
-            {
-                case VoxelRenderType.Locked:  return ColRed;
-                case VoxelRenderType.Primary: return ColGreen;
-                case VoxelRenderType.Anchor:  return ColBlue;
-                case VoxelRenderType.Grabbed: return ColWhite;
-                case VoxelRenderType.Division: return ColMagenta;
-                default:                      return ColYellow; // Normal
-            }
         }
 
         private static bool IsFarAnchorAligned(Vec3d start, Vec3d far)

@@ -434,28 +434,125 @@ namespace Layout.UI
         }
 
         // The shape picker's expand tile: a bold chevron (▾ collapsed / ▴ expanded).
-        // Settings gear. Eight radial spokes around a ring rather than a true toothed outline — at title-bar
-        // size (18 px) real teeth turn into a grey smudge, while spokes stay legible.
+        /// <summary>
+        /// Settings gear (redrawn v0.4.9, refined v0.4.10, F10): a spoked wheel-gear, drawn from the human's
+        /// reference image — a rim of eight trapezoidal teeth with rounded valleys, six spokes, a bored hub,
+        /// and six large open segments between. The SPOKED WHEEL is the point of the design (human-directed);
+        /// the teeth are the frame around it, so they are deliberately few and the strokes deliberately light.
+        /// </summary>
+        /// <remarks>
+        /// FILLED, NOT STROKED, and that is the whole trick. The original drew eight radial spokes around a
+        /// ring because detail on a STROKED outline becomes a grey smudge at icon sizes — each tooth would be
+        /// a two-pixel box drawn with a two-pixel pen. As solid silhouette the same teeth are bumps on the
+        /// edge of a disc, and an edge bump survives at two pixels where an outlined box does not.
+        ///
+        /// Every hole is cut with the EVEN-ODD fill rule rather than painted in a background colour, so the
+        /// icon stays correct on any button state or backdrop.
+        ///
+        /// THREE SEPARATE FILL PASSES, and that is not an accident. Ring, spokes and hub overlap each other,
+        /// and under a single even-odd path every overlap would CANCEL — the spokes would punch holes through
+        /// the hub instead of joining it. Filling each part on its own path means an overlap simply paints
+        /// the same pixels twice, which is what "these pieces are one solid object" needs to look like.
+        ///
+        /// SIZE. Rendered and inspected at 18/22/28/40 px before it shipped. The spokes and the bore do not
+        /// survive 18 px — the spoke gaps close and the centre fills in — which is why the title bar draws
+        /// this at 22 (see GEAR_SIZE in GuideToolGui). Radii are bounded by the Canvas zoom: design box 60 at
+        /// 1.12 zoom means anything past about 26.8 from the centre falls outside the tile, so the tips sit
+        /// at 25.5. Do not raise them without lowering the zoom.
+        /// </remarks>
         private static void DrawGear(Context ctx, int x, int y, float w, float h, double[] rgba)
         {
             var c = new Canvas(x, y, w, h, 60);
-            Pen(ctx, rgba, c.L(3.4));
+            SetColor(ctx, rgba, 1.0);
 
             const double cx = 30, cy = 30;
-            for (int i = 0; i < 8; i++)
+            const int teeth = 8, spokes = 6;
+            const double rTip = 25.5;       // tooth tips — the outer silhouette
+            const double rRoot = 21.5;      // tooth roots = outer edge of the rim
+            const double rRimIn = 17.8;     // inner edge of the rim
+            const double rHub = 7.6;        // hub boss
+            const double rBore = 4.6;       // the hole through the middle
+            const double spokeHalf = 1.9;
+
+            // ---- 1. the toothed rim: the outer outline, with the rim's bore taken out of it ----
+            double pitch = Math.PI * 2 / teeth;
+            double tipHalf = pitch * 0.22;           // narrower at the tip than at the root, so the flanks
+            double rootHalf = pitch * 0.32;          // taper like a cast tooth rather than being square
+
+            // HALF A TOOTH OF PHASE (human-directed, v0.4.10): puts a VALLEY at twelve and six o'clock
+            // instead of a tooth. With eight teeth that lands valleys on all four cardinals, so the glyph
+            // reads square to the title bar rather than tilted. The spokes are deliberately NOT rotated to
+            // match — six spokes cannot align with eight teeth at any phase, and rotating them 30 degrees
+            // aims a spoke straight into the top valley, which looks like a mistake.
+            double phase = pitch * 0.5;
+
+            ctx.NewPath();
+            ctx.FillRule = FillRule.EvenOdd;
+            for (int i = 0; i < teeth; i++)
             {
-                double a = i * Math.PI / 4.0;
-                double ca = Math.Cos(a), sa = Math.Sin(a);
-                ctx.MoveTo(c.X(cx + ca * 14), c.Y(cy + sa * 14));
-                ctx.LineTo(c.X(cx + ca * 23), c.Y(cy + sa * 23));
+                double a = i * pitch + phase;
+                GearVertex(ctx, c, cx, cy, rRoot, a - rootHalf, moveTo: i == 0);
+                GearVertex(ctx, c, cx, cy, rTip, a - tipHalf, moveTo: false);
+                GearVertex(ctx, c, cx, cy, rTip, a + tipHalf, moveTo: false);
+                GearVertex(ctx, c, cx, cy, rRoot, a + rootHalf, moveTo: false);
+                // The valley is a genuine arc of the root circle, so the gaps between teeth are round like a
+                // cast gear rather than flat-bottomed. It ends exactly where the next tooth's root begins.
+                ctx.Arc(c.X(cx), c.Y(cy), c.L(rRoot), a + rootHalf, a + pitch - rootHalf);
             }
-            ctx.Stroke();
+            ctx.ClosePath();
+            GearCircle(ctx, c, cx, cy, rRimIn);
+            ctx.Fill();
 
-            ctx.Arc(c.X(cx), c.Y(cy), c.L(14), 0, Math.PI * 2);
-            ctx.Stroke();
+            // ---- 2. the spokes ----
+            // Winding, not even-odd: all six are wound the same way, so where they meet at the centre they
+            // merge instead of cancelling. They start inside the hub and end inside the rim so both joints
+            // are overlaps rather than seams that could open up a pixel gap.
+            ctx.NewPath();
+            ctx.FillRule = FillRule.Winding;
+            for (int i = 0; i < spokes; i++)
+            {
+                double a = i * Math.PI * 2 / spokes;
+                double ca = Math.Cos(a), sa = Math.Sin(a);
+                SpokeCorner(ctx, c, cx, cy, ca, sa, rBore + 0.5, -spokeHalf, moveTo: true);
+                SpokeCorner(ctx, c, cx, cy, ca, sa, rRimIn + 0.6, -spokeHalf, moveTo: false);
+                SpokeCorner(ctx, c, cx, cy, ca, sa, rRimIn + 0.6, spokeHalf, moveTo: false);
+                SpokeCorner(ctx, c, cx, cy, ca, sa, rBore + 0.5, spokeHalf, moveTo: false);
+                ctx.ClosePath();
+            }
+            ctx.Fill();
 
-            ctx.Arc(c.X(cx), c.Y(cy), c.L(5.5), 0, Math.PI * 2);
-            ctx.Stroke();
+            // ---- 3. the hub, with the bore through it ----
+            ctx.NewPath();
+            ctx.FillRule = FillRule.EvenOdd;
+            GearCircle(ctx, c, cx, cy, rHub);
+            GearCircle(ctx, c, cx, cy, rBore);
+            ctx.Fill();
+        }
+
+        private static void GearVertex(
+            Context ctx, Canvas c, double cx, double cy, double r, double a, bool moveTo)
+        {
+            double px = c.X(cx + Math.Cos(a) * r);
+            double py = c.Y(cy + Math.Sin(a) * r);
+            if (moveTo) ctx.MoveTo(px, py); else ctx.LineTo(px, py);
+        }
+
+        // A full circle as its own subpath. The MoveTo (rather than NewSubPath) puts the current point on the
+        // arc's own start, so the lead-in line Cairo inserts has zero length and cannot streak across the face.
+        private static void GearCircle(Context ctx, Canvas c, double cx, double cy, double r)
+        {
+            ctx.MoveTo(c.X(cx + r), c.Y(cy));
+            ctx.Arc(c.X(cx), c.Y(cy), c.L(r), 0, Math.PI * 2);
+        }
+
+        // A spoke corner, given the spoke's axis: u runs along it from the centre, v across it.
+        private static void SpokeCorner(
+            Context ctx, Canvas c, double cx, double cy, double ca, double sa,
+            double u, double v, bool moveTo)
+        {
+            double px = c.X(cx + u * ca - v * sa);
+            double py = c.Y(cy + u * sa + v * ca);
+            if (moveTo) ctx.MoveTo(px, py); else ctx.LineTo(px, py);
         }
 
         private static void DrawExpandChevron(Context ctx, int x, int y, float w, float h, double[] rgba, bool down)

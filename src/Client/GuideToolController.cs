@@ -314,8 +314,8 @@ namespace Layout.Client
         {
             if (_renderer.RenderingEnabled) return false;
             Error("layout-renderingoff",
-                "Layout guide rendering is off. Use /layout on to turn it back on "
-                + "(or .layout on in client-only mode).");
+                "Layout guides are hidden. Turn them back on with \"Show guides\" on the tool panel's "
+                + "settings page (F, then the gear), or /layout on.");
             return true;
         }
 
@@ -2166,6 +2166,10 @@ namespace Layout.Client
         public void OnRenderingChanged(bool enabled)
         {
             _hud.SetRenderingEnabled(enabled);
+            // The GUI is told either way, and is NOT closed when guides go off (v0.4.2). Its settings page
+            // now carries the switch that turns them back on, so closing the dialog stranded the player on
+            // the chat command. It composes its tool page fully inert instead.
+            _gui.SetRenderingEnabled(enabled);
             if (enabled) return;
 
             if (_grab != null) CancelGrab();
@@ -2187,7 +2191,6 @@ namespace Layout.Client
             _currentTargetGuide = null;
             _renderer.ClearDraftPreview();
             _hud.SetComatoseDraft(false);
-            if (_gui.IsOpened()) _gui.TryClose();
             if (!_toolHeld) _hud.TryClose();
         }
 
@@ -2309,7 +2312,9 @@ namespace Layout.Client
         public bool OnToolGuiHotkey()
         {
             if (!IsToolActive()) return false;
-            if (WarnIfRenderingDisabled()) return true;
+            // Deliberately NOT gated on rendering (v0.4.2). Opening the panel is the one thing that must
+            // still work while guides are hidden, because the switch to unhide them is on its settings page.
+            // Everything the panel can DO is inert in that state; only the gear responds.
             if (_gui.IsOpened()) _gui.TryClose(); else _gui.TryOpen();
             return true;
         }

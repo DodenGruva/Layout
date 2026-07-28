@@ -39,6 +39,9 @@ namespace Layout.Network
         private LocalGuideAuthority _local;
         private bool _receivedServerBulkSync;
         private bool _preferClientOnly;
+
+        // A "Publish Private Guides" waiting on the server to confirm the switch to public mode.
+        private bool _pendingPublish;
         private bool _serverLayoutAvailable;
         private bool _serverAllowsClientOnlyMode;
         // Placement mode answers where NEW guides go. In a mixed world the player can still edit either
@@ -242,6 +245,31 @@ namespace Layout.Network
             return true;
         }
 
+        /// <summary>The client PREFERS private, client-stored guides. This is the saved preference, not the
+        /// mode currently in force — a server may refuse it (see <see cref="AuthorityMode"/>).</summary>
+        public bool PrefersClientOnly => _preferClientOnly;
+
+        /// <summary>
+        /// Changes the private-guide preference IN PLAY (v0.4.2, the settings page). Until now this was
+        /// file-only: <see cref="ResetAuthorityMode"/> read it once at client start and nothing could move
+        /// it afterwards.
+        /// </summary>
+        /// <remarks>
+        /// The preference is saved unconditionally because it is a CROSS-SERVER preference. If this
+        /// particular server refuses private guides, its reply switches the active mode back and prints the
+        /// refusal, but the preference must survive — reverting it here would clobber the setting for every
+        /// other server the player visits. Off a Layout server there is nothing to ask: the session is
+        /// already local and stays local, and the preference simply applies the next time it can.
+        /// </remarks>
+        public void SetClientOnlyPreference(bool clientOnly)
+        {
+            if (_preferClientOnly == clientOnly) return;
+            _preferClientOnly = clientOnly;
+            ForceClientOnlyPreferenceChanged?.Invoke(clientOnly);
+            if (_serverLayoutAvailable)
+                _channel.SendPacket(new ClientPlacementModeRequestPacket(clientOnly));
+        }
+
         /// <summary>Returns authority selection to neutral without touching a network bulk sync already received.</summary>
         public void ResetAuthorityMode(bool forceClientOnly = false)
         {
@@ -257,6 +285,7 @@ namespace Layout.Network
             _receivedServerBulkSync = false;
             _serverLayoutAvailable = false;
             _serverAllowsClientOnlyMode = false;
+            _pendingPublish = false;
             _lastMutationWasLocal = null;
             _local = null;
             _guides.Clear();
@@ -420,6 +449,16 @@ namespace Layout.Network
 
             if (!string.IsNullOrWhiteSpace(packet.Message))
                 _capi.ShowChatMessage("[Layout] " + packet.Message);
+
+            // A publish parked by PublishPrivateGuides is released here, once the server has confirmed the
+            // player is public — earlier than this it would be rejected. Cleared on ANY answer, so a refused
+            // switch cannot leave it armed to fire on some unrelated mode change later.
+            if (_pendingPublish)
+            {
+                _pendingPublish = false;
+                if (!packet.ClientOnly && packet.Allowed) SendPrivateGuidePush();
+                else _capi.ShowChatMessage("[Layout] Could not switch to public mode, so nothing was published.");
+            }
         }
 
         private void OnGuidePushRequest(ClientGuidePushRequestPacket packet)
@@ -431,6 +470,69 @@ namespace Layout.Network
             }
 
             ClientGuidePushDto[] guides = _local?.CreatePushDtos() ?? Array.Empty<ClientGuidePushDto>();
+            _channel.SendPacket(new ClientGuidePushPacket(guides));
+        }
+
+        /// <summary>How many private guides this client is holding — what "Publish Private Guides" would send.</summary>
+        public int PrivateGuideCount => _localGuideIds.Count;
+
+        /// <summary>
+        /// Publishes every private guide to the server, going public first if necessary (v0.4.6, the settings
+        /// page's "Publish Private Guides" button).
+        /// </summary>
+        /// <remarks>
+        /// The chat route is server-PULLED: <c>/layout client push all</c> refuses unless the player is
+        /// already public, then asks the client to upload. This is the same upload with the mode switch
+        /// folded in, so the player is not made to run two commands in the right order to get one outcome.
+        ///
+        /// It needs no new packet and no protocol bump. <c>ClientGuidePushPacket</c> may be sent unprompted —
+        /// the server's handler re-validates client-only mode and privilege on receipt regardless of how the
+        /// push was started, so the request packet was only ever the server's way of asking, never a
+        /// permission token.
+        ///
+        /// GOING PUBLIC IS A ROUND TRIP, and until the server answers it still has the player in its
+        /// client-only set and would reject the upload. So the push is PARKED and sent from
+        /// <see cref="OnPlacementMode"/> when the switch is confirmed, never fired optimistically.
+        /// </remarks>
+        public void PublishPrivateGuides()
+        {
+            if (!_serverLayoutAvailable)
+            {
+                _capi.ShowChatMessage("[Layout] There is no Layout server here to publish guides to.");
+                return;
+            }
+            if (PrivateGuideCount == 0)
+            {
+                _capi.ShowChatMessage("[Layout] You have no private guides to publish.");
+                return;
+            }
+
+            if (AuthorityMode == ClientAuthorityMode.Networked && !_preferClientOnly)
+            {
+                SendPrivateGuidePush();
+                return;
+            }
+
+            // Deliberately NOT routed through SetClientOnlyPreference: that early-returns when the
+            // preference already reads public, which would leave the parked push waiting for a reply that
+            // was never requested.
+            _pendingPublish = true;
+            if (_preferClientOnly)
+            {
+                _preferClientOnly = false;
+                ForceClientOnlyPreferenceChanged?.Invoke(false);
+            }
+            _channel.SendPacket(new ClientPlacementModeRequestPacket(false));
+        }
+
+        private void SendPrivateGuidePush()
+        {
+            ClientGuidePushDto[] guides = _local?.CreatePushDtos() ?? Array.Empty<ClientGuidePushDto>();
+            if (guides.Length == 0)
+            {
+                _capi.ShowChatMessage("[Layout] You have no private guides to publish.");
+                return;
+            }
             _channel.SendPacket(new ClientGuidePushPacket(guides));
         }
 
