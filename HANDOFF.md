@@ -3,16 +3,16 @@
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
 > and the performance-relevant mechanics. Updated 2026-07-27 against the built/package checkpoint
-> **v0.3.89 on the `beta` branch** (v0.3.53 is live on `main`). Where this file and the code
+> **v0.4.0 on the `beta` branch** (v0.3.53 is live on `main`). Where this file and the code
 > disagree, **the code wins** — treat this as a map, then read the `.cs` files it points at.
 >
-> ⚠️ **`dev/ARCHITECTURE.md` (v3.14) and `dev/PROJECT_STATUS.md` predate Sessions 28–30** and do not know
-> about vertex welding, the custom shader, block occupancy, or Move mode. This file and the session records
+> ⚠️ **`dev/ARCHITECTURE.md` (v3.14) and `dev/PROJECT_STATUS.md` predate Sessions 28–31** and do not know
+> about vertex welding, the custom shader, block occupancy, or Transform mode. This file and the session records
 > are ahead of them.
 >
 > **Deeper docs:** `CHANGELOG.md` (player-facing release log), `dev/ARCHITECTURE.md` (the authoritative
 > plan + Settled Decisions Register, v3.14), `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list),
-> `dev/SESSION_9/…/30.md` (per-session history), `dev/PLAN_RENDER_PERFORMANCE.md` (the live rendering plan +
+> `dev/SESSION_9/…/31.md` (per-session history), `dev/PLAN_RENDER_PERFORMANCE.md` (the live rendering plan +
 > measurements), `dev/PLAN_BLOCK_OCCUPANCY.md` (the delivered occupancy feature + its disproved first draft),
 > `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
@@ -47,9 +47,9 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** **v0.3.89** built and packaged; v0.3.53 is the live `main` release. Session 30 added **F6 Move
-  mode** — a fourth tool mode that slides a whole guide without touching its shape, driven by an arrow pad
-  in the GUI or by a crosshair drag (see §4 and §8). Sessions 28–29 added a
+- **Status:** **v0.4.0** built and packaged; v0.3.53 is the live `main` release. Sessions 30–31 added the
+  **Transform** tool mode — move, rotate, copy and mirror a whole guide without touching its shape, from a
+  state-driven direction pad (see §4). Sessions 28–29 added a
   **custom guide shader** (guide frame cost 8.2 ms → 1.8 ms on an 8M-voxel guide), **vertex welding**
   (−72.9% vertices, no visible change), **settled-shell streaming**, procedural **voxel outlines**, and the
   **block-occupancy recolour** — guide voxels already holding world material are drawn cyan and update live
@@ -65,11 +65,12 @@ guides on servers without Layout and, when server policy permits, alongside publ
   durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
   **mesh pass Stage A (exposed-face meshing) has shipped** and filled 3D interiors are retired. Volumes may
   persist as their hollow **Shell** or canonical structural **Wireframe**.
-- **Size:** **79 source files** (`src/`), ~one asset tree (now including `assets/layout/shaders/`), one
+- **Size:** **81 source files** (`src/`), ~one asset tree (now including `assets/layout/shaders/`), one
   `.csproj`.
 - **Data schema:** **DataVersion 12** (creator/Last Sculptor attribution; v11 `IsWireframe`; v10 cached metadata).
   Move changes nothing here — a translated guide persists through the fields it already had.
-- **Wire protocol:** **17** (whole-guide translation; 16 personal render state; explicit immense-placement
+- **Wire protocol:** **19** (whole-guide rotation and the compound transform/copy; 17 whole-guide
+  translation; 16 personal render state; explicit immense-placement
   rejection; player moderation policy; `/layout who` query; v12 attribution metadata; v11 wireframe state;
   protocol 9 polygon orientation; earlier append-only fields remain compatible with matching builds).
 - **Catalog:** **15 shape types**, shown as **21 picker tiles** — a full 2D family plus an eight-volume 3D family.
@@ -128,10 +129,10 @@ Layout/                         ← repo root = git root; holds the MOD CODE
 ├── assets/layout/              ← itemtypes, textures, lang
 ├── assets/layout/shaders/      ← guide.vsh / guide.fsh — MUST be pure ASCII
 ├── CHANGELOG.md                ← player-facing release log (part of the doc-update set)
-├── src/                        ← all 79 .cs files (see §6)
+├── src/                        ← all 81 .cs files (see §6)
 └── dev/                        ← ALL PROSE DOCS live here (NOT the code)
     ├── ARCHITECTURE.md  PROJECT_STATUS.md  TODO.md
-    ├── SESSION_9.md … SESSION_27.md  SESSION_28.md  SESSION_29.md  SESSION_30.md
+    ├── SESSION_9.md … SESSION_27.md  SESSION_28.md … SESSION_31.md
     ├── CHANGELOG_ARCHITECTURE.md   ← ARCHITECTURE.md's per-revision deltas (archive)
     ├── PLAN_CLIENT_ONLY.md  PLAN_CHALKING_KIT.md  BUILD_INSTRUCTIONS.txt
     ├── PLAN_RENDER_PERFORMANCE.md  ← Session-28 rendering plan + every measurement taken
@@ -170,12 +171,29 @@ Renamed in git to lowercase throughout, so disk, index and prose now agree. Hist
   either by clicking the GUI's direction pad or by arming free-move and dragging on the crosshair.
   **Delete** dispels. The fixed HUD names the current action, uses a contextual shape tile, and shows exact
   settings/dimensions/count/cap without resizing. `/layout who` reports Creator and Last Sculptor on demand.
-- **Move mechanics.** Steps are whole multiples of the MOVED GUIDE's own voxel scale (×1/×2/×4/×8/×16) and
-  the authority refuses anything finer — see §7. The four horizontal arrows resolve against the player's
-  facing snapped to the nearest world axis (the panel holds the mouse cursor, so the facing cannot drift
-  between clicks); Up/Down are world vertical. Locked points and the as-placed spring-back snapshot both
-  travel with the guide. Moving charges no chalk (chalk is a placement cost) and cannot breach a voxel cap,
-  but the destination IS re-checked against land claims.
+- **Transform mechanics (Sessions 30–31).** The panel's **direction pad is STATE-DRIVEN**: three latching
+  toggles — Move, Copy, Mirror — decide what its six arrows and four rotate corners do. Move and Copy are
+  mutually exclusive (Move+Copy is just Copy), Mirror is independent, and at least one is always lit, so the
+  pad is never inert. The five reachable actions are move, move+mirror, copy, copy+mirror, and mirror in
+  place; a rotate corner with Copy lit yields a duplicate turned a quarter. The HUD names the compound
+  ("Transform · Copy + Mirror") because a copy costs chalk and the other actions do not.
+  - **Distance.** Steps are whole multiples of the guide's own voxel scale (×1/×2/×4/×8/×16); the authority
+    refuses anything finer (§7). **Span** instead steps by the guide's own extent along the pressed axis, so
+    a copy lands flush. Span is the DEFAULT for copies and mirrored moves and merely AVAILABLE for a plain
+    Move, which keeps its one-voxel nudge; clicking a lit step tile toggles back to span. Repeating one copy
+    direction marches outward (1, 2, 3 spans) so a run lays a line rather than a stack.
+  - **Direction.** The four horizontal arrows resolve against the player's facing snapped to the nearest
+    world axis (the panel holds the mouse cursor, so the facing cannot drift between clicks); Up/Down are
+    world vertical. Rotation is quarter turns only — the top corners spin about the vertical, the bottom
+    corners tip about the axis running away from the player.
+  - **Cost.** Locked points and the as-placed spring-back snapshot travel with the guide. Move, rotate and
+    mirror charge no chalk and cannot breach a voxel cap, but their destination IS re-checked against land
+    claims. **A COPY is a placement**: it charges chalk, counts against the cumulative creator cap, and can
+    therefore be refused where the others cannot.
+  - **Mirror needs only one axis choice per press.** Quarter turns about two axes reach all 24 orientations,
+    and adding any single reflection generates all 48 — so mirroring about the guide's OWN CENTRE plane,
+    composed with rotate, reaches everything. It also leaves the guide where it stands. Consequence: with
+    Mirror alone, left/right (and away/toward, up/down) are the same mirror.
 - **Placement** is **two clicks for most shapes**, with deliberately-reopened exceptions: free/right/
   isosceles triangles and Cylinder/Polygonal Prism/Cone/Box take **three clicks** (base + height);
   Tapered Cylinder and Tapered Polygonal Prism take a **fourth** click for the top radius; the
@@ -244,7 +262,7 @@ Pure, dependency-light layers under a server-authoritative core. Namespaces matc
 | `Config/` | `Layout.Config` | `LayoutServerConfig` (`layout.json`), `LayoutClientConfig` (`layout-client.json`). |
 | `Items/` | `Layout.Items` | `ItemGuideTool` — stateless glue; routes clicks to the controller. |
 | `Client/` | `Layout.Client` | `GuideToolController` plus `LocalGuideAuthority`, authority mode, vanilla-item gate, and per-world/per-UID private persistence. |
-| `Undo/` + `Undo/Commands/` | `Layout.Undo[.Commands]` | `IGuideCommand`, `UndoStack`, and 15 command types (Create/Delete/MoveControlPoint/Insert/Lock/RemoveLockMarker/Rescale/Hide/SetProjection/SetFilled/SetDivisions/SetSides/SetWireframe/SpringBack/BreakConstraint/TranslateGuide). |
+| `Undo/` + `Undo/Commands/` | `Layout.Undo[.Commands]` | `IGuideCommand`, `UndoStack`, and 17 command types (… /SpringBack/BreakConstraint/TranslateGuide/RotateGuide/TransformGuide). |
 
 **Data-flow (networked mode):** client `GuideToolController`/GUI/HUD → `ClientNetworkHandler.Send*` →
 protobuf packet → `ServerNetworkHandler` → `GuideManager` validates + persists + records undo → **broadcasts
@@ -293,6 +311,21 @@ mode decides only where a new guide is created.
   the delta as integers in 1/16 units, so a fractional nudge cannot even be expressed. Land claims are
   still re-checked: the destination is new ground. Surface guides translate their `Plane.PlaneOffset` too,
   or moving along the flattened axis would look like nothing happened.
+- **A ROTATION OR MIRROR DOES NOT GUARANTEE THE COUNT, and must not reuse the cache (Session 31).** The
+  lattice still maps onto itself at 90 degrees, but the shape is regenerated from control points rather than
+  from moved cells, and `ShapeGeometry.TryGetFrame` sign-normalises m̂ toward world up — so a polygon-family
+  guide can return with its vertices in a different phase and a slightly different count. `RotateGuide` and
+  `TransformGuide` therefore recount and re-check caps in full, exactly as `Rescale` does. Only
+  `TranslateGuide` may skip that.
+- **Orientation state travels with the geometry.** A quarter turn remaps `ShapePlaneAxis` (the axis set maps
+  onto itself) and re-derives a Surface `Plane`; an axis-aligned MIRROR needs neither, because a reflection
+  maps every world axis onto itself — only the plane offset can move. Volumes need no per-shape work either
+  way: a volume's rise is `BaseNormal(û, ShapePlaneAxis)` with its SIGN taken from which side the apex
+  control point sits on, so rotating or reflecting the apex carries the facing automatically.
+- **Undo stores the pivot.** A transformed shape's bounding centre is not generally where the original's
+  was, so recomputing it on the way back would drift the guide. `TransformGuideCommand` also reverses in
+  order — translate back, THEN reflect about the stored plane — since a reflection is its own inverse only
+  while its plane stays put.
 
 Key struct: `VoxelPosition` is a `readonly struct : IEquatable<VoxelPosition>` (hashes all of X/Y/Z/Type),
 generated in large quantities and de-duplicated through a `HashSet` — deliberately boxing-free in that hot
@@ -616,10 +649,11 @@ cell; an adjacent first-hit body cell now receives a distinct passive marker. Hu
    (3M voxels) the feature stops updating **silently**.
 4. **Keep the broader multiplayer matrix as future regression coverage.** The v0.2.35 public/private pass
    succeeded and is not a release blocker.
-5. **The queued feature set (`dev/TODO.md` F6–F11).** **F6 Move is DELIVERED (Session 30, v0.3.86–v0.3.89).**
-   Recommended order for the rest: **F8 copy a guide → F9 in-game settings panel → F7 mirror/flip**, with
-   F10 (redraw the gear glyph) and F11 (colour-blind-safe palette) alongside. Copy is nearly free now that
-   Move exists and the two compose — copy, then nudge into place.
+5. **The queued feature set (`dev/TODO.md`).** **F6 Move, F7 mirror, F8 copy and F12 rotate are ALL
+   DELIVERED (Sessions 30–31, v0.3.86–v0.4.0)** — the Transform category is complete. What remains:
+   **F9** in-game settings panel (which subsumes T2's formatting/hover work), **F10** redraw the gear glyph,
+   **F11** colour-blind-safe palette, and **T1** CTRL surface-snap on free-move (contact rule decided — the
+   guide's lowest voxel plane meets the surface — but not built).
 6. **If asked:** Roof / Tunnel volumes; concave-safe Free-Shape fill (fill is currently inert on Free-Shapes);
    an F3 re-constrain op; broadcasting the whole Free-Shape draft chain to other players.
 
@@ -664,7 +698,8 @@ voxels-never-stored; pinned append-only enums + JSON-save/protobuf-wire split; t
   and the off-state tool lockout; SESSION_27 records v0.3.53's cumulative-cap override and final release;
   SESSION_28 records the v0.3.55–v0.3.69 rendering arc — welding, settled-shell streaming, the custom shader,
   voxel outlines; SESSION_29 records the v0.3.70–v0.3.85 block-occupancy arc; SESSION_30 records the
-  v0.3.86–v0.3.89 F6 Move arc). For
+  v0.3.86–v0.3.89 F6 Move arc; SESSION_31 records the v0.3.90–v0.4.0 Transform arc — rotate, copy,
+  mirror, the state-driven pad). For
   current state, trust `HANDOFF.md` / the code, not a mid-session checklist inside a
   session record — and note that `ARCHITECTURE.md` and `PROJECT_STATUS.md` now trail this file by two
   sessions.

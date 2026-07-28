@@ -940,6 +940,52 @@ namespace Layout.Network
             _channel.SendPacket(new GuideTranslatePacket(guideId, deltaX, deltaY, deltaZ));
         }
 
+        /// <summary>
+        /// F12 Rotate: turn a whole guide by quarter turns about a world axis. The authority derives the
+        /// pivot from the guide itself, so nothing about it crosses the wire. Unlike a move this can change
+        /// the voxel count and so can be refused by a cap as well as by a land claim.
+        /// </summary>
+        public void SendRotate(Guid guideId, PlaneAxis axis, int quarterTurns)
+        {
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation) { _local.Rotate(guideId, axis, quarterTurns); return; }
+            _channel.SendPacket(new GuideRotatePacket(guideId, axis, quarterTurns));
+        }
+
+        /// <summary>
+        /// F7/F8 Transform pad: one compound action — optional mirror, optional rotation, optional move —
+        /// applied in place or to a fresh copy. A copy is a placement and can be refused for chalk or caps;
+        /// the in-place actions can only be refused by a land claim.
+        /// </summary>
+        public void SendTransform(
+            Guid guideId, int deltaX, int deltaY, int deltaZ,
+            int mirrorAxis, PlaneAxis rotateAxis, int quarterTurns, bool asCopy)
+        {
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation)
+            {
+                GuideData copied = _local.Transform(
+                    guideId, new Vec3d(deltaX / 16.0, deltaY / 16.0, deltaZ / 16.0),
+                    mirrorAxis, rotateAxis, quarterTurns, asCopy);
+                // A private COPY is still a placement, so it charges chalk the same way a fresh private
+                // placement does: the server owns the inventory but cannot see private guides, so the
+                // honest client reports it and the server validates and applies the charge.
+                if (copied != null && ServerLayoutAvailable)
+                {
+                    _channel.SendPacket(new ChalkChargePacket(
+                        Guide.GuideShapeTypes.IsVolume(copied.ShapeType)
+                            ? Items.ItemGuideTool.ChalkCostVolume
+                            : Items.ItemGuideTool.ChalkCostFlat));
+                }
+                if (copied != null) Systems.ChalkEffects.PlacementEffects(_capi.World, copied);
+                return;
+            }
+            _channel.SendPacket(new GuideTransformPacket(
+                guideId, deltaX, deltaY, deltaZ, mirrorAxis, rotateAxis, quarterTurns, asCopy));
+        }
+
         /// <summary>Session 11: spring a guide back to its as-placed form (SHIFT+click).</summary>
         public void SendSpringBack(Guid guideId)
         {

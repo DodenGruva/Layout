@@ -207,6 +207,23 @@ namespace Layout.Config
         [JsonProperty("occupancyRecolour")]
         public bool OccupancyRecolour { get; set; } = false;
 
+        /// <summary>
+        /// Registers the development diagnostic chat commands. **Off by default and deliberately not
+        /// surfaced in the GUI** — these were built to investigate specific problems during development and
+        /// are not part of the mod a player is meant to operate.
+        /// </summary>
+        /// <remarks>
+        /// Hidden rather than deleted because several are still the only way to run verification work that
+        /// remains open (SESSION_29 §7 wants <c>blockevents</c> run in a busy base to measure event noise,
+        /// and <c>occupancyscan</c> to size the occupancy cache). Setting this true in
+        /// <c>layout-client.json</c> brings back: <c>renderstats</c>, <c>weld</c>, <c>occupancy</c>,
+        /// <c>occupancyscan</c>, <c>blockevents</c>. Everything a player legitimately tunes — <c>built</c>,
+        /// <c>inset</c>, <c>voxelframe</c>, <c>shaderbrightness</c>, <c>shader</c>, <c>on</c>/<c>off</c> —
+        /// is registered unconditionally and is unaffected by this.
+        /// </remarks>
+        [JsonProperty("diagnosticCommands")]
+        public bool DiagnosticCommands { get; set; } = false;
+
         /// <summary>Folds out-of-range values (e.g. from a hand-edited file) back to safe defaults.</summary>
         public void Normalize()
         {

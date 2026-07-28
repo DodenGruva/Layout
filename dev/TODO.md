@@ -1,4 +1,4 @@
-# Layout — TODO / Outstanding Items (current: v0.3.89 on `beta`)
+# Layout — TODO / Outstanding Items (current: v0.4.0 on `beta`)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
@@ -7,36 +7,53 @@
 
 ## ⭐ Top of the list (v0.3.53 final release → field reports)
 
-> **✅ F6 MOVE DELIVERED — v0.3.86–v0.3.89 (SESSION_30).** A fourth tool mode: select a guide, then slide it
-> whole from the GUI's arrow pad or on the crosshair. Shape untouched, locked points travel with it, no
-> chalk charged, one undo step. **Protocol 16 → 17**; DataVersion unchanged. Full record in `SESSION_30.md`;
-> its §7 carries six flagged items, of which the live one is that `OnGuideAddedOrUpdated` can still strand a
-> stale wireframe outside Move mode.
+> **✅ THE TRANSFORM CATEGORY IS COMPLETE — v0.3.86–v0.4.0 (SESSION_30 + SESSION_31).**
+> **F6 Move, F12 Rotate, F8 Copy and F7 Mirror are all delivered**, inside a tool mode renamed from Move to
+> **Transform** because all four act on a finished guide as a WHOLE OBJECT without reshaping it.
+> **Protocol 16 → 19**; DataVersion unchanged; 81 source files.
 >
-> **QUEUED 2026-07-26 — the rest of the human-requested set, not started:** **F7 mirror/flip**,
-> **F8 copy a guide**, **F9 in-game settings panel**, plus **F10** (redraw the settings gear glyph) and
-> **F11** (configurable voxel colour scheme, for colour-blind accessibility — the red locked point and green
-> apex are the problem pair).
-> Full write-ups in the feature ledger below. Remaining order is **F8 → F9 → F7**: Copy next because it is
-> nearly free now that Move exists and the two compose (copy, then nudge into place), the settings panel
-> when convenient, and Mirror last — it shares a tool mode with Move but not its difficulty.
+> The direction pad is **state-driven**: Move/Copy/Mirror toggles change what its six arrows and four rotate
+> corners do. Move and Copy are mutually exclusive, Mirror is independent, at least one is always lit.
+> **Span** steps by the guide's own width — the default for copies and mirrored moves, available everywhere
+> something travels. A run of copies in one direction marches outward into a line.
+>
+> Full record in `SESSION_31.md`; its §7 carries six flagged items. The one inherited and still live is that
+> `OnGuideAddedOrUpdated` can strand a stale wireframe outside the Transform hold path.
+>
+> **QUEUED, not started:** **F9** in-game settings panel (subsumes T2 below), **F10** redraw the settings
+> gear glyph, **F11** configurable voxel colour scheme for colour-blind accessibility, and **T1** below.
 
-> **✅ BLOCK OCCUPANCY DELIVERED — v0.3.70–v0.3.85 (SESSION_29).** Guide voxels holding world material are
-> drawn cyan and update live as you build. Playtest verdict: *"the color difference is incredibly helpful."*
-> Off by default; GUI settings page or `/layout built on|off|refresh`. Client-side only.
+> **🔧 OPEN FROM THE TRANSFORM ARC (human-requested 2026-07-27, not started):**
 >
-> Full record in **`SESSION_29.md`**; the design and everything disproved along the way in
-> **`PLAN_BLOCK_OCCUPANCY.md` §0**, which should be read before touching any of it.
+> **T1. CTRL on free-move constrains the guide to the targeted surface.** While free-moving, holding CTRL
+> should drop the guide onto the block face under the crosshair instead of riding the fixed view-ray depth
+> (`MoveSession.Depth`) — the same idea as CTRL's level/cardinal snap while drafting.
+> **✅ DECIDED 2026-07-27: the guide's LOWEST VOXEL PLANE meets the surface.** Unambiguous on every shape
+> and matches the common case of setting a build down on the ground. Accepted consequence: aiming at a wall
+> or ceiling still pushes the guide's BOTTOM to that face, which may read oddly — predictable was preferred
+> over clever. (Rejected: nearest-face, which handles walls but has no sane meaning on a sphere; base
+> anchors, which would sink a dome halfway into the floor since its anchors are its base ring, not its
+> lowest point.)
+> The offset must stay a whole number of the guide's own voxels or `TranslateGuide` will refuse it — snap
+> AFTER computing the contact, not before. The controller already has `CtrlHeld()` and the block raycast;
+> the work is the contact rule, not the plumbing.
 >
-> **Open verification, all quick and all needing play:**
-> 1. **Coarser scales** — exact at scale 1; above that the voxel's centre cell is sampled, never looked at.
-> 2. **Client-only mode** — should be free (nothing touches the server), unconfirmed.
-> 3. **Unloaded chunks** — they deliberately read as EMPTY; check that walking away and back does not leave
->    guides looking wrongly unbuilt.
-> 4. **Event noise** — `/layout blockevents on` in a busy base would show how hard the filter really works.
->
-> **Open gap:** above `OccupancyBatchVoxelCeiling` (3M voxels) the feature silently stops updating, with
-> nothing said to the player. Needs a message. The ceiling itself is a guess — see `SESSION_29.md` §7.
+> **T2. Settings page: better formatting + mouse-over descriptions.** The page is currently a bare stack of
+> label/control pairs with no explanations at all — the prose was removed in v0.3.87 because it overflowed
+> the dialog, and hover text was the agreed replacement but has not been added. Restore each control's
+> explanation as `AddAutoSizeHoverText` on its bounds (the text is recoverable from the v0.3.86 source or
+> `CHANGELOG.md`), and tidy the layout: consistent row heights, aligned labels, and grouping so the opacity
+> slider and the built-voxel switch read as separate settings rather than one run of controls.
+> **"Better formatted" is the human's judgement** — get their eye on it rather than guessing twice.
+
+> **📄 DOC DEBT (human-requested 2026-07-27): merge `PROJECT_STATUS.md` into `HANDOFF.md`.** The two are
+> largely redundant — both are "where the project stands" briefs, and `PROJECT_STATUS.md` has been left to
+> trail (it now carries a banner saying it is three sessions behind, which is itself the evidence). Keep
+> **`HANDOFF.md`** as the single current-state document, fold across anything `PROJECT_STATUS.md` says that
+> HANDOFF does not (its per-module descriptions are the likeliest unique content), then delete
+> `PROJECT_STATUS.md` and update every reference: `CLAUDE.md`, `HANDOFF.md`'s own header and §3 repo tree,
+> `ARCHITECTURE.md`'s banner, and this file's Purpose line. Note that maintaining one fewer status doc is
+> the actual goal — do not simply move the redundancy into HANDOFF.
 
 > **Session-16 playtest results (human-confirmed):** the v0.2.21 **inventory refill and hotbar refill both
 > work** — the MouseDown-hook ordering and the `InventoryID` round-trip both hold, closing `SESSION_16.md` §8.
@@ -819,6 +836,25 @@ step. No chalk charged; claims re-checked at the destination.
 
 Full record, including the two-round rendering defect it exposed, in `SESSION_30.md`.
 
+### F12. Rotate a guide — ✅ DELIVERED (Session 31, v0.3.90)
+Turn a whole guide about a vertical axis, in the Transform mode beside Move, Copy and Mirror. Raised while
+naming that mode; the human "likes the idea", which is interest rather than a commitment.
+
+**Expect this to be the hardest of the four, harder than Mirror.** The control points are trivial to rotate;
+the orientation state around them is not. `ShapePlaneAxis`, `ProjectionPlane`, `FlatSideAligned` and the
+apex/primary point of directional shapes (arch, tapered cylinder, cone, polygonal prism) all encode
+orientation, and a naive point rotation leaves a turned shape whose settings still describe the old facing —
+the same trap F7 documents, but worse, because mirror maps an axis to itself and rotation maps one axis onto
+another.
+
+Two constraints worth settling early:
+- **90-degree increments only, about the vertical.** Arbitrary angles would put control points off the
+  quantise lattice, so the rendered cells would no longer be a clean remap of the originals — the property
+  that makes Move exact and cheap (see F6). At 90 degrees the lattice maps onto itself and a rotation is as
+  exact as a translation. Free rotation is a much larger piece of work and probably should not be attempted.
+- **About what centre?** The guide's own bounding centre is the obvious default; rotating about a picked
+  anchor is the more useful behaviour when aligning to an existing build. Both are cheap; pick one in play.
+
 ### F11. Configurable voxel colour scheme — accessibility (human-requested 2026-07-26)
 Let players change the guide colour palette from the settings page. **Motivation is accessibility, not
 taste:** the current palette can be unreadable for colour-blind players.
@@ -869,29 +905,58 @@ Wants: an actual toothed gear silhouette. Watch the size — this draws at 18 px
 why the first attempt avoided real teeth; a filled/solid form will probably survive small sizes better
 than a stroked outline.
 
-### F7. Mirror / flip a guide across an axis (human-requested 2026-07-26)
-Reflect a guide across one of its own axes. Rides in the same Move mode.
+### F7. Mirror / flip a guide — ✅ DELIVERED (Session 31, v0.3.93)
+Reflect a guide so it changes handedness. Rides in the Transform mode.
 
-Harder than F6 and worth separating from it. Reflecting the control points is trivial; the orientation
-state around them is not — `ShapePlaneAxis`, `ProjectionPlane`, `FlatSideAligned`, and the apex/primary
-point of directional shapes (arch, tapered cylinder, cone, polygonal prism) all carry handedness. A naive
-point reflection will produce a mirrored shape whose settings still describe the old orientation. Expect
-per-shape work, and expect a symmetric shape (sphere, box) to be free while a tapered prism is not.
-Also undecided: mirror about the guide's own centre, or about a plane the player picks?
+**✅ DECIDED 2026-07-27: ONE button, mirroring about the guide's OWN CENTRE plane.**
+Quarter turns about two axes already reach all 24 axis-aligned orientations; a reflection is the one thing
+no rotation can produce, but adding **any single** reflection to that set generates all 48 — so three
+per-axis mirror buttons would only add new ways to reach results that one button plus the rotate buttons
+already reach. Mirroring about the guide's own centre also leaves it where it stands, so it composes with
+move and rotate instead of displacing the guide as a side effect.
 
-### F8. Copy an existing guide (human-requested 2026-07-26) — NEXT UP
+**The old "harder than F6, expect per-shape work" estimate predates F12 and no longer holds.** Rotate built
+the entire scaffold: snapshot, transform points + `OriginalControlPoints` together, remap `ShapePlaneAxis`,
+remap the Surface `Plane`, re-adopt the shape, recount, claim-check, roll back. `MirrorGuide` is
+`RotateGuide` with a different point transform and no pivot ambiguity. Rotate also PROVED the load-bearing
+assumption — that a volume's facing survives a transform, because its rise direction takes its sign from
+which side the apex control point sits on.
+
+**What mirror is actually for.** On a sphere, box, cylinder, dome, regular polygon, rectangle, circle or
+ellipse a mirror is either a no-op or the same as a rotation. Its value is concentrated in **Free-Shapes,
+scalene/right triangles, and anything hand-sculpted asymmetrically** — where a reflected copy genuinely
+cannot be reached any other way. Real, but narrower than "mirror any guide".
+
+### F8. Copy an existing guide — ✅ DELIVERED (Session 31, v0.3.93)
 Duplicate a guide, presumably placing the copy offset by a step so it is immediately visible, then let F6
 move it into position. **The cheapest of the three** — `GuideData.DeepClone()` already exists; a copy is a
 clone with a fresh `Guid`. **F6 has shipped**, so the compose story is now real: copy, then nudge into
 place. The Move mode's selection, arrow pad and grey-out behaviour are all reusable as-is.
 
-Two decisions that are policy, not code:
-- **Does a copy cost chalk?** It is a new placement and F5 charges 2D −1 / 3D −2 on completed placements.
-  Charging is consistent; not charging makes copy the obvious way to dodge durability. Recommend charging.
-- **It counts against the cumulative creator cap** (a copy is genuinely a second guide's worth of voxels),
-  so copying a large guide can be refused. That refusal must read clearly, not fail silently.
+**✅ DECIDED 2026-07-27: a copy CHARGES CHALK as a placement** — 2D −1 / 3D −2, exactly like any completed
+placement, and it counts against the cumulative creator cap. Without that, copy is the obvious way to dodge
+the Chalking Kit's durability entirely: place one guide, then duplicate it for free forever.
+- **It can therefore be REFUSED** where move, rotate and mirror cannot (they are all free and can only be
+  refused by a land claim). That refusal must read clearly, not fail silently.
+- Follow the existing kit rule where they meet: the kit never LOCKS OUT at 0 chalk, so match whatever
+  placement does at 0 rather than inventing a second policy for copy.
 
-### F9. In-game settings panel in the GUI (human-requested 2026-07-26)
+**Panel placement (agreed 2026-07-27):** Copy and Mirror get their own short labelled row BENEATH the pad,
+not slots inside it. The pad means position and facing; these two differ in kind — one makes a new guide,
+the other changes handedness — and the vertical column is better left with its free slot than filled with
+an unrelated button.
+
+```
+[spin<] [away]   [spin>]    [Up]
+[left]  [free]   [right]
+[tip <] [toward] [tip >]    [Down]
+
+Actions   [Copy]  [Mirror]
+```
+
+### F9. In-game settings panel in the GUI (human-requested 2026-07-26) — NEXT UP
+Absorbs **T2** (settings-page formatting + hover descriptions), which is the same work at smaller scope.
+
 Let players change client settings from the GUI instead of editing `layout-client.json` and restarting.
 
 **The lowest-risk of the four and largely UI work over plumbing that already exists.** Every candidate is
@@ -925,9 +990,10 @@ the inventory refill remains (Top of the list).
 ## Next session — start here
 
 **The agenda is "⭐ Top of the list" at the top of this file** — it is not repeated here. Current state:
-v0.3.89 is built, packaged and documented on `beta`. F6 Move shipped this session; **F8 (copy a guide) is
-the recommended next feature.** The open verification items from Session 29 (block occupancy) and the six
-flagged items in `SESSION_30.md` §7 are the standing backlog.
+**v0.4.0** is built, packaged and documented on `beta`. The Transform category (F6/F7/F8/F12) is complete.
+**F9 — the in-game settings panel — is the recommended next feature**, since it subsumes T2. The standing
+backlog is T1 (CTRL surface-snap), F10, F11, the six flagged items in `SESSION_31.md` §7, the Session-29
+occupancy verification items, and the `PROJECT_STATUS.md` → `HANDOFF.md` merge.
 
 **Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\Layout Zips\`;
 docs are updated ONLY when the human says so — and **`CHANGELOG.md` is part of that set** (it was missed at

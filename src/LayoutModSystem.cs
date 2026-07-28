@@ -329,7 +329,7 @@ namespace Layout
         private void RegisterClientCommands(ICoreClientAPI capi)
         {
             var parsers = capi.ChatCommands.Parsers;
-            capi.ChatCommands
+            IChatCommand root = capi.ChatCommands
                 .Create("layout")
                 .WithDescription("Client-side Layout commands.")
                 .BeginSubCommand("dispel")
@@ -340,10 +340,6 @@ namespace Layout
                 .BeginSubCommand("who")
                     .WithDescription("Show the creator and last sculptor of your selected or targeted guide.")
                     .HandleWith(OnClientWhoCommand)
-                .EndSubCommand()
-                .BeginSubCommand("renderstats")
-                    .WithDescription("Show local Layout guide rendering statistics for the last frame.")
-                    .HandleWith(OnClientRenderStatsCommand)
                 .EndSubCommand()
                 .BeginSubCommand("inset")
                     .WithDescription(
@@ -374,6 +370,34 @@ namespace Layout
                     .WithArgs(parsers.Word("on-or-off"))
                     .HandleWith(OnClientShaderCommand)
                 .EndSubCommand()
+                .BeginSubCommand("built")
+                    .WithDescription(
+                        "Colour guide voxels that already hold material (on / off / refresh). Rebuilds "
+                        + "your guides; affects nobody else.")
+                    .WithArgs(parsers.Word("on-off-or-refresh"))
+                    .HandleWith(OnClientBuiltCommand)
+                .EndSubCommand()
+                .BeginSubCommand("off")
+                    .WithDescription("Turn off all Layout guide rendering for yourself.")
+                    .HandleWith(OnClientRenderingOffCommand)
+                .EndSubCommand()
+                .BeginSubCommand("on")
+                    .WithDescription("Turn on all Layout guide rendering for yourself.")
+                    .HandleWith(OnClientRenderingOnCommand)
+                .EndSubCommand();
+
+            // DEVELOPMENT DIAGNOSTICS — not registered unless `diagnosticCommands` is set true in
+            // layout-client.json. These were built to investigate specific problems while developing the
+            // renderer and the occupancy feature; they report internals, they are not things a player is
+            // meant to operate, and a couple of them are actively unhelpful to stumble into (blockevents
+            // spams chat). Kept behind the flag rather than deleted because they are still the only way to
+            // run the verification work SESSION_29 §7 leaves open.
+            if (ClientConfig?.DiagnosticCommands != true) return;
+
+            root.BeginSubCommand("renderstats")
+                    .WithDescription("Diagnostic: last-frame Layout guide rendering statistics.")
+                    .HandleWith(OnClientRenderStatsCommand)
+                .EndSubCommand()
                 .BeginSubCommand("weld")
                     .WithDescription(
                         "Diagnostic: toggle guide vertex welding to compare the meshes side by side.")
@@ -389,13 +413,6 @@ namespace Layout
                         + "and print the 1/16 slice at your aim point.")
                     .HandleWith(OnClientOccupancyCommand)
                 .EndSubCommand()
-                .BeginSubCommand("built")
-                    .WithDescription(
-                        "Colour guide voxels that already hold material (on / off / refresh). Rebuilds "
-                        + "your guides; affects nobody else.")
-                    .WithArgs(parsers.Word("on-off-or-refresh"))
-                    .HandleWith(OnClientBuiltCommand)
-                .EndSubCommand()
                 .BeginSubCommand("occupancyscan")
                     .WithDescription(
                         "Diagnostic: read sub-block occupancy for a cube of the given radius (1-32) around "
@@ -409,14 +426,6 @@ namespace Layout
                         + "event also fires for nearby chests, furnaces and other ticking blocks.")
                     .WithArgs(parsers.Word("on-or-off"))
                     .HandleWith(OnClientBlockEventsCommand)
-                .EndSubCommand()
-                .BeginSubCommand("off")
-                    .WithDescription("Turn off all Layout guide rendering for yourself.")
-                    .HandleWith(OnClientRenderingOffCommand)
-                .EndSubCommand()
-                .BeginSubCommand("on")
-                    .WithDescription("Turn on all Layout guide rendering for yourself.")
-                    .HandleWith(OnClientRenderingOnCommand)
                 .EndSubCommand();
         }
 

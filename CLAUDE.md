@@ -14,9 +14,9 @@ on servers without Layout and, when permitted, alongside public guides. The tool
 (SESSION_21), on top of exposed-face meshing (SESSION_16, Stage A). 3D volumes can persist as either a
 hollow **Shell** or a structural **Wireframe**.
 The catalog is **15 shape types / 21 picker tiles** (SESSION_20 added straight/tapered Polygonal Prisms).
-Guide voxels that already hold world material can be drawn in a "built" colour, live (SESSION_29). A whole
-guide can be slid into place without reshaping it (**Move mode**, SESSION_30).
-Status: **v0.3.89 on the `beta` branch** (v0.3.53 is the last `main` release; the mod is public).
+Guide voxels that already hold world material can be drawn in a "built" colour, live (SESSION_29). A finished
+guide can be moved, rotated, copied and mirrored as a whole object (**Transform mode**, SESSION_30/31).
+Status: **v0.4.0 on the `beta` branch** (v0.3.53 is the last `main` release; the mod is public).
 
 > **Renderer note — read before any rendering work.** Guides are **order-dependent translucent geometry**
 > (Opaque stage, manual alpha blending, depth-tested, double-sided). On a hollow shell the guide overlaps
@@ -42,7 +42,7 @@ Status: **v0.3.89 on the `beta` branch** (v0.3.53 is the last `main` release; th
 - **Versioning rule (standing, human-set):** EVERY revision bumps `modinfo.json` and ships as a NEW
   `Layout<version>.zip` in **`..\LayoutZips\`** (the sibling folder of this repo — human-directed location;
   holds 0.1.10–0.1.27 + the 0.2.x line; the 0.1.28–0.1.53 zips live in `Documents\ChatGPT\LayoutZips\`) —
-  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.3.89.**
+  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.4.0.**
   (The folder's real name has a space: `..\Layout Zips\`.)
   **Zip layout matters:** entry paths must use FORWARD slashes with no directory entries, root files first.
   `Compress-Archive` on Windows PowerShell 5.1 writes backslashes and directory entries and is therefore
@@ -95,18 +95,20 @@ Status: **v0.3.89 on the `beta` branch** (v0.3.53 is the last `main` release; th
   streaming, the custom guide shader, voxel outlines), and SESSION_29 the **v0.3.70–v0.3.85 block-occupancy
   arc** (the face outset, the settings page, sub-block world reads, the built-voxel colour, and its live
   per-batch updates), and SESSION_30 the **v0.3.86–v0.3.89 F6 Move arc** (whole-guide translation, the
-  arrow pad and free-move, the materialization hold, and the graduated precision floor).
+  arrow pad and free-move, the materialization hold, and the graduated precision floor), and SESSION_31 the
+  **v0.3.90–v0.4.0 Transform arc** (rotate, copy, mirror, the state-driven pad, span stepping, copy runs,
+  and hiding the development diagnostic commands).
 
-## ✅ Docs updated to v0.3.89 (2026-07-27)
-Consistent with **v0.3.89, DataVersion 12, protocol 17, 79 source files, 15 shape types / 21 tiles**.
-`SESSION_30.md` is the latest record (Move: `SESSION_30.md`, occupancy: `SESSION_29.md` +
-`PLAN_BLOCK_OCCUPANCY.md`, mesh: `SESSION_16.md` + `SESSION_28.md`, F5: `SESSION_15.md`).
-`CHANGELOG.md` is current through v0.3.89 (0.3.70–0.3.85 were backfilled in Session 30).
+## ✅ Docs updated to v0.4.0 (2026-07-27)
+Consistent with **v0.4.0, DataVersion 12, protocol 19, 81 source files, 15 shape types / 21 tiles**.
+`SESSION_31.md` is the latest record (Transform: `SESSION_30.md` + `SESSION_31.md`, occupancy:
+`SESSION_29.md` + `PLAN_BLOCK_OCCUPANCY.md`, mesh: `SESSION_16.md` + `SESSION_28.md`, F5: `SESSION_15.md`).
+`CHANGELOG.md` is current through v0.4.0.
 
-⚠️ **`ARCHITECTURE.md` (v3.14) and `PROJECT_STATUS.md` predate Sessions 28–30.** They are not wrong about
+⚠️ **`ARCHITECTURE.md` (v3.14) and `PROJECT_STATUS.md` predate Sessions 28–31.** They are not wrong about
 what they describe, but they do not know about vertex welding, settled-shell streaming, the custom shader,
-block occupancy, or Move mode. `HANDOFF.md`, the session records and the plans are authoritative for those.
-Prefer source for exact identifiers.
+block occupancy, or Transform mode. `HANDOFF.md`, the session records and the plans are authoritative for
+those. Prefer source for exact identifiers.
 
 ⚠️ **`SESSION_26.md` carries a correction banner** — three of its claims were disproved in Session 28,
 including the 140→80 FPS regression that closed the rendering arc. Do not plan renderer work from it alone.
@@ -133,13 +135,34 @@ Its §0 records the disproved conclusions so they are not re-derived.
   so nothing is lost to the trim un-recorded.
 - **Commit only when the human instructs.** `main` is the mainline; never push without direction.
 
-## Tool modes: Create · Edit · Move · Delete
+## Tool modes: Create · Edit · Transform · Delete
 **Create** owns all geometry (place, grab/reshape, insert, lock; right-click = cancel/lock). **Edit** is
 settings-only: left-click **selects** a guide and the GUI's setting rows then act on THAT guide (no
 reshaping — geometry stays in Create); this replaced the old panel-expanding "selected-guide section".
-**Move** (Session 30) selects the same way and slides the whole guide, never reshaping it. **Delete**
-dispels. `ToolMode` is client-only (never wired), so it's safe to reorder — Move was inserted before
-Delete for exactly that reason.
+**Transform** (Sessions 30–31) selects the same way and then acts on the guide as a WHOLE OBJECT without
+reshaping it: move, rotate, copy, mirror. **Delete** dispels. `ToolMode` is client-only (never wired), so
+it's safe to reorder — Transform was inserted before Delete for exactly that reason.
+
+## Session-31 additions (v0.3.90–v0.4.0, `beta`) — full detail in `SESSION_31.md`
+- **Move mode became TRANSFORM**, the category for everything done to a finished guide as a whole object.
+  **F12 rotate, F8 copy and F7 mirror all delivered**, so F6–F8 + F12 are complete.
+- **The direction pad is STATE-DRIVEN.** Move/Copy/Mirror toggles change what its six arrows and four
+  rotate corners do. Move and Copy are mutually exclusive, Mirror is independent, at least one is always
+  lit. The HUD names the compound ("Transform · Copy + Mirror") so an arrow click is never a surprise.
+- **Protocol 17 → 19** (`GuideRotatePacket`, `GuideTransformPacket`). DataVersion unchanged.
+- **Only ONE mirror button is needed:** quarter turns about two axes reach all 24 orientations, and adding
+  any single reflection generates all 48. Mirroring is about the guide's own centre plane, so it composes
+  with move and rotate rather than displacing the guide.
+- **Rotate/mirror do NOT preserve the voxel count** (the in-plane frame sign-normalises m̂ toward world up,
+  so a polygon can re-phase) — both recount in full. Only `TranslateGuide` may reuse the cached count.
+- **Undo stores the pivot**; a transformed shape's bounding centre is not where the original's was.
+- **Copy is the only transform action that is a PLACEMENT** — charges chalk, counts against the creator
+  cap, and can therefore be refused. It goes through `RestoreGuide`, the existing adopt-a-record seam.
+- **Span** steps by the guide's own width; it is the DEFAULT for copies and mirrored moves and merely
+  AVAILABLE for a plain Move (which keeps its one-voxel nudge). Repeating a copy direction marches outward.
+- **Development commands are hidden** behind `"diagnosticCommands": true` in `layout-client.json`:
+  `renderstats`, `weld`, `occupancy`, `occupancyscan`, `blockevents`. Hidden not deleted — SESSION_29's
+  open verification items still need them.
 
 ## Session-30 additions (v0.3.86–v0.3.89, `beta`) — full detail in `SESSION_30.md`
 - **F6 Move mode:** a fourth `ToolMode`. Select a guide, then slide it whole from the GUI's arrow pad or on
@@ -219,10 +242,10 @@ Mesh **Stage A** shipped and filled 3D volumes were retired. Normal public multi
 4. **Performance follow-up only from a new measured bottleneck and a fidelity-preserving design.** Immense
    placement/sculpt work still uses one below-normal worker plus bounded claim ticks; do not assume spatial
    subdivision or greedy merging is the next step.
-5. **The queued feature set (TODO F6–F11).** **F6 Move is DELIVERED (Session 30).** Recommended order for
-   the rest is **F8 (copy a guide) → F9 (settings panel) → F7 (mirror/flip)**, with F10 (redraw the gear
-   glyph) and F11 (colour-blind-safe palette) alongside. Copy is nearly free now that Move exists and the
-   two compose: copy, then nudge into place.
+5. **The queued feature set (TODO F6–F12).** **F6, F7, F8 and F12 are all DELIVERED (Sessions 30–31)** —
+   the Transform category is complete. What remains is **F9** (in-game settings panel, which subsumes T2),
+   **F10** (redraw the gear glyph), **F11** (colour-blind-safe palette) and **T1** (CTRL surface-snap on
+   free-move; its contact rule is decided, not built).
 6. If asked: **Roof / Tunnel** volumes; concave-safe Free-Shape fill; F3 re-constrain op. Remaining
    flagged decisions are cosmetic.
 
@@ -237,4 +260,5 @@ lives in `Items/ItemGuideTool.cs` (helpers + fill-state rendering) + `Items/Item
 Sub-block world material lives in `Systems/BlockOccupancy.cs`. F6 Move spans
 `Systems/GuideManager.TranslateGuide`, `Undo/Commands/TranslateGuideCommand.cs`, `GuideTranslatePacket`,
 the Move section of `UI/GuideToolGui.cs`, and the free-move session in `Client/GuideToolController.cs`.
-(Filenames verified against the tree on 2026-07-27 — 79 source files.)
+Rotate/copy/mirror add `Undo/Commands/RotateGuideCommand.cs` and `TransformGuideCommand.cs` alongside it.
+(Filenames verified against the tree on 2026-07-27 — 81 source files.)

@@ -73,7 +73,7 @@ namespace Layout.UI
 
         public const string ModeCreate = "layout-mode-create";
         public const string ModeEdit = "layout-mode-edit";
-        public const string ModeMove = "layout-mode-move";
+        public const string ModeTransform = "layout-mode-transform";
         public const string ModeDelete = "layout-mode-delete";
 
         // F6 Move pad. Away/Toward/Left/Right are the four HORIZONTAL directions, read relative to the
@@ -86,6 +86,20 @@ namespace Layout.UI
         public const string MoveUp = "layout-move-up";
         public const string MoveDown = "layout-move-down";
         public const string MoveFree = "layout-move-free";
+
+        // F12 Rotate, in the four corners of the Move pad. The SPIN pair (top corners) turns the guide about
+        // the vertical axis and is drawn as a flattened ellipse — a turntable seen at an angle. The TIP pair
+        // (bottom corners) turns it about the horizontal axis pointing away from the player and is drawn as
+        // an upright circle. Same silhouette family, different plane, so the two pairs read as siblings.
+        public const string RotateSpinLeft = "layout-rotate-spin-left";
+        public const string RotateSpinRight = "layout-rotate-spin-right";
+        public const string RotateTipLeft = "layout-rotate-tip-left";
+        public const string RotateTipRight = "layout-rotate-tip-right";
+
+        // F7/F8 Transform action row — what the direction pad DOES. These LATCH, unlike the pad tiles.
+        public const string ActionMove = "layout-action-move";
+        public const string ActionCopy = "layout-action-copy";
+        public const string ActionMirror = "layout-action-mirror";
         public const string ProjVolumetric = "layout-proj-vol";
         public const string ProjSurface = "layout-proj-surf";
         public const string FillHollow = "layout-fill-hollow";
@@ -181,8 +195,17 @@ namespace Layout.UI
 
             reg[ModeCreate] = DrawModeCreate;
             reg[ModeEdit] = DrawModeEdit;
-            reg[ModeMove] = DrawModeMove;
+            reg[ModeTransform] = DrawModeTransform;
             reg[ModeDelete] = DrawModeDelete;
+
+            reg[ActionMove] = DrawActionMove;
+            reg[ActionCopy] = DrawActionCopy;
+            reg[ActionMirror] = DrawActionMirror;
+
+            reg[RotateSpinLeft] = (ctx, x, y, w, h, rgba) => DrawRotate(ctx, x, y, w, h, rgba, false, false);
+            reg[RotateSpinRight] = (ctx, x, y, w, h, rgba) => DrawRotate(ctx, x, y, w, h, rgba, false, true);
+            reg[RotateTipLeft] = (ctx, x, y, w, h, rgba) => DrawRotate(ctx, x, y, w, h, rgba, true, false);
+            reg[RotateTipRight] = (ctx, x, y, w, h, rgba) => DrawRotate(ctx, x, y, w, h, rgba, true, true);
 
             reg[MoveAway] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, 0, false);
             reg[MoveRight] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, Math.PI / 2, false);
@@ -645,29 +668,122 @@ namespace Layout.UI
             ctx.MoveTo(c.X(31), c.Y(21)); ctx.LineTo(c.X(39), c.Y(29)); ctx.Stroke();
         }
 
-        private static void DrawModeMove(Context ctx, int x, int y, float w, float h, double[] rgba)
+        private static void DrawModeTransform(Context ctx, int x, int y, float w, float h, double[] rgba)
         {
-            // The universal "move" glyph: a four-way arrow cross.
+            // Four corner brackets around a centre pip. The brackets say "the WHOLE guide, taken hold of" —
+            // the category, not any one operation — which is what lets one glyph cover move, rotate, and
+            // later copy and mirror. Anything action-shaped in the middle (a four-way arrow, a curved arrow,
+            // an offset ghost) would sell one of those four and mis-sell the other three.
+            //
+            // The centre pip is deliberately NOT tiny, and the frame is deliberately NOT left empty: this
+            // GUI already uses a faint empty square to mean "unfilled favourite slot", so a hollow frame
+            // would read as a placeholder rather than as a mode.
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(3.0));
+
+            const double lo = 13, hi = 47, arm = 11;
+            ctx.MoveTo(c.X(lo), c.Y(lo + arm)); ctx.LineTo(c.X(lo), c.Y(lo)); ctx.LineTo(c.X(lo + arm), c.Y(lo));
+            ctx.Stroke();
+            ctx.MoveTo(c.X(hi - arm), c.Y(lo)); ctx.LineTo(c.X(hi), c.Y(lo)); ctx.LineTo(c.X(hi), c.Y(lo + arm));
+            ctx.Stroke();
+            ctx.MoveTo(c.X(hi), c.Y(hi - arm)); ctx.LineTo(c.X(hi), c.Y(hi)); ctx.LineTo(c.X(hi - arm), c.Y(hi));
+            ctx.Stroke();
+            ctx.MoveTo(c.X(lo + arm), c.Y(hi)); ctx.LineTo(c.X(lo), c.Y(hi)); ctx.LineTo(c.X(lo), c.Y(hi - arm));
+            ctx.Stroke();
+
+            SetColor(ctx, rgba, 1.0);
+            ctx.Arc(c.X(30), c.Y(30), c.L(4), 0, 2 * Math.PI);
+            ctx.Fill();
+        }
+
+        // The action row's four latching toggles. Each depicts WHAT HAPPENS TO A SHAPE, so they read as a
+        // family and stay distinct from the pad's directional arrows below them.
+
+        private static void DrawActionMove(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            // One square, shifted, with a motion arrow behind it.
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(2.8));
+            ctx.Rectangle(c.X(26), c.Y(20), c.L(22), c.L(22));
+            ctx.Stroke();
+            ctx.MoveTo(c.X(11), c.Y(31)); ctx.LineTo(c.X(23), c.Y(31)); ctx.Stroke();
+            ctx.MoveTo(c.X(17), c.Y(25)); ctx.LineTo(c.X(23), c.Y(31)); ctx.LineTo(c.X(17), c.Y(37));
+            ctx.Stroke();
+        }
+
+        private static void DrawActionCopy(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            // Two overlapping squares — the universal duplicate glyph.
             var c = new Canvas(x, y, w, h, 60);
             Pen(ctx, rgba, c.L(2.6));
-            ctx.MoveTo(c.X(30), c.Y(12)); ctx.LineTo(c.X(30), c.Y(48)); ctx.Stroke();
-            ctx.MoveTo(c.X(12), c.Y(30)); ctx.LineTo(c.X(48), c.Y(30)); ctx.Stroke();
-            Head(ctx, c, 30, 12, 0);                  // up
-            Head(ctx, c, 30, 48, Math.PI);            // down
-            Head(ctx, c, 12, 30, -Math.PI / 2);       // left
-            Head(ctx, c, 48, 30, Math.PI / 2);        // right
+            ctx.Rectangle(c.X(14), c.Y(14), c.L(24), c.L(24));
+            ctx.Stroke();
+            ctx.Rectangle(c.X(24), c.Y(24), c.L(24), c.L(24));
+            ctx.Stroke();
+        }
 
-            // A chevron pair at a design point, pointing along `rotation` (0 = up).
-            static void Head(Context g, Canvas cv, double ux, double uy, double rotation)
+        private static void DrawActionMirror(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            // A dashed axis with a solid triangle one side and its reflection the other.
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(2.4));
+            for (double v = 12; v < 48; v += 7)
             {
-                double spread = cv.L(6), drop = cv.L(8);
-                g.Save();
-                g.Translate(cv.X(ux), cv.Y(uy));
-                g.Rotate(rotation);
-                g.MoveTo(-spread, drop); g.LineTo(0, 0); g.LineTo(spread, drop);
-                g.Stroke();
-                g.Restore();
+                ctx.MoveTo(c.X(30), c.Y(v)); ctx.LineTo(c.X(30), c.Y(v + 3.6)); ctx.Stroke();
             }
+            Poly(ctx, c, rgba, false, 25, 17, 25, 43, 12, 30);
+            Poly(ctx, c, rgba, false, 35, 17, 35, 43, 48, 30);
+        }
+
+        /// <summary>
+        /// One rotate glyph: a ring with an arrowhead on it. <paramref name="upright"/> draws a true circle
+        /// (turning about a horizontal axis — tipping the guide over); otherwise a flattened ellipse, a
+        /// turntable seen at an angle (turning about the vertical axis). <paramref name="clockwise"/> mirrors
+        /// the whole thing, so a left button and a right button are exact reflections of one another.
+        /// </summary>
+        private static void DrawRotate(
+            Context ctx, int x, int y, float w, float h, double[] rgba, bool upright, bool clockwise)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(3.0));
+
+            double cx = c.X(30), cy = c.Y(30);
+            double rx = c.L(16);
+            double ry = upright ? c.L(16) : c.L(8.5);
+            // Cairo's y runs DOWN, so increasing t sweeps CLOCKWISE on screen. Mirroring x reverses it.
+            double m = clockwise ? 1.0 : -1.0;
+
+            // Gap centred on the top of the ring, so the head sits clear of it at the upper left/right.
+            const double start = -0.32 * Math.PI;
+            const double end = 1.32 * Math.PI;
+
+            (double X, double Y) At(double t) =>
+                (cx + m * rx * Math.Cos(t), cy + ry * Math.Sin(t));
+
+            // Walked as a polyline rather than stroked under a non-uniform Scale, so the pen stays an even
+            // width all the way round instead of pinching where a squashed ellipse is steepest.
+            const int steps = 56;
+            for (int i = 0; i <= steps; i++)
+            {
+                (double ax, double ay) = At(start + (end - start) * i / steps);
+                if (i == 0) ctx.MoveTo(ax, ay); else ctx.LineTo(ax, ay);
+            }
+            ctx.Stroke();
+
+            // A SYMMETRIC chevron at the end of the sweep, aligned to the true tangent there — both legs
+            // the same length and mirrored about the direction of travel.
+            (double hx, double hy) = At(end);
+            double dx = -m * rx * Math.Sin(end), dy = ry * Math.Cos(end);
+            double len = Math.Sqrt(dx * dx + dy * dy);
+            if (len < 1e-9) return;
+            dx /= len; dy /= len;
+
+            double nx = -dy, ny = dx;                       // unit normal to the direction of travel
+            double back = c.L(10), half = c.L(6.5);
+            ctx.MoveTo(hx - dx * back + nx * half, hy - dy * back + ny * half);
+            ctx.LineTo(hx, hy);
+            ctx.LineTo(hx - dx * back - nx * half, hy - dy * back - ny * half);
+            ctx.Stroke();
         }
 
         // One Move-pad arrow, drawn pointing up and rotated into place. `groundBar` adds a floor line under

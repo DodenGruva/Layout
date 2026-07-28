@@ -79,8 +79,8 @@ namespace Layout.UI
 
         // ---- Tile row tables (code kept stable; display names are short tile labels) ----
         // Order matches the ToolMode enum (Create · Edit · Move · Delete) so (int)Mode indexes the row.
-        private static readonly string[] ModeCodes  = { "create", "edit", "move", "delete" };
-        private static readonly string[] ModeNames  = { "Create", "Edit (selected guide)", "Move (selected guide)", "Delete" };
+        private static readonly string[] ModeCodes  = { "create", "edit", "transform", "delete" };
+        private static readonly string[] ModeNames  = { "Create", "Edit (selected guide)", "Transform (selected guide)", "Delete" };
 
         // The shape catalog — the primitives+modifiers model, in the order players think of them
         // (0.1.15: thirteen entries with Polygon + Free-Shape, shown in the EXPANDED picker as a grid of
@@ -131,7 +131,7 @@ namespace Layout.UI
             LayoutToolIcons.TaperedCylinder, LayoutToolIcons.PolygonalPrism,
             LayoutToolIcons.TaperedPolygonalPrism, LayoutToolIcons.Cone, LayoutToolIcons.Box };
         private static readonly string[] ModeIcons =
-            { LayoutToolIcons.ModeCreate, LayoutToolIcons.ModeEdit, LayoutToolIcons.ModeMove, LayoutToolIcons.ModeDelete };
+            { LayoutToolIcons.ModeCreate, LayoutToolIcons.ModeEdit, LayoutToolIcons.ModeTransform, LayoutToolIcons.ModeDelete };
 
         // F6 Move pad. Away/Toward/Left/Right are horizontal and resolve against the player's facing at the
         // moment of the click; Up/Down are world vertical. Codes are what OnMoveArrowTile switches on.
@@ -187,6 +187,10 @@ namespace Layout.UI
         private readonly HashSet<string> _inertRows = new HashSet<string>();
 
         private readonly List<(string key, int sel)> _initialLight = new List<(string, int)>();
+
+        // Standalone toggles that should be lit after compose (the Transform action row). Unlike
+        // _initialLight these are not an exclusive row, so each carries its own key rather than an index.
+        private readonly List<string> _litToggles = new List<string>();
 
         // Persists the client config right now (B-24-2 fix, v0.1.24) — wired to LayoutModSystem's full
         // Draft→config sync + StoreModConfig, so a pin change is written immediately instead of relying on
@@ -305,7 +309,7 @@ namespace Layout.UI
         {
             // Move (F6) selects a guide exactly as Edit does; the two modes then do different things with
             // it — Edit drives the setting rows, Move drives the arrow pad — but resolution is shared.
-            if (_tool.Mode != ToolMode.Edit && _tool.Mode != ToolMode.Move) return null;
+            if (_tool.Mode != ToolMode.Edit && _tool.Mode != ToolMode.Transform) return null;
             Guid? sel = _tool.SelectedGuideId;
             if (sel == null) return null;
             if (_net.Guides.TryGetValue(sel.Value, out GuideData g) && g != null) return g;
@@ -346,6 +350,7 @@ namespace Layout.UI
 
             _inertRows.Clear();
             _initialLight.Clear();
+            _litToggles.Clear();
             _divWheelFields.Clear();
 
             ElementBounds bgBounds = ElementBounds.Fill.WithFixedPadding(GuiStyle.ElementToDialogPadding);
@@ -418,7 +423,7 @@ namespace Layout.UI
             // the same panel is reused — no separate expanding section. When Edit has no selection, those rows
             // grey out with a "click a guide" prompt. Create/Delete use the tool defaults exactly as before.
             bool editMode = _tool.Mode == ToolMode.Edit;
-            bool moveMode = _tool.Mode == ToolMode.Move;
+            bool transformMode = _tool.Mode == ToolMode.Transform;
             bool editNoSel = editMode && selected == null;
             bool settingsInert = deleteMode || editNoSel;           // setting rows disabled + ghosted
             CairoFont settingLabelFont = settingsInert ? ghostFont : font;
@@ -433,7 +438,7 @@ namespace Layout.UI
             // (the guide-body colour), so a selection that isn't on the favorite slots is still visible at
             // a glance. Status only — clicks are swallowed. Hidden in Edit (the tool's next-guide shape
             // isn't what that mode is about); dimmed in Delete like the other shape controls.
-            if (!editMode && !moveMode)
+            if (!editMode && !transformMode)
             {
                 int curIdx = ClampIndex(CurrentShapeIndex(), ShapeCodes.Length);
                 string chipIcon = ShapeIcons[curIdx] + LayoutToolIcons.CurrentSuffix
@@ -451,9 +456,9 @@ namespace Layout.UI
 
             // MOVE mode owns the whole panel below the mode row: no setting rows at all, because a move
             // changes position and nothing else. It ends the composition itself.
-            if (moveMode)
+            if (transformMode)
             {
-                BuildMoveSection(c, font, ghostFont, selected,
+                BuildTransformSection(c, font, ghostFont, selected,
                     ref y, labelW, pad, tile, tileGap, rowGap, headerH, contentW);
                 SingleComposer = c.EndChildElements().Compose();
                 LightInitialTiles();
@@ -594,7 +599,7 @@ namespace Layout.UI
         // centre, and the world-vertical Up/Down pair in the column at the far right. The horizontal four
         // resolve against the player's facing at click time; the dialog holds the mouse cursor, so the
         // facing physically cannot drift between two clicks of the pad.
-        private void BuildMoveSection(
+        private void BuildTransformSection(
             GuiComposer c, CairoFont font, CairoFont ghostFont, GuideData selected,
             ref double y, double labelW, double pad, double tile, double tileGap, double rowGap,
             double headerH, double contentW)
@@ -616,28 +621,64 @@ namespace Layout.UI
                 y += headerH + rowGap;
             }
 
+            // ---- Action row: what the direction pad DOES ----
+            // Move and Copy are mutually exclusive; Mirror rides on top of either, or drives the pad alone
+            // (mirror in place). Span swaps the step distance for the guide's own width along the pressed
+            // axis, which is what lands a mirrored copy flush beside the original.
+            c.AddStaticText("Action", Centered(labelFont),
+                ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20));
+            AddActionTile(c, detail, LayoutToolIcons.ActionMove, "Move\nSlide the guide itself.",
+                "move", ElementBounds.Fixed(labelW + pad, y, tile, tile),
+                _tool.Placement == DraftManager.TransformPlacement.Move, !inert);
+            AddActionTile(c, detail, LayoutToolIcons.ActionCopy,
+                "Copy\nLeave this guide alone and put a duplicate one step that way. "
+                + "Costs chalk and counts against your voxel budget, like any placement.",
+                "copy", ElementBounds.Fixed(labelW + pad + (tile + tileGap), y, tile, tile),
+                _tool.Placement == DraftManager.TransformPlacement.Copy, !inert);
+            AddActionTile(c, detail, LayoutToolIcons.ActionMirror,
+                "Mirror\nFlip the guide along the axis you press. On its own the guide does not move; "
+                + "with Move or Copy it flips as well as travels.",
+                "mirror", ElementBounds.Fixed(labelW + pad + 2 * (tile + tileGap), y, tile, tile),
+                _tool.TransformMirror, !inert);
+            y += tile + rowGap;
+
             // ---- Step row: multiples of THIS guide's own voxel, never anything finer ----
+            // Greyed only when nothing travels at all (Mirror driving the pad by itself). When the action
+            // is one that lands things flush — a copy, or a mirrored move — this row DEFAULTS to the
+            // guide's own width instead: no tile is lit, the label reads "Span", and picking a tile
+            // overrides it. Clicking the lit tile again hands the span back.
+            bool spanning = _tool.TransformSpanStep;
+            bool stepInert = inert || _tool.Placement == DraftManager.TransformPlacement.None;
             int[] steps = DraftManager.MoveStepMultipliers;
-            c.AddStaticText("Step", Centered(labelFont),
+            c.AddStaticText(spanning ? "Span" : "Step", Centered(stepInert ? ghostFont : font),
                 ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20));
             int litStep = 0;
             for (int i = 0; i < steps.Length; i++)
             {
                 if (steps[i] == _tool.MoveStep) litStep = i;
-                string code = steps[i].ToString();
+                int multiplier = steps[i];
                 string tileKey = "movestep:" + i;
                 ElementBounds tb = ElementBounds.Fixed(labelW + pad + i * (tile + tileGap), y, tile, tile);
-                c.AddToggleButton("x" + steps[i], inert ? ghostFont : font,
-                    on => OnTileToggled("movestep", code, tileKey, on, OnMoveStepTile), tb, tileKey);
-                // The step is a property of the guide being moved, so with none selected there is no
-                // distance to quote — the multiplier alone is all the tile can honestly say.
-                if (!inert)
+                c.AddToggleButton("x" + multiplier, stepInert ? ghostFont : font,
+                    on =>
+                    {
+                        if (_suppress || stepInert) return;
+                        _tool.SelectMoveStep(multiplier, on);
+                        DeferRecompose();     // the label and the lit tile both change
+                    },
+                    tb, tileKey);
+                if (!stepInert)
                     c.AddAutoSizeHoverText(
-                        StepDescription(selected.VoxelScale, steps[i]),
-                        detail, 260, tb.FlatCopy(), tileKey + ":ht");
+                        StepDescription(selected.VoxelScale, multiplier)
+                        + (_tool.SpanStepAvailable
+                            ? "\nClick the selected one again to step by the guide's own width instead."
+                            : ""),
+                        detail, 280, tb.FlatCopy(), tileKey + ":ht");
             }
-            if (inert) _inertRows.Add("movestep");
-            else _initialLight.Add(("movestep", litStep));
+            // While spanning, NO tile is lit — the row is showing that its distance is being supplied by
+            // the guide's own width rather than by any multiplier on it.
+            if (stepInert) _inertRows.Add("movestep");
+            else if (!spanning) _initialLight.Add(("movestep", litStep));
             y += tile + rowGap;
 
             // ---- Direction pad ----
@@ -649,8 +690,18 @@ namespace Layout.UI
             c.AddStaticText("Move", Centered(labelFont),
                 ElementBounds.Fixed(0, y + tile + tileGap + (tile - 16) / 2, labelW, 20));
 
+            // The pad's four CORNERS were empty; they now hold rotation. The top pair SPINS the guide about
+            // the vertical axis (a turntable), the bottom pair TIPS it about the horizontal axis pointing
+            // away from the player. Left button turns left, right button turns right, in both pairs — and
+            // two independent axes of quarter turns reach every orientation.
+            AddRotateTile(c, detail, LayoutToolIcons.RotateSpinLeft,
+                "Spin left\nTurns the guide anticlockwise, seen from above.", "spinleft",
+                ElementBounds.Fixed(x0, y, tile, tile), !inert);
             AddMoveTile(c, detail, LayoutToolIcons.MoveAway, MoveArrowNames[0], "away",
                 ElementBounds.Fixed(col1, y, tile, tile), !inert);
+            AddRotateTile(c, detail, LayoutToolIcons.RotateSpinRight,
+                "Spin right\nTurns the guide clockwise, seen from above.", "spinright",
+                ElementBounds.Fixed(col2, y, tile, tile), !inert);
             AddMoveTile(c, detail, LayoutToolIcons.MoveUp, MoveArrowNames[4], "up",
                 ElementBounds.Fixed(vcol, y, tile, tile), !inert);
             y += tile + tileGap;
@@ -662,8 +713,14 @@ namespace Layout.UI
                 ElementBounds.Fixed(col2, y, tile, tile), !inert);
             y += tile + tileGap;
 
+            AddRotateTile(c, detail, LayoutToolIcons.RotateTipLeft,
+                "Tip left\nTips the guide over toward your left.", "tipleft",
+                ElementBounds.Fixed(x0, y, tile, tile), !inert);
             AddMoveTile(c, detail, LayoutToolIcons.MoveToward, MoveArrowNames[1], "toward",
                 ElementBounds.Fixed(col1, y, tile, tile), !inert);
+            AddRotateTile(c, detail, LayoutToolIcons.RotateTipRight,
+                "Tip right\nTips the guide over toward your right.", "tipright",
+                ElementBounds.Fixed(col2, y, tile, tile), !inert);
             AddMoveTile(c, detail, LayoutToolIcons.MoveDown, MoveArrowNames[5], "down",
                 ElementBounds.Fixed(vcol, y, tile, tile), !inert);
             y += tile + rowGap;
@@ -686,6 +743,63 @@ namespace Layout.UI
                     try { SingleComposer?.GetToggleButton(tileKey)?.SetValue(false); }
                     finally { _suppress = false; }
                     OnMoveArrowTile(code);
+                },
+                bounds, toggleable: true)
+            { Enabled = enabled };
+            c.AddInteractiveElement(btn, tileKey);
+            c.AddAutoSizeHoverText(hover, hoverFont, 260, bounds.FlatCopy(), tileKey + ":ht");
+        }
+
+        // A LATCHING toggle, unlike the pad tiles: these carry the state the pad reads, so they stay lit.
+        // Lit state is pushed after compose (LightInitialTiles) rather than passed to the constructor,
+        // matching how every other toggle in this panel is handled.
+        private void AddActionTile(
+            GuiComposer c, CairoFont hoverFont, string icon, string hover, string code,
+            ElementBounds bounds, bool lit, bool enabled)
+        {
+            string tileKey = "transformaction:" + code;
+            var btn = new GuiElementToggleButton(
+                capi, enabled ? icon : icon + LayoutToolIcons.GhostSuffix, "",
+                CairoFont.WhiteSmallText(),
+                _ =>
+                {
+                    if (_suppress || !enabled) return;
+                    OnTransformActionTile(code);
+                    DeferRecompose();     // the row set changes (step row greys in and out)
+                },
+                bounds, toggleable: true)
+            { Enabled = enabled };
+            c.AddInteractiveElement(btn, tileKey);
+            c.AddAutoSizeHoverText(hover, hoverFont, 280, bounds.FlatCopy(), tileKey + ":ht");
+            if (lit) _litToggles.Add(tileKey);
+        }
+
+        private void OnTransformActionTile(string code)
+        {
+            switch (code)
+            {
+                case "move": _tool.ToggleTransformPlacement(DraftManager.TransformPlacement.Move); break;
+                case "copy": _tool.ToggleTransformPlacement(DraftManager.TransformPlacement.Copy); break;
+                case "mirror": _tool.ToggleTransformMirror(); break;
+            }
+        }
+
+        // Momentary, exactly like the move arrows — a rotation is an action, not a selection.
+        private void AddRotateTile(
+            GuiComposer c, CairoFont hoverFont, string icon, string hover, string code,
+            ElementBounds bounds, bool enabled)
+        {
+            string tileKey = "moverotate:" + code;
+            var btn = new GuiElementToggleButton(
+                capi, enabled ? icon : icon + LayoutToolIcons.GhostSuffix, "",
+                CairoFont.WhiteSmallText(),
+                on =>
+                {
+                    if (_suppress || !on || !enabled) return;
+                    _suppress = true;
+                    try { SingleComposer?.GetToggleButton(tileKey)?.SetValue(false); }
+                    finally { _suppress = false; }
+                    OnRotateTile(code);
                 },
                 bounds, toggleable: true)
             { Enabled = enabled };
@@ -721,21 +835,51 @@ namespace Layout.UI
                 + voxelScale + "/16 each).";
         }
 
-        private void OnMoveStepTile(string rowKey, string code)
-        {
-            if (int.TryParse(code, out int multiplier)) _tool.SetMoveStep(multiplier);
-        }
-
+        // Every direction button now runs through the Move/Copy/Mirror toggles, so one pad covers five
+        // actions. The DIRECTION picks the world axis; what happens along it depends on the toggles.
         private void OnMoveArrowTile(string code)
         {
             GuideData g = ResolveSelectedGuide();
             if (g == null) return;
 
-            int step = g.VoxelScale * _tool.MoveStep;                 // in 1/16-block units
-            (int dx, int dy, int dz) = MoveOffset(code, step);
-            if (dx == 0 && dy == 0 && dz == 0) return;
+            bool mirroring = _tool.TransformMirror;
+            bool placing = _tool.Placement != DraftManager.TransformPlacement.None;
+
+            // Direction resolved as a unit step first, so its axis can be read off for the mirror plane and
+            // for the span distance before the real magnitude is applied.
+            (int ux, int uy, int uz) = MoveOffset(code, 1);
+            if (ux == 0 && uy == 0 && uz == 0) return;
+            PlaneAxis axis = ux != 0 ? PlaneAxis.X : uy != 0 ? PlaneAxis.Y : PlaneAxis.Z;
+
+            int step = placing
+                ? (_tool.TransformSpanStep
+                    ? SpanStep(g, axis)
+                    : g.VoxelScale * _tool.MoveStep)
+                : 0;
+
+            bool asCopy = _tool.Placement == DraftManager.TransformPlacement.Copy;
+            if (!mirroring && step == 0) return;
+
+            // A run of copies in one direction marches OUTWARD — one step out, then two, then three — so
+            // holding down a direction lays a continuous line rather than stacking every duplicate in the
+            // same place. Measured from the still-selected original, which is why the selection does not
+            // follow the copies. Changing guide, direction, distance or action starts a fresh run.
+            if (asCopy) step *= _tool.NextCopyRunFactor(g.Id, code);
+            else _tool.ResetCopyRun();
+
+            int dx = ux * step, dy = uy * step, dz = uz * step;
+
             _holdMoveMaterialization?.Invoke(g.Id);
-            _net.SendTranslate(g.Id, dx, dy, dz);
+            _net.SendTransform(
+                g.Id, dx, dy, dz, mirroring ? (int)axis : -1, PlaneAxis.Y, 0, asCopy);
+        }
+
+        // The guide's own extent along the pressed axis, in 1/16 units — the "span" step, which lands a
+        // copy flush against the original instead of overlapping it.
+        private int SpanStep(GuideData g, PlaneAxis axis)
+        {
+            int span = Systems.GuideManager.SpanAlong(g, axis);
+            return span > 0 ? span : g.VoxelScale * _tool.MoveStep;
         }
 
         // Resolves a pad direction to a world offset in 1/16-block units. Up/Down are world vertical; the
@@ -756,6 +900,44 @@ namespace Layout.UI
                 "right"  => (-fz * step, 0, fx * step),
                 _        => (0, 0, 0)
             };
+        }
+
+        // F12: a quarter turn about a world axis. The SPIN pair is about world vertical, so it needs no
+        // facing at all — "anticlockwise from above" is the same turn wherever you stand. The TIP pair is
+        // about the horizontal axis running away from you, so it does, and it resolves the same way the
+        // move arrows do.
+        private void OnRotateTile(string code)
+        {
+            GuideData g = ResolveSelectedGuide();
+            if (g == null) return;
+
+            _holdMoveMaterialization?.Invoke(g.Id);
+
+            bool asCopy = _tool.Placement == DraftManager.TransformPlacement.Copy;
+
+            if (code == "spinleft" || code == "spinright")
+            {
+                // GuideManager rotates by the right-hand rule about the POSITIVE axis. About +Y that sends
+                // east to north — anticlockwise seen from above (north up, east right) — so a positive turn
+                // is "spin left".
+                int spin = code == "spinleft" ? 1 : -1;
+                // Copy + rotate is the four-corner-towers gesture: duplicate this, turned a quarter.
+                if (asCopy) _net.SendTransform(g.Id, 0, 0, 0, -1, PlaneAxis.Y, spin, true);
+                else _net.SendRotate(g.Id, PlaneAxis.Y, spin);
+                return;
+            }
+
+            // Tip = roll about the horizontal axis running AWAY from the player. A +90 degree right-hand
+            // turn about that forward axis carries the guide's top toward the player's RIGHT (up' = f x up,
+            // which is -left), so tipping left is the negative turn about forward.
+            (int fx, int fz) = FacingAxis();
+            PlaneAxis axis = fx != 0 ? PlaneAxis.X : PlaneAxis.Z;
+            // Forward is only the POSITIVE axis half the time; facing the other way reverses the whole
+            // sense, so the facing's sign has to ride along or the buttons swap meaning when you turn round.
+            int sign = (fx != 0 ? fx : fz) > 0 ? 1 : -1;
+            int turns = (code == "tipleft" ? -1 : 1) * sign;
+            if (asCopy) _net.SendTransform(g.Id, 0, 0, 0, -1, axis, turns, true);
+            else _net.SendRotate(g.Id, axis, turns);
         }
 
         private (int fx, int fz) FacingAxis()
@@ -1464,6 +1646,9 @@ namespace Layout.UI
                 // Move mode's free-move arm is a standalone toggle, not an exclusive row.
                 SingleComposer.GetToggleButton("movefree")?.SetValue(_tool.FreeMove);
 
+                foreach (string key in _litToggles)
+                    SingleComposer.GetToggleButton(key)?.SetValue(true);
+
                 // Configure the number inputs: whole numbers, ±1 per wheel notch / spinner click.
                 foreach ((string fieldKey, _, _, _) in _divWheelFields)
                 {
@@ -1478,6 +1663,7 @@ namespace Layout.UI
             {
                 _suppress = false;
                 _initialLight.Clear();
+                _litToggles.Clear();
                 _pendingFieldText.Clear();
             }
         }
@@ -1696,7 +1882,7 @@ namespace Layout.UI
                 // this left half only backstops any other caller.
                 ToolMode.Create => "Create Mode",
                 ToolMode.Edit => "Edit Mode - Select a guide to edit it.",
-                ToolMode.Move => "Move Mode - Select a guide to move it.",
+                ToolMode.Transform => "Transform Mode - Select a guide to change it.",
                 ToolMode.Delete => "Delete Mode - Click a guide to remove it.",
                 _ => "Layout tool"
             };
@@ -1792,7 +1978,7 @@ namespace Layout.UI
         {
             "create" => ToolMode.Create,
             "edit"   => ToolMode.Edit,
-            "move"   => ToolMode.Move,
+            "transform" => ToolMode.Transform,
             "delete" => ToolMode.Delete,
             _        => ToolMode.Create
         };

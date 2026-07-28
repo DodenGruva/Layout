@@ -4,6 +4,49 @@ All notable changes to Layout will be recorded in this file going forward.
 
 ## Unreleased
 
+## 0.4.0 - 2026-07-27
+
+The **Transform** milestone. A guide can now be moved, turned, duplicated and flipped as a whole object,
+without ever reshaping it.
+
+### Added
+
+- **Transform mode** replaces Move on the mode row. It covers everything you do to a finished guide as a
+  single object: move it, rotate it, copy it, mirror it.
+- **Rotate.** The four corners of the direction pad turn the selected guide a quarter at a time — the top
+  pair spins it about the vertical, the bottom pair tips it over toward your left or right. Between the two
+  you can reach any orientation.
+- **Copy.** Turn on Copy and the direction buttons leave the guide alone and put a duplicate one step that
+  way. Keep pressing the same direction and the copies march outward in a line rather than stacking.
+  Copying with a rotate corner gives you a duplicate turned a quarter.
+- **Mirror.** Flips the guide along the axis you press. On its own the guide stays put and only changes
+  handedness; with Move or Copy it flips as well as travels.
+- **Span distance.** Actions that land things flush — copies, and mirrored moves — step by the guide's own
+  width instead of a voxel count, so a copy sits exactly beside the original. Pick any step tile to
+  override it, or click the lit one again to go back to span. Available in plain Move too.
+
+### Changed
+
+- Copying costs chalk and counts against your voxel budget, like any other placement — so unlike moving,
+  rotating and mirroring, a copy can be refused.
+- The HUD names the current combination ("Transform · Copy + Mirror"), so a direction button never does
+  something unexpected.
+- **Development diagnostic commands are no longer registered.** `renderstats`, `weld`, `occupancy`,
+  `occupancyscan` and `blockevents` reported internals and were never meant for players. Set
+  `"diagnosticCommands": true` in `layout-client.json` to bring them back.
+- Removed panel text that overflowed the tool window on the Transform and Settings pages.
+
+### Fixed
+
+- A large guide's wireframe no longer stays behind at its old position while the guide rebuilds at the new
+  one.
+- The bottom of a moving guide's wireframe is drawn at the guide's own voxel scale, stepping up to the
+  coarse scale gradually, so it can be lined up precisely. Previously the fine detail was hidden inside the
+  block-sized wireframe over the top of it.
+- Moving a large guide waits before rebuilding it, so a run of nudges is not interrupted by a rebuild
+  between each one.
+- The Transform controls grey out when no guide is selected instead of disappearing.
+
 ## 0.3.89 - 2026-07-27
 
 ### Fixed

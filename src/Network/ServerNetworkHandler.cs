@@ -230,6 +230,8 @@ namespace Layout.Network
                 .SetMessageHandler<GuideSetSidesPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetSides(p, x)))
                 .SetMessageHandler<GuideSpringBackPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSpringBack(p, x)))
                 .SetMessageHandler<GuideTranslatePacket>((p, x) => WithPlayerVoxelCap(p, () => OnTranslate(p, x)))
+                .SetMessageHandler<GuideRotatePacket>((p, x) => WithPlayerVoxelCap(p, () => OnRotate(p, x)))
+                .SetMessageHandler<GuideTransformPacket>((p, x) => WithPlayerVoxelCap(p, () => OnTransform(p, x)))
                 .SetMessageHandler<DraftStartPacket>(OnDraftStart)
                 .SetMessageHandler<DraftCancelPacket>(OnDraftCancel)
                 .SetMessageHandler<UndoRequestPacket>((p, x) => WithPlayerVoxelCap(p, () => OnUndo(p, x)))
@@ -2498,6 +2500,105 @@ namespace Layout.Network
                 if (p.DeltaX != 0 || p.DeltaY != 0 || p.DeltaZ != 0)
                 {
                     _undo.Record(fromPlayer.PlayerUID, new TranslateGuideCommand(id, delta));
+                    StampLastSculptor(fromPlayer, result.Guide, broadcastIncremental: false);
+                }
+                _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
+            }
+            else HandleNonSuccessToggle(fromPlayer, id, result, g);
+        }
+
+        // F12 Rotate (0.3.90): quarter-turn a whole guide. Same shape as OnTranslate — geometry rewritten
+        // wholesale, so a full-state broadcast, and the full-exclusivity edit lock applies. Unlike a move
+        // this CAN change the voxel count (see GuideManager.RotateGuide), so the cap path is live.
+        private void OnRotate(IServerPlayer fromPlayer, GuideRotatePacket p)
+        {
+            if (DeniedByPrivilege(fromPlayer)) return;
+            Guid id = p.GuideId();
+            if (!_guides.TryGetGuide(id, out GuideData g)) { _channel.SendPacket(new GuideDeletePacket(id), fromPlayer); return; }
+            if (BlockedByEditLock(fromPlayer, id)) return;
+
+            // Null pivot: the authority derives it and hands it back, so the undo command turns the guide
+            // back about the same point rather than about wherever its new bounding centre landed.
+            Vec3d pivot = null;
+            GuideOperationResult result = _guides.RotateGuide(id, p.ResolveAxis(), p.QuarterTurns, ref pivot);
+            if (result.Status == GuideOpStatus.Success)
+            {
+                if (p.QuarterTurns % 4 != 0)
+                {
+                    _undo.Record(fromPlayer.PlayerUID,
+                        new RotateGuideCommand(id, p.ResolveAxis(), p.QuarterTurns, pivot));
+                    StampLastSculptor(fromPlayer, result.Guide, broadcastIncremental: false);
+                }
+                _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
+            }
+            else HandleNonSuccessToggle(fromPlayer, id, result, g);
+        }
+
+        // F7/F8 Transform pad (0.3.93): one compound action — mirror and/or rotate and/or move, applied in
+        // place or to a fresh copy. A COPY is the only transform action that is a placement: it charges
+        // chalk, counts against the creator's cumulative budget, and can be refused on those grounds. The
+        // in-place actions are free and can only be refused by a land claim.
+        private void OnTransform(IServerPlayer fromPlayer, GuideTransformPacket p)
+        {
+            if (DeniedByPrivilege(fromPlayer)) return;
+            Guid id = p.GuideId();
+            if (!_guides.TryGetGuide(id, out GuideData g)) { _channel.SendPacket(new GuideDeletePacket(id), fromPlayer); return; }
+            if (BlockedByEditLock(fromPlayer, id)) return;
+
+            Vec3d delta = p.ResolveDelta();
+
+            if (p.AsCopy)
+            {
+                // The same NO-LOCKOUT gate a fresh placement gets: an empty kit blocks a new guide, and
+                // nothing else. Checked before the copy is built so a refusal costs no voxel generation.
+                if (ChalkApplies(fromPlayer, out ItemSlot kitSlot)
+                    && Items.ItemGuideTool.GetChalk(kitSlot.Itemstack) <= 0)
+                {
+                    fromPlayer.SendIngameError("layout-outofchalk",
+                        "Out of chalk. Refill the Chalking Kit with Chalking Powder (hold it and right-click).");
+                    return;
+                }
+
+                GuideOperationResult copy = _guides.CopyGuide(
+                    id, delta, p.MirrorAxis, p.ResolveRotateAxis(), p.QuarterTurns,
+                    fromPlayer.PlayerUID, fromPlayer.PlayerName);
+                if (copy.Status != GuideOpStatus.Success) { HandleNonSuccessToggle(fromPlayer, id, copy, g); return; }
+
+                _undo.Record(fromPlayer.PlayerUID, new CreateGuideCommand(copy.Guide));
+                ChalkEffects.PlacementEffects(_sapi.World, copy.Guide);
+                // Charged exactly as a placement is, and deliberately outside the undo system for the same
+                // reason: undoing a copy does not refund its chalk, and redo re-creates through the command
+                // path so it cannot double-charge.
+                if (ChalkApplies(fromPlayer, out ItemSlot chargeSlot))
+                    Items.ItemGuideTool.ConsumeChalk(chargeSlot,
+                        GuideShapeTypes.IsVolume(copy.Guide.ShapeType)
+                            ? Items.ItemGuideTool.ChalkCostVolume
+                            : Items.ItemGuideTool.ChalkCostFlat);
+                _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(copy.Guide)));
+                return;
+            }
+
+            // In place. A rotation is its own authority call, so a compound "rotate and move" is applied as
+            // the rotation first and then the mirror/translate — each validating and each undoable.
+            if (p.QuarterTurns % 4 != 0)
+            {
+                Vec3d rotatePivot = null;
+                GuideOperationResult turned = _guides.RotateGuide(
+                    id, p.ResolveRotateAxis(), p.QuarterTurns, ref rotatePivot);
+                if (turned.Status != GuideOpStatus.Success) { HandleNonSuccessToggle(fromPlayer, id, turned, g); return; }
+                _undo.Record(fromPlayer.PlayerUID,
+                    new RotateGuideCommand(id, p.ResolveRotateAxis(), p.QuarterTurns, rotatePivot));
+            }
+
+            Vec3d pivot = null;
+            GuideOperationResult result = _guides.TransformGuide(id, delta, p.MirrorAxis, ref pivot);
+            if (result.Status == GuideOpStatus.Success)
+            {
+                bool changed = p.MirrorAxis >= 0 || p.DeltaX != 0 || p.DeltaY != 0 || p.DeltaZ != 0;
+                if (changed)
+                {
+                    _undo.Record(fromPlayer.PlayerUID,
+                        new TransformGuideCommand(id, delta, p.MirrorAxis, pivot));
                     StampLastSculptor(fromPlayer, result.Guide, broadcastIncremental: false);
                 }
                 _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));

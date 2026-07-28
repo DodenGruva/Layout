@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 17;
+        public const int ProtocolVersion = 19;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -908,6 +908,81 @@ namespace Layout.Network
         public Vec3d ResolveDelta() => new Vec3d(DeltaX / 16.0, DeltaY / 16.0, DeltaZ / 16.0);
     }
 
+    /// <summary>
+    /// Client → server (F12 Rotate, protocol 18). Turns a whole guide a quarter at a time about a world
+    /// axis. Only the axis and the number of quarter turns cross the wire — the PIVOT is derived from the
+    /// guide's own control points by the authority, so both sides cannot disagree about it and a client
+    /// cannot nominate a pivot that would move the guide somewhere it should not go.
+    /// </summary>
+    [ProtoContract]
+    public class GuideRotatePacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public int Axis;            // PlaneAxis, pinned: X=0, Y=1, Z=2
+        [ProtoMember(3)] public int QuarterTurns;    // +1 / -1; the authority normalises
+
+        public GuideRotatePacket() { }
+
+        public GuideRotatePacket(Guid guideId, PlaneAxis axis, int quarterTurns)
+        {
+            GuideIdBytes = NetIds.ToBytes(guideId);
+            Axis = (int)axis;
+            QuarterTurns = quarterTurns;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+
+        public PlaneAxis ResolveAxis() => (PlaneAxis)Axis;
+    }
+
+    /// <summary>
+    /// Client → server (F7/F8 Transform pad, protocol 19). One compound pad action: an optional mirror, an
+    /// optional rotation, and an optional translation, applied to the guide in place or to a fresh COPY of
+    /// it. Covers every state of the pad's Move/Copy/Mirror toggles in one message, so a compound action is
+    /// one server operation, one validation and one undo step.
+    /// </summary>
+    /// <remarks>
+    /// The delta is in 1/16 units as INTEGERS — a move is only ever a whole number of the guide's own
+    /// voxels, so a fractional nudge cannot be expressed. The mirror and rotation PIVOT never crosses the
+    /// wire: the authority derives it from the guide itself, so the two sides cannot disagree and a client
+    /// cannot nominate one that would put the guide somewhere it should not go.
+    /// </remarks>
+    [ProtoContract]
+    public class GuideTransformPacket
+    {
+        [ProtoMember(1)] public byte[] GuideIdBytes;
+        [ProtoMember(2)] public int DeltaX;
+        [ProtoMember(3)] public int DeltaY;
+        [ProtoMember(4)] public int DeltaZ;
+        [ProtoMember(5)] public int MirrorAxis;      // PlaneAxis, or -1 for no mirror
+        [ProtoMember(6)] public int RotateAxis;      // PlaneAxis; ignored when QuarterTurns is 0
+        [ProtoMember(7)] public int QuarterTurns;
+        [ProtoMember(8)] public bool AsCopy;
+
+        public GuideTransformPacket() { MirrorAxis = -1; }
+
+        public GuideTransformPacket(
+            Guid guideId, int deltaX, int deltaY, int deltaZ,
+            int mirrorAxis, PlaneAxis rotateAxis, int quarterTurns, bool asCopy)
+        {
+            GuideIdBytes = NetIds.ToBytes(guideId);
+            DeltaX = deltaX;
+            DeltaY = deltaY;
+            DeltaZ = deltaZ;
+            MirrorAxis = mirrorAxis;
+            RotateAxis = (int)rotateAxis;
+            QuarterTurns = quarterTurns;
+            AsCopy = asCopy;
+        }
+
+        public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
+
+        /// <summary>The delta as world units. A fresh instance every call — never aliased.</summary>
+        public Vec3d ResolveDelta() => new Vec3d(DeltaX / 16.0, DeltaY / 16.0, DeltaZ / 16.0);
+
+        public PlaneAxis ResolveRotateAxis() => (PlaneAxis)RotateAxis;
+    }
+
     /// <summary>Both directions. Set a guide's projection mode and plane together.</summary>
     [ProtoContract]
     public class GuideSetProjectionPacket
@@ -1146,7 +1221,11 @@ namespace Layout.Network
             // 0.3.33: personal /layout on|off rendering control (protocol 16)
             typeof(GuideRenderingPacket),
             // 0.3.86: F6 Move mode — whole-guide translation (protocol 17)
-            typeof(GuideTranslatePacket)
+            typeof(GuideTranslatePacket),
+            // 0.3.90: F12 Rotate — whole-guide quarter turns (protocol 18)
+            typeof(GuideRotatePacket),
+            // 0.3.93: F7/F8 Transform pad — compound mirror / rotate / move, in place or as a copy (19)
+            typeof(GuideTransformPacket)
         };
     }
 }

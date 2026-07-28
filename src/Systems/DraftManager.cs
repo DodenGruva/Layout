@@ -13,15 +13,17 @@ namespace Layout.Systems
     /// cancels or toggles a point's lock. <b>Edit</b> is the same guide-manipulation minus placement (empty
     /// clicks just deselect) — while in it, the GUI's setting rows act on the SELECTED guide instead of the
     /// tool defaults, so per-guide editing no longer needs a separate expanding panel section.
-    /// <b>Move</b> (F6, 0.3.86) selects a guide the same way and then slides it whole, from the GUI's arrow
-    /// pad or on the crosshair; it never reshapes. <b>Delete</b> is the deliberately separated destructive
-    /// mode, kept last. Order matches the mode-row tiles via <c>(int)Mode</c>.
+    /// <b>Transform</b> (F6/F12, 0.3.86/0.3.90) selects a guide the same way and then acts on it as a WHOLE
+    /// OBJECT without changing its shape — move it, rotate it, and in future copy and mirror it. Named for
+    /// the category rather than one action, so the panel's buttons can keep the plain verbs.
+    /// <b>Delete</b> is the deliberately separated destructive mode, kept last. Order matches the mode-row
+    /// tiles via <c>(int)Mode</c>.
     /// </summary>
     public enum ToolMode
     {
         Create,
         Edit,
-        Move,
+        Transform,
         Delete
     }
 
@@ -316,8 +318,8 @@ namespace Layout.Systems
         // --- Tool state: Edit-mode selection ----------------------------------------------------
 
         public Guid? SelectedGuideId => _selectedGuideId;
-        public void SelectGuide(Guid guideId) => _selectedGuideId = guideId;
-        public void ClearSelection() => _selectedGuideId = null;
+        public void SelectGuide(Guid guideId) { _selectedGuideId = guideId; ResetCopyRun(); }
+        public void ClearSelection() { _selectedGuideId = null; ResetCopyRun(); }
 
         // --- Tool state: Move mode (F6) ---------------------------------------------------------
 
@@ -346,6 +348,124 @@ namespace Layout.Systems
         /// <summary>Armed by the GUI toggle: the selected guide follows the crosshair once the panel closes.</summary>
         public bool FreeMove => _freeMove;
         public void SetFreeMove(bool enabled) => _freeMove = enabled;
+
+        /// <summary>What the Transform pad does with the result: nothing (mirror in place), move it, or
+        /// leave the original alone and produce a copy there.</summary>
+        public enum TransformPlacement { None = 0, Move = 1, Copy = 2 }
+
+        private TransformPlacement _placement = TransformPlacement.Move;
+        private bool _transformMirror;
+        private bool _transformSpanStep;
+        private bool _spanEligible;      // eligibility as of the last action change, for the re-default
+
+        public TransformPlacement Placement => _placement;
+        public bool TransformMirror => _transformMirror;
+
+        /// <summary>
+        /// Whether stepping by the guide's OWN WIDTH can be reached at all — true wherever anything
+        /// actually travels, plain Move included. Only a Mirror driving the pad by itself has no distance.
+        /// </summary>
+        public bool SpanStepAvailable => _placement != TransformPlacement.None;
+
+        /// <summary>
+        /// Whether span is what an action STARTS on. True where landing flush is the point: a copy, a
+        /// mirrored copy, or a mirrored move (the "flip it over its own edge" gesture). False for a plain
+        /// Move, whose purpose is the one-voxel nudge — starting that at a whole guide-width would break
+        /// the case the mode was built for. Move can still reach span by re-clicking its lit step tile.
+        /// </summary>
+        public bool SpanStepDefault =>
+            _placement == TransformPlacement.Copy
+            || (_placement == TransformPlacement.Move && _transformMirror);
+
+        /// <summary>Step by the guide's own extent along the pressed axis, rather than by <see cref="MoveStep"/>.</summary>
+        public bool TransformSpanStep => _transformSpanStep && SpanStepAvailable;
+
+        /// <summary>
+        /// A step tile was clicked. <paramref name="selecting"/> is false when the player clicked the tile
+        /// that was ALREADY lit, which means "give me the span back" — so the row is a plain exclusive
+        /// picker on the way in and an escape hatch on the way out, with no separate span button.
+        /// </summary>
+        public void SelectMoveStep(int multiplier, bool selecting)
+        {
+            ResetCopyRun();          // a new distance starts a fresh line
+            if (!selecting)
+            {
+                if (SpanStepAvailable) _transformSpanStep = true;
+                return;
+            }
+            _transformSpanStep = false;
+            SetMoveStep(multiplier);
+        }
+
+        /// <summary>
+        /// Move and Copy are MUTUALLY EXCLUSIVE — "copy it and also move it" is just Copy, since the copy
+        /// is what lands at the offset. Clicking the lit one turns it off, leaving Mirror to drive the pad
+        /// on its own; that is refused when Mirror is off, because a pad that does nothing is not a state
+        /// worth being able to reach.
+        /// </summary>
+        public void ToggleTransformPlacement(TransformPlacement which)
+        {
+            if (which != TransformPlacement.Move && which != TransformPlacement.Copy) return;
+            if (_placement == which)
+            {
+                if (_transformMirror) _placement = TransformPlacement.None;
+            }
+            else _placement = which;
+            SyncSpanDefault();
+        }
+
+        /// <summary>Toggles the mirror flag, refusing to leave the pad with nothing at all to do.</summary>
+        public void ToggleTransformMirror()
+        {
+            if (_transformMirror && _placement == TransformPlacement.None) return;
+            _transformMirror = !_transformMirror;
+            SyncSpanDefault();
+        }
+
+        // Span follows the default only when CROSSING between actions that want it and actions that do not
+        // — so switching Copy → Move drops back to the nudge, Move → Copy picks span up, and a deliberate
+        // override survives any toggling that stays on one side of that line.
+        private void SyncSpanDefault()
+        {
+            bool defaultsOn = SpanStepDefault;
+            if (defaultsOn != _spanEligible) _transformSpanStep = defaultsOn;
+            if (!SpanStepAvailable) _transformSpanStep = false;
+            _spanEligible = defaultsOn;
+            ResetCopyRun();          // any change of action starts a fresh run
+        }
+
+        // --- Copy runs -------------------------------------------------------------------------
+        //
+        // Hitting the same copy direction repeatedly should lay guides out in a LINE — 1 span out, then 2,
+        // then 3 — rather than stacking every copy in the same place. The count is kept here rather than by
+        // re-selecting each new copy, so the original stays selected and stays the thing being measured
+        // from; that also keeps the whole gesture client-side, with no waiting on the new guide's id.
+        private Guid? _copyRunGuide;
+        private string _copyRunDirection;
+        private int _copyRunCount;
+
+        /// <summary>
+        /// How many steps out the NEXT copy in this direction belongs: 1 the first time, then 2, 3, …
+        /// Any change of guide or direction starts the run over.
+        /// </summary>
+        public int NextCopyRunFactor(Guid guideId, string directionCode)
+        {
+            if (_copyRunGuide == guideId && _copyRunDirection == directionCode) _copyRunCount++;
+            else
+            {
+                _copyRunGuide = guideId;
+                _copyRunDirection = directionCode;
+                _copyRunCount = 1;
+            }
+            return _copyRunCount;
+        }
+
+        public void ResetCopyRun()
+        {
+            _copyRunGuide = null;
+            _copyRunDirection = null;
+            _copyRunCount = 0;
+        }
 
         /// <summary>
         /// Assembles a render-settings bundle from the current (live) tool state plus a resolved projection plane.

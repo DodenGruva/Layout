@@ -1,11 +1,11 @@
 # Layout — Architecture Document (v3.14)
 
-> ⚠️ **THIS FILE TRAILS BY THREE SESSIONS (last revised at v0.3.53; current build is v0.3.89).** Its plan
+> ⚠️ **THIS FILE TRAILS BY FOUR SESSIONS (last revised at v0.3.53; current build is v0.4.0).** Its plan
 > and its **Settled Decisions Register remain authoritative** — nothing since has reopened a settled
 > decision — but it predates **Session 28** (vertex welding, settled-shell streaming, the custom guide
-> shader, voxel outlines), **Session 29** (block occupancy, the face outset) and **Session 30** (F6 Move
-> mode; **wire protocol 16 → 17**; a fourth `ToolMode`; 79 source files). Read `HANDOFF.md` and
-> `SESSION_28/29/30.md` for those.
+> shader, voxel outlines), **Session 29** (block occupancy, the face outset) and **Sessions 30–31** (the
+> **Transform** tool mode — move, rotate, copy, mirror; **wire protocol 16 → 19**; a fourth `ToolMode`;
+> 81 source files). Read `HANDOFF.md` and `SESSION_28/29/30/31.md` for those.
 
 **Supersedes v3.13 — persistent per-player cumulative-cap overrides and the final release
 (v0.3.53).** v2.5 consolidated five

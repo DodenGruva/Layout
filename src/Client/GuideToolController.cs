@@ -584,7 +584,7 @@ namespace Layout.Client
             // A commit still in flight blocks a new drag: its anchor would be measured against the guide's
             // old data position while the screen already shows the new one, so the second move would be
             // wrong by exactly the first one.
-            bool wanted = _draft.Mode == ToolMode.Move
+            bool wanted = _draft.Mode == ToolMode.Transform
                 && _draft.FreeMove
                 && _draft.SelectedGuideId != null
                 && _pendingMoveCommit == Guid.Empty
@@ -1396,7 +1396,7 @@ namespace Layout.Client
 
             // MOVE mode: a live free-move settles here; otherwise a click SELECTS the guide to move (and an
             // empty click deselects), exactly as Edit does. Geometry is never touched in this mode.
-            if (_draft.Mode == ToolMode.Move)
+            if (_draft.Mode == ToolMode.Transform)
             {
                 if (FreeMoving) { CommitFreeMove(); return; }
                 TargetHit moveHit = FindTarget(includeLockedPoints: true);
@@ -1501,7 +1501,7 @@ namespace Layout.Client
 
             // MOVE mode: right-click is the same backtrack gesture as everywhere else — first it puts an
             // in-progress free-move back where it started, and only then does it drop the selection.
-            if (_draft.Mode == ToolMode.Move)
+            if (_draft.Mode == ToolMode.Transform)
             {
                 if (FreeMoving) { CancelFreeMove(); return; }
                 if (_draft.SelectedGuideId != null)
@@ -2215,7 +2215,7 @@ namespace Layout.Client
         public string DescribeCurrentGuide(out bool found)
         {
             Guid? guideId = null;
-            if ((_draft.Mode == ToolMode.Edit || _draft.Mode == ToolMode.Move)
+            if ((_draft.Mode == ToolMode.Edit || _draft.Mode == ToolMode.Transform)
                 && _draft.SelectedGuideId != null
                 && _net.Guides.ContainsKey(_draft.SelectedGuideId.Value))
                 guideId = _draft.SelectedGuideId;
