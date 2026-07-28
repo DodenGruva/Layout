@@ -70,6 +70,10 @@ Status: **v0.4.14 on the `beta` branch** (v0.3.53 is the last `main` release; th
   anything here** — it records what was tried and why the design looks as it does. Retained because the
   feature has open verification items and one escape hatch (the shader-lookup route) still on the table.
 - **`PROJECT_STATUS.md`** — where things stand and what each module does.
+- **`RenderIcon.ps1`** (in `dev/`) — renders a `LayoutToolIcons` glyph to a PNG at several true sizes plus
+  magnified copies, so an icon can be LOOKED AT before it ships. Icons cannot be compile-checked and a
+  correct glyph can still be an unreadable smudge at 18–22 px. It settled the Session-32 gear (tooth count,
+  stroke weight, and the 18→22 size bump). `.\dev\RenderIcon.ps1`; writes to temp, not the repo.
 - **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix (candidate for 0.2.0).
 - **`PLAN_CHALKING_KIT.md`** — the F5 chalking-kit design rationale, now marked ✅ implemented with its
   plan-vs-shipped deltas up top.

@@ -224,8 +224,9 @@ As a solid silhouette the same teeth are bumps on a disc edge, which survives at
 every overlap would CANCEL — the spokes would punch holes through the hub. Separate fills mean an overlap
 paints the same pixels twice.
 
-**The proportions were measured, not guessed.** `dev/` does not carry the harness, but the glyph was ported
-to GDI+ and rendered at 18/22/28/40 px before shipping. That caught two things a compile never would:
+**The proportions were measured, not guessed.** The glyph was ported to GDI+ and rendered at 18/22/28/42 px
+before shipping. **That harness is kept as `dev/RenderIcon.ps1`** — run it before changing any icon. It
+caught two things a compile never would:
 
 1. **Twelve teeth were too many at 18 px** — and an early eight-tooth attempt put valleys at 2.0 px against
    2.6 px tips, teeth half again wider than the gaps, which reads as a scalloped disc rather than a gear.
