@@ -372,6 +372,17 @@ namespace Layout.Systems
             public MeshRef TransitionCleanRef;
             public readonly List<MeshRef> TransitionCleanAuxiliary = new List<MeshRef>();
             public bool RenderedWireframe;
+
+            /// <summary>
+            /// The guide state the currently-uploaded WIREFRAME SCAFFOLD was built from, or 0 when this
+            /// mesh is not a scaffold. Meaningful only while <see cref="RenderedWireframe"/> is true.
+            /// </summary>
+            /// <remarks>
+            /// Exists to answer "is the wireframe on screen still a picture of THIS guide?". Without it
+            /// <c>TryStartSettledShellMaterialization</c> could only ask whether a wireframe was showing at
+            /// all, and would happily take over from a stale one — see its preconditions.
+            /// </remarks>
+            public ulong ScaffoldFingerprint;
         }
 
         public GuideRenderer(ICoreClientAPI capi, ClientNetworkHandler network)
@@ -1665,12 +1676,10 @@ namespace Layout.Systems
                 if (fingerprint == _cancelRestoreFingerprint) return;
             }
 
-            // BEING MOVED (F6): the ordinary path below would start the shell straight away and return
-            // WITHOUT rebuilding the wireframe — TryStartSettledShellMaterialization succeeds off the
-            // existing RenderedWireframe flag and never touches the scaffold mesh. That left the scaffold
-            // drawn at the guide's OLD position while the shell streamed in at the new one, and meant the
-            // rebuild's move-hold branch (which draws the true-scale floor band) was never reached at all.
-            // A held guide therefore goes straight to the rebuild.
+            // BEING TRANSFORMED: go straight to the rebuild, which is where the move hold's scaffold and
+            // its true-scale floor band are raised. TryStartSettledShellMaterialization would now decline
+            // this anyway — the guide has changed, so its scaffold fingerprint no longer matches — but
+            // saying so here keeps the intent explicit rather than resting on that.
             if (MoveHoldActive(guide.Id)) { RebuildGuide(guide); return; }
 
             if (TryStartSettledShellMaterialization(guide)) return;
@@ -3617,6 +3626,15 @@ namespace Layout.Systems
                 || !mesh.RenderedWireframe)
                 return false;
 
+            // THE SCAFFOLD MUST STILL BE A PICTURE OF THIS GUIDE. Without this test the check above only
+            // asks whether a wireframe is showing at all — and one is, whenever the guide is already
+            // mid-stream from an earlier change. Taking over from that stale scaffold starts the shell at
+            // the NEW pose while leaving the wireframe drawn at the OLD one, and skips the caller's
+            // rebuild, which is the only thing that would have re-uploaded it. Refusing here instead sends
+            // the caller down RebuildGuide, which raises a fresh scaffold and then calls back in — at which
+            // point the fingerprints agree and the stream starts properly.
+            if (mesh.ScaffoldFingerprint != fingerprint) return false;
+
             GuideData snapshot = guide.DeepClone();
             var build = new SettledMaterializationBuild
             {
@@ -4118,6 +4136,9 @@ namespace Layout.Systems
             if (_guideMeshes.TryGetValue(guide.Id, out GuideMesh mesh))
             {
                 mesh.RenderedWireframe = true;
+                // Record WHICH guide state this scaffold depicts, so a later change can tell that the
+                // wireframe on screen has gone stale rather than assuming any wireframe is a current one.
+                mesh.ScaffoldFingerprint = RenderFingerprint(guide);
 
                 // Added AFTER UploadOrReplace, which clears the auxiliary list as part of replacing the
                 // primary mesh — building the layers first would only have them deleted again.

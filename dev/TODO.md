@@ -1,4 +1,4 @@
-# Layout — TODO / Outstanding Items (current: v0.4.0 on `beta`)
+# Layout — TODO / Outstanding Items (current: v0.4.1 on `beta`)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
@@ -990,7 +990,7 @@ the inventory refill remains (Top of the list).
 ## Next session — start here
 
 **The agenda is "⭐ Top of the list" at the top of this file** — it is not repeated here. Current state:
-**v0.4.0** is built, packaged and documented on `beta`. The Transform category (F6/F7/F8/F12) is complete.
+**v0.4.1** is built, packaged and documented on `beta`. The Transform category (F6/F7/F8/F12) is complete.
 **F9 — the in-game settings panel — is the recommended next feature**, since it subsumes T2. The standing
 backlog is T1 (CTRL surface-snap), F10, F11, the six flagged items in `SESSION_31.md` §7, the Session-29
 occupancy verification items, and the `PROJECT_STATUS.md` → `HANDOFF.md` merge.

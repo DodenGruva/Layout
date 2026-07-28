@@ -3,7 +3,7 @@
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
 > and the performance-relevant mechanics. Updated 2026-07-27 against the built/package checkpoint
-> **v0.4.0 on the `beta` branch** (v0.3.53 is live on `main`). Where this file and the code
+> **v0.4.1 on the `beta` branch** (v0.3.53 is live on `main`). Where this file and the code
 > disagree, **the code wins** — treat this as a map, then read the `.cs` files it points at.
 >
 > ⚠️ **`dev/ARCHITECTURE.md` (v3.14) and `dev/PROJECT_STATUS.md` predate Sessions 28–31** and do not know
@@ -47,7 +47,7 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** **v0.4.0** built and packaged; v0.3.53 is the live `main` release. Sessions 30–31 added the
+- **Status:** **v0.4.1** built and packaged; v0.3.53 is the live `main` release. Sessions 30–31 added the
   **Transform** tool mode — move, rotate, copy and mirror a whole guide without touching its shape, from a
   state-driven direction pad (see §4). Sessions 28–29 added a
   **custom guide shader** (guide frame cost 8.2 ms → 1.8 ms on an 8M-voxel guide), **vertex welding**

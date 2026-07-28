@@ -4,6 +4,15 @@ All notable changes to Layout will be recorded in this file going forward.
 
 ## Unreleased
 
+## 0.4.1 - 2026-07-27
+
+### Fixed
+
+- A large guide that is edited while it is still growing in no longer leaves its wireframe behind at the old
+  position. The wireframe now rebuilds whenever the guide it depicts has changed, instead of only when the
+  guide was being moved. This also covers switching a guide from Wireframe to Shell, which had the same
+  problem.
+
 ## 0.4.0 - 2026-07-27
 
 The **Transform** milestone. A guide can now be moved, turned, duplicated and flipped as a whole object,

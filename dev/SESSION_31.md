@@ -184,18 +184,49 @@ moderation or genuine player commands and were left alone.
 1. **A refused copy still advances the run counter**, so the next one lands two spans out with a gap.
    Refusal is an error state (chalk, cap, claim) and changing direction resets it, but it is not
    self-healing.
-2. **`OnGuideAddedOrUpdated` starts the shell materialization BEFORE reaching `RebuildGuide`** and that path
-   never touches the scaffold mesh — the Session-30 defect. Fixed for the Transform hold path only; **the
-   general case is still live** for any edit to a guide currently showing a scaffold.
+2. ~~`OnGuideAddedOrUpdated` starts the shell materialization before reaching `RebuildGuide`, stranding a
+   stale scaffold.~~ **FIXED GENERALLY in v0.4.1** — see §9.
 3. **Polygon-family re-phasing under rotate and mirror is unverified.** The mechanism is understood (see §4)
    and the count is recalculated correctly; what is unknown is whether the visible result surprises anyone.
 4. **The wireframe floor band keys on the lowest point of the shape's defining curve** — right for a dome,
    cylinder and prism; unverified on sphere and box.
-5. **Mirror on a Free-Shape is the case mirror exists for and is the least tested.**
+5. ~~Mirror on a Free-Shape is the least tested.~~ **VERIFIED IN PLAY (2026-07-27):** the human tested
+   Free-Shape mirroring extensively and reported no problems. That is the case mirror exists for — an
+   irregular hand-drawn polyline is the shape a reflection cannot be faked on with a rotation — so this
+   closes the main risk the feature carried.
 6. **T1 and T2 remain open** in `TODO.md`: CTRL surface-snap on free-move (contact rule decided, not built)
    and the settings-page formatting plus hover text.
 
 ---
+
+## 9. v0.4.1 — the stale-scaffold defect, fixed generally
+
+Session 30 found that `OnGuideAddedOrUpdated` calls `TryStartSettledShellMaterialization` **before** it ever
+reaches `RebuildGuide`, and that call succeeds off `mesh.RenderedWireframe` — "is a wireframe showing?" —
+which is true whenever the guide is already mid-stream from an earlier change. It then starts the shell for
+the NEW state and returns, and `RebuildGuide` is the only thing that re-uploads the scaffold. Result: the
+shell streams at the new pose while the wireframe stays drawn at the old one.
+
+Session 30 fixed only the Transform path (a held guide goes straight to the rebuild) and left the general
+case open, because reordering that handler changes which branch every guide update takes — including the
+immense-sculpt and pending-placement branches above it — and the renderer carries the "protect the v0.3.42
+baseline" rule.
+
+**The contained fix, found on re-reading:** the renderer already fingerprints a guide's exact shape and
+position, and a running build records the fingerprint it is building. **The scaffold MESH recorded nothing.**
+`GuideMesh.ScaffoldFingerprint` now stores the guide state the uploaded wireframe depicts, set wherever
+`RebuildSettledScaffold` raises one, and `TryStartSettledShellMaterialization` refuses when it does not match
+the guide in hand. A refusal sends the caller down `RebuildGuide`, which raises a fresh scaffold and calls
+back in — at which point the fingerprints agree and the stream starts properly.
+
+Nothing was reordered; one precondition became honest. The pre-existing
+"already streaming this exact pose → return true" check still comes FIRST, so a redundant full-state
+broadcast leaves a running stream alone and does not restart the animation.
+
+Flows checked by hand: first load of a big guide; an edit landing mid-stream (the defect); a redundant
+re-broadcast; an edit after the stream completes; the materialization-failure path; a small synchronous
+guide; and a persistent Wireframe guide switched to Shell — **which turns out to have had the same defect**
+and is fixed by the same change.
 
 ## 8. Next
 

@@ -16,7 +16,7 @@ hollow **Shell** or a structural **Wireframe**.
 The catalog is **15 shape types / 21 picker tiles** (SESSION_20 added straight/tapered Polygonal Prisms).
 Guide voxels that already hold world material can be drawn in a "built" colour, live (SESSION_29). A finished
 guide can be moved, rotated, copied and mirrored as a whole object (**Transform mode**, SESSION_30/31).
-Status: **v0.4.0 on the `beta` branch** (v0.3.53 is the last `main` release; the mod is public).
+Status: **v0.4.1 on the `beta` branch** (v0.3.53 is the last `main` release; the mod is public).
 
 > **Renderer note — read before any rendering work.** Guides are **order-dependent translucent geometry**
 > (Opaque stage, manual alpha blending, depth-tested, double-sided). On a hollow shell the guide overlaps
@@ -42,7 +42,7 @@ Status: **v0.4.0 on the `beta` branch** (v0.3.53 is the last `main` release; the
 - **Versioning rule (standing, human-set):** EVERY revision bumps `modinfo.json` and ships as a NEW
   `Layout<version>.zip` in **`..\LayoutZips\`** (the sibling folder of this repo — human-directed location;
   holds 0.1.10–0.1.27 + the 0.2.x line; the 0.1.28–0.1.53 zips live in `Documents\ChatGPT\LayoutZips\`) —
-  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.4.0.**
+  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.4.1.**
   (The folder's real name has a space: `..\Layout Zips\`.)
   **Zip layout matters:** entry paths must use FORWARD slashes with no directory entries, root files first.
   `Compress-Archive` on Windows PowerShell 5.1 writes backslashes and directory entries and is therefore
@@ -99,11 +99,11 @@ Status: **v0.4.0 on the `beta` branch** (v0.3.53 is the last `main` release; the
   **v0.3.90–v0.4.0 Transform arc** (rotate, copy, mirror, the state-driven pad, span stepping, copy runs,
   and hiding the development diagnostic commands).
 
-## ✅ Docs updated to v0.4.0 (2026-07-27)
-Consistent with **v0.4.0, DataVersion 12, protocol 19, 81 source files, 15 shape types / 21 tiles**.
+## ✅ Docs updated to v0.4.1 (2026-07-27)
+Consistent with **v0.4.1, DataVersion 12, protocol 19, 81 source files, 15 shape types / 21 tiles**.
 `SESSION_31.md` is the latest record (Transform: `SESSION_30.md` + `SESSION_31.md`, occupancy:
 `SESSION_29.md` + `PLAN_BLOCK_OCCUPANCY.md`, mesh: `SESSION_16.md` + `SESSION_28.md`, F5: `SESSION_15.md`).
-`CHANGELOG.md` is current through v0.4.0.
+`CHANGELOG.md` is current through v0.4.1.
 
 ⚠️ **`ARCHITECTURE.md` (v3.14) and `PROJECT_STATUS.md` predate Sessions 28–31.** They are not wrong about
 what they describe, but they do not know about vertex welding, settled-shell streaming, the custom shader,
