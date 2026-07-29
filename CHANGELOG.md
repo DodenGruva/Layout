@@ -4,6 +4,81 @@ All notable changes to Layout will be recorded in this file going forward.
 
 ## Unreleased
 
+## 0.4.26 - 2026-07-28
+
+### Added
+
+- **A Players list for admins.** A **Players** button beside Save on the settings page opens a window with
+  three tabs. **Players** lists everyone Layout knows about — click one to see their limits, how much of
+  each they are using, and their guides largest-first with sizes and coordinates. **Overrides** lists only
+  the players whose limits differ from the server's, and what each one is set to. **Jail** lists who is
+  currently suspended and how many guides they still have standing.
+
+## 0.4.24 - 0.4.25 - 2026-07-28
+
+### Fixed
+
+- **Limit messages were printing `{0:n0}` instead of the actual number.** Eleven messages were affected,
+  including every "that guide is too large" and "guide limit reached" warning, and the land-claim refusal
+  that was showing `{0}, {1}, {2}` where the coordinates should have been.
+- **The Admin panel now warns you when your own limits are overridden.** A personal override beats every
+  cap in the panel, and the page was showing the server's numbers as though they applied to you. If you
+  have one, an orange line now says so above the settings, with the command to clear it.
+
+## 0.4.22 - 0.4.23 - 2026-07-28
+
+### Changed
+
+- **Private guides now obey the server's limits**, on servers that run Layout. Previously a player could
+  step around every cap an admin had set by switching to private placement. The client-only fallback — a
+  server without Layout at all — stays unlimited, since there is nobody there to have set a limit.
+
+### Added
+
+- The running version is shown at the foot of the settings page, and written to the log at startup.
+
+## 0.4.20 - 0.4.21 - 2026-07-28
+
+### Changed
+
+- **Admin settings now need a Save.** Editing a limit stages the change and the panel shows how many are
+  unsaved; nothing reaches the server until Save is pressed. The fields then redraw with what the server
+  actually stored, so a value it adjusted is visible rather than silently different from what you typed.
+  Saving reports back in chat what each setting became.
+- Chalk consumption was removed from the Admin panel. It is still in `layout.json`.
+
+## 0.4.16 - 0.4.19 - 2026-07-28
+
+### Added
+
+- **Admin settings on the settings page.** An **Admin - Server Settings** section, visible only to admins,
+  holding the five voxel and guide limits plus the private-guides switch. Changes apply to the running
+  server and are written to its config file. Per-player commands (`/layout jail`, `limit`, `voxelcap`)
+  are unchanged.
+- **Reveal Near and Reveal All**, two new tiles on the Edit menu's Visibility row. Reveal Near un-hides
+  every hidden guide within 6 blocks of you, whoever made it; Reveal All un-hides every hidden guide you
+  made, anywhere. Both stay available when no guide is selected, which is when you need them.
+
+### Fixed
+
+- Admin changes were silently discarded if your own placement mode was set to Private.
+- Turning private guides off left players' saved preference on Private, so they would flip back to it.
+
+## 0.4.15 - 2026-07-28
+
+### Added
+
+- **CTRL while free-moving sets a guide down on the surface you are aiming at**, instead of keeping it at
+  the distance it was picked up from. The bottom of the guide meets the face under the crosshair.
+
+### Changed
+
+- **Rectangles, squares and boxes can be placed at any angle.** They were the only shapes locked to
+  north/south/east/west. The gesture changed to supply the missing rotation: a **rectangle** is now three
+  clicks — a corner, the far end of one edge, then the width — and a **box** is four, with the height last.
+  A **square** stays two clicks, since one edge already settles it, and SHIFT picks which side of that edge
+  it sits on. Rectangles and boxes placed before this update keep their original shape exactly.
+
 ## 0.4.12 - 0.4.14 - 2026-07-28
 
 ### Added

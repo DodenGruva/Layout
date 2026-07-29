@@ -219,11 +219,13 @@ namespace Layout.Systems
         private readonly IGuidePersistence _persistence;
         private readonly IGuideBlockProbe _blockProbe;
         private readonly ILogger _logger;
-        private readonly int _perGuideVoxelCap;
-        private readonly int _totalVoxelCap;
-        private readonly int _perPlayerTotalVoxelCap;
-        private readonly int _maxGuidesPerPlayer;
-        private readonly int _maxGuidesWorldWide;
+        // NOT readonly since v0.4.16: the settings page's Admin section changes these in play, through
+        // ApplyCaps below. Still write-once-per-change on the server main thread — see that method.
+        private int _perGuideVoxelCap;
+        private int _totalVoxelCap;
+        private int _perPlayerTotalVoxelCap;
+        private int _maxGuidesPerPlayer;
+        private int _maxGuidesWorldWide;
         private readonly System.Func<string, int> _playerGuideLimitResolver;
         private readonly System.Func<string, int> _playerTotalVoxelCapResolver;
         // Server-main-thread operation scope. The network authority sets this around one player's mutation
@@ -284,6 +286,31 @@ namespace Layout.Systems
 
         /// <summary>Number of guides currently loaded (the figure the world-wide count cap checks against).</summary>
         public int GuideCount => _guides.Count;
+
+        /// <summary>
+        /// Replaces the five cap values in play (v0.4.16, the settings page's Admin section). Non-positive
+        /// means unlimited, matching the config's own semantics.
+        /// </summary>
+        /// <remarks>
+        /// LOWERING A CAP NEVER DELETES ANYTHING. The caps are entry conditions checked when a guide is
+        /// created or grown, so guides already over a newly-lowered cap keep existing and keep rendering;
+        /// they simply cannot grow, exactly like the existing over-cap guides the cumulative budget already
+        /// tolerates. Dropping a cap and expecting the world to tidy itself would be a destructive surprise
+        /// from a settings panel, and <c>/layout dispel</c> is the deliberate tool for that.
+        ///
+        /// Server main thread only, which is where every network handler and command already runs. The
+        /// immense create/sculpt workers read their limit BEFORE going off-thread, so a change landing
+        /// mid-operation cannot alter the rules an in-flight placement is being judged against.
+        /// </remarks>
+        public void ApplyCaps(int perGuideVoxelCap, int totalVoxelCap, int perPlayerTotalVoxelCap,
+            int maxGuidesPerPlayer, int maxGuidesWorldWide)
+        {
+            _perGuideVoxelCap = perGuideVoxelCap > 0 ? perGuideVoxelCap : 0;
+            _totalVoxelCap = totalVoxelCap > 0 ? totalVoxelCap : 0;
+            _perPlayerTotalVoxelCap = perPlayerTotalVoxelCap > 0 ? perPlayerTotalVoxelCap : 0;
+            _maxGuidesPerPlayer = maxGuidesPerPlayer > 0 ? maxGuidesPerPlayer : 0;
+            _maxGuidesWorldWide = maxGuidesWorldWide > 0 ? maxGuidesWorldWide : 0;
+        }
 
         /// <summary>
         /// Wires up persistence (load on save-game load, write on world-save) and stores the caps, which

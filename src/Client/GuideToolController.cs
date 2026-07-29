@@ -184,7 +184,9 @@ namespace Layout.Client
                         return ShapeModifierHelp.CtrlCardinal | ShapeModifierHelp.ShiftVertical
                             | ShapeModifierHelp.CtrlShiftDiagonal;
                     if (_draft.AwaitingRim)
-                        return ShapeModifierHelp.CtrlCloseRim | ShapeModifierHelp.ShiftAllowFlare;
+                        return DraftManager.IsTaperedRimStage(_draft.Shape)
+                            ? ShapeModifierHelp.CtrlCloseRim | ShapeModifierHelp.ShiftAllowFlare
+                            : ShapeModifierHelp.None;   // the Box's fourth click is a plain height click
                     if (_draft.AwaitingApex)
                         return _draft.Shape == GuideShapeType.Triangle
                             ? ShapeModifierHelp.ShiftCenterApex : ShapeModifierHelp.None;
@@ -195,7 +197,12 @@ namespace Layout.Client
                     if (GuideShapeTypes.UsesSides(_draft.Shape)) help |= ShapeModifierHelp.ShiftFlatSide;
                     if (_draft.Shape == GuideShapeType.Arch || _draft.Shape == GuideShapeType.Dome
                         || (_draft.Shape == GuideShapeType.Triangle
-                            && _draft.Constraint == ShapeConstraint.Equilateral))
+                            && _draft.Constraint == ShapeConstraint.Equilateral)
+                        // v0.4.15: a Square is settled by one clicked edge, so SHIFT is what picks which
+                        // side of that edge it lies on — the two-click counterpart of the free rectangle's
+                        // width click.
+                        || (_draft.Shape == GuideShapeType.Rectangle
+                            && _draft.Constraint == ShapeConstraint.Square))
                         help |= ShapeModifierHelp.ShiftInvert;
                     return help;
                 }
@@ -611,17 +618,41 @@ namespace Layout.Client
                 };
             }
 
-            Vec3d e = EyePos(), d = ViewDir();
-            double px = e.X + d.X * _move.Depth;
-            double py = e.Y + d.Y * _move.Depth;
-            double pz = e.Z + d.Z * _move.Depth;
+            // T1 (v0.4.15): CTRL sets the guide DOWN on the surface under the crosshair instead of riding
+            // the held view-ray depth — the same idea as CTRL's level/cardinal snap while drafting. The aim
+            // point becomes the real face hit, and the vertical offset is then solved so the guide's LOWEST
+            // VOXEL PLANE meets that face (see TryGuideFloorSixteenths). With no block under the crosshair
+            // there is no surface to meet, so the ordinary held-depth drag simply continues.
+            BlockSelection surface = CtrlHeld() ? _capi.World.Player.CurrentBlockSelection : null;
+
+            double px, py, pz;
+            if (surface != null)
+            {
+                px = surface.Position.X + surface.HitPosition.X;
+                py = surface.Position.Y + surface.HitPosition.Y;
+                pz = surface.Position.Z + surface.HitPosition.Z;
+            }
+            else
+            {
+                Vec3d e = EyePos(), d = ViewDir();
+                px = e.X + d.X * _move.Depth;
+                py = e.Y + d.Y * _move.Depth;
+                pz = e.Z + d.Z * _move.Depth;
+            }
 
             // Snap to whole voxels of THIS guide — the authority refuses anything finer, and a sub-voxel
             // offset would move cells by a whole cell wherever it happened to cross a quantise boundary.
             int step = Math.Max(1, g.VoxelScale);
             int ox = SnapSixteenths(px - _move.Anchor.X, step);
-            int oy = SnapSixteenths(py - _move.Anchor.Y, step);
             int oz = SnapSixteenths(pz - _move.Anchor.Z, step);
+
+            // Solve the contact FIRST and snap the result, never the other way round: rounding the hit
+            // height to the voxel grid before subtracting the guide's underside would leave the guide a
+            // voxel proud of — or sunk into — the very face it is supposed to be resting on.
+            int oy = surface != null && TryGuideFloorSixteenths(g, out int floor16)
+                ? SnapSixteenths(py - floor16 / 16.0, step)
+                : SnapSixteenths(py - _move.Anchor.Y, step);
+
             if (ox == _move.OffsetX && oy == _move.OffsetY && oz == _move.OffsetZ) return;
 
             _move.OffsetX = ox;
@@ -632,6 +663,65 @@ namespace Layout.Client
 
         private static int SnapSixteenths(double worldDelta, int step) =>
             (int)Math.Round(worldDelta * 16.0 / step) * step;
+
+        /// <summary>
+        /// The bottom of the guide's LOWEST voxel plane, in 1/16 units — the plane T1's CTRL surface-snap
+        /// brings down onto the targeted face. False when the guide has no usable geometry yet.
+        /// </summary>
+        /// <remarks>
+        /// WHY THE LOWEST PLANE (decided 2026-07-27). It is unambiguous on every shape and matches the
+        /// common case of setting a build down on the ground. Aiming at a wall or ceiling therefore still
+        /// pushes the guide's BOTTOM to that face, which can read oddly — predictable was preferred over
+        /// clever. Nearest-face has no sane meaning on a sphere; base anchors would sink a dome halfway
+        /// into the floor, since its anchors are its base ring rather than its lowest point.
+        ///
+        /// Measured from the shape's own sampled outline (the cached targeting polyline) plus its real
+        /// control points, and never from the voxel set: this runs every tick of a drag, and voxelising a
+        /// behemoth merely to find its underside is exactly the cost free-move exists to avoid. Cells
+        /// quantise to Floor(world*16/scale)*scale, so flooring the outline's lowest point onto that grid
+        /// IS the cell the shell's underside occupies.
+        ///
+        /// Phantom points are excluded. They steer end tangents and are never emitted as voxels, and an
+        /// arch's phantoms sit BELOW its feet — including them would hang the whole guide in the air.
+        ///
+        /// A Surface guide is drawn FLATTENED onto its plane, so when that plane is the horizontal one its
+        /// stored points say nothing about where the decal actually lies; the plane offset is the answer.
+        /// </remarks>
+        private bool TryGuideFloorSixteenths(GuideData g, out int floor16)
+        {
+            floor16 = 0;
+            int scale = Math.Max(1, g.VoxelScale);
+
+            if (g.Projection == ProjectionMode.Surface && g.Plane.FlattenedAxis == PlaneAxis.Y)
+            {
+                floor16 = FloorToStep(g.Plane.PlaneOffset, scale);
+                return true;
+            }
+
+            double minY = double.MaxValue;
+            List<Vec3d> curve = GetCurvePolyline(g);
+            if (curve != null)
+                for (int i = 0; i < curve.Count; i++)
+                    if (curve[i] != null && curve[i].Y < minY) minY = curve[i].Y;
+
+            List<ControlPoint> points = g.ControlPoints;
+            if (points != null)
+                for (int i = 0; i < points.Count; i++)
+                {
+                    ControlPoint cp = points[i];
+                    if (cp == null || cp.IsPhantom || cp.WorldPosition == null) continue;
+                    if (cp.WorldPosition.Y < minY) minY = cp.WorldPosition.Y;
+                }
+
+            if (minY == double.MaxValue) return false;
+            floor16 = (int)Math.Floor(minY * 16.0 / scale) * scale;
+            return true;
+        }
+
+        // Floors a 1/16-unit coordinate onto the guide's own voxel grid. Negative-safe by construction:
+        // integer division truncates toward zero, which would lift a below-sea-level plane by a voxel.
+        private static int FloorToStep(int sixteenths, int step) =>
+            (int)Math.Floor((double)sixteenths / step) * step;
 
         // Commits the drag as ONE translate — one undo step — and disarms. Disarming matters: leaving it
         // armed would re-engage on the very next tick and the guide would start following the crosshair
@@ -743,12 +833,17 @@ namespace Layout.Client
                     }
                     else if (_draft.AwaitingRim)
                     {
-                        // Tapered volume's LAST stage: the base and height are down and the
-                        // crosshair now sets the lid's radius — the ghost's taper opens and closes live.
-                        // The one-way capture gate prevents the just-clicked, usually distant HEIGHT block
-                        // from becoming a giant rim before the player has aimed back toward the lid.
-                        aim = StabilizeDraftRimAim(aim);
-                        aim = ConstrainDraftRim(aim);
+                        // A four-click shape's LAST stage. For a tapered volume the base and height are
+                        // down and the crosshair now sets the lid's radius — the ghost's taper opens and
+                        // closes live, and the one-way capture gate prevents the just-clicked, usually
+                        // distant HEIGHT block from becoming a giant rim before the player has aimed back
+                        // toward the lid. The Box's fourth click (v0.4.15) is a plain HEIGHT click and
+                        // takes none of that: it has no lid radius to hold, flare, or close.
+                        if (DraftManager.IsTaperedRimStage(_draft.Shape))
+                        {
+                            aim = StabilizeDraftRimAim(aim);
+                            aim = ConstrainDraftRim(aim);
+                        }
                         ObserveDraftMotion(aim, _draft.DraftFlatSideAligned);
                         aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
                         PresentDraft(new DraftPreviewSpec(0, BuildSettings(blockSel, aim),
@@ -1728,14 +1823,17 @@ namespace Layout.Client
                 return;
             }
 
-            // FOUR-CLICK TAPERED CYLINDER (0.2.24): the third click stores the HEIGHT and the draft moves
-            // on to its rim stage, where the crosshair sets how wide the lid is. Every other 3-click shape
-            // finishes here instead.
-            if (_draft.AwaitingApex && !_draft.AwaitingRim && DraftManager.NeedsRimClick(_draft.Shape))
+            // FOUR-CLICK SHAPES: the third click is stored and the draft moves on to its fourth stage —
+            // the tapered volumes' rim, where the crosshair sets how wide the lid is (0.2.24), or the
+            // Box's HEIGHT after its width (v0.4.15). Every other 3-click shape finishes here instead.
+            if (_draft.AwaitingApex && !_draft.AwaitingRim && DraftManager.NeedsFourthClick(_draft.Shape))
             {
                 _draft.PlaceThirdPoint(ClampDraftAimToPerGuideCap(anchor));
-                _rimAimArmed = false;
-                _rimAwaitingRelease = true;
+                // The one-way capture gate belongs to the tapered rim alone. A box's height click is an
+                // ordinary height click: nothing to hold at 60%, so nothing to wait for a release over.
+                bool taperedRim = DraftManager.IsTaperedRimStage(_draft.Shape);
+                _rimAimArmed = !taperedRim;
+                _rimAwaitingRelease = taperedRim;
                 _draftClamp.Reset();
                 return;
             }
@@ -1745,9 +1843,16 @@ namespace Layout.Client
             Vec3d end = anchor;
             if (_draft.AwaitingRim)
             {
-                rim = StabilizeDraftRimAim(anchor);  // held at 60% until the lid area captures the aim
-                rim = ConstrainDraftRim(rim);        // CTRL closes; SHIFT deliberately permits a flare
-                apex = _draft.DraftThird;            // the height was fixed by the third click
+                if (DraftManager.IsTaperedRimStage(_draft.Shape))
+                {
+                    rim = StabilizeDraftRimAim(anchor);  // held at 60% until the lid area captures the aim
+                    rim = ConstrainDraftRim(rim);        // CTRL closes; SHIFT deliberately permits a flare
+                }
+                else
+                {
+                    rim = anchor;                        // the Box's fourth click is a plain height click
+                }
+                apex = _draft.DraftThird;            // the third click was fixed already
                 end = _draft.DraftSecond;            // the base by the second
             }
             else if (_draft.AwaitingApex)
@@ -2727,13 +2832,25 @@ namespace Layout.Client
         }
 
         // True when the active draft is on a free-air-capable stage of a 3D volume: the HEIGHT stage
-        // (cylinder/cone/box, base placed) or — 0.2.24 — the Tapered Cylinder's RIM stage after it.
-        private bool AwaitingVolumeHeight =>
-            _draft.AwaitingApex && GuideShapeTypes.IsVolume(_draft.Shape);
+        // (cylinder/cone, base placed) or — 0.2.24 — the Tapered Cylinder's RIM stage after it.
+        private bool AwaitingVolumeHeight
+        {
+            get
+            {
+                if (!GuideShapeTypes.IsVolume(_draft.Shape) || !_draft.AwaitingApex) return false;
+                // v0.4.15: the Box's third click is its base WIDTH — an in-plane click like the two base
+                // clicks, so it needs a real block just as they do. Its height moved to the fourth click,
+                // and that one is free-air capable like every other volume height.
+                if (_draft.Shape == GuideShapeType.Box) return _draft.AwaitingRim;
+                return true;
+            }
+        }
 
-        // The free-air aim for whichever stage the draft is on: the rim stage reads the lid plane, every
-        // other free-air-capable stage reads the height ray.
-        private Vec3d FreeAirAim() => _draft.AwaitingRim ? FreeAirRimAim() : FreeAirHeightAim();
+        // The free-air aim for whichever stage the draft is on: a TAPERED rim stage reads the lid plane,
+        // every other free-air-capable stage (the Box's fourth click included) reads the height ray.
+        private Vec3d FreeAirAim() =>
+            _draft.AwaitingRim && DraftManager.IsTaperedRimStage(_draft.Shape)
+                ? FreeAirRimAim() : FreeAirHeightAim();
 
         // The free-air height aim (0.1.23): with no block under the crosshair, the volume's height handle
         // follows the view ray at the base's distance — looking up/down grows/shrinks the height (the

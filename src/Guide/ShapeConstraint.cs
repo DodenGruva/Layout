@@ -33,7 +33,11 @@ namespace Layout.Guide
         /// <summary>Triangle whose apex slides along the base's perpendicular bisector.</summary>
         Isosceles = 5,
 
-        /// <summary>Rectangle with equal sides: the derived corners use the dominant diagonal component.</summary>
+        /// <summary>
+        /// Rectangle with equal sides: the width matches the clicked edge, so a square places in two
+        /// clicks and SHIFT picks which side of that edge it lies on. (Pre-v0.4.15 squares derived their
+        /// corners from the dominant diagonal component instead, and are still read that way.)
+        /// </summary>
         Square = 6
     }
 }

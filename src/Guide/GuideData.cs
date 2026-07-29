@@ -62,8 +62,13 @@ namespace Layout.Guide
         /// Version 10 stores lightweight display dimensions/count so merely hovering a large guide never
         /// has to regenerate its voxel shell. Version 11 added persistent Shell/Wireframe form. Version 12
         /// adds friendly creator and last-sculptor attribution for the HUD; older records simply display
-        /// unknown attribution until a player next changes them.
-        public const int CurrentDataVersion = 12;
+        /// unknown attribution until a player next changes them. Version 13 (v0.4.15) re-gestured the
+        /// Rectangle and Box, which changed how many control points they store — three and four instead of
+        /// two and three. No migration STEP is needed: both shapes read the old encoding in place and
+        /// reproduce it to the voxel (see RectangleShape's remarks). The bump exists so the change is
+        /// visible, and because a record written here WOULD be misread by an older build, which would take
+        /// the new edge anchor for the old diagonal corner.
+        public const int CurrentDataVersion = 13;
 
         /// <summary>The voxel edge lengths a guide may use, in 1/16-block units (1 → 1/16 block, 16 → 1 block).</summary>
         public static readonly int[] ValidVoxelScales = { 1, 2, 4, 8, 16 };

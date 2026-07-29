@@ -232,7 +232,8 @@ namespace Layout.UI
         public GuideToolGui(ICoreClientAPI capi, DraftManager tool, ClientNetworkHandler net,
             LayoutClientConfig config, Action saveConfig, Action applyOpacities,
             System.Func<bool, bool> applyOccupancy,
-            Action<Guid> holdMoveMaterialization, Action<bool> applyRendering) : base(capi)
+            Action<Guid> holdMoveMaterialization, Action<bool> applyRendering,
+            Action openPlayersDialog = null) : base(capi)
         {
             _tool = tool;
             _net = net;
@@ -242,7 +243,12 @@ namespace Layout.UI
             _applyOccupancy = applyOccupancy;
             _holdMoveMaterialization = holdMoveMaterialization;
             _applyRendering = applyRendering;
+            _openPlayersDialog = openPlayersDialog;
         }
+
+        // Opening the Players dialog is delegated rather than done here: the mod system owns every
+        // dialog's lifetime, and having one dialog construct another would leave two owners for it.
+        private readonly Action _openPlayersDialog;
 
         /// <summary>True if <paramref name="code"/> is one of the shape picker's catalog codes — the
         /// validity check the client config uses when normalising the pinned favorites.</summary>
@@ -260,6 +266,8 @@ namespace Layout.UI
             _shapeGridExpanded = false;      // the panel always opens compact (Session-11 flag 11e)
             _settingsTab = false;            // ...and always on the tool, not the settings page
             _customColorsExpanded = false;   // ...and the color table starts folded away
+            _adminExpanded = false;          // ...as does the Admin section
+            _adminEdits.Clear();             // ...and nothing is left staged from a previous session
             Subscribe();
             SetupDialog();
         }
@@ -610,9 +618,8 @@ namespace Layout.UI
 
             // Visibility is Edit-only — a placed guide can be shown/hidden; the tool has no such state.
             if (editMode)
-                AddIconRow(c, rowFont, ref y, labelW, pad, tile, tileGap, rowGap,
-                    "Visibility", VisCodes, VisNames, VisIcons, (selected?.IsHidden ?? false) ? 1 : 0,
-                    OnGuideVisibilityTile, "vis", settingsInert);
+                AddVisibilityRow(c, rowFont, font, ref y, labelW, pad, tile, tileGap, rowGap,
+                    selected, settingsInert);
 
             SingleComposer = c.EndChildElements().Compose();
 
@@ -852,7 +859,9 @@ namespace Layout.UI
             c.AddInteractiveElement(btn, "movefree");
             c.AddAutoSizeHoverText(
                 "Free-move: close this panel and the guide follows your crosshair, snapped to its own "
-                + "voxel scale. Left-click places it; right-click puts it back where it started.",
+                + "voxel scale. Left-click places it; right-click puts it back where it started. "
+                + "Hold CTRL to set it down on the surface you are aiming at - the bottom of the guide "
+                + "meets that face.",
                 hoverFont, 280, bounds.FlatCopy(), "movefree:ht");
         }
 
@@ -1141,6 +1150,366 @@ namespace Layout.UI
                 "Refill in inventory", "refillinv", OnInventoryRefillToggled,
                 "Lets you refill a Chalking Kit by dropping a held stack of Chalking Powder onto its "
                 + "inventory slot. Off by default. The ground refill always works regardless of this.");
+
+            // ==================== Admin ====================
+            BuildAdminSection(c, font, ref y, contentW, rowGap);
+
+            // The running build, stated plainly at the foot of the page (v0.4.23). Vintage Story loads one
+            // mod per modid, so several Layout zips left in the Mods folder means the version that runs is
+            // not necessarily the newest one sitting there. Without this the only way to find out was the
+            // log, and a fix that was never actually running looks exactly like a fix that does not work.
+            y += 6;
+            CairoFont versionFont = CairoFont.WhiteDetailText();
+            versionFont.Color = new double[] { 0.62, 0.62, 0.62, 1 };
+            c.AddStaticText("Layout v" + LayoutModSystem.ModVersion, versionFont,
+                ElementBounds.Fixed(0, y, contentW, 16));
+            y += 16;
+        }
+
+        // ---------------------------------------------------------------------------------
+        //  Admin section (v0.4.16)
+        // ---------------------------------------------------------------------------------
+        // The settings page was deliberately client-only until now — server settings lived on their admin
+        // commands and were kept off a player-facing panel. The human reopened that: these are the settings
+        // an admin actually reaches for, and a form reads far better than remembering five command names.
+        //
+        // WHAT IS AND IS NOT HERE. This section holds the server-WIDE settings, the ones that are a fixed
+        // short list with no argument but their own value. The per-PLAYER overrides (/layout jail, free,
+        // limit, voxelcap, totalvoxelcap) stay on the command line, because every one of them needs a
+        // player named first and a panel has nowhere good to put a player picker. The commands are not
+        // deprecated; both routes change the same state.
+        //
+        // COLLAPSED BY DEFAULT and reset on every arrival at the page, exactly like the colour table: it is
+        // eight rows that most players will never open, sitting under the four they came for.
+        private void BuildAdminSection(
+            GuiComposer c, CairoFont font, ref double y, double contentW, double rowGap)
+        {
+            // Nothing to administer when no Layout server has told us anything — a pre-0.4.16 server, a
+            // vanilla server, or single-player client-only. Drawing an empty Admin heading in those worlds
+            // would advertise a section that can never open.
+            LayoutAdminConfigPacket cfg = _net.AdminConfig;
+            if (cfg == null || !_net.CanEditAdminConfig) return;
+            _shownAdminConfig = cfg;   // the baseline OnAdminConfigChanged compares later packets against
+
+            // The heading carries the chevron, in the same right-hand slot the colour table's chevron uses.
+            y += 8;
+            const double collapseW = 24;
+            CairoFont headerFont = CairoFont.WhiteSmallText();
+            headerFont.Color = new double[] { 1, 0.85, 0.55, 1 };
+            c.AddStaticText("Admin - Server Settings", headerFont,
+                ElementBounds.Fixed(0, y, contentW - collapseW, 20));
+
+            ElementBounds chevron = ElementBounds.Fixed(contentW - collapseW, y + 1, 18, 18);
+            c.AddInteractiveElement(
+                new BareIconElement(capi,
+                    _adminExpanded ? LayoutToolIcons.ExpandUp : LayoutToolIcons.ExpandDown,
+                    OnToggleAdmin, chevron),
+                "adminexpand");
+            c.AddAutoSizeHoverText(
+                _adminExpanded ? "Hide the server settings" : "Show the server settings",
+                CairoFont.WhiteDetailText(), 220, chevron.FlatCopy(), "ht:adminexpand");
+            y += 20;
+
+            c.AddInset(ElementBounds.Fixed(0, y, contentW, 1), 1, 0.4f);
+            y += 1 + 6;
+
+            if (!_adminExpanded) return;
+
+            // The heading itself now says "Server Settings" (v0.4.18), so the separate scope note that used
+            // to sit here was saying the same thing twice.
+            //
+            // AN OVERRIDE ON YOU BEATS EVERY NUMBER BELOW, so it is stated before them rather than after.
+            // Without this the panel reads as authoritative while being quietly untrue for the one person
+            // looking at it: a forgotten personal cap survived an entire debugging session precisely
+            // because the page showed the server's caps and said nothing about the override winning.
+            if (cfg.HasPersonalOverride)
+            {
+                CairoFont warnFont = CairoFont.WhiteDetailText();
+                warnFont.Color = new double[] { 1, 0.55, 0.30, 1 };
+                c.AddStaticText(
+                    "Your own limits are overridden, so the caps below do not apply to you: "
+                    + DescribeOverrides(cfg) + ". Clear with /layout voxelcap <you> 0.",
+                    warnFont, ElementBounds.Fixed(0, y, contentW, 46));
+                y += 46 + 4;
+            }
+
+            const string unlimited = "Set 0 for unlimited.";
+
+            // The wheel/spinner step is per row, matched to the scale of the number it edits: 1000 on the
+            // six-figure voxel caps, where a single voxel is a null gesture, but 1 on guides-per-player
+            // (a realistic value is single digits) and 10 on the world guide count (human-directed).
+            AddAdminNumber(c, font, ref y, contentW, rowGap,
+                "Voxels per guide", LayoutAdminSetting.PerGuideVoxelCap, cfg.PerGuideVoxelCap, 1000,
+                "The largest a single guide may be. A player's draft stops growing when it reaches this, "
+                + "and the gauge on the heads-up display fills against it. " + unlimited);
+
+            AddAdminNumber(c, font, ref y, contentW, rowGap,
+                "Voxels per player", LayoutAdminSetting.PerPlayerTotalVoxelCap, cfg.PerPlayerTotalVoxelCap,
+                1000,
+                "The total across every guide one player has created and still has standing. Deleting a "
+                + "guide gives the room back. " + unlimited);
+
+            AddAdminNumber(c, font, ref y, contentW, rowGap,
+                "Voxels in the world", LayoutAdminSetting.TotalVoxelCap, cfg.TotalVoxelCap, 1000,
+                "The total across every guide from every player on the server. " + unlimited);
+
+            AddAdminNumber(c, font, ref y, contentW, rowGap,
+                "Guides per player", LayoutAdminSetting.MaxGuidesPerPlayer, cfg.MaxGuidesPerPlayer, 1,
+                "How many guides one player may have standing at once. " + unlimited);
+
+            AddAdminNumber(c, font, ref y, contentW, rowGap,
+                "Guides in the world", LayoutAdminSetting.MaxGuidesWorldWide, cfg.MaxGuidesWorldWide, 10,
+                "How many guides may exist on the server at once. " + unlimited);
+
+            AddAdminSwitch(c, font, ref y, contentW, rowGap,
+                "Allow private guides", "adminprivate", LayoutAdminSetting.AllowClientOnlyMode,
+                cfg.AllowClientOnlyMode,
+                "Lets players keep guides on their own machine where nobody else can see them. Turning "
+                + "this off puts everyone back to public guides for anything NEW - the private guides they "
+                + "already have are not touched or taken.");
+
+            // ---- Players + Save ----
+            // Nothing above this line has reached the server yet; see the staging remarks on _adminEdits.
+            const double saveW = 90, playersW = 90;
+            ElementBounds saveBounds = ElementBounds.Fixed(contentW - saveW, y, saveW, 24);
+            ElementBounds playersBounds =
+                ElementBounds.Fixed(contentW - saveW - playersW - 8, y, playersW, 24);
+
+            // Players sits LEFT of Save (human-directed). It opens a separate dialog and changes nothing,
+            // so it is deliberately not in the staged-edit flow the Save button governs.
+            c.AddSmallButton("Players", OnOpenPlayersDialog, playersBounds);
+            c.AddAutoSizeHoverText(
+                "Opens the player list: who Layout knows about, what limits they carry, and who is jailed.",
+                CairoFont.WhiteDetailText(), 260, playersBounds.FlatCopy(), "ht:adminplayers");
+
+            c.AddSmallButton("Save", OnSaveAdminSettings, saveBounds);
+            c.AddAutoSizeHoverText(
+                "Applies the settings above to the server and writes them to its config file. Nothing "
+                + "above takes effect until this is pressed.",
+                CairoFont.WhiteDetailText(), 260, saveBounds.FlatCopy(), "ht:adminsave");
+
+            // The dirty marker, left of both buttons: without it there is no way to tell a typed-but-unsaved
+            // value from a saved one, since both simply sit in the field looking identical.
+            if (_adminEdits.Count > 0)
+            {
+                CairoFont dirtyFont = CairoFont.WhiteDetailText();
+                dirtyFont.Color = new double[] { 1, 0.72, 0.30, 1 };
+                c.AddStaticText(
+                    _adminEdits.Count == 1 ? "1 unsaved change" : _adminEdits.Count + " unsaved changes",
+                    dirtyFont, ElementBounds.Fixed(0, y + 5, contentW - saveW - playersW - 16, 18));
+            }
+            y += 24 + rowGap;
+        }
+
+        // Names only the overrides that are actually set, so the notice stays as short as the situation is.
+        private static string DescribeOverrides(LayoutAdminConfigPacket cfg)
+        {
+            var parts = new List<string>(3);
+            if (cfg.YourVoxelCapOverride > 0)
+                parts.Add(cfg.YourVoxelCapOverride.ToString("N0") + " voxels per guide");
+            if (cfg.YourTotalVoxelCapOverride > 0)
+                parts.Add(cfg.YourTotalVoxelCapOverride.ToString("N0") + " voxels total");
+            if (cfg.YourGuideLimitOverride > 0)
+                parts.Add(cfg.YourGuideLimitOverride.ToString("N0") + " guides");
+            return string.Join(", ", parts);
+        }
+
+        // An admin number row: label left, number field right. Editing STAGES — see _adminEdits.
+        private void AddAdminNumber(
+            GuiComposer c, CairoFont font, ref double y, double contentW, double rowGap,
+            string label, LayoutAdminSetting setting, int serverValue, float interval, string hoverText)
+        {
+            const double fieldW = 110, fieldH = 26;
+            string key = "admin" + (int)setting;
+
+            ElementBounds rowBounds = ElementBounds.Fixed(0, y, contentW, fieldH);
+            c.AddStaticText(label, font,
+                ElementBounds.Fixed(0, y + 4, contentW - fieldW - 8, 20));
+            c.AddNumberInput(
+                ElementBounds.Fixed(contentW - fieldW, y, fieldW, fieldH),
+                text => OnAdminNumberTyped(text, setting, serverValue), font, key);
+            c.AddAutoSizeHoverText(hoverText, CairoFont.WhiteDetailText(), 260, rowBounds, "ht:" + key);
+
+            // A staged edit survives a recompose, so the field redraws with what the admin typed rather
+            // than snapping back to the server's value under them.
+            _pendingAdminText.Add((key, StagedOr(setting, serverValue).ToString(), interval));
+            y += fieldH + rowGap;
+        }
+
+        private void AddAdminSwitch(
+            GuiComposer c, CairoFont font, ref double y, double contentW, double rowGap,
+            string label, string key, LayoutAdminSetting setting, bool serverValue, string hoverText)
+        {
+            AddSettingSwitch(c, font, ref y, contentW, rowGap, label, key,
+                on => { if (!_suppress) StageAdminEdit(setting, on ? 1 : 0, serverValue ? 1 : 0); },
+                hoverText);
+            _pendingAdminSwitches.Add((key, StagedOr(setting, serverValue ? 1 : 0) != 0));
+        }
+
+        // Whether the Admin section is showing. Session state, not config, and reset on every arrival at
+        // the settings page — same reasoning as the colour table.
+        private bool _adminExpanded;
+
+        // Post-compose value pushes for the admin widgets, drained by ApplySettingsWidgetValues.
+        private readonly List<(string key, string text, float interval)> _pendingAdminText =
+            new List<(string, string, float)>();
+        private readonly List<(string key, bool on)> _pendingAdminSwitches =
+            new List<(string, bool)>();
+
+        /// <summary>
+        /// Admin settings the player has changed on screen but not yet saved. Empty means the panel is
+        /// showing exactly what the server holds.
+        /// </summary>
+        /// <remarks>
+        /// EDITS STAGE, THEY DO NOT APPLY (v0.4.20, human-directed). The previous design sent each change
+        /// on a timer as it was typed, which was wrong twice over. It was wrong for the SERVER — a cap
+        /// typed digit by digit arrives as a series of nonsense values, each one briefly real and each one
+        /// clamping every player's draft preview. And it was wrong for the ADMIN, who had no way to tell a
+        /// value that had been applied from one that merely sat in a field; when a change failed to reach
+        /// the server there was nothing on screen that said so.
+        ///
+        /// Staging fixes both: nothing leaves the client until Save, the whole set goes at once, and the
+        /// panel says how many changes are waiting. After Save the server broadcasts what it actually
+        /// stored, so the fields end up showing the SERVER's values — which is also how a rejected or
+        /// clamped value becomes visible instead of silently disagreeing.
+        ///
+        /// An entry whose value matches the server's is REMOVED rather than kept, so typing a number and
+        /// then typing it back does not leave the panel claiming an unsaved change it no longer has.
+        /// </remarks>
+        private readonly Dictionary<LayoutAdminSetting, int> _adminEdits =
+            new Dictionary<LayoutAdminSetting, int>();
+
+        private int StagedOr(LayoutAdminSetting setting, int serverValue) =>
+            _adminEdits.TryGetValue(setting, out int staged) ? staged : serverValue;
+
+        private void StageAdminEdit(LayoutAdminSetting setting, int value, int serverValue)
+        {
+            bool wasDirty = _adminEdits.Count > 0;
+            if (value == serverValue) _adminEdits.Remove(setting);
+            else _adminEdits[setting] = value;
+            // Only redraw when the unsaved-changes line has to appear or disappear: a recompose per
+            // keystroke would drop focus out of the field being typed in.
+            if (wasDirty != (_adminEdits.Count > 0)) DeferRecompose();
+        }
+
+        private void OnToggleAdmin()
+        {
+            _adminExpanded = !_adminExpanded;
+            // Folding the section away discards anything unsaved rather than keeping it invisibly pending.
+            if (!_adminExpanded) _adminEdits.Clear();
+            DeferRecompose();
+        }
+
+        private void OnAdminNumberTyped(string text, LayoutAdminSetting setting, int serverValue)
+        {
+            if (_suppress) return;
+            // An empty field is someone midway through clearing it, not a request for unlimited. They have
+            // to type the 0 — an accidental select-all-delete must not silently uncap the server.
+            if (string.IsNullOrWhiteSpace(text)) return;
+            if (!int.TryParse(text.Trim(), out int value)) return;   // ignore partial/garbled input
+
+            // HARD FLOOR AT ZERO. The native spinner and wheel have no minimum of their own, so stepping
+            // down from 0 arrives here as -1000 and the field would happily keep counting downward. Zero
+            // already MEANS unlimited, so everything below it is a second spelling of the same thing —
+            // snap the display back rather than let it show a number the server will never store.
+            if (value < 0)
+            {
+                value = 0;
+                _suppress = true;
+                try { SingleComposer?.GetNumberInput("admin" + (int)setting)?.SetValue("0"); }
+                finally { _suppress = false; }
+            }
+
+            StageAdminEdit(setting, value, serverValue);
+        }
+
+        /// <summary>Opens the Players dialog. Supplied by the mod system, which owns the dialog's lifetime.</summary>
+        private bool OnOpenPlayersDialog()
+        {
+            _openPlayersDialog?.Invoke();
+            return true;
+        }
+
+        /// <summary>Sends every staged admin edit. The server validates, applies, and broadcasts back.</summary>
+        private bool OnSaveAdminSettings()
+        {
+            if (_adminEdits.Count == 0)
+            {
+                capi.TriggerIngameError(this, "layout-nothingtosave", "No changes to save.");
+                return true;
+            }
+
+            // Said out loud, on purpose. The server answers every setting it applies with its own line, so
+            // the pair of messages tells you exactly where a change got to: this line and then the
+            // server's means it landed; this line alone means the request never arrived. Without it, a
+            // change that failed to reach the server was indistinguishable from one that did, which is
+            // what made the v0.4.16-v0.4.19 delivery bugs so hard to pin down.
+            capi.ShowChatMessage("[Layout] Sending " + _adminEdits.Count
+                + (_adminEdits.Count == 1 ? " setting change" : " setting changes") + " to the server...");
+            capi.Logger.Notification("[Layout] Admin save: sending {0} change(s); server available={1}.",
+                _adminEdits.Count, _net.ServerLayoutAvailable);
+
+            if (!_net.ServerLayoutAvailable)
+            {
+                capi.ShowChatMessage(
+                    "[Layout] ...but this world has no Layout server to apply them, so nothing changed.");
+                _adminEdits.Clear();
+                DeferRecompose();
+                return true;
+            }
+
+            foreach (var pair in _adminEdits) _net.SendAdminConfig(pair.Key, pair.Value);
+            _adminEdits.Clear();
+
+            // The fields now show the server's answer, whatever it turns out to be. Recomposing here also
+            // clears the unsaved-changes line immediately rather than waiting on the round trip — and it
+            // means a field that snaps back to its old number is itself telling you the change was lost.
+            DeferRecompose();
+            return true;
+        }
+
+        /// <summary>
+        /// The server's settings arrived or changed. Redraws the page so the Admin section appears for an
+        /// admin who has just been granted the privilege, and so a change made by ANOTHER admin — or a value
+        /// the server clamped — replaces what is on screen rather than leaving a stale number in the field.
+        /// </summary>
+        /// <remarks>
+        /// ONLY WHEN SOMETHING ACTUALLY DIFFERS. The server broadcasts after every change, including the
+        /// admin's own, and a recompose rebuilds every element and so drops keyboard focus. Redrawing on
+        /// the echo of your own edit would therefore kick you out of the field on each value you set —
+        /// worse when setting two caps in a row, because the first echo lands while you are typing the
+        /// second. The usual case (the server took the value verbatim) compares equal and draws nothing.
+        /// </remarks>
+        public void OnAdminConfigChanged()
+        {
+            if (!IsOpened() || !_settingsTab) return;
+
+            LayoutAdminConfigPacket now = _net.AdminConfig;
+            if (SameAdminConfig(_shownAdminConfig, now)) return;
+            _shownAdminConfig = now;
+            DeferRecompose();
+        }
+
+        // What the Admin section is currently DRAWING, so the echo of an accepted change can be told from
+        // a real one. Held by value, not by reference: the handler replaces the packet instance every time.
+        private LayoutAdminConfigPacket _shownAdminConfig;
+
+        private static bool SameAdminConfig(LayoutAdminConfigPacket a, LayoutAdminConfigPacket b)
+        {
+            if (a == null || b == null) return ReferenceEquals(a, b);
+            return a.PerGuideVoxelCap == b.PerGuideVoxelCap
+                && a.PerPlayerTotalVoxelCap == b.PerPlayerTotalVoxelCap
+                && a.TotalVoxelCap == b.TotalVoxelCap
+                && a.MaxGuidesPerPlayer == b.MaxGuidesPerPlayer
+                && a.MaxGuidesWorldWide == b.MaxGuidesWorldWide
+                && a.AllowClientOnlyMode == b.AllowClientOnlyMode
+                && a.YourVoxelCapOverride == b.YourVoxelCapOverride
+                && a.YourTotalVoxelCapOverride == b.YourTotalVoxelCapOverride
+                && a.YourGuideLimitOverride == b.YourGuideLimitOverride
+                // EnableChalkDurability and AdminCanOverrideLocks are deliberately absent: the panel
+                // stopped drawing them (v0.4.17 and v0.4.20), so a change to either — only possible via
+                // layout.json plus a restart — has nothing on screen to redraw.
+                && a.CanEdit == b.CanEdit;
         }
 
         // The two guide-anchor hues, tinted for use as a background behind white text. The RGB is the
@@ -1320,9 +1689,29 @@ namespace Layout.UI
                 // constructor and then owns it, so pushing a value here would fight its animation.
                 SingleComposer.GetSwitch("refillhotbar")?.SetValue(_config.AllowHotbarChalkRefill);
                 SingleComposer.GetSwitch("refillinv")?.SetValue(_config.AllowInventoryChalkRefill);
+
+                // Admin section (v0.4.16). Whole numbers, with the wheel/spinner step carried per row —
+                // see AddAdminNumber's call sites for why each field gets the step it does.
+                foreach ((string key, string text, float interval) in _pendingAdminText)
+                {
+                    GuiElementNumberInput num = SingleComposer.GetNumberInput(key);
+                    if (num == null) continue;
+                    num.IntMode = true;
+                    num.Interval = interval;
+                    num.SetValue(text);
+                }
+                foreach ((string key, bool on) in _pendingAdminSwitches)
+                    SingleComposer.GetSwitch(key)?.SetValue(on);
             }
             catch (Exception e) { capi.Logger.Warning("[Layout] settings widgets: {0}", e.Message); }
-            finally { _suppress = false; }
+            finally
+            {
+                _suppress = false;
+                // Cleared in the finally, not after the loops: a throw partway through must not leave
+                // stale entries to be re-applied against the NEXT compose's elements.
+                _pendingAdminText.Clear();
+                _pendingAdminSwitches.Clear();
+            }
         }
 
         private static int OpacityPercent(float alpha) =>
@@ -1344,8 +1733,11 @@ namespace Layout.UI
         private void ToggleSettingsTab()
         {
             _settingsTab = !_settingsTab;
-            // Every arrival at the settings page starts with the color table folded, not just the first.
-            if (_settingsTab) _customColorsExpanded = false;
+            // Every arrival at the settings page starts with the color table and the Admin section folded,
+            // not just the first. Leaving the page drops anything staged but unsaved, so a value typed and
+            // abandoned cannot be saved by accident on some later visit.
+            if (_settingsTab) { _customColorsExpanded = false; _adminExpanded = false; }
+            _adminEdits.Clear();
             DeferRecompose();      // never recompose from inside a composer callback
         }
 
@@ -1953,16 +2345,13 @@ namespace Layout.UI
                 if (args.Button != EnumMouseButton.Left) { base.OnMouseUpOnElement(api, args); return; }
                 args.Handled = true;
 
-                // Clicking a HALF picks that half, rather than any click flipping the control. With both
-                // options named on screen, clicking the one you want is the obvious gesture — and clicking
-                // the option already in force must not turn it off.
-                // absX, not renderX: absX is what PointInside tests against, so it is the frame the mouse
-                // coordinates are already known to be in. (These bounds carry no padding, so the two agree —
-                // but matching the hit test is the version that stays right if padding is ever added.)
-                bool wantRight = args.X - Bounds.absX >= Bounds.OuterWidth / 2;
-                if (wantRight == _rightChosen) return;
-                _rightChosen = wantRight;
-                _onChanged?.Invoke(wantRight);
+                // ANY click flips the control (v0.4.18, human-directed). It previously picked the half you
+                // clicked, which meant only the COVERED half — the option not currently in force — ever did
+                // anything, and clicking the lit half read as a dead control rather than as "already set".
+                // A two-state control that flips wherever you hit it is the safer read: there is no
+                // inactive region to discover.
+                _rightChosen = !_rightChosen;
+                _onChanged?.Invoke(_rightChosen);
             }
 
             /// <summary>
@@ -2617,6 +3006,152 @@ namespace Layout.UI
             if (g == null) return;
             bool hidden = code == "hidden";
             if (g.IsHidden != hidden) _net.SendHide(g.Id, hidden);
+        }
+
+        // ---------------------------------------------------------------------------------
+        //  Visibility row + the two Reveal actions (v0.4.18)
+        // ---------------------------------------------------------------------------------
+        // Shown / Hidden are an exclusive pair describing the SELECTED guide. Reveal Near and Reveal All
+        // are momentary ACTIONS over many guides, so they sit in the row's last two tile columns with an
+        // empty column between: the gap is what says "these are not a third and fourth visibility state".
+        //
+        // The two actions stay ENABLED even when the rest of the row is greyed for having no selection.
+        // That is the whole point of them — you reach for Reveal precisely when a guide is hidden and
+        // therefore awkward to click on, so gating them behind having selected one would make them
+        // useless in the only situation that calls for them.
+        private void AddVisibilityRow(
+            GuiComposer c, CairoFont labelFont, CairoFont hoverFont, ref double y,
+            double labelW, double pad, double tile, double tileGap, double rowGap,
+            GuideData selected, bool inert)
+        {
+            c.AddStaticText("Visibility", Centered(labelFont),
+                ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20));
+
+            for (int i = 0; i < VisCodes.Length; i++)
+            {
+                ElementBounds tb = ElementBounds.Fixed(labelW + pad + i * (tile + tileGap), y, tile, tile);
+                AddIconTile(c, VisIcons[i], VisNames[i], tb, "vis", VisCodes[i], "vis:" + i,
+                    OnGuideVisibilityTile, !inert);
+            }
+            if (inert) _inertRows.Add("vis");
+            else _initialLight.Add(("vis", ClampIndex((selected?.IsHidden ?? false) ? 1 : 0, VisCodes.Length)));
+
+            AddRevealTile(c, hoverFont, LayoutToolIcons.RevealNear, "near",
+                ElementBounds.Fixed(labelW + pad + 3 * (tile + tileGap), y, tile, tile),
+                "Reveal Near\nUn-hides every hidden guide within " + RevealNearBlocks
+                + " blocks of you, whoever made them.");
+
+            AddRevealTile(c, hoverFont, LayoutToolIcons.RevealAll, "all",
+                ElementBounds.Fixed(labelW + pad + 4 * (tile + tileGap), y, tile, tile),
+                "Reveal All\nUn-hides every hidden guide YOU made, anywhere in the world. Other players' "
+                + "guides are left alone.");
+
+            y += tile + rowGap;
+        }
+
+        // Momentary, like the Transform pad's rotate tiles: a reveal is something you do, not a state the
+        // row sits in, so the tile snaps back off rather than staying lit.
+        private void AddRevealTile(
+            GuiComposer c, CairoFont hoverFont, string icon, string code, ElementBounds bounds, string hover)
+        {
+            string tileKey = "reveal:" + code;
+            var btn = new GuiElementToggleButton(
+                capi, icon, "", CairoFont.WhiteSmallText(),
+                on =>
+                {
+                    if (_suppress || !on) return;
+                    _suppress = true;
+                    try { SingleComposer?.GetToggleButton(tileKey)?.SetValue(false); }
+                    finally { _suppress = false; }
+                    RevealGuides(nearOnly: code == "near");
+                },
+                bounds, toggleable: true);
+            c.AddInteractiveElement(btn, tileKey);
+            c.AddAutoSizeHoverText(hover, hoverFont, 260, bounds.FlatCopy(), tileKey + ":ht");
+        }
+
+        /// <summary>How far "near" reaches, in blocks (human-directed).</summary>
+        private const int RevealNearBlocks = 6;
+
+        /// <summary>
+        /// Un-hides a batch of guides: those within <see cref="RevealNearBlocks"/> of the player, or every
+        /// one the player created.
+        /// </summary>
+        /// <remarks>
+        /// SENT ONE AT A TIME through the ordinary hide path rather than as a bulk packet. That path
+        /// already carries every rule this must not sidestep — the privilege check, the edit-lock check,
+        /// the jail check, the broadcast, and the undo entry — and a bulk packet would have had to
+        /// reproduce all of them correctly to gain nothing but fewer bytes. It also means a reveal works
+        /// unchanged on private client-only guides, which never touch the network at all.
+        ///
+        /// The consequence worth knowing: each guide is its own undo step, so undoing a Reveal All that
+        /// touched nine guides is nine presses. That is the honest cost of reusing the single-guide seam,
+        /// and it is recoverable — a bulk step that half-failed partway would not be.
+        ///
+        /// REVEAL ALL SPLITS IN TWO (v0.4.19). Only the client knows which guides are its own PRIVATE
+        /// ones, and only the server knows who CREATED a public guide — the wire record carries the
+        /// creator's display name for the HUD but never their UID, so the v0.4.18 client-side ownership
+        /// filter matched nothing and the button did nothing. Each side now answers the half it can.
+        ///
+        /// The ids are COLLECTED FIRST. Revealing a private guide mutates the local mirror synchronously,
+        /// which would invalidate an enumerator still walking it.
+        /// </remarks>
+        private void RevealGuides(bool nearOnly)
+        {
+            IClientPlayer player = capi.World?.Player;
+            if (player == null) return;
+
+            Vec3d here = player.Entity?.Pos?.XYZ;
+            if (nearOnly && here == null) return;
+
+            var targets = new List<Guid>();
+            foreach (GuideData g in _net.Guides.Values)
+            {
+                if (g == null || !g.IsHidden) continue;
+                // Near: anyone's guide, so long as it is standing here. All: only guides this client
+                // owns outright, which is exactly the private ones — the server handles the rest.
+                if (nearOnly ? !WithinBlocks(g, here, RevealNearBlocks) : !_net.IsLocalGuide(g.Id))
+                    continue;
+                targets.Add(g.Id);
+            }
+
+            for (int i = 0; i < targets.Count; i++) _net.SendHide(targets[i], false);
+
+            if (!nearOnly && _net.ServerLayoutAvailable)
+            {
+                // The server reports the empty case itself, so nothing is said here either way.
+                _net.SendRevealMine();
+            }
+            else if (targets.Count == 0)
+            {
+                capi.TriggerIngameError(this, "layout-nothingtoreveal",
+                    nearOnly
+                        ? "No hidden guides within " + RevealNearBlocks + " blocks."
+                        : "You have no hidden guides.");
+                return;
+            }
+
+            DeferRecompose();   // the selected guide's own Shown/Hidden pair may have just moved
+        }
+
+        // Distance to the NEAREST control point, not to the guide's centre: a 40-block arch whose foot is
+        // beside you is a guide that is near you, and measuring from its middle would say otherwise.
+        // Control points only — this must never touch a behemoth's voxel set to answer a proximity test.
+        private static bool WithinBlocks(GuideData g, Vec3d here, double blocks)
+        {
+            List<ControlPoint> points = g.ControlPoints;
+            if (points == null) return false;
+            double limit = blocks * blocks;
+            for (int i = 0; i < points.Count; i++)
+            {
+                ControlPoint cp = points[i];
+                if (cp == null || cp.IsPhantom || cp.WorldPosition == null) continue;
+                double dx = cp.WorldPosition.X - here.X;
+                double dy = cp.WorldPosition.Y - here.Y;
+                double dz = cp.WorldPosition.Z - here.Z;
+                if (dx * dx + dy * dy + dz * dz <= limit) return true;
+            }
+            return false;
         }
 
         private bool OnDeselectClicked()

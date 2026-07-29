@@ -88,13 +88,94 @@ namespace Layout.Network
         /// <summary>Player UID → their in-progress draft start anchor, for rendering remote anchor dots.</summary>
         public IReadOnlyDictionary<string, Vec3d> RemoteDraftAnchors => _remoteDraftAnchors;
 
-        /// <summary>The server's active per-guide voxel cap (synced on join). Use for the placement pre-check.</summary>
+        /// <summary>The active per-guide voxel cap. Use for the placement pre-check.</summary>
+        /// <remarks>
+        /// PRIVATE GUIDES OBEY THE SERVER'S CAPS TOO (v0.4.22, and a behaviour change — see below). Local
+        /// authority used to report the 10 M hard ceiling unconditionally, which meant that on a server
+        /// permitting private guides, a player could step around every cap the admin had set by moving one
+        /// slider. A 5,000-voxel cap did not stop a 130,000-voxel private guide, and nothing on screen
+        /// explained why. That is the same question the chalk system already settled the other way —
+        /// "private is private, not free" — so caps now follow the same rule.
+        ///
+        /// The client-only FALLBACK is deliberately left uncapped: with no Layout server there is nobody to
+        /// have set a cap, and inventing one would be worse than having none.
+        ///
+        /// Honest-client enforcement, exactly like the private chalk charge. The client IS the authority
+        /// for its own private guides, so a modified client can ignore this; that is inherent to the
+        /// feature, not a hole opened here.
+        /// </remarks>
         public int PerGuideVoxelCap => AuthorityMode == ClientAuthorityMode.Local
-            ? GuideManager.HardVoxelCeiling
+            ? (_serverLayoutAvailable ? _perGuideVoxelCap : GuideManager.HardVoxelCeiling)
             : _perGuideVoxelCap;
 
-        /// <summary>The server's active total voxel cap (synced on join).</summary>
-        public int TotalVoxelCap => AuthorityMode == ClientAuthorityMode.Local ? 0 : _totalVoxelCap;
+        /// <summary>The active total voxel cap. Zero (unlimited) with no Layout server; see above.</summary>
+        public int TotalVoxelCap => AuthorityMode == ClientAuthorityMode.Local
+            ? (_serverLayoutAvailable ? _totalVoxelCap : 0)
+            : _totalVoxelCap;
+
+        /// <summary>
+        /// The live server settings behind the settings page's Admin section (v0.4.16, protocol 20), or
+        /// null on a server that has not sent them — a pre-0.4.16 server, or no Layout server at all.
+        /// A null here is what hides the section; there is nothing to administer in those worlds.
+        /// </summary>
+        public LayoutAdminConfigPacket AdminConfig { get; private set; }
+
+        /// <summary>True when the server has told THIS player they may change the settings above.</summary>
+        public bool CanEditAdminConfig => AdminConfig != null && AdminConfig.CanEdit;
+
+        /// <summary>Asks the server to change one admin setting. The server re-checks the privilege.</summary>
+        /// <remarks>
+        /// Gated on whether a Layout SERVER exists, not on the authority mode. Those are different
+        /// questions: an admin who has their own placement set to Private is in Local authority while
+        /// still connected to a Layout server they can perfectly well administer. Testing the authority
+        /// mode here silently swallowed every change such an admin made (the v0.4.16-v0.4.18 bug).
+        /// </remarks>
+        public void SendAdminConfig(LayoutAdminSetting setting, int value)
+        {
+            if (!_serverLayoutAvailable) return;   // nobody to ask
+            _channel?.SendPacket(new LayoutAdminConfigRequestPacket(setting, value));
+        }
+
+        /// <summary>Asks the server to un-hide every guide this player created ("Reveal All").</summary>
+        public void SendRevealMine()
+        {
+            if (!_serverLayoutAvailable) return;
+            _channel?.SendPacket(new GuideRevealMinePacket());
+        }
+
+        // -- Admin player roster (v0.4.26) ---------------------------------------------------------
+
+        /// <summary>The last roster the server sent, or empty before the first request answers.</summary>
+        public PlayerRosterEntryDto[] PlayerRoster { get; private set; } = Array.Empty<PlayerRosterEntryDto>();
+
+        /// <summary>Which player <see cref="PlayerGuides"/> currently describes.</summary>
+        public string PlayerGuidesUid { get; private set; }
+
+        /// <summary>The selected player's guides, largest first and capped by the server.</summary>
+        public PlayerGuideDto[] PlayerGuides { get; private set; } = Array.Empty<PlayerGuideDto>();
+
+        /// <summary>How many guides that player has in total, which may exceed the listed ones.</summary>
+        public int PlayerGuidesTotal { get; private set; }
+
+        /// <summary>The roster arrived; redraw the Players dialog.</summary>
+        public event Action PlayerRosterChanged;
+
+        /// <summary>A player's guide list arrived; redraw the Players dialog's detail pane.</summary>
+        public event Action PlayerGuidesChanged;
+
+        /// <summary>Asks for the admin player roster. Refused server-side without controlserver.</summary>
+        public void RequestPlayerRoster()
+        {
+            if (!_serverLayoutAvailable) return;
+            _channel?.SendPacket(new PlayerRosterRequestPacket());
+        }
+
+        /// <summary>Asks for one player's guide list.</summary>
+        public void RequestPlayerGuides(string uid)
+        {
+            if (!_serverLayoutAvailable || string.IsNullOrEmpty(uid)) return;
+            _channel?.SendPacket(new PlayerGuidesRequestPacket(uid));
+        }
 
         // v0.2.22: the chalk refill channels moved from server policy to a CLIENT preference, so the two
         // synced flags that used to be mirrored here are gone. Read
@@ -125,6 +206,9 @@ namespace Layout.Network
 
         /// <summary>A remote player's draft anchor was removed: (player UID).</summary>
         public event Action<string> RemoteDraftAnchorRemoved;
+
+        /// <summary>The server's admin settings arrived or changed; redraw the settings page if it is open.</summary>
+        public event Action AdminConfigChanged;
 
         /// <summary>A mutation was refused for exceeding a cap: (guide id, attempted count, cap).</summary>
         public event Action<Guid, int, int> VoxelCapWarningReceived;
@@ -182,15 +266,58 @@ namespace Layout.Network
                 .SetMessageHandler<PlayerGuidePolicyPacket>(OnPlayerGuidePolicy)
                 .SetMessageHandler<GuidePlacementRejectedPacket>(_ => PlacementRejected?.Invoke())
                 .SetMessageHandler<GuideRenderingPacket>(
-                    packet => GuideRenderingChanged?.Invoke(packet?.Enabled ?? true));
+                    packet => GuideRenderingChanged?.Invoke(packet?.Enabled ?? true))
+                .SetMessageHandler<LayoutAdminConfigPacket>(OnAdminConfig)
+                .SetMessageHandler<PlayerRosterPacket>(OnPlayerRoster)
+                .SetMessageHandler<PlayerGuidesPacket>(OnPlayerGuides);
+        }
+
+        private void OnPlayerRoster(PlayerRosterPacket packet)
+        {
+            PlayerRoster = packet?.Players ?? Array.Empty<PlayerRosterEntryDto>();
+            PlayerRosterChanged?.Invoke();
+        }
+
+        private void OnPlayerGuides(PlayerGuidesPacket packet)
+        {
+            if (packet == null) return;
+            PlayerGuidesUid = packet.Uid;
+            PlayerGuides = packet.Guides ?? Array.Empty<PlayerGuideDto>();
+            PlayerGuidesTotal = packet.TotalCount;
+            PlayerGuidesChanged?.Invoke();
+        }
+
+        private void OnAdminConfig(LayoutAdminConfigPacket packet)
+        {
+            if (packet == null) return;
+            AdminConfig = packet;
+            // The server's private-guide policy also arrives here, so an admin flipping it mid-session
+            // reaches every client's panel rather than only the players who reconnect afterwards.
+            _serverAllowsClientOnlyMode = packet.AllowClientOnlyMode;
+            // This packet is where the client learns the per-PLAYER total cap, so a change to it has to
+            // reach the private-guide store as well as the panel.
+            PushServerCapsToLocalAuthority();
+            AdminConfigChanged?.Invoke();
         }
 
         private void OnPlayerGuidePolicy(PlayerGuidePolicyPacket packet)
         {
             if (packet == null) return;
             _perGuideVoxelCap = Math.Max(0, packet.PerGuideVoxelCap);
+            PushServerCapsToLocalAuthority();
             PublicGuideAccessJailed = packet.Jailed;
             PublicGuidePolicyChanged?.Invoke(packet.Jailed);
+        }
+
+        // Keeps the private-guide store's caps in step with the server's. Only meaningful while a Layout
+        // server is present; the no-server fallback is deliberately left unlimited (see PerGuideVoxelCap).
+        private void PushServerCapsToLocalAuthority()
+        {
+            if (_local == null || !_serverLayoutAvailable) return;
+            // The per-PLAYER total is not part of the join-time cap sync; it rides on the admin-settings
+            // packet, which every player receives. Absent (a pre-0.4.16 server) it stays unlimited.
+            _local.ApplyServerCaps(
+                _perGuideVoxelCap, _totalVoxelCap, AdminConfig?.PerPlayerTotalVoxelCap ?? 0);
         }
 
         /// <summary>
@@ -285,6 +412,9 @@ namespace Layout.Network
             _receivedServerBulkSync = false;
             _serverLayoutAvailable = false;
             _serverAllowsClientOnlyMode = false;
+            // Dropped with the session: carrying one server's settings into the next world would show the
+            // Admin section on a server that never sent one, with somebody else's caps in it.
+            AdminConfig = null;
             _pendingPublish = false;
             _lastMutationWasLocal = null;
             _local = null;
@@ -343,6 +473,7 @@ namespace Layout.Network
             if (_serverAllowsClientOnlyMode) EnsureLocalAuthority();
             else RemoveLocalOverlay();
 
+            PushServerCapsToLocalAuthority();
             SetAuthorityMode(ClientAuthorityMode.Networked);
             if (supportsClientOnlyPolicy)
             {

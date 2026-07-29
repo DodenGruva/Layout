@@ -262,7 +262,7 @@ namespace Layout.Systems
                 _draftSecond = null;
                 _draftFlatSideAligned = false;
             }
-            if (!NeedsRimClick(_shape)) _draftThird = null;
+            if (!NeedsFourthClick(_shape)) _draftThird = null;
             // Switching away from the Free-Shape mid-draft drops any chained corners beyond the first
             // (the draft steps back to "one anchor placed", same as the 3-click base rule above).
             if (_shape != GuideShapeType.FreeShape && _draftChain.Count > 1)
@@ -279,13 +279,14 @@ namespace Layout.Systems
             || (shape == GuideShapeType.Rectangle && constraint == ShapeConstraint.Square);
 
         /// <summary>
-        /// True when this shape+constraint places with THREE clicks (base · base · height/apex): the free,
-        /// Right, and Isosceles triangles (apex click), and the Cylinder / Cone / Box volumes (0.1.21 —
-        /// two base clicks then a height click). Equilateral stays two-click (its apex is fully derived);
-        /// the Sphere and Dome are two-click volumes.
+        /// True when this shape+constraint places with a THIRD click: the free, Right, and Isosceles
+        /// triangles (apex), the Cylinder / Cone / Box volumes (0.1.21 — height), and the free Rectangle
+        /// (v0.4.15 — width). Equilateral stays two-click (its apex is fully derived) and so does Square
+        /// (one clicked edge already determines it); the Sphere and Dome are two-click volumes.
         /// </summary>
         public static bool NeedsApexClick(GuideShapeType shape, ShapeConstraint constraint) =>
             (shape == GuideShapeType.Triangle && constraint != ShapeConstraint.Equilateral)
+            || (shape == GuideShapeType.Rectangle && constraint != ShapeConstraint.Square)
             || shape == GuideShapeType.Cylinder
             || shape == GuideShapeType.TaperedCylinder
             || shape == GuideShapeType.PolygonalPrism
@@ -294,11 +295,20 @@ namespace Layout.Systems
             || shape == GuideShapeType.Box;
 
         /// <summary>
-        /// True when this shape places with a FOURTH click after the height one (0.2.24): only the
-        /// Tapered Cylinder, whose last click sets the lid's radius by its distance from the axis.
+        /// True when this shape places with a FOURTH click: the tapered volumes (0.2.24 — the rim point,
+        /// whose distance from the axis sets the lid's radius) and, since v0.4.15, the Box, whose width
+        /// click pushed its height click out to fourth.
         /// </summary>
-        public static bool NeedsRimClick(GuideShapeType shape) => shape == GuideShapeType.TaperedCylinder
-            || shape == GuideShapeType.TaperedPolygonalPrism;
+        public static bool NeedsFourthClick(GuideShapeType shape) => IsTaperedRimStage(shape)
+            || shape == GuideShapeType.Box;
+
+        /// <summary>
+        /// True when a shape's FOURTH click is a tapered RIM rather than a plain height — the stage that
+        /// owns the flare clamp, the one-way capture gate, and the CTRL-close / SHIFT-flare modifiers.
+        /// The Box's fourth click is an ordinary height click and must not inherit any of that.
+        /// </summary>
+        public static bool IsTaperedRimStage(GuideShapeType shape) =>
+            shape == GuideShapeType.TaperedCylinder || shape == GuideShapeType.TaperedPolygonalPrism;
 
         /// <summary>True for the chained-click Free-Shape (Session 11, 0.1.15).</summary>
         public static bool IsChainShape(GuideShapeType shape) => shape == GuideShapeType.FreeShape;
@@ -597,8 +607,9 @@ namespace Layout.Systems
         }
 
         /// <summary>
-        /// Stores the third click of a FOUR-click draft (the height point); the draft then awaits its rim
-        /// click. Only meaningful when <see cref="NeedsRimClick"/> is true for the current shape (0.2.24).
+        /// Stores the third click of a FOUR-click draft (a tapered volume's height, a box's width); the
+        /// draft then awaits its fourth. Only meaningful when <see cref="NeedsFourthClick"/> is true for
+        /// the current shape (0.2.24; the Box joined in v0.4.15).
         /// </summary>
         public void PlaceThirdPoint(Vec3d thirdPoint)
         {
@@ -688,10 +699,11 @@ namespace Layout.Systems
         }
 
         /// <summary>
-        /// Applies the later placement clicks onto a freshly built shape: the third click (apex/height) at
-        /// control point 2, and — for the four-click Tapered Cylinder — the fourth (rim/top radius) at
-        /// control point 3. The one place that mapping lives; the ghost preview, the HUD measure, the cap
-        /// pre-check, and the server's create path all route through it so they cannot drift apart.
+        /// Applies the later placement clicks onto a freshly built shape: the third click at control point
+        /// 2 (a triangle's apex, a volume's height, a rectangle's width) and the fourth at control point 3
+        /// (a tapered volume's rim, a box's height). The one place that mapping lives; the ghost preview,
+        /// the HUD measure, the cap pre-check, and the server's create path all route through it so they
+        /// cannot drift apart.
         /// </summary>
         public static void ApplyPlacementPoints(IGuideShape shape, GuideShapeType type,
             ShapeConstraint constraint, Vec3d apex, Vec3d rim)
@@ -699,7 +711,7 @@ namespace Layout.Systems
             if (shape == null) return;
             if (apex != null && NeedsApexClick(type, constraint) && shape.ControlPoints.Count > 2)
                 shape.MoveControlPoint(2, apex);
-            if (rim != null && NeedsRimClick(type) && shape.ControlPoints.Count > 3)
+            if (rim != null && NeedsFourthClick(type) && shape.ControlPoints.Count > 3)
                 shape.MoveControlPoint(3, rim);
         }
 

@@ -1,11 +1,57 @@
-# Layout — TODO / Outstanding Items (current: v0.4.14 on `beta`)
+# Layout — TODO / Outstanding Items (current: v0.4.26 on `beta`)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list
+## ⭐ Top of the list — the Session-33 polish queue (human-requested 2026-07-28, none started)
+
+All seven are cosmetic or small-UI. None blocks play. Full delivery record for the session in
+`SESSION_33.md`.
+
+1. **Remove the admin voxel-limit warning message in the GUI.** The orange "your own limits are overridden"
+   line added in v0.4.24, in `GuideToolGui.BuildAdminSection`. It earned its keep once — a forgotten
+   10,000,000-voxel override was what made the caps look broken across six revisions — but the human does
+   not want it on the page. Removing the line is enough; leave the per-player override fields on
+   `LayoutAdminConfigPacket` (append-only, and the Players dialog's Overrides tab reads the same data).
+2. **Left-align the Players button.** It currently sits immediately left of Save at the right edge
+   (`BuildAdminSection`); move it to the row's left edge. Watch the unsaved-changes marker, which shares
+   that row and is currently sized to the space left of both buttons.
+3. **Alter the overflow text on the player's Overridden message.** The `Overridden: …` line in
+   `GuidePlayersDialog.BuildPlayerDetail` runs past its bounds; it is a single fixed-height static text
+   carrying a value, a name and a command. Shorten it or wrap it.
+4. **Work on the tile icons for rotate and tilt.** `LayoutToolIcons.DrawRotate` covers all four
+   (`RotateSpinLeft/Right`, `RotateTipLeft/Right`). **Use `dev/RenderIcon.ps1`** — add the glyph and LOOK at
+   it at 42 px before shipping, per the v0.4.18 reveal-near lesson.
+5. **Move the Down move arrow up one space, and add a double-down arrow that sends a guide to the ground.**
+   The Transform pad's vertical pair is in `GuideToolGui`'s Move section (`MoveArrowCodes` = away/toward/
+   left/right/up/down). The new action is NOT a step — it is "travel down until the guide rests on the
+   surface below", which is T1's contact rule (lowest voxel plane meets the surface) applied downward, so
+   reuse `TryGuideFloorSixteenths` in `GuideToolController` rather than deriving it twice.
+6. **Redo the mirror icon** so it has a mirror on BOTH sides of the line. `LayoutToolIcons.DrawActionMirror`.
+7. **Make the teeth taller on the Settings gear icon.** `LayoutToolIcons.DrawGear`; `rTip`/`rRoot` are the
+   two radii. `dev/RenderIcon.ps1 -Glyph gear` renders it — that harness is what settled the tooth count
+   and stroke weight in Session 32, and the same check applies to any change here.
+
+---
+
+## ⭐ Previously top of the list — both delivered in Session 33
+
+> **✅ T1 DELIVERED (v0.4.15).** CTRL on free-move drops the guide onto the targeted surface, with the
+> decided contact rule: the guide's LOWEST VOXEL PLANE meets the face. Measured from the shape's own
+> sampled outline (never the voxel set — this runs every tick of a drag), phantom points excluded, and a
+> Surface guide reads its plane offset instead. `GuideToolController.TryGuideFloorSixteenths`.
+
+> **✅ THE BOX/SQUARE CARDINAL DEFECT IS FIXED (v0.4.15).** Rectangle and Box were the only two shapes in
+> the catalog reading their sides off the plane's world axes; every other shape derives its frame from the
+> clicks. The gesture now supplies the missing rotation — Rectangle is 3 clicks (corner · edge end · width),
+> Box is 4 (…· height), Square stays 2 with SHIFT choosing the side. Legacy guides read in their old
+> encoding and reproduce to the voxel (21/21 harness). DataVersion 12 → 13.
+
+---
+
+## Older top of the list
 
 > **✅ THE SETTINGS PAGE IS COMPLETE — v0.4.2–v0.4.14 (SESSION_32).**
 > **F9 (in-game settings panel), T2 (its formatting + hover text), F10 (the gear glyph) and F11 (colour
@@ -282,11 +328,14 @@ reports intuitive block dimensions.
 5. ~~**Verify and package the final release.**~~ **DONE.** Focused cumulative-cap smoke test passed; Release
    build has 0 warnings/errors; `Layout0.3.53.zip` has 40 entries and 37 assets.
 
-### A10. Current human backlog (status at v0.3.58)
+### A10. Current human backlog (status at v0.3.58; item 1 closed in Session 33)
 
-1. **Fix Box and Square guides automatically constraining to cardinal directions.** — **OPEN.** The only
-   outstanding functional defect; nothing in Sessions 25–28 touched it.
-2. **Perform an adversarial code review.** — **OPEN.**
+1. ~~**Fix Box and Square guides automatically constraining to cardinal directions.**~~ **FIXED (v0.4.15).**
+   See the Session-33 entry at the top of this file and `SESSION_33.md` §2.
+2. **Perform an adversarial code review.** — **OPEN.** Session 33 raises the value of this: four real bugs
+   in shipped code were found by reading during one debugging session (a silently-dropped admin packet, a
+   Reveal All filter that could never match, a cap bypass via private mode, and eleven player-facing
+   messages printing their own format placeholders).
 3. **Perform a performance-focused code review.** — **PARTLY ADDRESSED** by Session 28's measured renderer
    work, but a general review of the non-render code has not been done.
 4. **Explore alternative rendering options for performance gains.** — **IN PROGRESS**, see

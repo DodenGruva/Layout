@@ -3,16 +3,20 @@
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
 > and the performance-relevant mechanics. Updated 2026-07-28 against the built/package checkpoint
-> **v0.4.14 on the `beta` branch** (v0.3.53 is live on `main`). Where this file and the code
+> **v0.4.26 on the `beta` branch** (v0.3.53 is live on `main`). Where this file and the code
 > disagree, **the code wins** — treat this as a map, then read the `.cs` files it points at.
 >
-> ⚠️ **`dev/ARCHITECTURE.md` (v3.14) and `dev/PROJECT_STATUS.md` predate Sessions 28–32** and do not know
-> about vertex welding, the custom shader, block occupancy, Transform mode, or the settings page. This file and the session records
-> are ahead of them.
+> **Current wire/save state: DataVersion 13, protocol 23, 83 source files, 15 shape types / 21 tiles.**
+> DataVersion 13 came from Session 33's Rectangle/Box re-gesture, which changed how many control points
+> those two shapes store; older records are read in their original encoding and reproduce exactly.
+>
+> ⚠️ **`dev/ARCHITECTURE.md` (v3.14) and `dev/PROJECT_STATUS.md` predate Sessions 28–33** and do not know
+> about vertex welding, the custom shader, block occupancy, Transform mode, the settings page, or the admin
+> section. This file and the session records are ahead of them.
 >
 > **Deeper docs:** `CHANGELOG.md` (player-facing release log), `dev/ARCHITECTURE.md` (the authoritative
 > plan + Settled Decisions Register, v3.14), `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list),
-> `dev/SESSION_9/…/32.md` (per-session history), `dev/PLAN_RENDER_PERFORMANCE.md` (the live rendering plan +
+> `dev/SESSION_9/…/33.md` (per-session history), `dev/PLAN_RENDER_PERFORMANCE.md` (the live rendering plan +
 > measurements), `dev/PLAN_BLOCK_OCCUPANCY.md` (the delivered occupancy feature + its disproved first draft),
 > `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
@@ -47,7 +51,14 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** **v0.4.14** built and packaged; v0.3.53 is the live `main` release. **Session 32 added the
+- **Status:** **v0.4.26** built and packaged; v0.3.53 is the live `main` release. **Session 33 added the
+  ADMIN SERVER-SETTINGS SECTION** to the settings page (admin-only; the five voxel/guide limits and the
+  private-guides switch, staged behind a **Save** button and applied to the running server), the **Players**
+  dialog (Players · Overrides · Jail over one server-built roster), **Reveal Near / Reveal All**, and T1's
+  **CTRL surface-snap** on free-move. It also **re-gestured Rectangle and Box** so they are no longer locked
+  to the world axes — Rectangle 3 clicks, Box 4, Square still 2 — which advanced **DataVersion to 13**, and
+  made **private guides obey the server's caps** (previously any player could bypass every cap by switching
+  to private placement). See `dev/SESSION_33.md`. **Session 32 added the
   in-game SETTINGS PAGE** behind the title-bar gear: a master Layout on/off, guide opacity, a configurable
   **colour scheme** (Default / Red-Green Safe / a Custom per-role palette chosen from a swatch grid), the
   chiseling highlight, a sliding **Public/Private** control with the server's policy and a one-press
@@ -71,11 +82,15 @@ guides on servers without Layout and, when server policy permits, alongside publ
   durability + powder refills + deflating **5-state** models) are both feature-complete. The large-guide
   **mesh pass Stage A (exposed-face meshing) has shipped** and filled 3D interiors are retired. Volumes may
   persist as their hollow **Shell** or canonical structural **Wireframe**.
-- **Size:** **82 source files** (`src/`), ~one asset tree (now including `assets/layout/shaders/`), one
+- **Size:** **83 source files** (`src/`), ~one asset tree (now including `assets/layout/shaders/`), one
   `.csproj`.
-- **Data schema:** **DataVersion 12** (creator/Last Sculptor attribution; v11 `IsWireframe`; v10 cached metadata).
+- **Data schema:** **DataVersion 13** (Session 33: Rectangle and Box store three and four control points
+  instead of two and three, after their re-gesture; older records are read in their original encoding and
+  reproduce to the voxel, so there is no migration step. v12 creator/Last Sculptor attribution; v11
+  `IsWireframe`; v10 cached metadata).
   Move changes nothing here — a translated guide persists through the fields it already had.
-- **Wire protocol:** **19**, unchanged by Session 32 — the settings page is entirely client-side
+- **Wire protocol:** **23** (Session 33: admin config + request, Reveal All, the player roster and its
+  per-player guide list). 19 was the Session-32 state
   (whole-guide rotation and the compound transform/copy; 17 whole-guide
   translation; 16 personal render state; explicit immense-placement
   rejection; player moderation policy; `/layout who` query; v12 attribution metadata; v11 wireframe state;

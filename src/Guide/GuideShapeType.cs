@@ -31,8 +31,10 @@ namespace Layout.Guide
         Triangle = 3,
 
         /// <summary>
-        /// Rectangle (Session 9): the two clicks are its DIAGONAL corners (stored); the other two corners
-        /// derive in the intrinsic plane. Square = this + Square constraint.
+        /// Rectangle (Session 9; re-gestured v0.4.15): THREE clicks — corner A, the far end of one EDGE
+        /// (which is what gives it a free rotation), then the width. Square = this + Square constraint,
+        /// and stays TWO clicks because one edge already settles it. Guides placed before v0.4.15 stored
+        /// only the two DIAGONAL corners and are still read that way; see RectangleShape.
         /// </summary>
         Rectangle = 4,
 

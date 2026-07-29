@@ -17,8 +17,9 @@ The catalog is **15 shape types / 21 picker tiles** (SESSION_20 added straight/t
 Guide voxels that already hold world material can be drawn in a "built" colour, live (SESSION_29). A finished
 guide can be moved, rotated, copied and mirrored as a whole object (**Transform mode**, SESSION_30/31).
 Client display settings live on an in-game **settings page** behind the title-bar gear, including a
-configurable **colour scheme** with per-role custom colours (SESSION_32).
-Status: **v0.4.14 on the `beta` branch** (v0.3.53 is the last `main` release; the mod is public).
+configurable **colour scheme** with per-role custom colours (SESSION_32) and, for admins, a live
+**server-settings section** plus a **Players** dialog (SESSION_33).
+Status: **v0.4.26 on the `beta` branch** (v0.3.53 is the last `main` release; the mod is public).
 
 > **Renderer note — read before any rendering work.** Guides are **order-dependent translucent geometry**
 > (Opaque stage, manual alpha blending, depth-tested, double-sided). On a hollow shell the guide overlaps
@@ -105,13 +106,32 @@ Status: **v0.4.14 on the `beta` branch** (v0.3.53 is the last `main` release; th
   **v0.3.90–v0.4.0 Transform arc** (rotate, copy, mirror, the state-driven pad, span stepping, copy runs,
   and hiding the development diagnostic commands), and SESSION_32 the **v0.4.2–v0.4.14 settings-page arc**
   (the F9 panel with hover text, the disable-not-block rendering gate, the sliding Public/Private control,
-  Publish, the F11 colour schemes with a custom swatch palette, and the F10 gear redraw).
+  Publish, the F11 colour schemes with a custom swatch palette, and the F10 gear redraw), and SESSION_33 the
+  **v0.4.15–v0.4.26 admin arc** (T1's surface snap, the Rectangle/Box re-gesture at DataVersion 13, the
+  admin server-settings section with its Save flow, Reveal Near/All, private guides obeying server caps, the
+  Players dialog, and two traps worth not re-learning — the `SendIngameError` lang-key bug and the
+  six-revision cap hunt that a single `/layout info` would have ended).
 
-## ✅ Docs updated to v0.4.14 (2026-07-28)
-Consistent with **v0.4.14, DataVersion 12, protocol 19, 82 source files, 15 shape types / 21 tiles**.
-`SESSION_32.md` is the latest record (settings/colours: `SESSION_32.md`, Transform: `SESSION_30.md` +
-`SESSION_31.md`, occupancy: `SESSION_29.md` + `PLAN_BLOCK_OCCUPANCY.md`, mesh: `SESSION_16.md` +
-`SESSION_28.md`, F5: `SESSION_15.md`). `CHANGELOG.md` is current through v0.4.14.
+## ✅ Docs updated to v0.4.26 (2026-07-28)
+Consistent with **v0.4.26, DataVersion 13, protocol 23, 83 source files, 15 shape types / 21 tiles**.
+`SESSION_33.md` is the latest record (admin/rectangle-box: `SESSION_33.md`, settings/colours:
+`SESSION_32.md`, Transform: `SESSION_30.md` + `SESSION_31.md`, occupancy: `SESSION_29.md` +
+`PLAN_BLOCK_OCCUPANCY.md`, mesh: `SESSION_16.md` + `SESSION_28.md`, F5: `SESSION_15.md`).
+`CHANGELOG.md` is current through v0.4.26.
+
+⚠️ **`SendIngameError`'s message parameter is a LANG KEY, not a format string.** Its trailing arguments
+are applied only when that key resolves; an English sentence never does, so the string is returned verbatim
+and every `{0}` reaches the player as literal text. **Eleven shipped messages** were printing their own
+placeholders — since the day they were written — and only surfaced when a cap finally refused something.
+Build the whole message first and pass no arguments. See `SESSION_33.md` §5.
+
+⚠️ **Reach for the existing diagnostic before writing a fix.** A "the voxel cap does not work" report cost
+SIX revisions and three speculative fixes; the cause was a forgotten per-player override, and
+`/layout info <player>` prints exactly that, alongside the effective cap. The admin commands from Sessions
+23/27 exist to answer these questions. See `SESSION_33.md` §4.
+
+⚠️ **Vintage Story loads the HIGHEST version when several zips share a modid** (human-corrected). Multiple
+Layout zips in `Mods` are harmless — do not chase that as a cause.
 
 ⚠️ **`ARCHITECTURE.md` (v3.14) and `PROJECT_STATUS.md` predate Sessions 28–32.** They are not wrong about
 what they describe, but they do not know about vertex welding, settled-shell streaming, the custom shader,
@@ -159,6 +179,29 @@ reshaping — geometry stays in Create); this replaced the old panel-expanding "
 **Transform** (Sessions 30–31) selects the same way and then acts on the guide as a WHOLE OBJECT without
 reshaping it: move, rotate, copy, mirror. **Delete** dispels. `ToolMode` is client-only (never wired), so
 it's safe to reorder — Transform was inserted before Delete for exactly that reason.
+
+## Session-33 additions (v0.4.15–v0.4.26, `beta`) — full detail in `SESSION_33.md`
+- **T1 delivered (v0.4.15):** CTRL on free-move sets a guide down on the targeted surface, lowest voxel
+  plane meeting the face. Measured from the shape's sampled outline, NEVER the voxel set (it runs per tick
+  of a drag); phantoms excluded; a Surface guide reads its plane offset.
+- **Rectangle/Box cardinal defect fixed (v0.4.15).** They were the only two shapes reading their sides off
+  the plane's world axes. **Rectangle is now 3 clicks** (corner · edge end · width), **Box 4**, **Square
+  stays 2** with SHIFT choosing the side. Legacy 2-point rectangles and 3-point boxes are read IN PLACE and
+  reproduce to the voxel — never migrated, because **shapes are adopted on renderer worker threads** and
+  rewriting the shared control-point list from a shape would be a data race. **DataVersion 12 → 13.**
+- **Admin server settings on the settings page** (v0.4.16+), admin-only, with a **Save** button — edits
+  stage and nothing reaches the server until pressed. `GuideManager.ApplyCaps` makes the five caps live;
+  `layout.json` is rewritten on every change. Lowering a cap never deletes anything.
+- **Players dialog** (`UI/GuidePlayersDialog.cs`, v0.4.26): Players · Overrides · Jail, three views of one
+  server-built roster. Read-only; both requests re-check `controlserver` on arrival.
+- **Private guides now obey server caps** when a Layout server is present (v0.4.22) — previously any player
+  could bypass every cap by switching to private. The no-server fallback stays unlimited.
+- **Protocol 19 → 23** (`LayoutAdminConfigPacket`/`RequestPacket`, `GuideRevealMinePacket`,
+  `PlayerRoster*`/`PlayerGuides*`).
+- **Reveal Near / Reveal All** on the Edit Visibility row. Reveal All is SERVER-side: `GuideDataDto` has
+  never carried `CreatorUid`, so a client-side ownership filter matches nothing.
+- ⚠️ **Seven cosmetic/UI items are queued at the top of `TODO.md`** (icons, button alignment, an overflowing
+  label, a send-to-ground arrow). None started.
 
 ## Session-31 additions (v0.3.90–v0.4.0, `beta`) — full detail in `SESSION_31.md`
 - **Move mode became TRANSFORM**, the category for everything done to a finished guide as a whole object.
@@ -259,13 +302,15 @@ Mesh **Stage A** shipped and filled 3D volumes were retired. Normal public multi
 4. **Performance follow-up only from a new measured bottleneck and a fidelity-preserving design.** Immense
    placement/sculpt work still uses one below-normal worker plus bounded claim ticks; do not assume spatial
    subdivision or greedy merging is the next step.
-5. **The queued feature set (TODO F6–F12) is now EMPTY.** F6/F7/F8/F12 shipped in Sessions 30–31
-   (Transform); F9/T2/F10/F11 shipped in Session 32 (the settings page, its formatting, the gear, and the
-   colour schemes). The only queued item left is **T1** (CTRL surface-snap on free-move; its contact rule
-   is decided, not built).
-   **Session 32 was playtested per revision** — the human ran every iteration and drove the settings page,
-   the colour table and the gear to their shipped form from what they saw in game.
-6. If asked: **Roof / Tunnel** volumes; concave-safe Free-Shape fill; F3 re-constrain op. Remaining
+5. **The F-queue is EMPTY and T1 is delivered.** F6/F7/F8/F12 shipped in Sessions 30–31 (Transform);
+   F9/T2/F10/F11 in Session 32 (settings page, formatting, gear, colour schemes); **T1 and the Box/Square
+   cardinal defect in Session 33 (v0.4.15)**. What remains queued is the **seven-item cosmetic/UI polish
+   list at the top of `TODO.md`** — icons (rotate/tilt, mirror, gear teeth), button alignment, an
+   overflowing label, and a send-to-ground move arrow. None started.
+   **Sessions 32 and 33 were playtested per revision** — the human ran every iteration.
+6. **Six flagged items from Session 33 await review** (`SESSION_33.md` §8), notably Square staying a
+   two-click gesture with changed meaning, and private guides now obeying server caps.
+7. If asked: **Roof / Tunnel** volumes; concave-safe Free-Shape fill; F3 re-constrain op. Remaining
    flagged decisions are cosmetic.
 
 ## Project layout (namespaces match folders)
@@ -283,4 +328,7 @@ The settings page and its three custom elements (`SlidingChoiceElement`, `AlertT
 `Systems/GuideManager.TranslateGuide`, `Undo/Commands/TranslateGuideCommand.cs`, `GuideTranslatePacket`,
 the Move section of `UI/GuideToolGui.cs`, and the free-move session in `Client/GuideToolController.cs`.
 Rotate/copy/mirror add `Undo/Commands/RotateGuideCommand.cs` and `TransformGuideCommand.cs` alongside it.
-(Filenames verified against the tree on 2026-07-28 — 82 source files.)
+The admin Players dialog is its own file, `UI/GuidePlayersDialog.cs`; the admin SETTINGS section lives in
+`UI/GuideToolGui.cs` with the rest of the settings page, and its server half is the admin-config and
+player-roster handlers in `Network/ServerNetworkHandler.cs`.
+(Filenames verified against the tree on 2026-07-28 — 83 source files.)

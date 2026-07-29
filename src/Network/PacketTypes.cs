@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 19;
+        public const int ProtocolVersion = 23;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -1040,6 +1040,193 @@ namespace Layout.Network
         }
     }
 
+    /// <summary>
+    /// The server settings the in-game Admin panel may read and change (protocol 20). PINNED VALUES — this
+    /// crosses the wire, so treat it exactly like the data-model enums: append only, never renumber.
+    /// </summary>
+    /// <remarks>
+    /// NOT EVERY KEY IN layout.json IS HERE, deliberately. <c>requiredPrivilege</c> is a free-text privilege
+    /// name and fumbling it in a GUI can lock every player — including the admin — out of the tool, which is
+    /// exactly the situation you cannot then fix from inside the game. <c>undoHistoryDepth</c> is a memory
+    /// trade-off nobody tunes in play. Both stay in the file, where changing them is a deliberate act.
+    /// </remarks>
+    public enum LayoutAdminSetting
+    {
+        PerGuideVoxelCap = 0,
+        PerPlayerTotalVoxelCap = 1,
+        TotalVoxelCap = 2,
+        MaxGuidesPerPlayer = 3,
+        MaxGuidesWorldWide = 4,
+        AllowClientOnlyMode = 5,
+        // RETIRED, and NOT reused — pinned numbers are append-only. Both settings still live in
+        // layout.json, where changing them takes a restart; the panel no longer offers either and the
+        // server no longer accepts them here, so a request naming one changes nothing.
+        //   6 — chalk consumption, dropped v0.4.20 (human-directed).
+        //   7 — admin lock-override, dropped v0.4.17 (human-directed).
+        EnableChalkDurability = 6,
+        AdminCanOverrideLocks = 7
+    }
+
+    /// <summary>
+    /// S→C (protocol 20). The live server settings behind the settings page's Admin section, plus whether
+    /// THIS player is allowed to change them. Sent to everyone on join and re-broadcast after every change.
+    /// </summary>
+    /// <remarks>
+    /// SENT TO EVERY PLAYER, not just admins. The caps are not secret — a player already learns the
+    /// per-guide cap from the bulk sync, and the HUD draws a gauge against it — and a non-admin needs the
+    /// values anyway if the panel is ever to explain WHY a placement was refused. What is per-player is
+    /// <see cref="CanEdit"/>, and it is advisory only: it decides whether the section is drawn, never
+    /// whether a change is accepted. The server re-checks the privilege on every incoming request, because
+    /// a modified client can set any flag it likes on its own copy of this packet.
+    /// </remarks>
+    [ProtoContract]
+    public class LayoutAdminConfigPacket
+    {
+        [ProtoMember(1)] public int PerGuideVoxelCap;
+        [ProtoMember(2)] public int PerPlayerTotalVoxelCap;
+        [ProtoMember(3)] public int TotalVoxelCap;
+        [ProtoMember(4)] public int MaxGuidesPerPlayer;
+        [ProtoMember(5)] public int MaxGuidesWorldWide;
+        [ProtoMember(6)] public bool AllowClientOnlyMode;
+        [ProtoMember(7)] public bool EnableChalkDurability;
+        [ProtoMember(8)] public bool AdminCanOverrideLocks;
+        [ProtoMember(9)] public bool CanEdit;
+        // The RECIPIENT's own per-player overrides (protocol 22), 0 when they have none. A personal
+        // override silently beats every cap above it, so a panel that showed the server's numbers without
+        // these was telling an admin their caps applied to them when they did not — which is exactly how a
+        // forgotten 10,000,000-voxel override survived several rounds of cap debugging undetected.
+        [ProtoMember(10)] public int YourVoxelCapOverride;
+        [ProtoMember(11)] public int YourTotalVoxelCapOverride;
+        [ProtoMember(12)] public int YourGuideLimitOverride;
+
+        public LayoutAdminConfigPacket() { }
+
+        /// <summary>True when this player's own limits are not the server-wide ones shown above.</summary>
+        public bool HasPersonalOverride =>
+            YourVoxelCapOverride > 0 || YourTotalVoxelCapOverride > 0 || YourGuideLimitOverride > 0;
+    }
+
+    /// <summary>
+    /// C→S (protocol 20). Asks the server to change ONE admin setting. Booleans travel as 0/1 so a single
+    /// packet covers every key; the server clamps, normalises, and may refuse.
+    /// </summary>
+    [ProtoContract]
+    public class LayoutAdminConfigRequestPacket
+    {
+        [ProtoMember(1)] public int Setting;
+        [ProtoMember(2)] public int Value;
+
+        public LayoutAdminConfigRequestPacket() { }
+
+        public LayoutAdminConfigRequestPacket(LayoutAdminSetting setting, int value)
+        {
+            Setting = (int)setting;
+            Value = value;
+        }
+    }
+
+    /// <summary>
+    /// C→S (protocol 21). "Un-hide every guide I created." Carries no payload: the sender IS the
+    /// argument, and letting a client name whose guides to reveal would be a permission hole.
+    /// </summary>
+    /// <remarks>
+    /// WHY THE SERVER DOES THIS AND NOT THE CLIENT. The obvious client-side version — walk the local
+    /// mirror, keep the guides whose creator is me — cannot work: <see cref="GuideDataDto"/> carries
+    /// <c>CreatorName</c> for the HUD but has never carried the creator's UID, so every guide in a
+    /// client's mirror has a null CreatorUid and the filter matches nothing. That was the v0.4.18 bug.
+    /// Adding the UID to the DTO would have worked too, but it would broadcast every creator's UID to
+    /// every client to serve one button; asking the side that already knows is both smaller and tighter.
+    /// </remarks>
+    [ProtoContract]
+    public class GuideRevealMinePacket
+    {
+        public GuideRevealMinePacket() { }
+    }
+
+    // ----------------------------------------------------------------------------------------------
+    //  Admin player roster (protocol 23) — the settings page's Players dialog
+    // ----------------------------------------------------------------------------------------------
+    //
+    // The same ground the /layout info, jailroster and top commands cover, assembled server-side and sent
+    // as data instead of as prose. It is ONE roster rather than three: the Players, Overrides and Jail
+    // tabs are three views of the same rows, and fetching them separately would let the three disagree
+    // about a player whose policy changed between requests.
+
+    /// <summary>One player as the admin dialog sees them. Everything here is already resolved.</summary>
+    [ProtoContract]
+    public class PlayerRosterEntryDto
+    {
+        [ProtoMember(1)] public string Uid;
+        [ProtoMember(2)] public string Name;
+        [ProtoMember(3)] public bool Online;
+        [ProtoMember(4)] public bool Jailed;
+        [ProtoMember(5)] public int GuideCount;
+        [ProtoMember(6)] public long VoxelTotal;
+        /// <summary>Per-player overrides; 0 means "no override, the server default applies".</summary>
+        [ProtoMember(7)] public int VoxelCapOverride;
+        [ProtoMember(8)] public int TotalVoxelCapOverride;
+        [ProtoMember(9)] public int GuideLimitOverride;
+        /// <summary>What actually applies to them once overrides are folded in. 0 = unlimited.</summary>
+        [ProtoMember(10)] public int EffectiveVoxelCap;
+        [ProtoMember(11)] public int EffectiveTotalVoxelCap;
+        [ProtoMember(12)] public int EffectiveGuideLimit;
+
+        public bool HasOverride =>
+            VoxelCapOverride > 0 || TotalVoxelCapOverride > 0 || GuideLimitOverride > 0;
+    }
+
+    /// <summary>One of a player's guides, for the Players tab's detail list.</summary>
+    [ProtoContract]
+    public class PlayerGuideDto
+    {
+        [ProtoMember(1)] public string ShapeName;
+        [ProtoMember(2)] public int VoxelCount;
+        [ProtoMember(3)] public int X;
+        [ProtoMember(4)] public int Y;
+        [ProtoMember(5)] public int Z;
+        [ProtoMember(6)] public bool Hidden;
+    }
+
+    /// <summary>C→S. Asks for the admin player roster. Refused without controlserver.</summary>
+    [ProtoContract]
+    public class PlayerRosterRequestPacket
+    {
+        public PlayerRosterRequestPacket() { }
+    }
+
+    /// <summary>S→C. Every player Layout knows about, with their policy and usage.</summary>
+    [ProtoContract]
+    public class PlayerRosterPacket
+    {
+        [ProtoMember(1)] public PlayerRosterEntryDto[] Players;
+
+        public PlayerRosterPacket() { }
+    }
+
+    /// <summary>C→S. Asks for one player's guide list, for the Players tab's detail pane.</summary>
+    [ProtoContract]
+    public class PlayerGuidesRequestPacket
+    {
+        [ProtoMember(1)] public string Uid;
+
+        public PlayerGuidesRequestPacket() { }
+        public PlayerGuidesRequestPacket(string uid) { Uid = uid; }
+    }
+
+    /// <summary>
+    /// S→C. One player's guides, newest-largest first and capped — a prolific builder's full list would
+    /// be thousands of rows nobody can read, and the dialog shows a "and N more" line instead.
+    /// </summary>
+    [ProtoContract]
+    public class PlayerGuidesPacket
+    {
+        [ProtoMember(1)] public string Uid;
+        [ProtoMember(2)] public PlayerGuideDto[] Guides;
+        [ProtoMember(3)] public int TotalCount;
+
+        public PlayerGuidesPacket() { }
+    }
+
     /// <summary>Both directions. Select a 3D guide's persistent shell or structural wireframe.</summary>
     [ProtoContract]
     public class GuideSetWireframePacket
@@ -1225,7 +1412,17 @@ namespace Layout.Network
             // 0.3.90: F12 Rotate — whole-guide quarter turns (protocol 18)
             typeof(GuideRotatePacket),
             // 0.3.93: F7/F8 Transform pad — compound mirror / rotate / move, in place or as a copy (19)
-            typeof(GuideTransformPacket)
+            typeof(GuideTransformPacket),
+            // 0.4.16: the settings page's Admin section — live server settings (protocol 20)
+            typeof(LayoutAdminConfigPacket),
+            typeof(LayoutAdminConfigRequestPacket),
+            // 0.4.19: "Reveal All" — un-hide every guide the sender created (protocol 21)
+            typeof(GuideRevealMinePacket),
+            // 0.4.26: the Admin section's Players dialog (protocol 23)
+            typeof(PlayerRosterRequestPacket),
+            typeof(PlayerRosterPacket),
+            typeof(PlayerGuidesRequestPacket),
+            typeof(PlayerGuidesPacket)
         };
     }
 }

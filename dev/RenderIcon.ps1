@@ -42,7 +42,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('gear')]
+    [ValidateSet('gear', 'revealnear', 'revealall')]
     [string]$Glyph = 'gear',
 
     [int[]]$Sizes = @(18, 22, 28, 42),
@@ -141,6 +141,61 @@ $Glyphs = @{
         & $ellipse $p3 $rBore
         $g.FillPath($brush, $p3)
     }
+
+    # Mirrors LayoutToolIcons.DrawRevealNear (v0.4.18): a small eye over six separated blocks. The
+    # question this render answers is whether SIX blocks stay countable at 42 px, or blur into a bar.
+    revealnear = {
+        param($g, $c)
+        $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), ([float](& $c.L 2.4))
+        $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
+
+        & $Script:DrawSmallEye $g $c $pen 22
+        $r = & $c.L 4
+        $g.FillEllipse($brush, [float]((& $c.X 30) - $r), [float]((& $c.Y 22) - $r), [float]($r * 2), [float]($r * 2))
+
+        $count = 6; $blockW = 6.8; $gap = 1.4; $blockH = 9.0
+        $runW = $count * $blockW + ($count - 1) * $gap
+        $bx = (60 - $runW) / 2.0
+        for ($i = 0; $i -lt $count; $i++) {
+            $g.FillRectangle($brush,
+                [float](& $c.X ($bx + $i * ($blockW + $gap))), [float](& $c.Y 40),
+                [float](& $c.L $blockW), [float](& $c.L $blockH))
+        }
+    }
+
+    # Mirrors LayoutToolIcons.DrawRevealAll (v0.4.18): a small eye with rays. The question here is
+    # whether the rays stay separate from the eye at 42 px rather than fusing into a blob.
+    revealall = {
+        param($g, $c)
+        $rayPen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), ([float](& $c.L 2.2))
+        $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), ([float](& $c.L 2.4))
+        $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
+
+        $inner = 19.0; $outer = 27.0
+        for ($i = 0; $i -lt 8; $i++) {
+            $deg = 22.5 + $i * 45.0
+            if ([Math]::Abs([Math]::Sin($deg * [Math]::PI / 180.0)) -lt 0.2) { continue }
+            $a = $deg * [Math]::PI / 180.0
+            $dx = [Math]::Cos($a); $dy = [Math]::Sin($a)
+            $g.DrawLine($rayPen,
+                [float](& $c.X (30 + $dx * $inner)), [float](& $c.Y (30 + $dy * $inner)),
+                [float](& $c.X (30 + $dx * $outer)), [float](& $c.Y (30 + $dy * $outer)))
+        }
+
+        & $Script:DrawSmallEye $g $c $pen 30
+        $r = & $c.L 4
+        $g.FillEllipse($brush, [float]((& $c.X 30) - $r), [float]((& $c.Y 30) - $r), [float]($r * 2), [float]($r * 2))
+    }
+}
+
+# The SmallEye helper, shared by both reveal glyphs exactly as it is in the C#.
+$Script:DrawSmallEye = {
+    param($g, $c, $pen, $cy)
+    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $p = { param($u, $v) New-Object System.Drawing.PointF([float](& $c.X $u), [float](& $c.Y $v)) }
+    $path.AddBezier((& $p 17 $cy), (& $p 23 ($cy - 9)), (& $p 37 ($cy - 9)), (& $p 43 $cy))
+    $path.AddBezier((& $p 43 $cy), (& $p 37 ($cy + 9)), (& $p 23 ($cy + 9)), (& $p 17 $cy))
+    $g.DrawPath($pen, $path)
 }
 
 # ------------------------------------------------------------------------------------------------

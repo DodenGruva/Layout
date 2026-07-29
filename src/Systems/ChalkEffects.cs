@@ -415,15 +415,33 @@ namespace Layout.Systems
         private static List<SurfaceEmitPoint> BoxSurfacePoints(GuideData guide)
         {
             if (guide.ControlPoints == null || guide.ControlPoints.Count < 3) return null;
+            bool freeFrame = guide.ControlPoints.Count >= 4;   // v0.4.15 edge-gestured box; see BoxShape
             Vec3d a = guide.ControlPoints[0]?.WorldPosition;
-            Vec3d diagonal = guide.ControlPoints[1]?.WorldPosition;
-            Vec3d heightPoint = guide.ControlPoints[2]?.WorldPosition;
-            if (a == null || diagonal == null || heightPoint == null) return null;
+            Vec3d farCorner = guide.ControlPoints[freeFrame ? 2 : 1]?.WorldPosition;
+            Vec3d heightPoint = guide.ControlPoints[freeFrame ? 3 : 2]?.WorldPosition;
+            if (a == null || farCorner == null || heightPoint == null) return null;
 
-            ShapeGeometry.InPlaneAxes(guide.ShapePlaneAxis, out Vec3d u1, out Vec3d u2);
-            Vec3d axis = ShapeGeometry.AxisVec(guide.ShapePlaneAxis);
-            var d = new Vec3d(diagonal.X - a.X, diagonal.Y - a.Y, diagonal.Z - a.Z);
-            double du = ShapeGeometry.Dot(d, u1), dv = ShapeGeometry.Dot(d, u2);
+            Vec3d u1, u2, axis;
+            double du;
+            if (freeFrame)
+            {
+                Vec3d b = guide.ControlPoints[1]?.WorldPosition;
+                if (b == null
+                    || !ShapeGeometry.TryGetFrame(a, b, guide.ShapePlaneAxis, out u1, out u2, out du))
+                    return null;
+                axis = ShapeGeometry.BaseNormal(u1, guide.ShapePlaneAxis);
+                if (axis == null) return null;
+            }
+            else
+            {
+                // LEGACY (pre-v0.4.15): the stored far corner is the base DIAGONAL, in world-axis frame.
+                ShapeGeometry.InPlaneAxes(guide.ShapePlaneAxis, out u1, out u2);
+                axis = ShapeGeometry.AxisVec(guide.ShapePlaneAxis);
+                du = ShapeGeometry.Dot(
+                    new Vec3d(farCorner.X - a.X, farCorner.Y - a.Y, farCorner.Z - a.Z), u1);
+            }
+            double dv = ShapeGeometry.Dot(
+                new Vec3d(farCorner.X - a.X, farCorner.Y - a.Y, farCorner.Z - a.Z), u2);
             if (Math.Abs(du) < 0.05 || Math.Abs(dv) < 0.05) return null;
             var bc = new Vec3d(a.X + (u1.X * du + u2.X * dv) * 0.5,
                 a.Y + (u1.Y * du + u2.Y * dv) * 0.5,

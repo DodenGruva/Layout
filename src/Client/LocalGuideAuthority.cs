@@ -122,6 +122,23 @@ namespace Layout.Client
                     storagePath, _guides.AllGuides.Count);
         }
 
+        /// <summary>
+        /// Pushes a Layout server's caps onto the private-guide store (v0.4.22). Called whenever the
+        /// server's policy arrives or changes; passing zeroes restores "unlimited", which is what the
+        /// no-server client-only fallback keeps.
+        /// </summary>
+        /// <remarks>
+        /// The AUTHORITATIVE half of making private guides respect server caps. The draft pre-check in
+        /// DraftManager stops the guide being drawn past the limit; this stops it being STORED past the
+        /// limit, so the two agree even if a placement arrives by some path the pre-check did not cover.
+        /// </remarks>
+        public void ApplyServerCaps(int perGuideVoxelCap, int totalVoxelCap, int perPlayerTotalVoxelCap)
+        {
+            _guides?.ApplyCaps(
+                perGuideVoxelCap, totalVoxelCap, perPlayerTotalVoxelCap,
+                maxGuidesPerPlayer: 0, maxGuidesWorldWide: 0);
+        }
+
         public GuideBulkSyncPacket CreateBulkSyncPacket()
         {
             GuideDataDto[] guides = _guides.AllGuides.Values

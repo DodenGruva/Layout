@@ -108,6 +108,10 @@ namespace Layout.UI
         public const string FormWireframe = "layout-form-wireframe";
         public const string VisShown = "layout-vis-shown";
         public const string VisHidden = "layout-vis-hidden";
+        /// <summary>Reveal hidden guides within reach: an eye over a short measured run of blocks.</summary>
+        public const string RevealNear = "layout-reveal-near";
+        /// <summary>Reveal all of your own hidden guides: an eye casting rays outward.</summary>
+        public const string RevealAll = "layout-reveal-all";
 
         public const string PlaneAuto = "layout-plane-auto";
         public const string PlaneFloor = "layout-plane-floor";
@@ -222,6 +226,8 @@ namespace Layout.UI
             reg[FormWireframe] = DrawFormWireframe;
             reg[VisShown] = DrawVisShown;
             reg[VisHidden] = DrawVisHidden;
+            reg[RevealNear] = DrawRevealNear;
+            reg[RevealAll] = DrawRevealAll;
 
             reg[PlaneAuto] = DrawPlaneAuto;
             reg[PlaneFloor] = DrawPlaneFloor;
@@ -1017,6 +1023,79 @@ namespace Layout.UI
             EyeAlmond(ctx, c);
             ctx.Stroke();
             ctx.MoveTo(c.X(15), c.Y(16)); ctx.LineTo(c.X(45), c.Y(44)); ctx.Stroke();   // slash
+        }
+
+        // ---- reveal actions (v0.4.18) ----
+        // Both are an EYE plus a qualifier, because both do the same thing (unhide) and differ only in
+        // reach. The eye is lifted and shrunk to leave room underneath; the qualifier carries the meaning.
+
+        /// <summary>Eye over a measured run of six blocks — "unhide what is standing right here".</summary>
+        private static void DrawRevealNear(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(2.4));
+            SmallEye(ctx, c, 22);
+            ctx.Stroke();
+            SetColor(ctx, rgba, 1.0);
+            ctx.Arc(c.X(30), c.Y(22), c.L(4), 0, 2 * Math.PI);
+            ctx.Fill();
+
+            // SIX blocks, drawn as filled squares with real gaps rather than a ruler with fine ticks: at a
+            // 42 px tile a tick every four pixels is a grey smear, whereas six separated blocks stay
+            // countable. They are the unit the range is measured in, so they read as the range too.
+            //
+            // Sized off a render, not by eye (dev/RenderIcon.ps1 -Glyph revealnear): the first attempt used
+            // 6.2-wide blocks 6.2 tall and they collapsed into a dashed underline at true size. Height is
+            // what rescued them — a mark needs vertical mass to read as a block rather than a dash — so
+            // these are TALLER than they are wide, which looks wrong in the source and right on screen.
+            const double count = 6, blockW = 6.8, gap = 1.4, blockH = 9.0;
+            double runW = count * blockW + (count - 1) * gap;
+            double bx = (60 - runW) / 2.0;
+            SetColor(ctx, rgba, 0.95);
+            for (int i = 0; i < count; i++)
+            {
+                ctx.Rectangle(c.X(bx + i * (blockW + gap)), c.Y(40), c.L(blockW), c.L(blockH));
+                ctx.Fill();
+            }
+        }
+
+        /// <summary>Eye casting rays outward — "unhide everything of mine, wherever it stands".</summary>
+        private static void DrawRevealAll(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+
+            // Rays first, so the eye's own stroke draws over any that reach too far inward.
+            Pen(ctx, rgba, c.L(2.2));
+            const double inner = 19, outer = 27;
+            for (int i = 0; i < 8; i++)
+            {
+                // Skipped at the horizontal, where a ray would run straight into the eye's own corners
+                // and read as the eye being wider rather than as light leaving it.
+                double deg = 22.5 + i * 45.0;
+                if (Math.Abs(Math.Sin(deg * Math.PI / 180.0)) < 0.2) continue;
+                double a = deg * Math.PI / 180.0;
+                double dx = Math.Cos(a), dy = Math.Sin(a);
+                ctx.MoveTo(c.X(30 + dx * inner), c.Y(30 + dy * inner));
+                ctx.LineTo(c.X(30 + dx * outer), c.Y(30 + dy * outer));
+            }
+            ctx.Stroke();
+
+            Pen(ctx, rgba, c.L(2.4));
+            SmallEye(ctx, c, 30);
+            ctx.Stroke();
+            SetColor(ctx, rgba, 1.0);
+            ctx.Arc(c.X(30), c.Y(30), c.L(4), 0, 2 * Math.PI);
+            ctx.Fill();
+        }
+
+        // The eye almond at ~three quarters scale, centred on an arbitrary row. Kept separate from
+        // EyeAlmond so the two full-size visibility tiles are untouched by anything done here.
+        private static void SmallEye(Context ctx, Canvas c, double cy)
+        {
+            ctx.MoveTo(c.X(17), c.Y(cy));
+            ctx.CurveTo(c.X(23), c.Y(cy - 9), c.X(37), c.Y(cy - 9), c.X(43), c.Y(cy));
+            ctx.CurveTo(c.X(37), c.Y(cy + 9), c.X(23), c.Y(cy + 9), c.X(17), c.Y(cy));
+            ctx.ClosePath();
         }
 
         private static void EyeAlmond(Context ctx, Canvas c)

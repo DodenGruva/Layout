@@ -63,6 +63,9 @@ namespace Layout
         public ClientNetworkHandler ClientNet { get; private set; }
         public GuideRenderer Renderer { get; private set; }
         public GuideToolGui ToolGui { get; private set; }
+
+        /// <summary>The admin Players dialog (v0.4.26), opened from the settings page's Admin section.</summary>
+        public GuidePlayersDialog PlayersGui { get; private set; }
         public GuideHud Hud { get; private set; }
         public GuideToolController Controller { get; private set; }
 
@@ -97,9 +100,16 @@ namespace Layout
         //  Common (both sides)
         // ==========================================================================================
 
+        /// <summary>
+        /// The running build's version string, for the startup log and the settings page's footer.
+        /// Static so the GUI can read it without threading the mod handle through four constructors.
+        /// </summary>
+        public static string ModVersion { get; private set; } = "?";
+
         public override void Start(ICoreAPI api)
         {
             base.Start(api);
+            ModVersion = Mod?.Info?.Version ?? "?";
 
             // The custom item classes behind assets/layout/itemtypes/*.json. Must exist on BOTH sides —
             // the server instantiates the items too (and the powder's refill consumption runs server-side).
@@ -143,13 +153,19 @@ namespace Layout
             Locks = new GuideLockManager();
             Undo = new UndoManager(Guides, ServerConfig.UndoHistoryDepth, Locks);
 
+            // The handler takes the config OBJECT, not a copy of four values: since v0.4.16 the settings
+            // page's Admin section changes these in play, and the change has to reach both the live
+            // managers and layout.json or it would silently revert on the next restart.
             ServerNet = new ServerNetworkHandler(
                 sapi, Guides, Locks, Undo, AdminPolicies,
-                ServerConfig.RequiredPrivilege,
-                ServerConfig.AdminCanOverrideLocks,
-                ServerConfig.AllowClientOnlyMode,
-                ServerConfig.EnableChalkDurability);
+                ServerConfig,
+                cfg => StoreServerConfig(sapi, cfg));
 
+            // The VERSION is logged first and deliberately (v0.4.23). Vintage Story loads exactly ONE mod
+            // per modid, so leaving several Layout zips in the Mods folder means the build that runs is not
+            // necessarily the newest one there — and nothing in game says which won. That cost several
+            // rounds of chasing fixes that were never running. This line is the answer, in one place.
+            sapi.Logger.Notification("[Layout] Version {0} loaded (server).", ModVersion);
             sapi.Logger.Notification(
                 "[Layout] Server started. Caps: {0} voxels/guide, {1} per-player total, {2} world total, {3} guides/player, {4} world-wide (0 = unlimited); undo depth {5}; privilege '{6}'; admin lock-override {7}; client-only mode {8}.",
                 ServerConfig.PerGuideVoxelCap, ServerConfig.PerPlayerTotalVoxelCap,
@@ -176,7 +192,15 @@ namespace Layout
 
             if (cfg == null) cfg = new LayoutServerConfig();
             cfg.Normalize();
+            StoreServerConfig(sapi, cfg);
+            return cfg;
+        }
 
+        // Writes layout.json. Used at startup (so the file gains any new keys) and again after every change
+        // made from the settings page's Admin section. A write failure is logged, never thrown: an admin
+        // changing a cap in play should not be able to take the server down with a read-only config file.
+        private static void StoreServerConfig(ICoreServerAPI sapi, LayoutServerConfig cfg)
+        {
             try
             {
                 sapi.StoreModConfig(cfg, ServerConfigFile);
@@ -185,8 +209,6 @@ namespace Layout
             {
                 sapi.Logger.Warning("[Layout] Could not write {0} ({1}); continuing with in-memory config.", ServerConfigFile, e.Message);
             }
-
-            return cfg;
         }
 
         // ==========================================================================================
@@ -196,6 +218,7 @@ namespace Layout
         public override void StartClientSide(ICoreClientAPI capi)
         {
             _capi = capi;
+            capi.Logger.Notification("[Layout] Version {0} loaded (client).", ModVersion);
 
             // Register the tool GUI's custom shape/toggle/plane glyphs before any dialog composes (UI pass).
             LayoutToolIcons.EnsureRegistered(capi);
@@ -254,11 +277,17 @@ namespace Layout
             // the GUI on F.
             // config carries the pinned favorites; the save action lets the GUI persist a pin change
             // immediately (B-24-2 fix — not relying on Dispose firing on exit-to-title).
+            PlayersGui = new GuidePlayersDialog(capi, ClientNet);
             ToolGui = new GuideToolGui(capi, Draft, ClientNet, ClientConfig, SaveClientConfig,
                 ApplyOpacitiesAndRebuild, ApplyOccupancyRecolour,
                 id => Renderer?.HoldMoveMaterialization(id),
-                ApplyGuideRendering);
+                ApplyGuideRendering,
+                OpenPlayersDialog);
             Hud = new GuideHud(capi, Draft, ClientNet);
+
+            // Subscribed after the GUI exists (v0.4.16): the server's admin settings arrive on join and
+            // again after any admin's change, and the settings page has to redraw to show them.
+            ClientNet.AdminConfigChanged += OnAdminConfigChanged;
 
             // The aim-controller: per-tick raycast + click routing while the tool is held. It (not the
             // ModSystem, not the item) owns all interaction state, including comatose grab sessions.
@@ -687,6 +716,16 @@ namespace Layout
             Controller?.OnPublicGuidePolicyChanged(jailed);
         }
 
+        private void OnAdminConfigChanged() => ToolGui?.OnAdminConfigChanged();
+
+        // The tool panel stays open behind it: the Players dialog is a reference view an admin reads WHILE
+        // setting caps, and closing the panel to look at it would lose any staged edits.
+        private void OpenPlayersDialog()
+        {
+            if (PlayersGui == null) return;
+            if (!PlayersGui.IsOpened()) PlayersGui.TryOpen();
+        }
+
         private static LayoutClientConfig LoadClientConfig(ICoreClientAPI capi)
         {
             LayoutClientConfig cfg = null;
@@ -1029,6 +1068,7 @@ namespace Layout
                     ClientNet.AuthorityModeChanged -= OnAuthorityModeChanged;
                     ClientNet.ForceClientOnlyPreferenceChanged -= OnForceClientOnlyPreferenceChanged;
                     ClientNet.GuideRenderingChanged -= OnGuideRenderingChanged;
+                    ClientNet.AdminConfigChanged -= OnAdminConfigChanged;
                 }
 
                 try { Controller?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] Controller dispose: {0}", e.Message); }
@@ -1036,6 +1076,7 @@ namespace Layout
 
                 try { Renderer?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] Renderer dispose: {0}", e.Message); }
                 try { ToolGui?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] ToolGui dispose: {0}", e.Message); }
+                try { PlayersGui?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] PlayersGui dispose: {0}", e.Message); }
                 try { Hud?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] Hud dispose: {0}", e.Message); }
 
                 Renderer = null;
