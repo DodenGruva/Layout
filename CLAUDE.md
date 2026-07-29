@@ -19,7 +19,7 @@ guide can be moved, rotated, copied and mirrored as a whole object (**Transform 
 Client display settings live on an in-game **settings page** behind the title-bar gear, including a
 configurable **colour scheme** with per-role custom colours (SESSION_32) and, for admins, a live
 **server-settings section** plus a **Players** dialog (SESSION_33).
-Status: **v0.4.26 on the `beta` branch** (v0.3.53 is the last `main` release; the mod is public).
+Status: **v0.4.27 on the `beta` branch** (v0.3.53 is the last `main` release; the mod is public).
 
 > **Renderer note — read before any rendering work.** Guides are **order-dependent translucent geometry**
 > (Opaque stage, manual alpha blending, depth-tested, double-sided). On a hollow shell the guide overlaps
@@ -112,12 +112,12 @@ Status: **v0.4.26 on the `beta` branch** (v0.3.53 is the last `main` release; th
   Players dialog, and two traps worth not re-learning — the `SendIngameError` lang-key bug and the
   six-revision cap hunt that a single `/layout info` would have ended).
 
-## ✅ Docs updated to v0.4.26 (2026-07-28)
-Consistent with **v0.4.26, DataVersion 13, protocol 23, 83 source files, 15 shape types / 21 tiles**.
+## ✅ Docs updated to v0.4.27 (2026-07-28)
+Consistent with **v0.4.27, DataVersion 13, protocol 23, 83 source files, 15 shape types / 21 tiles**.
 `SESSION_33.md` is the latest record (admin/rectangle-box: `SESSION_33.md`, settings/colours:
 `SESSION_32.md`, Transform: `SESSION_30.md` + `SESSION_31.md`, occupancy: `SESSION_29.md` +
 `PLAN_BLOCK_OCCUPANCY.md`, mesh: `SESSION_16.md` + `SESSION_28.md`, F5: `SESSION_15.md`).
-`CHANGELOG.md` is current through v0.4.26.
+`CHANGELOG.md` is current through v0.4.27.
 
 ⚠️ **`SendIngameError`'s message parameter is a LANG KEY, not a format string.** Its trailing arguments
 are applied only when that key resolves; an English sentence never does, so the string is returned verbatim
@@ -180,7 +180,7 @@ reshaping — geometry stays in Create); this replaced the old panel-expanding "
 reshaping it: move, rotate, copy, mirror. **Delete** dispels. `ToolMode` is client-only (never wired), so
 it's safe to reorder — Transform was inserted before Delete for exactly that reason.
 
-## Session-33 additions (v0.4.15–v0.4.26, `beta`) — full detail in `SESSION_33.md`
+## Session-33 additions (v0.4.15–v0.4.27, `beta`) — full detail in `SESSION_33.md`
 - **T1 delivered (v0.4.15):** CTRL on free-move sets a guide down on the targeted surface, lowest voxel
   plane meeting the face. Measured from the shape's sampled outline, NEVER the voxel set (it runs per tick
   of a drag); phantoms excluded; a Surface guide reads its plane offset.
@@ -194,8 +194,14 @@ it's safe to reorder — Transform was inserted before Delete for exactly that r
   `layout.json` is rewritten on every change. Lowering a cap never deletes anything.
 - **Players dialog** (`UI/GuidePlayersDialog.cs`, v0.4.26): Players · Overrides · Jail, three views of one
   server-built roster. Read-only; both requests re-check `controlserver` on arrival.
-- **Private guides now obey server caps** when a Layout server is present (v0.4.22) — previously any player
-  could bypass every cap by switching to private. The no-server fallback stays unlimited.
+- ⚠️ **PRIVATE GUIDES ARE DELIBERATELY NOT CAPPED — settled, do not "fix" it.** v0.4.22 applied server caps
+  to them; **v0.4.27 reverted that** at the human's direction. Caps protect SHARED resources (server
+  storage, other clients' render cost) and a private guide, stored on the placer's own machine and invisible
+  to everyone else, consumes neither. The chalk analogy that justified v0.4.22 is wrong: chalk is an
+  inventory ITEM the server owns, caps are a storage/render budget. Only `HardVoxelCeiling` (10M) applies,
+  because that is a physical limit rather than a policy. `LocalGuideAuthority` now passes all five caps as 0
+  explicitly — it had been omitting `perPlayerTotalVoxelCap` and inheriting its 1,000,000 default. Full
+  reasoning in `SESSION_33.md` §9.
 - **Protocol 19 → 23** (`LayoutAdminConfigPacket`/`RequestPacket`, `GuideRevealMinePacket`,
   `PlayerRoster*`/`PlayerGuides*`).
 - **Reveal Near / Reveal All** on the Edit Visibility row. Reveal All is SERVER-side: `GuideDataDto` has

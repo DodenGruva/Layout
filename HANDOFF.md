@@ -3,7 +3,7 @@
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
 > and the performance-relevant mechanics. Updated 2026-07-28 against the built/package checkpoint
-> **v0.4.26 on the `beta` branch** (v0.3.53 is live on `main`). Where this file and the code
+> **v0.4.27 on the `beta` branch** (v0.3.53 is live on `main`). Where this file and the code
 > disagree, **the code wins** — treat this as a map, then read the `.cs` files it points at.
 >
 > **Current wire/save state: DataVersion 13, protocol 23, 83 source files, 15 shape types / 21 tiles.**
@@ -51,14 +51,16 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** **v0.4.26** built and packaged; v0.3.53 is the live `main` release. **Session 33 added the
+- **Status:** **v0.4.27** built and packaged; v0.3.53 is the live `main` release. **Session 33 added the
   ADMIN SERVER-SETTINGS SECTION** to the settings page (admin-only; the five voxel/guide limits and the
   private-guides switch, staged behind a **Save** button and applied to the running server), the **Players**
   dialog (Players · Overrides · Jail over one server-built roster), **Reveal Near / Reveal All**, and T1's
   **CTRL surface-snap** on free-move. It also **re-gestured Rectangle and Box** so they are no longer locked
-  to the world axes — Rectangle 3 clicks, Box 4, Square still 2 — which advanced **DataVersion to 13**, and
-  made **private guides obey the server's caps** (previously any player could bypass every cap by switching
-  to private placement). See `dev/SESSION_33.md`. **Session 32 added the
+  to the world axes — Rectangle 3 clicks, Box 4, Square still 2 — which advanced **DataVersion to 13**.
+  ⚠️ **Private guides are deliberately NOT subject to server caps** (settled v0.4.27, after v0.4.22 briefly
+  applied them): caps budget shared storage and other clients' render cost, and a private guide consumes
+  neither. Only the 10M hard render ceiling applies. See `dev/SESSION_33.md` §9 before changing that.
+  **Session 32 added the
   in-game SETTINGS PAGE** behind the title-bar gear: a master Layout on/off, guide opacity, a configurable
   **colour scheme** (Default / Red-Green Safe / a Custom per-role palette chosen from a swatch grid), the
   chiseling highlight, a sliding **Public/Private** control with the server's policy and a one-press

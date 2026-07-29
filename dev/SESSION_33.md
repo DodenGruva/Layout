@@ -1,8 +1,11 @@
-# Session 33 — v0.4.15 → v0.4.26
+# Session 33 — v0.4.15 → v0.4.27
 
 **Branch:** `beta`. **DataVersion 12 → 13. Protocol 19 → 23.** **83 source files** (one added:
 `src/UI/GuidePlayersDialog.cs`). Every revision was shipped as its own zip into `..\Layout Zips\` and
 playtested by the human as it landed.
+
+> **Read §9 before touching private-guide limits.** Applying server caps to private guides looks like an
+> obvious fix and is a settled decision the other way.
 
 Two features, one long debugging arc, and a polish queue that came out of it.
 
@@ -142,10 +145,8 @@ to answer this question.
    `GuideDataDto` has never carried `CreatorUid` — only `CreatorName`, for the HUD. Moved server-side
    (`GuideRevealMinePacket`); adding the UID to the wire record would have broadcast every creator's UID to
    every client to serve one button.
-3. **Private guides bypassed every server cap** (v0.4.22). Local authority reported the 10M hard ceiling
-   unconditionally, so a player could step around any cap by moving one slider. Now they obey the server's
-   caps when a Layout server is present; the no-server fallback stays unlimited. Honest-client enforcement,
-   exactly like the private chalk charge.
+3. **Private guides "bypassed" every server cap — and that turned out to be correct.** Applied in v0.4.22,
+   **REVERTED in v0.4.27 by human decision.** See §9; do not re-apply it.
 4. **Turning private guides off left players' saved preference on Private** (v0.4.19), so they would flip
    straight back next session — `SendPlacementMode` was sent with `allowed: false`, and the client only
    updates the preference when the answer is "allowed".
@@ -214,8 +215,7 @@ order: **Players**, **Overrides**, **Jail**.
 ## 8. Flagged for review
 
 1. **Square is 2 clicks, and its two clicks changed meaning** (§2). Cheap to reverse.
-2. **Private guides now obey server caps** (§4, item 3). A behaviour change to a settled design, made under
-   decide-and-flag because the alternative is a silent cap bypass. One-line revert.
+2. ~~**Private guides now obey server caps**~~ — **RESOLVED: reverted in v0.4.27.** See §9.
 3. **Dragging rectangle corner A now changes the edge direction** rather than sliding the shape (§2).
 4. **T1 aimed at a wall or ceiling pushes the guide's BOTTOM to that face** — the accepted consequence of
    the decided contact rule, but it reads oddly and is worth confirming in play.
@@ -224,3 +224,41 @@ order: **Players**, **Overrides**, **Jail**.
    that takes two deliberate clicks — but a short screen may still overflow.
 6. **The Players dialog's layout maths is unverified on screen** — column widths and the detail pane's
    height against the player list are the kind of thing that only looks right or wrong in game.
+
+---
+
+## 9. ⚠️ Private guides are NOT capped — settled, after being wrongly "fixed" (v0.4.22 → reverted v0.4.27)
+
+**Do not re-apply server caps to private guides.** This looks like a bypass and is not one. It was applied
+in v0.4.22 and reverted in v0.4.27 at the human's direction, after a design discussion that concluded the
+original uncapped behaviour was right on the merits — not merely preferred.
+
+**The reasoning that was wrong.** v0.4.22 argued by analogy to chalk: *"private is private, not free"*, the
+rule that makes a private placement spend chalk on a Layout server. The analogy does not hold. **Chalk is an
+item in the player's inventory** — genuine server-owned state that a private placement really does consume.
+**Voxel caps are a budget on server storage and other clients' render cost**, and a private guide is stored
+on the placer's own machine and is invisible to everyone else, so it consumes neither. Same phrasing,
+different kind of resource.
+
+The only thing a per-guide cap would protect in the private case is the placer from their own framerate,
+which is their business.
+
+**Private is still not unlimited.** `GuideManager.HardVoxelCeiling` (10M) is checked unconditionally inside
+`CreateGuide`, so a private guide can never exceed what can actually be rendered. That ceiling is a
+physical limit rather than a policy, which is exactly why it applies where policy does not.
+
+**A latent cap the revert exposed.** `LocalGuideAuthority` built its `GuideManager` naming four caps and
+omitting `perPlayerTotalVoxelCap`, which has a **constructor default of 1,000,000**. Private guides were
+therefore carrying a cumulative million-voxel limit — a handful of large guides — while every other cap at
+that call site read as unlimited. All five are now passed explicitly as 0. An omitted argument on a
+parameter with a non-zero default is invisible at the call site; that is the general lesson.
+
+**Considered and not taken.** A server setting to cap private guides, a client setting to opt out (which
+would make any cap a suggestion rather than a policy), and a separate, more generous private cap. The last
+was the interesting one — it would have kept the HUD gauge, the draft clamp and the refusal message
+identical while raising the number, which is the only option that served both "freedom to build big
+privately" and "private should feel like public" at once. The human chose no cap at all.
+
+**If this is ever reopened**, the open question is what "private should feel like public" actually means in
+play; the mechanical differences that remain are that claims are not checked, attribution and
+`/layout who` do not apply, and other players cannot see the guides.

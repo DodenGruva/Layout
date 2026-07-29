@@ -90,28 +90,30 @@ namespace Layout.Network
 
         /// <summary>The active per-guide voxel cap. Use for the placement pre-check.</summary>
         /// <remarks>
-        /// PRIVATE GUIDES OBEY THE SERVER'S CAPS TOO (v0.4.22, and a behaviour change — see below). Local
-        /// authority used to report the 10 M hard ceiling unconditionally, which meant that on a server
-        /// permitting private guides, a player could step around every cap the admin had set by moving one
-        /// slider. A 5,000-voxel cap did not stop a 130,000-voxel private guide, and nothing on screen
-        /// explained why. That is the same question the chalk system already settled the other way —
-        /// "private is private, not free" — so caps now follow the same rule.
+        /// PRIVATE GUIDES ARE DELIBERATELY NOT CAPPED. This looks like a bypass and is not one — it is a
+        /// settled decision (human, v0.4.27), and it was briefly "fixed" in v0.4.22 before being reverted.
+        /// Do not re-apply server caps to local authority without the human asking for it.
         ///
-        /// The client-only FALLBACK is deliberately left uncapped: with no Layout server there is nobody to
-        /// have set a cap, and inventing one would be worse than having none.
+        /// WHY. Voxel caps exist to protect SHARED resources: server storage, and every other client's
+        /// render budget. A private guide is stored on the placer's own machine and is invisible to
+        /// everyone else, so it consumes neither. The only thing a per-guide cap would protect there is the
+        /// placer from their own framerate, which is their business.
         ///
-        /// Honest-client enforcement, exactly like the private chalk charge. The client IS the authority
-        /// for its own private guides, so a modified client can ignore this; that is inherent to the
-        /// feature, not a hole opened here.
+        /// The v0.4.22 argument was an analogy to chalk — "private is private, not free" — and the analogy
+        /// is wrong. Chalk is an ITEM in the player's inventory, genuine server-owned state that a private
+        /// placement really does spend. Caps are a budget on storage and rendering that private guides
+        /// never touch. Same words, different kind of thing.
+        ///
+        /// NOT unlimited, either: <see cref="GuideManager.HardVoxelCeiling"/> is checked unconditionally
+        /// inside CreateGuide, so a private guide still cannot exceed what can actually be rendered. That
+        /// ceiling is a physical limit, not a policy, which is exactly why it applies where policy does not.
         /// </remarks>
         public int PerGuideVoxelCap => AuthorityMode == ClientAuthorityMode.Local
-            ? (_serverLayoutAvailable ? _perGuideVoxelCap : GuideManager.HardVoxelCeiling)
+            ? GuideManager.HardVoxelCeiling
             : _perGuideVoxelCap;
 
-        /// <summary>The active total voxel cap. Zero (unlimited) with no Layout server; see above.</summary>
-        public int TotalVoxelCap => AuthorityMode == ClientAuthorityMode.Local
-            ? (_serverLayoutAvailable ? _totalVoxelCap : 0)
-            : _totalVoxelCap;
+        /// <summary>The active total voxel cap. Unlimited under local authority; see above.</summary>
+        public int TotalVoxelCap => AuthorityMode == ClientAuthorityMode.Local ? 0 : _totalVoxelCap;
 
         /// <summary>
         /// The live server settings behind the settings page's Admin section (v0.4.16, protocol 20), or
@@ -294,9 +296,6 @@ namespace Layout.Network
             // The server's private-guide policy also arrives here, so an admin flipping it mid-session
             // reaches every client's panel rather than only the players who reconnect afterwards.
             _serverAllowsClientOnlyMode = packet.AllowClientOnlyMode;
-            // This packet is where the client learns the per-PLAYER total cap, so a change to it has to
-            // reach the private-guide store as well as the panel.
-            PushServerCapsToLocalAuthority();
             AdminConfigChanged?.Invoke();
         }
 
@@ -304,20 +303,8 @@ namespace Layout.Network
         {
             if (packet == null) return;
             _perGuideVoxelCap = Math.Max(0, packet.PerGuideVoxelCap);
-            PushServerCapsToLocalAuthority();
             PublicGuideAccessJailed = packet.Jailed;
             PublicGuidePolicyChanged?.Invoke(packet.Jailed);
-        }
-
-        // Keeps the private-guide store's caps in step with the server's. Only meaningful while a Layout
-        // server is present; the no-server fallback is deliberately left unlimited (see PerGuideVoxelCap).
-        private void PushServerCapsToLocalAuthority()
-        {
-            if (_local == null || !_serverLayoutAvailable) return;
-            // The per-PLAYER total is not part of the join-time cap sync; it rides on the admin-settings
-            // packet, which every player receives. Absent (a pre-0.4.16 server) it stays unlimited.
-            _local.ApplyServerCaps(
-                _perGuideVoxelCap, _totalVoxelCap, AdminConfig?.PerPlayerTotalVoxelCap ?? 0);
         }
 
         /// <summary>
@@ -473,7 +460,6 @@ namespace Layout.Network
             if (_serverAllowsClientOnlyMode) EnsureLocalAuthority();
             else RemoveLocalOverlay();
 
-            PushServerCapsToLocalAuthority();
             SetAuthorityMode(ClientAuthorityMode.Networked);
             if (supportsClientOnlyPolicy)
             {

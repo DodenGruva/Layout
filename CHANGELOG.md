@@ -4,6 +4,15 @@ All notable changes to Layout will be recorded in this file going forward.
 
 ## Unreleased
 
+## 0.4.27 - 2026-07-28
+
+### Fixed
+
+- **Private guides are no longer limited in size.** They were quietly capped at a cumulative million
+  voxels — a handful of large guides — even though every other limit on them read as unlimited. Private
+  guides are stored on your own machine and nobody else can see them, so the server's limits do not apply
+  to them; the only remaining bound is the size beyond which a guide cannot be drawn at all.
+
 ## 0.4.26 - 2026-07-28
 
 ### Added
@@ -26,12 +35,6 @@ All notable changes to Layout will be recorded in this file going forward.
   have one, an orange line now says so above the settings, with the command to clear it.
 
 ## 0.4.22 - 0.4.23 - 2026-07-28
-
-### Changed
-
-- **Private guides now obey the server's limits**, on servers that run Layout. Previously a player could
-  step around every cap an admin had set by switching to private placement. The client-only fallback — a
-  server without Layout at all — stays unlimited, since there is nobody there to have set a limit.
 
 ### Added
 

@@ -105,12 +105,22 @@ namespace Layout.Client
                     e.Message);
             }
 
+            // EVERY cap is zero, and every one is passed explicitly. Private guides are deliberately not
+            // capped (see ClientNetworkHandler.PerGuideVoxelCap for why), and only the hard render ceiling
+            // applies — CreateGuide checks that one unconditionally.
+            //
+            // perPlayerTotalVoxelCap was previously LEFT OUT of this call and so inherited the
+            // constructor's 1,000,000 default, which quietly capped private guides at a cumulative million
+            // voxels — a handful of large guides — while every other cap here read as unlimited. It is
+            // named now for the same reason the others are: an omitted argument on a parameter with a
+            // non-zero default is invisible at the call site.
             _guides = new GuideManager(
                 persistence,
                 new BlockAccessorGuideProbe(() => _capi.World?.BlockAccessor),
                 _capi.Logger,
                 perGuideVoxelCap: 0,
                 totalVoxelCap: 0,
+                perPlayerTotalVoxelCap: 0,
                 maxGuidesPerPlayer: 0,
                 maxGuidesWorldWide: 0);
             _guides.Load();
@@ -120,23 +130,6 @@ namespace Layout.Client
                 _capi.Logger.Notification(
                     "[Layout] Client-only guide storage: {0} ({1} guide(s) loaded).",
                     storagePath, _guides.AllGuides.Count);
-        }
-
-        /// <summary>
-        /// Pushes a Layout server's caps onto the private-guide store (v0.4.22). Called whenever the
-        /// server's policy arrives or changes; passing zeroes restores "unlimited", which is what the
-        /// no-server client-only fallback keeps.
-        /// </summary>
-        /// <remarks>
-        /// The AUTHORITATIVE half of making private guides respect server caps. The draft pre-check in
-        /// DraftManager stops the guide being drawn past the limit; this stops it being STORED past the
-        /// limit, so the two agree even if a placement arrives by some path the pre-check did not cover.
-        /// </remarks>
-        public void ApplyServerCaps(int perGuideVoxelCap, int totalVoxelCap, int perPlayerTotalVoxelCap)
-        {
-            _guides?.ApplyCaps(
-                perGuideVoxelCap, totalVoxelCap, perPlayerTotalVoxelCap,
-                maxGuidesPerPlayer: 0, maxGuidesWorldWide: 0);
         }
 
         public GuideBulkSyncPacket CreateBulkSyncPacket()
