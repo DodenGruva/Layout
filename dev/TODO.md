@@ -362,8 +362,14 @@ reports intuitive block dimensions.
    and `SESSION_28.md`. **Still gated, and deliberately not the next step:** primitive ordering and spatial
    culling, both of which regroup primitives and therefore change the accepted appearance (see the standing
    constraint under A12). Reopen only from a NEW measured bottleneck.
-5. **Clean up and consolidate the documentation.** — **OPEN**, though Session 28 corrected the false
-   performance claims in `SESSION_26.md`.
+5. **Clean up and consolidate the documentation.** — **OPEN, and now PLANNED IN DETAIL:
+   `PLAN_DOC_OVERHAUL.md`.** To be executed as its own session, with no code changes in the same commits.
+   The plan reorganises the doc set **by rate of change rather than by subject** — which is the actual
+   cause of the drift — and **archives every overhauled document intact** into
+   `dev/archive/superseded-<date>/` rather than deleting anything (human-set constraint).
+   It subsumes the `PROJECT_STATUS.md` → `HANDOFF.md` doc-debt item below, and adds a trap/reversal
+   register, a session index, a wire-history ledger and a `DocCheck.ps1` that makes the scheme
+   self-policing. Measurements motivating it are in its §0.
 
 ### A11. Session-28 rendering arc (v0.3.55–v0.3.58) — full detail in `SESSION_28.md`
 
