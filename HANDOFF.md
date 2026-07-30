@@ -2,21 +2,23 @@
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
 > up cold — especially for **performance / optimization analysis**. It consolidates scope, status, direction,
-> and the performance-relevant mechanics. Updated 2026-07-28 against the built/package checkpoint
-> **v0.4.27 on the `beta` branch** (v0.3.53 is live on `main`). Where this file and the code
+> and the performance-relevant mechanics. Updated 2026-07-29 against the built/package checkpoint
+> **v0.4.33 on the `beta` branch** (v0.3.53 is live on `main`). Where this file and the code
 > disagree, **the code wins** — treat this as a map, then read the `.cs` files it points at.
 >
-> **Current wire/save state: DataVersion 13, protocol 23, 83 source files, 15 shape types / 21 tiles.**
+> **Current wire/save state: DataVersion 13, protocol 24, 83 source files, 15 shape types / 21 tiles.**
 > DataVersion 13 came from Session 33's Rectangle/Box re-gesture, which changed how many control points
 > those two shapes store; older records are read in their original encoding and reproduce exactly.
+> Protocol 24 came from Session 34's editable Players dialog (`PlayerPolicyEditPacket`, `PlayerJailPacket`,
+> and world totals appended to `PlayerRosterPacket`) — no save-format change.
 >
-> ⚠️ **`dev/ARCHITECTURE.md` (v3.14) and `dev/PROJECT_STATUS.md` predate Sessions 28–33** and do not know
+> ⚠️ **`dev/ARCHITECTURE.md` (v3.14) and `dev/PROJECT_STATUS.md` predate Sessions 28–34** and do not know
 > about vertex welding, the custom shader, block occupancy, Transform mode, the settings page, or the admin
 > section. This file and the session records are ahead of them.
 >
 > **Deeper docs:** `CHANGELOG.md` (player-facing release log), `dev/ARCHITECTURE.md` (the authoritative
 > plan + Settled Decisions Register, v3.14), `dev/PROJECT_STATUS.md` (status), `dev/TODO.md` (punch-list),
-> `dev/SESSION_9/…/33.md` (per-session history), `dev/PLAN_RENDER_PERFORMANCE.md` (the live rendering plan +
+> `dev/SESSION_9/…/34.md` (per-session history), `dev/PLAN_RENDER_PERFORMANCE.md` (the live rendering plan +
 > measurements), `dev/PLAN_BLOCK_OCCUPANCY.md` (the delivered occupancy feature + its disproved first draft),
 > `dev/PLAN_CLIENT_ONLY.md` (F4 record), `dev/PLAN_CHALKING_KIT.md` (F5 rationale + deltas),
 > `CLAUDE.md` (working conventions).
@@ -51,7 +53,13 @@ against them by hand. **The mod is visual-only — it never places, removes, or 
 guides are server-authoritative/world-shared; ClientOnlyFallback also provides private client-authoritative
 guides on servers without Layout and, when server policy permits, alongside public guides.
 
-- **Status:** **v0.4.27** built and packaged; v0.3.53 is the live `main` release. **Session 33 added the
+- **Status:** **v0.4.33** built and packaged; v0.3.53 is the live `main` release. **Session 34 made the
+  PLAYERS DIALOG EDITABLE** (protocol 24): per-player caps are staged in a form and applied on Save, jail
+  and free sit behind a confirming second press, and the roster gained sorting, a name filter, a scroll
+  pane and a world-totals line. It also delivered the Session-33 polish queue in full, added a
+  **send-to-ground** arrow to the Transform pad (the guide's underside comes to rest on the highest ground
+  under its footprint, reusing T1's contact rule), and fixed momentary GUI tiles giving **no click
+  feedback at all**. See `dev/SESSION_34.md`. **Session 33 added the
   ADMIN SERVER-SETTINGS SECTION** to the settings page (admin-only; the five voxel/guide limits and the
   private-guides switch, staged behind a **Save** button and applied to the running server), the **Players**
   dialog (Players · Overrides · Jail over one server-built roster), **Reveal Near / Reveal All**, and T1's

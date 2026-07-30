@@ -4,6 +4,89 @@ All notable changes to Layout will be recorded in this file going forward.
 
 ## Unreleased
 
+## 0.4.33 - 2026-07-29
+
+### Changed
+
+- **The limit fields step in useful amounts now.** A scroll or a spinner click moves voxels-per-guide by
+  5,000, voxels-per-player by 25,000, voxels-in-the-world by 100,000, guides-per-player by 5, and
+  guides-in-the-world by 100. The per-player fields in the Players window step by the same amounts.
+
+## 0.4.32 - 2026-07-29
+
+### Added
+
+- **An Edit button on each row of the Overrides tab.** It takes you to the Players tab with that player
+  already selected and their limits open for editing.
+- **A Free button on each row of the Jail tab**, with the same confirmation the Players tab uses. Freeing
+  from there keeps you on the Jail tab.
+
+### Fixed
+
+- **The jail confirmation message no longer draws over the guide list beneath it.**
+
+## 0.4.31 - 2026-07-29
+
+### Added
+
+- **Player limits can be changed from the Players window.** Select someone and press **Edit** to change
+  their per-guide cap, their total voxel cap and their guide limit. Nothing is sent until you press Save,
+  and the fields then redraw with what the server actually stored. **Clear all** resets all three to the
+  server's own limits. `0` in any field means "no override".
+- **Jail and Free are in the window too**, on the selected player, behind a second confirming press that
+  spells out what will happen. The commands still work exactly as before.
+- **The player list now sorts, filters and scrolls.** Click **Player**, **Guides** or **Voxels** to sort by
+  that column, click again to reverse it; it opens on the largest builders first. Type in the filter box to
+  find someone by name. Jailed players are shown in orange, offline players dimmed, and anyone with their
+  own limits is marked with a `*`.
+- **A world total** at the top of the window: how many voxels and guides exist on the server altogether —
+  the numbers the world-wide limits are measured against.
+
+### Changed
+
+- Each of a player's limits now says whether it came from the server or from an override set just for them.
+- The Players window is wider, to fit the table and the details side by side.
+
+## 0.4.29 - 0.4.30 - 2026-07-29
+
+### Fixed
+
+- **Buttons that do something now visibly press when you click them.** The Transform pad's move arrows and
+  rotate corners, and the Reveal Near / Reveal All buttons, gave no feedback at all — clicking one looked
+  the same as clicking the panel background.
+
+### Changed
+
+- The teeth on the settings gear are taller and more sharply tapered.
+
+## 0.4.28 - 2026-07-29
+
+### Added
+
+- **A "send to ground" arrow in Transform mode**, below the Down arrow. It drops the guide straight down
+  until it comes to rest on the ground below — the bottom of the guide meets the surface, the same way
+  holding CTRL does during a free-move. It settles on the highest ground underneath, so nothing ends up
+  buried, and it lands flush on slabs, stairs and chiselled blocks rather than a whole block above them.
+  With Copy switched on, the copy is what lands.
+
+### Changed
+
+- **The rotate and tilt icons were redrawn.** Their arrowhead was merging into the ring it sat on, so the
+  glyph read as a hook rather than an arrow.
+- **The mirror icon was redrawn** so that each side of the line is a real shape and the reflection is
+  visible.
+- The Down arrow in the Transform pad moved up one space, so the vertical column runs Up, Down, ground.
+- The Admin section no longer warns you when your own limits are overridden. `/layout info <you>` and the
+  Players window's Overrides tab still report it.
+- The Players button sits at the left of its row; the unsaved-changes notice moved to its own line.
+
+### Fixed
+
+- **The mod's own description was displaying a garbled character** where a dash should have been.
+- In the Players window, a player's overrides are listed one per line instead of one long line that ran off
+  the edge of the panel — and each line now names the command that clears *that* override, rather than
+  naming `/layout voxelcap` for all three.
+
 ## 0.4.27 - 2026-07-28
 
 ### Fixed

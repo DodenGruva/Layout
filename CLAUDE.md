@@ -18,8 +18,9 @@ Guide voxels that already hold world material can be drawn in a "built" colour, 
 guide can be moved, rotated, copied and mirrored as a whole object (**Transform mode**, SESSION_30/31).
 Client display settings live on an in-game **settings page** behind the title-bar gear, including a
 configurable **colour scheme** with per-role custom colours (SESSION_32) and, for admins, a live
-**server-settings section** plus a **Players** dialog (SESSION_33).
-Status: **v0.4.27 on the `beta` branch** (v0.3.53 is the last `main` release; the mod is public).
+**server-settings section** plus an **editable Players dialog** (SESSION_33/34) where per-player caps are
+set and players are jailed or freed.
+Status: **v0.4.33 on the `beta` branch** (v0.3.53 is the last `main` release; the mod is public).
 
 > **Renderer note — read before any rendering work.** Guides are **order-dependent translucent geometry**
 > (Opaque stage, manual alpha blending, depth-tested, double-sided). On a hollow shell the guide overlaps
@@ -110,14 +111,22 @@ Status: **v0.4.27 on the `beta` branch** (v0.3.53 is the last `main` release; th
   **v0.4.15–v0.4.26 admin arc** (T1's surface snap, the Rectangle/Box re-gesture at DataVersion 13, the
   admin server-settings section with its Save flow, Reveal Near/All, private guides obeying server caps, the
   Players dialog, and two traps worth not re-learning — the `SendIngameError` lang-key bug and the
-  six-revision cap hunt that a single `/layout info` would have ended).
+  six-revision cap hunt that a single `/layout info` would have ended), and SESSION_34 the
+  **v0.4.28–v0.4.33 polish + editable-Players arc** (the seven-item queue, send-to-ground, momentary tile
+  press feedback, the Players dialog becoming editable at protocol 24, and the measured-text-height trap).
 
-## ✅ Docs updated to v0.4.27 (2026-07-28)
-Consistent with **v0.4.27, DataVersion 13, protocol 23, 83 source files, 15 shape types / 21 tiles**.
-`SESSION_33.md` is the latest record (admin/rectangle-box: `SESSION_33.md`, settings/colours:
-`SESSION_32.md`, Transform: `SESSION_30.md` + `SESSION_31.md`, occupancy: `SESSION_29.md` +
-`PLAN_BLOCK_OCCUPANCY.md`, mesh: `SESSION_16.md` + `SESSION_28.md`, F5: `SESSION_15.md`).
-`CHANGELOG.md` is current through v0.4.27.
+## ✅ Docs updated to v0.4.33 (2026-07-29)
+Consistent with **v0.4.33, DataVersion 13, protocol 24, 83 source files, 15 shape types / 21 tiles**.
+`SESSION_34.md` is the latest record (players/polish: `SESSION_34.md`, admin/rectangle-box:
+`SESSION_33.md`, settings/colours: `SESSION_32.md`, Transform: `SESSION_30.md` + `SESSION_31.md`,
+occupancy: `SESSION_29.md` + `PLAN_BLOCK_OCCUPANCY.md`, mesh: `SESSION_16.md` + `SESSION_28.md`,
+F5: `SESSION_15.md`). `CHANGELOG.md` is current through v0.4.33.
+
+⚠️ **A static text WRAPS inside its bounds, but the bounds never grow to fit it.** A height guessed too
+small does not clip and does not scroll — it draws straight over whatever comes next, which looks like a
+rendering bug rather than a layout one. This shipped THREE times in Session 34 before it was fixed
+properly. Measure instead: `capi.Gui.Text.GetQuantityTextLines(font, text, width, …)` ×
+`GetLineHeight(font)`, as `GuidePlayersDialog.TextHeight` does. See `SESSION_34.md` §7.
 
 ⚠️ **`SendIngameError`'s message parameter is a LANG KEY, not a format string.** Its trailing arguments
 are applied only when that key resolves; an English sentence never does, so the string is returned verbatim
@@ -180,6 +189,29 @@ reshaping — geometry stays in Create); this replaced the old panel-expanding "
 reshaping it: move, rotate, copy, mirror. **Delete** dispels. `ToolMode` is client-only (never wired), so
 it's safe to reorder — Transform was inserted before Delete for exactly that reason.
 
+## Session-34 additions (v0.4.28–v0.4.33, `beta`) — full detail in `SESSION_34.md`
+- **The Session-33 polish queue shipped in full** (v0.4.28): the admin override warning removed, Players
+  left-aligned, the Overridden line split, rotate/tilt + mirror + gear icons redrawn.
+- **Send to ground** (v0.4.28): a third tile in the Transform pad's vertical column.
+  `GuideToolController.GroundDropSixteenths` **reuses `TryGuideFloorSixteenths`** so it can never disagree
+  with CTRL free-move about where a guide's underside is. Rests on the HIGHEST ground under the footprint
+  (sampled ≤32×32, so guides under 32 blocks across are sampled every block); reads material from collision
+  boxes via a throwaway `BlockOccupancy`. ⚠️ **Step and Mirror deliberately do not apply to it** — the drop
+  is solved before a flip would change the underside. Copy does.
+- **Momentary tiles visibly press** (v0.4.29). They used to reset themselves in the same call that ran the
+  action, so the lit state never survived a frame. ⚠️ **Every click must count as a press**, whichever way
+  the toggle flipped — a handler that only acts on the ON edge swallows every second click of a fast run.
+- **The Players dialog is editable** (v0.4.31–v0.4.33, **protocol 23 → 24**): `PlayerPolicyEditPacket`
+  (staged caps, one Save) and `PlayerJailPacket` (separate, confirmed). Sorting, name filter, scroll pane,
+  world totals. ⚠️ **The server handlers must not only call the policy setters** — the commands also
+  `SendPlayerPolicy` (the target's draft clamp) and `SendAdminConfig`, and skipping those leaves the
+  affected player's client stale until reconnect.
+- **`AdminCapSteps`** (in `GuideToolGui.cs`) is the one home for every cap field's wheel/spinner step, read
+  by both the Admin section and the Players dialog.
+- ⚠️ **The Players list's scroll container is wrapped in a fixed-height scope** because the dialog sizes
+  itself to its children; the container carries the whole roster's height for hit-testing. **This is the one
+  piece not verified outside the game** — if the dialog opens absurdly tall, that is why.
+
 ## Session-33 additions (v0.4.15–v0.4.27, `beta`) — full detail in `SESSION_33.md`
 - **T1 delivered (v0.4.15):** CTRL on free-move sets a guide down on the targeted surface, lowest voxel
   plane meeting the face. Measured from the shape's sampled outline, NEVER the voxel set (it runs per tick
@@ -193,7 +225,8 @@ it's safe to reorder — Transform was inserted before Delete for exactly that r
   stage and nothing reaches the server until pressed. `GuideManager.ApplyCaps` makes the five caps live;
   `layout.json` is rewritten on every change. Lowering a cap never deletes anything.
 - **Players dialog** (`UI/GuidePlayersDialog.cs`, v0.4.26): Players · Overrides · Jail, three views of one
-  server-built roster. Read-only; both requests re-check `controlserver` on arrival.
+  server-built roster. Every request re-checks `controlserver` on arrival. **Read-only until v0.4.31 made
+  it editable — see the Session-34 block above.**
 - ⚠️ **PRIVATE GUIDES ARE DELIBERATELY NOT CAPPED — settled, do not "fix" it.** v0.4.22 applied server caps
   to them; **v0.4.27 reverted that** at the human's direction. Caps protect SHARED resources (server
   storage, other clients' render cost) and a private guide, stored on the placer's own machine and invisible
@@ -308,14 +341,16 @@ Mesh **Stage A** shipped and filled 3D volumes were retired. Normal public multi
 4. **Performance follow-up only from a new measured bottleneck and a fidelity-preserving design.** Immense
    placement/sculpt work still uses one below-normal worker plus bounded claim ticks; do not assume spatial
    subdivision or greedy merging is the next step.
-5. **The F-queue is EMPTY and T1 is delivered.** F6/F7/F8/F12 shipped in Sessions 30–31 (Transform);
-   F9/T2/F10/F11 in Session 32 (settings page, formatting, gear, colour schemes); **T1 and the Box/Square
-   cardinal defect in Session 33 (v0.4.15)**. What remains queued is the **seven-item cosmetic/UI polish
-   list at the top of `TODO.md`** — icons (rotate/tilt, mirror, gear teeth), button alignment, an
-   overflowing label, and a send-to-ground move arrow. None started.
-   **Sessions 32 and 33 were playtested per revision** — the human ran every iteration.
-6. **Six flagged items from Session 33 await review** (`SESSION_33.md` §8), notably Square staying a
-   two-click gesture with changed meaning, and private guides now obeying server caps.
+5. **NOTHING IS QUEUED.** The F-queue emptied in Session 33; the seven-item polish list and the Players
+   dialog work both landed in Session 34. F6/F7/F8/F12 shipped in Sessions 30–31 (Transform);
+   F9/T2/F10/F11 in Session 32 (settings page, formatting, gear, colour schemes); T1 and the Box/Square
+   cardinal defect in Session 33. What is left is the review/doc backlog in `TODO.md` **A10** — an
+   adversarial code review, a performance review of the non-render code, and the doc consolidation
+   (including merging `PROJECT_STATUS.md` into `HANDOFF.md`).
+   **Sessions 32, 33 and 34 were playtested per revision** — the human ran every iteration.
+6. **Flagged items await review:** six from Session 33 (`SESSION_33.md` §8) and six from Session 34
+   (`SESSION_34.md` §10) — notably send-to-ground ignoring the Mirror toggle, and the Players list's
+   scroll container being the one thing not verified outside the game.
 7. If asked: **Roof / Tunnel** volumes; concave-safe Free-Shape fill; F3 re-constrain op. Remaining
    flagged decisions are cosmetic.
 
@@ -335,6 +370,7 @@ The settings page and its three custom elements (`SlidingChoiceElement`, `AlertT
 the Move section of `UI/GuideToolGui.cs`, and the free-move session in `Client/GuideToolController.cs`.
 Rotate/copy/mirror add `Undo/Commands/RotateGuideCommand.cs` and `TransformGuideCommand.cs` alongside it.
 The admin Players dialog is its own file, `UI/GuidePlayersDialog.cs`; the admin SETTINGS section lives in
-`UI/GuideToolGui.cs` with the rest of the settings page, and its server half is the admin-config and
-player-roster handlers in `Network/ServerNetworkHandler.cs`.
-(Filenames verified against the tree on 2026-07-28 — 83 source files.)
+`UI/GuideToolGui.cs` with the rest of the settings page (as does `AdminCapSteps`, the shared step sizes),
+and its server half is the admin-config, player-roster and player-edit handlers in
+`Network/ServerNetworkHandler.cs`.
+(Filenames verified against the tree on 2026-07-29 — 83 source files.)

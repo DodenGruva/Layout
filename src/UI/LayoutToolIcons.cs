@@ -85,6 +85,7 @@ namespace Layout.UI
         public const string MoveRight = "layout-move-right";
         public const string MoveUp = "layout-move-up";
         public const string MoveDown = "layout-move-down";
+        public const string MoveGround = "layout-move-ground";
         public const string MoveFree = "layout-move-free";
 
         // F12 Rotate, in the four corners of the Move pad. The SPIN pair (top corners) turns the guide about
@@ -217,6 +218,7 @@ namespace Layout.UI
             reg[MoveLeft] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, -Math.PI / 2, false);
             reg[MoveUp] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, 0, true);
             reg[MoveDown] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, Math.PI, true);
+            reg[MoveGround] = DrawMoveGround;
             reg[MoveFree] = DrawMoveFree;
             reg[ProjVolumetric] = DrawProjVolumetric;
             reg[ProjSurface] = DrawProjSurface;
@@ -473,16 +475,27 @@ namespace Layout.UI
 
             const double cx = 30, cy = 30;
             const int teeth = 8, spokes = 6;
+            // TALLER TEETH in v0.4.28 (human-directed). The height came out of the ROOT, not the tip: the
+            // tips already sit as far out as the Canvas zoom allows (see the size note above), so raising
+            // them would have pushed the silhouette outside the tile. Dropping the root from 21.5 to 19.5
+            // takes the tooth from 4.0 to 6.0 — half again as tall — and rRimIn follows it down so the rim
+            // keeps its 3.5-ish thickness instead of thinning to a wire that breaks up at 22 px.
             const double rTip = 25.5;       // tooth tips — the outer silhouette
-            const double rRoot = 21.5;      // tooth roots = outer edge of the rim
-            const double rRimIn = 17.8;     // inner edge of the rim
+            const double rRoot = 19.5;      // tooth roots = outer edge of the rim
+            const double rRimIn = 16.0;     // inner edge of the rim
             const double rHub = 7.6;        // hub boss
             const double rBore = 4.6;       // the hole through the middle
             const double spokeHalf = 1.9;
 
             // ---- 1. the toothed rim: the outer outline, with the rim's bore taken out of it ----
             double pitch = Math.PI * 2 / teeth;
-            double tipHalf = pitch * 0.22;           // narrower at the tip than at the root, so the flanks
+            // TAPER. 0.22 originally; 0.19 was tried in v0.4.28 and the human could not see the difference,
+            // which was fair — at r = 25.5 it moved the tip chord by under a pixel at 42 px. 0.13 against a
+            // root of 0.32 makes the tip well under half the root's width, so the flanks visibly rake in
+            // over the tooth's whole height instead of rising straight. Do not go much below this: the tip
+            // chord is then about 4 design units, which is roughly one pixel at 18 px, and the teeth start
+            // to come to nothing at the smallest size the glyph is drawn.
+            double tipHalf = pitch * 0.13;           // narrower at the tip than at the root, so the flanks
             double rootHalf = pitch * 0.32;          // taper like a cast tooth rather than being square
 
             // HALF A TOOTH OF PHASE (human-directed, v0.4.10): puts a VALLEY at twelve and six o'clock
@@ -825,17 +838,39 @@ namespace Layout.UI
             ctx.Stroke();
         }
 
+        /// <summary>
+        /// Mirror: a dashed axis with a closed asymmetric form on each side, each the other's reflection.
+        /// </summary>
+        /// <remarks>
+        /// REDRAWN v0.4.28 (human-directed: "a mirror on BOTH sides of the line"). The old glyph drew two
+        /// OPEN polylines — a vertical edge with a single line running out to a point — so neither side was
+        /// a closed shape. The pair read as two arrowheads aimed outward from the axis, which is a "spread
+        /// apart" glyph, not a mirror one.
+        ///
+        /// THE FORM HAS TO BE ASYMMETRIC or the icon says nothing. A shape symmetric about the vertical
+        /// axis looks identical to its own reflection, so the glyph would depict mirroring by showing the
+        /// one case where mirroring changes nothing. A right triangle is the smallest form that reads as
+        /// handed at 42 px: its vertical edge hugs the axis on one side and faces away on the other, and
+        /// that swap is the whole message.
+        ///
+        /// Both sides are stroked identically. Filling one and outlining the other was tried on paper and
+        /// rejected — that reads as "original and copy", which is what the Copy tile already says.
+        /// </remarks>
         private static void DrawActionMirror(Context ctx, int x, int y, float w, float h, double[] rgba)
         {
-            // A dashed axis with a solid triangle one side and its reflection the other.
             var c = new Canvas(x, y, w, h, 60);
             Pen(ctx, rgba, c.L(2.4));
-            for (double v = 12; v < 48; v += 7)
+
+            // The axis runs the full height of the glyph, so it reads as a mirror plane the forms sit
+            // against rather than a divider drawn only as far as they happen to reach.
+            for (double v = 10; v < 50; v += 7)
             {
                 ctx.MoveTo(c.X(30), c.Y(v)); ctx.LineTo(c.X(30), c.Y(v + 3.6)); ctx.Stroke();
             }
-            Poly(ctx, c, rgba, false, 25, 17, 25, 43, 12, 30);
-            Poly(ctx, c, rgba, false, 35, 17, 35, 43, 48, 30);
+
+            // Right triangles, upright edge against the axis, hypotenuse falling away outward.
+            Poly(ctx, c, rgba, true, 25, 16, 25, 44, 12, 44);
+            Poly(ctx, c, rgba, true, 35, 16, 35, 44, 48, 44);
         }
 
         /// <summary>
@@ -860,6 +895,12 @@ namespace Layout.UI
             const double start = -0.32 * Math.PI;
             const double end = 1.32 * Math.PI;
 
+            // THE ARC STOPS SHORT OF THE HEAD (v0.4.28). Running it all the way to the tip put a full
+            // stroke width of ring underneath the whole arrowhead, and the two fused into one blunt slab
+            // that read as a bar across the top of the glyph. Ending the stroke where the head's base
+            // begins leaves a shaft that grows into a head, which is what an arrow looks like.
+            const double headArc = 24.0 * Math.PI / 180.0;
+
             (double X, double Y) At(double t) =>
                 (cx + m * rx * Math.Cos(t), cy + ry * Math.Sin(t));
 
@@ -868,13 +909,24 @@ namespace Layout.UI
             const int steps = 56;
             for (int i = 0; i <= steps; i++)
             {
-                (double ax, double ay) = At(start + (end - start) * i / steps);
+                (double ax, double ay) = At(start + (end - headArc - start) * i / steps);
                 if (i == 0) ctx.MoveTo(ax, ay); else ctx.LineTo(ax, ay);
             }
             ctx.Stroke();
 
-            // A SYMMETRIC chevron at the end of the sweep, aligned to the true tangent there — both legs
-            // the same length and mirrored about the direction of travel.
+            // A FILLED TRIANGLE at the end of the sweep, on the true tangent there.
+            //
+            // IT WAS A STROKED CHEVRON UNTIL v0.4.28 AND THAT WAS THE BUG. A chevron's trailing leg runs
+            // back along the direction of travel, which on a ring of this radius is very nearly the ring
+            // itself — so that leg lay on top of the arc and vanished into it, leaving only the outward leg
+            // showing. The glyph read as a hook or a flag with a bar across the top, not as an arrow. The
+            // legs were also far too long for the ring (11.9 against a radius of 16), which is what made
+            // the surviving one look like a bar rather than a barb.
+            //
+            // A solid head cannot suffer that: it is a shape rather than two lines, and with the arc now
+            // stopping at its base it is the only thing at the end of the stroke. Half-width 4.5 against
+            // the 3.0 pen is what settled it — 5.2 was a blunt wedge wider than the ring it sat on, and
+            // 3.8 was too faint to see the direction of at 42 px. All four were rendered and compared.
             (double hx, double hy) = At(end);
             double dx = -m * rx * Math.Sin(end), dy = ry * Math.Cos(end);
             double len = Math.Sqrt(dx * dx + dy * dy);
@@ -882,11 +934,14 @@ namespace Layout.UI
             dx /= len; dy /= len;
 
             double nx = -dy, ny = dx;                       // unit normal to the direction of travel
-            double back = c.L(10), half = c.L(6.5);
-            ctx.MoveTo(hx - dx * back + nx * half, hy - dy * back + ny * half);
-            ctx.LineTo(hx, hy);
+            double back = c.L(8.5), half = c.L(4.5), over = c.L(1.0);
+            ctx.NewPath();
+            ctx.FillRule = FillRule.Winding;
+            ctx.MoveTo(hx + dx * over, hy + dy * over);     // tip carried just past where the arc stops
+            ctx.LineTo(hx - dx * back + nx * half, hy - dy * back + ny * half);
             ctx.LineTo(hx - dx * back - nx * half, hy - dy * back - ny * half);
-            ctx.Stroke();
+            ctx.ClosePath();
+            ctx.Fill();
         }
 
         // One Move-pad arrow, drawn pointing up and rotated into place. `groundBar` adds a floor line under
@@ -908,6 +963,35 @@ namespace Layout.UI
             ctx.Restore();
 
             if (!groundBar) return;
+            ctx.MoveTo(c.X(14), c.Y(48)); ctx.LineTo(c.X(46), c.Y(48)); ctx.Stroke();
+        }
+
+        /// <summary>
+        /// Send to ground (v0.4.28): a DOUBLE chevron falling onto the same floor bar the Up/Down pair
+        /// carries, so it reads as one more member of the vertical family rather than a new idea.
+        /// </summary>
+        /// <remarks>
+        /// NO SHAFT, unlike the single-step arrows, and that is the whole distinction. Down is a shaft with
+        /// one head — a measured step. This is two heads and no shaft: not a distance, but a fall that ends
+        /// at the bar. Two chevrons is also the settled convention for "go all the way" (the media
+        /// skip-to-end button), so it reads without a legend.
+        ///
+        /// The chevrons are DEEPER than the move arrowheads (11 down over 11 across, against the arrow's 9
+        /// over 11). A shallow chevron next to a shallow arrowhead was the pair that blurred together at
+        /// 42 px; making the fall steeper than the step separates them at a glance.
+        /// </remarks>
+        private static void DrawMoveGround(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(3.2));
+
+            // Two chevrons, the lower one nearly touching the bar so the fall reads as landing on it.
+            ctx.MoveTo(c.X(19), c.Y(15)); ctx.LineTo(c.X(30), c.Y(26)); ctx.LineTo(c.X(41), c.Y(15));
+            ctx.Stroke();
+            ctx.MoveTo(c.X(19), c.Y(28)); ctx.LineTo(c.X(30), c.Y(39)); ctx.LineTo(c.X(41), c.Y(28));
+            ctx.Stroke();
+
+            // The same floor bar, at the same 48, as the Up/Down pair.
             ctx.MoveTo(c.X(14), c.Y(48)); ctx.LineTo(c.X(46), c.Y(48)); ctx.Stroke();
         }
 

@@ -12,6 +12,43 @@ using Layout.Systems;
 
 namespace Layout.UI
 {
+    /// <summary>
+    /// How far one wheel notch or spinner click moves each of the admin cap fields (v0.4.33, human-set).
+    /// </summary>
+    /// <remarks>
+    /// ONE HOME FOR THE STEPS, because the same five limits are edited from two different panels: the
+    /// server-wide values in the settings page's Admin section, and the per-player overrides in the Players
+    /// dialog. Those had independent step numbers, so the same cap stepped by 1,000 in one place and by
+    /// nothing in particular in the other. Reading both from here means adjusting a step adjusts it
+    /// everywhere it appears.
+    ///
+    /// EACH STEP IS SCALED TO THE NUMBER IT EDITS. A single voxel is a null gesture on a six-figure cap, and
+    /// a hundred guides is a null gesture on a limit whose realistic value is single digits — so the voxel
+    /// caps step in thousands and the guide counts in ones and tens. Wider caps get coarser steps: the world
+    /// total is the largest number here and moves fastest.
+    ///
+    /// THE WORLD-WIDE TWO HAVE NO PER-PLAYER EQUIVALENT and so appear only in the Admin section. A player
+    /// carries a per-guide cap, a cumulative cap and a guide limit; there is no "voxels in the world"
+    /// override for one person.
+    /// </remarks>
+    internal static class AdminCapSteps
+    {
+        /// <summary>Voxels per guide — also the Players dialog's per-guide cap field.</summary>
+        public const float PerGuideVoxels = 5000f;
+
+        /// <summary>Voxels per player — also the Players dialog's cumulative cap field.</summary>
+        public const float PerPlayerVoxels = 25000f;
+
+        /// <summary>Voxels in the world. Admin section only.</summary>
+        public const float WorldVoxels = 100000f;
+
+        /// <summary>Guides per player — also the Players dialog's guide-limit field.</summary>
+        public const float PerPlayerGuides = 5f;
+
+        /// <summary>Guides in the world. Admin section only.</summary>
+        public const float WorldGuides = 100f;
+    }
+
     // =====================================================================================
     //  GuideToolGui  —  Module 6 (UI layer), Session-8 TILE REWORK (playtest revision B)
     // -------------------------------------------------------------------------------------
@@ -136,17 +173,20 @@ namespace Layout.UI
 
         // F6 Move pad. Away/Toward/Left/Right are horizontal and resolve against the player's facing at the
         // moment of the click; Up/Down are world vertical. Codes are what OnMoveArrowTile switches on.
+        // "ground" is the odd one out (v0.4.28): a direction with no step, since the distance is the drop
+        // to the surface below rather than a multiple of anything — see SendGuideToGround.
         private static readonly string[] MoveArrowCodes =
-            { "away", "toward", "left", "right", "up", "down" };
+            { "away", "toward", "left", "right", "up", "down", "ground" };
         private static readonly string[] MoveArrowIcons =
         {
             LayoutToolIcons.MoveAway, LayoutToolIcons.MoveToward, LayoutToolIcons.MoveLeft,
-            LayoutToolIcons.MoveRight, LayoutToolIcons.MoveUp, LayoutToolIcons.MoveDown
+            LayoutToolIcons.MoveRight, LayoutToolIcons.MoveUp, LayoutToolIcons.MoveDown,
+            LayoutToolIcons.MoveGround
         };
         private static readonly string[] MoveArrowNames =
         {
             "Away from you", "Toward you", "To your left", "To your right",
-            "Up", "Down"
+            "Up", "Down", "Send to the ground"
         };
         private static readonly string[] ProjIcons = { LayoutToolIcons.ProjVolumetric, LayoutToolIcons.ProjSurface };
         private static readonly string[] FillIcons = { LayoutToolIcons.FillHollow, LayoutToolIcons.FillFilled };
@@ -228,6 +268,17 @@ namespace Layout.UI
         // Turns this client's guide rendering on or off (LayoutModSystem.ApplyGuideRendering) — the same
         // setter /layout on|off uses, so the switch and the command can never disagree.
         private readonly Action<bool> _applyRendering;
+
+        // How far the send-to-ground tile drops a guide (GuideToolController.GroundDropSixteenths).
+        // NOT a constructor argument like the rest: the controller is built AFTER this dialog and takes it
+        // as an argument, so it cannot also be one of ours. LayoutModSystem sets this the moment the
+        // controller exists; a null one simply makes the tile a no-op rather than throwing.
+        // (System-qualified: Vintagestory.API.Common declares its own Func<,>, as _applyOccupancy above
+        // already has to work around.)
+        private System.Func<GuideData, int> _groundDrop;
+
+        /// <summary>Wires the send-to-ground contact rule, once the controller that owns it exists.</summary>
+        public void SetGroundDropResolver(System.Func<GuideData, int> resolver) => _groundDrop = resolver;
 
         public GuideToolGui(ICoreClientAPI capi, DraftManager tool, ClientNetworkHandler net,
             LayoutClientConfig config, Action saveConfig, Action applyOpacities,
@@ -751,6 +802,11 @@ namespace Layout.UI
             AddFreeMoveTile(c, detail, ElementBounds.Fixed(col1, y, tile, tile), !inert);
             AddMoveTile(c, detail, LayoutToolIcons.MoveRight, MoveArrowNames[3], "right",
                 ElementBounds.Fixed(col2, y, tile, tile), !inert);
+            // DOWN MOVED UP A ROW in v0.4.28 (human-directed) so the vertical column runs Up, Down, ground
+            // without a gap, and the new send-to-ground tile takes the bottom slot. Up and Down being
+            // adjacent also puts the pair that undoes each other side by side.
+            AddMoveTile(c, detail, LayoutToolIcons.MoveDown, MoveArrowNames[5], "down",
+                ElementBounds.Fixed(vcol, y, tile, tile), !inert);
             y += tile + tileGap;
 
             AddRotateTile(c, detail, LayoutToolIcons.RotateTipLeft,
@@ -761,33 +817,103 @@ namespace Layout.UI
             AddRotateTile(c, detail, LayoutToolIcons.RotateTipRight,
                 "Tip right\nTips the guide over toward your right.", "tipright",
                 ElementBounds.Fixed(col2, y, tile, tile), !inert);
-            AddMoveTile(c, detail, LayoutToolIcons.MoveDown, MoveArrowNames[5], "down",
-                ElementBounds.Fixed(vcol, y, tile, tile), !inert);
+            AddMoveTile(c, detail, LayoutToolIcons.MoveGround,
+                "Send to the ground\nDrops the guide straight down until it comes to rest on the ground "
+                + "below it - the bottom of the guide meets the surface, the same contact CTRL uses during "
+                + "a free-move. It settles on the HIGHEST ground under it, so nothing ends up buried. "
+                + "Distance is worked out for you, so the step setting does not apply; Mirror does not "
+                + "apply either. With Copy on, the copy is what lands.",
+                "ground", ElementBounds.Fixed(vcol, y, tile, tile), !inert);
             y += tile + rowGap;
         }
 
-        // A momentary pad tile: it fires on press and pops straight back up, so the pad can be clicked
-        // repeatedly without a recompose between nudges (an arrow is an action, not a selection).
-        private void AddMoveTile(
-            GuiComposer c, CairoFont hoverFont, string icon, string hover, string code,
-            ElementBounds bounds, bool enabled)
+        // ---------------------------------------------------------------------------------
+        //  Momentary tiles — the ones that DO something rather than select something
+        // ---------------------------------------------------------------------------------
+
+        /// <summary>How long a momentary tile stays visibly pressed, in milliseconds.</summary>
+        /// <remarks>
+        /// Long enough to register as a press at a glance, short enough that a run of pad nudges does not
+        /// feel like it is lagging behind the mouse. A click held longer than this simply keeps the tile
+        /// down until it is released, since the release is timed from the press.
+        /// </remarks>
+        private const int MomentaryPressMs = 120;
+
+        /// <summary>When each momentary tile was last pressed, so a stale release cannot cut a newer one short.</summary>
+        private readonly Dictionary<string, long> _momentaryPressedAt = new Dictionary<string, long>();
+
+        /// <summary>
+        /// Drives one press of a momentary tile: light it, run its action, and let it back up a beat later.
+        /// </summary>
+        /// <remarks>
+        /// THESE TILES USED TO GIVE NO FEEDBACK AT ALL (fixed v0.4.28, human-reported). Every one of them
+        /// forced itself back off in the very same call that ran its action, so the lit state existed for
+        /// less than a frame and was never drawn. Clicking a move arrow, a rotate corner or a Reveal tile
+        /// looked identical to clicking dead panel background — the guide moved, but the button never
+        /// acknowledged the click.
+        ///
+        /// EVERY CLICK IS A PRESS, whichever way the underlying toggle happened to flip. That is what the
+        /// unconditional SetValue(true) is for: while a tile is still lit from the previous click, the next
+        /// click flips it OFF, and a handler that only acted on the ON edge would swallow every second
+        /// click of a fast run of nudges. The old code got away with ignoring the OFF edge only because it
+        /// reset the tile synchronously, so the OFF edge never arrived from a user click.
+        ///
+        /// The release is timestamped rather than cancelled: a callback that finds a NEWER press simply
+        /// stands down and lets that press own the release. Cheaper than tracking and cancelling timers,
+        /// and it cannot leave a tile stuck down, because the newer press has always scheduled its own.
+        /// </remarks>
+        private void PressMomentaryTile(string tileKey, Action action)
         {
-            string tileKey = "movearrow:" + code;
+            _momentaryPressedAt[tileKey] = capi.World.ElapsedMilliseconds;
+
+            _suppress = true;
+            try { SingleComposer?.GetToggleButton(tileKey)?.SetValue(true); }
+            finally { _suppress = false; }
+
+            capi.Event.RegisterCallback(_ => ReleaseMomentaryTile(tileKey), MomentaryPressMs);
+            action();
+        }
+
+        private void ReleaseMomentaryTile(string tileKey)
+        {
+            if (!IsOpened()) return;
+
+            // A later press re-armed this tile; its own release is already scheduled.
+            if (_momentaryPressedAt.TryGetValue(tileKey, out long at)
+                && capi.World.ElapsedMilliseconds - at < MomentaryPressMs) return;
+
+            _suppress = true;
+            try { SingleComposer?.GetToggleButton(tileKey)?.SetValue(false); }
+            finally { _suppress = false; }
+        }
+
+        /// <summary>Builds a momentary icon tile — one that acts on click and does not stay selected.</summary>
+        private void AddMomentaryTile(
+            GuiComposer c, CairoFont hoverFont, string icon, string hover, string tileKey,
+            ElementBounds bounds, bool enabled, Action action)
+        {
             var btn = new GuiElementToggleButton(
                 capi, enabled ? icon : icon + LayoutToolIcons.GhostSuffix, "",
                 CairoFont.WhiteSmallText(),
-                on =>
+                _ =>
                 {
-                    if (_suppress || !on || !enabled) return;
-                    _suppress = true;
-                    try { SingleComposer?.GetToggleButton(tileKey)?.SetValue(false); }
-                    finally { _suppress = false; }
-                    OnMoveArrowTile(code);
+                    if (_suppress || !enabled) return;
+                    PressMomentaryTile(tileKey, action);
                 },
                 bounds, toggleable: true)
             { Enabled = enabled };
             c.AddInteractiveElement(btn, tileKey);
             c.AddAutoSizeHoverText(hover, hoverFont, 260, bounds.FlatCopy(), tileKey + ":ht");
+        }
+
+        // A momentary pad tile, so the pad can be clicked repeatedly without a recompose between nudges
+        // (an arrow is an action, not a selection).
+        private void AddMoveTile(
+            GuiComposer c, CairoFont hoverFont, string icon, string hover, string code,
+            ElementBounds bounds, bool enabled)
+        {
+            AddMomentaryTile(c, hoverFont, icon, hover, "movearrow:" + code, bounds, enabled,
+                () => OnMoveArrowTile(code));
         }
 
         // A LATCHING toggle, unlike the pad tiles: these carry the state the pad reads, so they stay lit.
@@ -829,22 +955,8 @@ namespace Layout.UI
             GuiComposer c, CairoFont hoverFont, string icon, string hover, string code,
             ElementBounds bounds, bool enabled)
         {
-            string tileKey = "moverotate:" + code;
-            var btn = new GuiElementToggleButton(
-                capi, enabled ? icon : icon + LayoutToolIcons.GhostSuffix, "",
-                CairoFont.WhiteSmallText(),
-                on =>
-                {
-                    if (_suppress || !on || !enabled) return;
-                    _suppress = true;
-                    try { SingleComposer?.GetToggleButton(tileKey)?.SetValue(false); }
-                    finally { _suppress = false; }
-                    OnRotateTile(code);
-                },
-                bounds, toggleable: true)
-            { Enabled = enabled };
-            c.AddInteractiveElement(btn, tileKey);
-            c.AddAutoSizeHoverText(hover, hoverFont, 260, bounds.FlatCopy(), tileKey + ":ht");
+            AddMomentaryTile(c, hoverFont, icon, hover, "moverotate:" + code, bounds, enabled,
+                () => OnRotateTile(code));
         }
 
         private void AddFreeMoveTile(
@@ -884,6 +996,8 @@ namespace Layout.UI
             GuideData g = ResolveSelectedGuide();
             if (g == null) return;
 
+            if (code == "ground") { SendGuideToGround(g); return; }
+
             bool mirroring = _tool.TransformMirror;
             bool placing = _tool.Placement != DraftManager.TransformPlacement.None;
 
@@ -914,6 +1028,42 @@ namespace Layout.UI
             _holdMoveMaterialization?.Invoke(g.Id);
             _net.SendTransform(
                 g.Id, dx, dy, dz, mirroring ? (int)axis : -1, PlaneAxis.Y, 0, asCopy);
+        }
+
+        /// <summary>
+        /// Send to ground: one downward move whose distance is the drop to the surface below, rather than
+        /// a multiple of the step. The contact rule itself is the controller's — see
+        /// <c>GuideToolController.GroundDropSixteenths</c>.
+        /// </summary>
+        /// <remarks>
+        /// STEP AND MIRROR BOTH SIT THIS OUT, deliberately, and the hover text says so. Step, because the
+        /// distance is not a step — it is however far the ground happens to be. Mirror, because a mirrored
+        /// guide has a DIFFERENT underside: the drop is solved before the flip, so composing the two would
+        /// land a dome its own height out of place. Rather than solve the contact twice, or land it wrong,
+        /// this tile is simply not a mirror tile. FLAGGED for review — the pad is otherwise uniformly
+        /// state-driven, and this is the one arrow that ignores a lit toggle.
+        ///
+        /// COPY DOES apply, and is worth having: a copy is a duplicate of unchanged geometry, so the drop
+        /// solved for the original is exactly right for it, and "leave this one here, put another on the
+        /// ground below" is the obvious thing to want.
+        ///
+        /// A silent no-op when it is already resting, when nothing is under it within reach, or when
+        /// neither Move nor Copy is lit — matching the other arrows, which also do nothing at all when the
+        /// action row leaves them nothing to do.
+        /// </remarks>
+        private void SendGuideToGround(GuideData g)
+        {
+            if (_tool.Placement == DraftManager.TransformPlacement.None) return;
+
+            int drop = _groundDrop?.Invoke(g) ?? 0;
+            if (drop >= 0) return;
+
+            // A run of ground drops is not a run: the second press lands on the same surface as the first.
+            _tool.ResetCopyRun();
+            _holdMoveMaterialization?.Invoke(g.Id);
+            _net.SendTransform(
+                g.Id, 0, drop, 0, -1, PlaneAxis.Y, 0,
+                _tool.Placement == DraftManager.TransformPlacement.Copy);
         }
 
         // The guide's own extent along the pressed axis, in 1/16 units — the "span" step, which lands a
@@ -1218,47 +1368,42 @@ namespace Layout.UI
             // The heading itself now says "Server Settings" (v0.4.18), so the separate scope note that used
             // to sit here was saying the same thing twice.
             //
-            // AN OVERRIDE ON YOU BEATS EVERY NUMBER BELOW, so it is stated before them rather than after.
-            // Without this the panel reads as authoritative while being quietly untrue for the one person
-            // looking at it: a forgotten personal cap survived an entire debugging session precisely
-            // because the page showed the server's caps and said nothing about the override winning.
-            if (cfg.HasPersonalOverride)
-            {
-                CairoFont warnFont = CairoFont.WhiteDetailText();
-                warnFont.Color = new double[] { 1, 0.55, 0.30, 1 };
-                c.AddStaticText(
-                    "Your own limits are overridden, so the caps below do not apply to you: "
-                    + DescribeOverrides(cfg) + ". Clear with /layout voxelcap <you> 0.",
-                    warnFont, ElementBounds.Fixed(0, y, contentW, 46));
-                y += 46 + 4;
-            }
+            // THE PERSONAL-OVERRIDE WARNING WAS REMOVED IN v0.4.28 (human-directed). It earned its keep
+            // once — a forgotten 10,000,000-voxel override was what made the caps look broken across six
+            // revisions — but the human does not want it on the page. The override itself is untouched:
+            // LayoutAdminConfigPacket still carries the per-player fields (registration is append-only),
+            // the Players dialog's Overrides tab still shows them, and /layout info <player> still reports
+            // them. Only this line is gone.
 
             const string unlimited = "Set 0 for unlimited.";
 
-            // The wheel/spinner step is per row, matched to the scale of the number it edits: 1000 on the
-            // six-figure voxel caps, where a single voxel is a null gesture, but 1 on guides-per-player
-            // (a realistic value is single digits) and 10 on the world guide count (human-directed).
+            // The wheel/spinner step is per row and lives in AdminCapSteps, which the Players dialog's
+            // per-player fields read from too — see the remarks there for why each is the size it is.
             AddAdminNumber(c, font, ref y, contentW, rowGap,
-                "Voxels per guide", LayoutAdminSetting.PerGuideVoxelCap, cfg.PerGuideVoxelCap, 1000,
+                "Voxels per guide", LayoutAdminSetting.PerGuideVoxelCap, cfg.PerGuideVoxelCap,
+                AdminCapSteps.PerGuideVoxels,
                 "The largest a single guide may be. A player's draft stops growing when it reaches this, "
                 + "and the gauge on the heads-up display fills against it. " + unlimited);
 
             AddAdminNumber(c, font, ref y, contentW, rowGap,
                 "Voxels per player", LayoutAdminSetting.PerPlayerTotalVoxelCap, cfg.PerPlayerTotalVoxelCap,
-                1000,
+                AdminCapSteps.PerPlayerVoxels,
                 "The total across every guide one player has created and still has standing. Deleting a "
                 + "guide gives the room back. " + unlimited);
 
             AddAdminNumber(c, font, ref y, contentW, rowGap,
-                "Voxels in the world", LayoutAdminSetting.TotalVoxelCap, cfg.TotalVoxelCap, 1000,
+                "Voxels in the world", LayoutAdminSetting.TotalVoxelCap, cfg.TotalVoxelCap,
+                AdminCapSteps.WorldVoxels,
                 "The total across every guide from every player on the server. " + unlimited);
 
             AddAdminNumber(c, font, ref y, contentW, rowGap,
-                "Guides per player", LayoutAdminSetting.MaxGuidesPerPlayer, cfg.MaxGuidesPerPlayer, 1,
+                "Guides per player", LayoutAdminSetting.MaxGuidesPerPlayer, cfg.MaxGuidesPerPlayer,
+                AdminCapSteps.PerPlayerGuides,
                 "How many guides one player may have standing at once. " + unlimited);
 
             AddAdminNumber(c, font, ref y, contentW, rowGap,
-                "Guides in the world", LayoutAdminSetting.MaxGuidesWorldWide, cfg.MaxGuidesWorldWide, 10,
+                "Guides in the world", LayoutAdminSetting.MaxGuidesWorldWide, cfg.MaxGuidesWorldWide,
+                AdminCapSteps.WorldGuides,
                 "How many guides may exist on the server at once. " + unlimited);
 
             AddAdminSwitch(c, font, ref y, contentW, rowGap,
@@ -1268,18 +1413,38 @@ namespace Layout.UI
                 + "this off puts everyone back to public guides for anything NEW - the private guides they "
                 + "already have are not touched or taken.");
 
+            // The dirty marker. Without it there is no way to tell a typed-but-unsaved value from a saved
+            // one, since both simply sit in the field looking identical.
+            //
+            // ON ITS OWN LINE since v0.4.28, because Players moved to the left edge. It used to occupy the
+            // space left of both buttons; with a button now at each end of the row the gap between them is
+            // about 110 px, which is what "2 unsaved changes" needs at detail size — close enough that any
+            // future rewording would clip. A full-width line above the row cannot clip at any wording, and
+            // it reads more like the warning it is. Costs its 18 px only while there is something unsaved.
+            if (_adminEdits.Count > 0)
+            {
+                CairoFont dirtyFont = CairoFont.WhiteDetailText();
+                dirtyFont.Color = new double[] { 1, 0.72, 0.30, 1 };
+                c.AddStaticText(
+                    _adminEdits.Count == 1 ? "1 unsaved change" : _adminEdits.Count + " unsaved changes",
+                    dirtyFont, ElementBounds.Fixed(0, y, contentW, 18));
+                y += 18 + 2;
+            }
+
             // ---- Players + Save ----
             // Nothing above this line has reached the server yet; see the staging remarks on _adminEdits.
             const double saveW = 90, playersW = 90;
             ElementBounds saveBounds = ElementBounds.Fixed(contentW - saveW, y, saveW, 24);
-            ElementBounds playersBounds =
-                ElementBounds.Fixed(contentW - saveW - playersW - 8, y, playersW, 24);
+            ElementBounds playersBounds = ElementBounds.Fixed(0, y, playersW, 24);
 
-            // Players sits LEFT of Save (human-directed). It opens a separate dialog and changes nothing,
-            // so it is deliberately not in the staged-edit flow the Save button governs.
+            // Players sits at the row's LEFT EDGE (human-directed, v0.4.28 — it was immediately left of
+            // Save until then). The two buttons are not a pair: Save commits the staged edits above it and
+            // belongs beside them at the right, while Players opens a separate dialog and changes nothing,
+            // so it is deliberately outside the staged-edit flow and now reads that way as well.
             c.AddSmallButton("Players", OnOpenPlayersDialog, playersBounds);
             c.AddAutoSizeHoverText(
-                "Opens the player list: who Layout knows about, what limits they carry, and who is jailed.",
+                "Opens the player list: who Layout knows about, what limits they carry, and who is jailed. "
+                + "A player's own limits can be changed there, and jailed or freed.",
                 CairoFont.WhiteDetailText(), 260, playersBounds.FlatCopy(), "ht:adminplayers");
 
             c.AddSmallButton("Save", OnSaveAdminSettings, saveBounds);
@@ -1288,31 +1453,11 @@ namespace Layout.UI
                 + "above takes effect until this is pressed.",
                 CairoFont.WhiteDetailText(), 260, saveBounds.FlatCopy(), "ht:adminsave");
 
-            // The dirty marker, left of both buttons: without it there is no way to tell a typed-but-unsaved
-            // value from a saved one, since both simply sit in the field looking identical.
-            if (_adminEdits.Count > 0)
-            {
-                CairoFont dirtyFont = CairoFont.WhiteDetailText();
-                dirtyFont.Color = new double[] { 1, 0.72, 0.30, 1 };
-                c.AddStaticText(
-                    _adminEdits.Count == 1 ? "1 unsaved change" : _adminEdits.Count + " unsaved changes",
-                    dirtyFont, ElementBounds.Fixed(0, y + 5, contentW - saveW - playersW - 16, 18));
-            }
             y += 24 + rowGap;
         }
 
-        // Names only the overrides that are actually set, so the notice stays as short as the situation is.
-        private static string DescribeOverrides(LayoutAdminConfigPacket cfg)
-        {
-            var parts = new List<string>(3);
-            if (cfg.YourVoxelCapOverride > 0)
-                parts.Add(cfg.YourVoxelCapOverride.ToString("N0") + " voxels per guide");
-            if (cfg.YourTotalVoxelCapOverride > 0)
-                parts.Add(cfg.YourTotalVoxelCapOverride.ToString("N0") + " voxels total");
-            if (cfg.YourGuideLimitOverride > 0)
-                parts.Add(cfg.YourGuideLimitOverride.ToString("N0") + " guides");
-            return string.Join(", ", parts);
-        }
+        // (DescribeOverrides lived here until v0.4.28. It existed only for the personal-override warning
+        // removed above; GuidePlayersDialog has its own, which is still in use.)
 
         // An admin number row: label left, number field right. Editing STAGES — see _adminEdits.
         private void AddAdminNumber(
@@ -3054,20 +3199,10 @@ namespace Layout.UI
         private void AddRevealTile(
             GuiComposer c, CairoFont hoverFont, string icon, string code, ElementBounds bounds, string hover)
         {
-            string tileKey = "reveal:" + code;
-            var btn = new GuiElementToggleButton(
-                capi, icon, "", CairoFont.WhiteSmallText(),
-                on =>
-                {
-                    if (_suppress || !on) return;
-                    _suppress = true;
-                    try { SingleComposer?.GetToggleButton(tileKey)?.SetValue(false); }
-                    finally { _suppress = false; }
-                    RevealGuides(nearOnly: code == "near");
-                },
-                bounds, toggleable: true);
-            c.AddInteractiveElement(btn, tileKey);
-            c.AddAutoSizeHoverText(hover, hoverFont, 260, bounds.FlatCopy(), tileKey + ":ht");
+            // Always enabled — see the note on AddVisibilityRow about why these two are not greyed with
+            // the rest of the row.
+            AddMomentaryTile(c, hoverFont, icon, hover, "reveal:" + code, bounds, true,
+                () => RevealGuides(nearOnly: code == "near"));
         }
 
         /// <summary>How far "near" reaches, in blocks (human-directed).</summary>

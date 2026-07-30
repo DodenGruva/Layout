@@ -249,6 +249,8 @@ namespace Layout.Network
                 .SetMessageHandler<GuideRevealMinePacket>((p, x) => WithPlayerVoxelCap(p, () => OnRevealMine(p, x)))
                 .SetMessageHandler<PlayerRosterRequestPacket>(OnPlayerRosterRequest)
                 .SetMessageHandler<PlayerGuidesRequestPacket>(OnPlayerGuidesRequest)
+                .SetMessageHandler<PlayerPolicyEditPacket>(OnPlayerPolicyEdit)
+                .SetMessageHandler<PlayerJailPacket>(OnPlayerJail)
                 .SetMessageHandler<ClientPlacementModeRequestPacket>(OnClientPlacementModeRequest)
                 .SetMessageHandler<ClientGuidePushPacket>((p, x) => WithPlayerVoxelCap(p, () => OnClientGuidePush(p, x)));
 
@@ -2892,7 +2894,134 @@ namespace Layout.Network
         private void OnPlayerRosterRequest(IServerPlayer fromPlayer, PlayerRosterRequestPacket packet)
         {
             if (!AdminRequestAllowed(fromPlayer, "roster")) return;
-            _channel.SendPacket(new PlayerRosterPacket { Players = BuildRoster() }, fromPlayer);
+            SendRosterTo(fromPlayer);
+        }
+
+        /// <summary>
+        /// Sends one admin the whole roster plus the world totals. Every editing path ends here rather than
+        /// answering with just the row it changed: the server is the authority on what was actually stored,
+        /// so an edit that was clamped, or that shifted an effective cap somewhere else, shows up honestly
+        /// instead of leaving the dialog displaying the number the admin typed.
+        /// </summary>
+        private void SendRosterTo(IServerPlayer fromPlayer)
+        {
+            if (fromPlayer == null) return;
+            _channel.SendPacket(new PlayerRosterPacket
+            {
+                Players = BuildRoster(),
+                WorldVoxelTotal = _guides.TotalVoxelCount,
+                WorldGuideCount = _guides.GuideCount
+            }, fromPlayer);
+        }
+
+        // ==========================================================================================
+        //  Editing a player's limits from the Players dialog (v0.4.31, protocol 24)
+        // ==========================================================================================
+        //
+        // The same state /layout voxelcap, totalvoxelcap and limit set, reached from a form instead of
+        // three command lines. The COMMANDS ARE NOT DEPRECATED and both routes land on the same setters.
+        //
+        // WHAT THESE HANDLERS MUST NOT DO IS ONLY CALL THE SETTER. Each command does follow-up work that
+        // the panel needs just as much: the target's own client caches its effective per-guide cap to clamp
+        // its draft preview, and its settings page shows its limits. A GUI edit that skipped those would
+        // leave the server correct and the affected player's client quietly stale until they reconnected.
+
+        private void OnPlayerPolicyEdit(IServerPlayer fromPlayer, PlayerPolicyEditPacket packet)
+        {
+            if (!AdminRequestAllowed(fromPlayer, "player limits")) return;
+            string uid = packet?.Uid;
+            if (string.IsNullOrEmpty(uid)) return;
+
+            string name = RosterName(uid);
+            IServerPlayer target = OnlinePlayerByUid(uid);
+
+            // CLAMPED, NOT REFUSED. The commands error out on a bad number because a person typed it and
+            // can read the reply; here the reply is the roster, so a value that cannot be stored is pulled
+            // into range and the panel redraws showing what the server really holds. Zero means "clear the
+            // override", exactly as on the command line.
+            int perGuide = Math.Min(Math.Max(0, packet.VoxelCapOverride), GuideManager.HardVoxelCeiling);
+            int total = Math.Max(0, packet.TotalVoxelCapOverride);
+            int limit = Math.Max(0, packet.GuideLimitOverride);
+
+            bool changed = _policies.SetVoxelCap(uid, name, perGuide);
+            changed |= _policies.SetPlayerTotalVoxelCap(uid, name, total);
+            changed |= _policies.SetGuideLimit(uid, name, limit);
+
+            if (target != null)
+            {
+                SendPlayerPolicy(target);   // their draft clamp follows the new per-guide cap
+                SendAdminConfig(target);    // and their own settings page follows their overrides
+            }
+
+            if (changed)
+                _sapi.Logger.Notification(
+                    "[Layout] {0} set {1}'s limits: per-guide {2}, cumulative {3}, guides {4}.",
+                    PlayerDisplayName(fromPlayer), name, perGuide, total, limit);
+
+            SendRosterTo(fromPlayer);
+        }
+
+        // Mirrors OnJailCommand exactly, including the offline branch — see the remarks on PlayerJailPacket
+        // for why this is not a field on the cap edit.
+        private void OnPlayerJail(IServerPlayer fromPlayer, PlayerJailPacket packet)
+        {
+            if (!AdminRequestAllowed(fromPlayer, "jail")) return;
+            string uid = packet?.Uid;
+            if (string.IsNullOrEmpty(uid)) return;
+
+            string name = RosterName(uid);
+            IServerPlayer target = OnlinePlayerByUid(uid);
+            bool jail = packet.Jailed;
+
+            _policies.SetJailed(uid, name, jail);
+
+            if (jail)
+            {
+                if (target != null)
+                {
+                    WithPlayerVoxelCap(target, () => CancelPlayerPublicActivity(target));
+                    SendPlayerPolicy(target);
+                    target.SendIngameError("layout-jailed",
+                        "An administrator suspended your access to public Layout guides.");
+                }
+                else
+                {
+                    _undo.ClearPlayer(uid);
+                    ClearPlayerSessionState(uid);
+                }
+            }
+            else if (target != null) SendPlayerPolicy(target);
+
+            _sapi.Logger.Notification("[Layout] {0} {1} {2}.",
+                PlayerDisplayName(fromPlayer), jail ? "jailed" : "freed", name);
+
+            SendRosterTo(fromPlayer);
+        }
+
+        private IServerPlayer OnlinePlayerByUid(string uid) =>
+            string.IsNullOrEmpty(uid)
+                ? null
+                : _sapi.World.AllOnlinePlayers.OfType<IServerPlayer>()
+                    .FirstOrDefault(p => p.PlayerUID == uid);
+
+        /// <summary>
+        /// The best display name known for a uid, in the same precedence <see cref="BuildRoster"/> uses.
+        /// The setters take a name as well as a uid because they REMEMBER it — a policy on an offline player
+        /// is only readable later because LastKnownName was stored with it, so passing "Unknown" here would
+        /// gradually erase the roster's own labels.
+        /// </summary>
+        private string RosterName(string uid)
+        {
+            IServerPlayer online = OnlinePlayerByUid(uid);
+            if (online != null) return PlayerDisplayName(online);
+
+            PlayerPolicy policy = _policies.Get(uid);
+            if (!string.IsNullOrWhiteSpace(policy?.LastKnownName)) return policy.LastKnownName;
+
+            foreach (GuideData g in _guides.AllGuides.Values)
+                if (g?.CreatorUid == uid && !string.IsNullOrWhiteSpace(g.CreatorName)) return g.CreatorName;
+
+            return "Unknown";
         }
 
         private void OnPlayerGuidesRequest(IServerPlayer fromPlayer, PlayerGuidesRequestPacket packet)

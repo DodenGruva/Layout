@@ -52,7 +52,7 @@ namespace Layout.Network
         /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
         /// future client can detect a mismatch; informational for now (there is only one version).
         /// </summary>
-        public const int ProtocolVersion = 23;
+        public const int ProtocolVersion = 24;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -1200,7 +1200,53 @@ namespace Layout.Network
     {
         [ProtoMember(1)] public PlayerRosterEntryDto[] Players;
 
+        // World totals (protocol 24). The per-player numbers were always here; these are what the Admin
+        // section's WORLD-wide caps are actually measured against, and without them the panel showed the
+        // limits with nothing to compare them to. Appended, so a protocol-23 server simply sends zero.
+        [ProtoMember(2)] public long WorldVoxelTotal;
+        [ProtoMember(3)] public int WorldGuideCount;
+
         public PlayerRosterPacket() { }
+    }
+
+    /// <summary>
+    /// C→S (protocol 24). Sets one player's three cap overrides in a single edit. 0 in any field clears
+    /// that override and hands the player back to the server default. Refused without controlserver.
+    /// </summary>
+    /// <remarks>
+    /// ONE PACKET FOR ALL THREE CAPS, because the Players dialog stages its edits and saves them together,
+    /// exactly as the server-settings section does. Sending one packet per field as it was typed would put
+    /// the same series of half-finished numbers on the wire that v0.4.20 removed from the settings page.
+    ///
+    /// JAILING IS DELIBERATELY NOT IN HERE — see <see cref="PlayerJailPacket"/>.
+    /// </remarks>
+    [ProtoContract]
+    public class PlayerPolicyEditPacket
+    {
+        [ProtoMember(1)] public string Uid;
+        [ProtoMember(2)] public int VoxelCapOverride;
+        [ProtoMember(3)] public int TotalVoxelCapOverride;
+        [ProtoMember(4)] public int GuideLimitOverride;
+
+        public PlayerPolicyEditPacket() { }
+    }
+
+    /// <summary>C→S (protocol 24). Jails or frees one player. Refused without controlserver.</summary>
+    /// <remarks>
+    /// ITS OWN PACKET, NOT A FIELD ON THE CAP EDIT (human-directed). Jailing is the one per-player action
+    /// with immediate consequences for somebody else's session — it cancels their in-flight public work,
+    /// clears their undo history and interrupts them with a message. Folded into the staged cap edit, one
+    /// Save press could retune a limit and suspend a player at the same time, and an admin who typed a
+    /// number would have no way to tell which half of the press they meant. Separate packet, separate
+    /// button, separate confirmation.
+    /// </remarks>
+    [ProtoContract]
+    public class PlayerJailPacket
+    {
+        [ProtoMember(1)] public string Uid;
+        [ProtoMember(2)] public bool Jailed;
+
+        public PlayerJailPacket() { }
     }
 
     /// <summary>C→S. Asks for one player's guide list, for the Players tab's detail pane.</summary>
@@ -1422,7 +1468,10 @@ namespace Layout.Network
             typeof(PlayerRosterRequestPacket),
             typeof(PlayerRosterPacket),
             typeof(PlayerGuidesRequestPacket),
-            typeof(PlayerGuidesPacket)
+            typeof(PlayerGuidesPacket),
+            // 0.4.31: the Players dialog became editable (protocol 24)
+            typeof(PlayerPolicyEditPacket),
+            typeof(PlayerJailPacket)
         };
     }
 }

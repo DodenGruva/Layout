@@ -723,6 +723,162 @@ namespace Layout.Client
         private static int FloorToStep(int sixteenths, int step) =>
             (int)Math.Floor((double)sixteenths / step) * step;
 
+        // ---------------------------------------------------------------------------------
+        //  Send to ground (v0.4.28)
+        // ---------------------------------------------------------------------------------
+
+        /// <summary>How far below a guide's underside the search gives up, in whole blocks.</summary>
+        private const int GroundSearchBlocks = 160;
+
+        /// <summary>Sample points along each horizontal axis of the guide's footprint.</summary>
+        private const int GroundSamplesPerAxis = 32;
+
+        /// <summary>
+        /// How far DOWN, in 1/16 units, the selected guide must travel for its underside to come to rest on
+        /// the ground beneath it. Always zero or negative; zero means it is already resting, is buried, or
+        /// has nothing under it within <see cref="GroundSearchBlocks"/>.
+        /// </summary>
+        /// <remarks>
+        /// THE SAME CONTACT RULE AS T1, APPLIED DOWNWARD. The guide's LOWEST VOXEL PLANE meets the surface,
+        /// and it is <see cref="TryGuideFloorSixteenths"/> that says where that plane is — deliberately the
+        /// same method rather than a second derivation of the same idea, so the CTRL free-move snap and this
+        /// button can never come to disagree about where the bottom of a guide is.
+        ///
+        /// THE HIGHEST GROUND UNDER THE FOOTPRINT WINS, not the ground under the centre. On a slope that is
+        /// the difference between setting a house plan down on the hillside and burying half of it: the
+        /// guide comes to rest on the first thing it would touch, which is what dropping an object does.
+        ///
+        /// SAMPLED, NOT SWEPT. A large guide's footprint is thousands of block columns and this runs on a
+        /// button press, so the footprint is sampled on a grid of at most 32x32 points. A spike of terrain
+        /// thinner than the sample spacing can be missed, which lets a corner of the guide intersect it;
+        /// the alternative is a click that stalls the client on a hundred-block plan. Guides up to 32 blocks
+        /// across — nearly all of them — are sampled at every single block and cannot miss anything.
+        ///
+        /// MATERIAL IS READ FROM COLLISION BOXES via <see cref="BlockOccupancy"/>, so the guide lands flush
+        /// on a slab, a stair or a chiselled block instead of a whole block above it. The instance is local
+        /// and thrown away with the call: this fires once per click, and keeping a cache alive between
+        /// clicks would hold a stale picture of a world the player is actively building in.
+        /// </remarks>
+        public int GroundDropSixteenths(GuideData g)
+        {
+            IBlockAccessor accessor = _capi?.World?.BlockAccessor;
+            if (g == null || accessor == null) return 0;
+            if (!TryGuideFloorSixteenths(g, out int floor16)) return 0;
+            if (!TryGuideFootprint(g, out double minX, out double maxX, out double minZ, out double maxZ))
+                return 0;
+
+            var occupancy = new BlockOccupancy();
+            int best = int.MinValue;
+
+            int nx = SampleCount(minX, maxX), nz = SampleCount(minZ, maxZ);
+            for (int ix = 0; ix < nx; ix++)
+            {
+                int x16 = SampleSixteenths(minX, maxX, ix, nx);
+                for (int iz = 0; iz < nz; iz++)
+                {
+                    int z16 = SampleSixteenths(minZ, maxZ, iz, nz);
+                    int top16 = ColumnSurfaceSixteenths(occupancy, accessor, x16, z16, floor16);
+                    if (top16 > best) best = top16;
+
+                    // Nothing can beat contact — the guide is already touching down somewhere.
+                    if (best == floor16) return 0;
+                }
+            }
+
+            if (best == int.MinValue) return 0;      // open air all the way down, within reach
+
+            // The surface sits on the WORLD's 1/16 grid; the guide may only move in whole voxels of its own
+            // scale. Rounding toward zero rather than away leaves the guide resting on, or up to one voxel
+            // proud of, the surface — never sunk into it. Only bites on scale-2 and coarser guides, whose
+            // cells cannot land flush on a half-block face in the first place.
+            int scale = Math.Max(1, g.VoxelScale);
+            int drop = best - floor16;
+            return -((-drop) / scale) * scale;
+        }
+
+        // The guide's horizontal extent, from the same two sources TryGuideFloorSixteenths measures its
+        // underside from: the sampled outline and the real (non-phantom) control points.
+        private bool TryGuideFootprint(
+            GuideData g, out double minX, out double maxX, out double minZ, out double maxZ)
+        {
+            minX = minZ = double.MaxValue;
+            maxX = maxZ = double.MinValue;
+
+            List<Vec3d> curve = GetCurvePolyline(g);
+            if (curve != null)
+                for (int i = 0; i < curve.Count; i++)
+                {
+                    Vec3d p = curve[i];
+                    if (p == null) continue;
+                    if (p.X < minX) minX = p.X;
+                    if (p.X > maxX) maxX = p.X;
+                    if (p.Z < minZ) minZ = p.Z;
+                    if (p.Z > maxZ) maxZ = p.Z;
+                }
+
+            List<ControlPoint> points = g.ControlPoints;
+            if (points != null)
+                for (int i = 0; i < points.Count; i++)
+                {
+                    ControlPoint cp = points[i];
+                    if (cp == null || cp.IsPhantom || cp.WorldPosition == null) continue;
+                    Vec3d p = cp.WorldPosition;
+                    if (p.X < minX) minX = p.X;
+                    if (p.X > maxX) maxX = p.X;
+                    if (p.Z < minZ) minZ = p.Z;
+                    if (p.Z > maxZ) maxZ = p.Z;
+                }
+
+            return minX <= maxX && minZ <= maxZ;
+        }
+
+        // One sample per block of extent, capped. A one-block-wide guide still gets its single column.
+        private static int SampleCount(double min, double max) =>
+            Math.Max(1, Math.Min(GroundSamplesPerAxis, (int)Math.Ceiling(max - min) + 1));
+
+        // Sample i of n, spread across [min, max] with the ends included, in absolute 1/16 units.
+        private static int SampleSixteenths(double min, double max, int i, int n)
+        {
+            double t = n <= 1 ? 0.5 : (double)i / (n - 1);
+            return (int)Math.Floor((min + (max - min) * t) * 16.0);
+        }
+
+        /// <summary>
+        /// The top of the first material found straight down from <paramref name="floor16"/> in this one
+        /// 1/16 column, or <see cref="int.MinValue"/> if there is none within reach.
+        /// </summary>
+        /// <remarks>
+        /// TWO RESOLUTIONS, and that is what keeps this cheap. Falling a cell at a time through open sky
+        /// would be 2,560 queries per sample point; the block classification skips a whole block per query
+        /// and only the one block that actually stops the fall is examined cell by cell. A partial block
+        /// that happens to be hollow at this column — the gap between two fence posts — correctly does not
+        /// stop it, and the walk continues below.
+        /// </remarks>
+        private static int ColumnSurfaceSixteenths(
+            BlockOccupancy occupancy, IBlockAccessor accessor, int x16, int z16, int floor16)
+        {
+            int bx = x16 >> 4, bz = z16 >> 4;
+            int startBlockY = (floor16 - 1) >> 4;      // the first block strictly below the underside
+            var pos = new BlockPos(bx, 0, bz);
+
+            for (int i = 0; i < GroundSearchBlocks; i++)
+            {
+                int by = startBlockY - i;
+                pos.Y = by;
+                BlockFill fill = occupancy.FillAt(accessor, pos);
+                if (fill == BlockFill.Empty) continue;
+
+                // The topmost cell of this block that is both material and below the guide, +1 for its top
+                // face. Capped at floor16 so the block the underside sits inside cannot report a surface
+                // above the guide itself.
+                int highest = Math.Min(by * 16 + 15, floor16 - 1);
+                for (int y16 = highest; y16 >= by * 16; y16--)
+                    if (occupancy.IsMaterialAt(accessor, x16, y16, z16)) return y16 + 1;
+            }
+
+            return int.MinValue;
+        }
+
         // Commits the drag as ONE translate — one undo step — and disarms. Disarming matters: leaving it
         // armed would re-engage on the very next tick and the guide would start following the crosshair
         // again the instant it was put down.

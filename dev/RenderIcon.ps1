@@ -42,7 +42,9 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('gear', 'revealnear', 'revealall')]
+    [ValidateSet('gear', 'revealnear', 'revealall',
+                 'rotatespin', 'rotatetip', 'rotatespinleft', 'rotatetipleft',
+                 'mirror', 'moveground', 'movedown')]
     [string]$Glyph = 'gear',
 
     [int[]]$Sizes = @(18, 22, 28, 42),
@@ -84,9 +86,9 @@ $Glyphs = @{
 
         $cx = 30.0; $cy = 30.0
         $teeth = 8; $spokes = 6
-        $rTip = 25.5; $rRoot = 21.5; $rRimIn = 17.8; $rHub = 7.6; $rBore = 4.6; $spokeHalf = 1.9
+        $rTip = 25.5; $rRoot = 19.5; $rRimIn = 16.0; $rHub = 7.6; $rBore = 4.6; $spokeHalf = 1.9
         $pitch = [Math]::PI * 2 / $teeth
-        $tipHalf = $pitch * 0.22
+        $tipHalf = $pitch * 0.13
         $rootHalf = $pitch * 0.32
         $phase = $pitch * 0.5      # a VALLEY at twelve and six o'clock, not a tooth
 
@@ -186,6 +188,116 @@ $Glyphs = @{
         $r = & $c.L 4
         $g.FillEllipse($brush, [float]((& $c.X 30) - $r), [float]((& $c.Y 30) - $r), [float]($r * 2), [float]($r * 2))
     }
+    # Mirrors LayoutToolIcons.DrawRotate with upright = false: the turntable seen at an angle, used by
+    # RotateSpinLeft/Right. The question is whether a 16 x 8.5 ellipse still reads as a ring at 42 px, and
+    # whether its arrowhead is distinguishable from the upright variant's at a glance.
+    rotatespin = { param($g, $c) & $Script:DrawRotateGlyph $g $c $false $true }
+
+    # The same glyph with upright = true: a true circle, used by RotateTipLeft/Right.
+    rotatetip  = { param($g, $c) & $Script:DrawRotateGlyph $g $c $true  $true }
+
+    # The anticlockwise halves of each pair. Rendered because the left and right buttons sit side by side
+    # in the pad, and "are these two obviously opposite" is a question only the pair can answer.
+    rotatespinleft = { param($g, $c) & $Script:DrawRotateGlyph $g $c $false $false }
+    rotatetipleft  = { param($g, $c) & $Script:DrawRotateGlyph $g $c $true  $false }
+
+    # Mirrors LayoutToolIcons.DrawActionMirror. The question: does it read as one form and its reflection,
+    # or as two arrows pointing outward?
+    mirror = {
+        param($g, $c)
+        $pen = & $Script:NewPen $c 2.4
+
+        for ($v = 10.0; $v -lt 50.0; $v += 7.0) {
+            $g.DrawLine($pen, [float](& $c.X 30), [float](& $c.Y $v), [float](& $c.X 30), [float](& $c.Y ($v + 3.6)))
+        }
+        & $Script:Poly $g $c $pen $true  @(25, 16, 25, 44, 12, 44)
+        & $Script:Poly $g $c $pen $true  @(35, 16, 35, 44, 48, 44)
+    }
+
+    # Mirrors LayoutToolIcons.DrawMoveGround (v0.4.28) - the double chevron falling onto the floor bar.
+    # The question: does it stay separable from movedown below, which shares the bar?
+    moveground = {
+        param($g, $c)
+        $pen = & $Script:NewPen $c 3.2
+        & $Script:Poly $g $c $pen $false @(19, 15, 30, 26, 41, 15)
+        & $Script:Poly $g $c $pen $false @(19, 28, 30, 39, 41, 28)
+        $g.DrawLine($pen, [float](& $c.X 14), [float](& $c.Y 48), [float](& $c.X 46), [float](& $c.Y 48))
+    }
+
+    # Mirrors LayoutToolIcons.DrawMoveArrow rotated a half turn with groundBar - the Down tile, rendered
+    # only so the pair above can be compared side by side.
+    movedown = {
+        param($g, $c)
+        $pen = & $Script:NewPen $c 3.2
+        $half = & $c.L 12; $spread = & $c.L 9; $drop = & $c.L 11
+        $ox = & $c.X 30; $oy = & $c.Y 25
+        # rotation = PI, so (u, v) -> (-u, -v) about the origin
+        $p = { param($u, $v) New-Object System.Drawing.PointF([float]($ox - $u), [float]($oy - $v)) }
+        $g.DrawLine($pen, (& $p 0 $half), (& $p 0 (-$half)))
+        $g.DrawLines($pen, @((& $p (-$spread) (-$half + $drop)), (& $p 0 (-$half)), (& $p $spread (-$half + $drop))))
+        $g.DrawLine($pen, [float](& $c.X 14), [float](& $c.Y 48), [float](& $c.X 46), [float](& $c.Y 48))
+    }
+}
+
+# ------------------------------------------------------------------------------------------------
+#  Shared helpers - the PowerShell counterparts of LayoutToolIcons.Pen / .Poly
+# ------------------------------------------------------------------------------------------------
+$Script:NewPen = {
+    param($c, $width)
+    $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), ([float][Math]::Max(1.4, (& $c.L $width)))
+    $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    $pen
+}
+
+# uv is a flat design-space coordinate list, exactly as the C# Poly takes it.
+$Script:Poly = {
+    param($g, $c, $pen, $close, $uv)
+    $pts = New-Object System.Collections.Generic.List[System.Drawing.PointF]
+    for ($i = 0; $i + 1 -lt $uv.Count; $i += 2) {
+        $pts.Add((New-Object System.Drawing.PointF([float](& $c.X $uv[$i]), [float](& $c.Y $uv[$i + 1]))))
+    }
+    if ($close) { $pts.Add($pts[0]) }
+    $g.DrawLines($pen, $pts.ToArray())
+}
+
+# Mirrors LayoutToolIcons.DrawRotate exactly: the ring walked as a polyline (so the pen stays even where a
+# squashed ellipse is steepest) plus a symmetric chevron on the true tangent at the end of the sweep.
+$Script:DrawRotateGlyph = {
+    param($g, $c, $upright, $clockwise)
+    $pen = & $Script:NewPen $c 3.0
+
+    $cx = & $c.X 30; $cy = & $c.Y 30
+    $rx = & $c.L 16
+    $ry = if ($upright) { & $c.L 16 } else { & $c.L 8.5 }
+    $m = if ($clockwise) { 1.0 } else { -1.0 }
+
+    $start = -0.32 * [Math]::PI
+    $end = 1.32 * [Math]::PI
+    $headArc = 24.0 * [Math]::PI / 180.0
+
+    $steps = 56
+    $pts = New-Object System.Collections.Generic.List[System.Drawing.PointF]
+    for ($i = 0; $i -le $steps; $i++) {
+        $t = $start + ($end - $headArc - $start) * $i / $steps
+        $pts.Add((New-Object System.Drawing.PointF(
+            [float]($cx + $m * $rx * [Math]::Cos($t)), [float]($cy + $ry * [Math]::Sin($t)))))
+    }
+    $g.DrawLines($pen, $pts.ToArray())
+
+    $hx = $cx + $m * $rx * [Math]::Cos($end); $hy = $cy + $ry * [Math]::Sin($end)
+    $dx = -$m * $rx * [Math]::Sin($end); $dy = $ry * [Math]::Cos($end)
+    $len = [Math]::Sqrt($dx * $dx + $dy * $dy)
+    if ($len -lt 1e-9) { return }
+    $dx /= $len; $dy /= $len
+    $nx = -$dy; $ny = $dx
+    $back = & $c.L 8.5; $half = & $c.L 4.5; $over = & $c.L 1.0
+    $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::White)
+    $g.FillPolygon($brush, @(
+        (New-Object System.Drawing.PointF([float]($hx + $dx * $over), [float]($hy + $dy * $over))),
+        (New-Object System.Drawing.PointF([float]($hx - $dx * $back + $nx * $half), [float]($hy - $dy * $back + $ny * $half))),
+        (New-Object System.Drawing.PointF([float]($hx - $dx * $back - $nx * $half), [float]($hy - $dy * $back - $ny * $half)))))
 }
 
 # The SmallEye helper, shared by both reveal glyphs exactly as it is in the C#.

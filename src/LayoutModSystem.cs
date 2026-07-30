@@ -293,6 +293,9 @@ namespace Layout
             // ModSystem, not the item) owns all interaction state, including comatose grab sessions.
             Controller = new GuideToolController(capi, Draft, ClientNet, Renderer, ToolGui, Hud);
             Controller.OnRenderingChanged(Renderer.RenderingEnabled);
+            // The send-to-ground tile's contact rule (v0.4.28). Handed over rather than passed in, because
+            // the controller takes the GUI and so cannot be constructed before it.
+            ToolGui.SetGroundDropResolver(Controller.GroundDropSixteenths);
             if (ClientNet.PublicGuideAccessJailed) Controller.OnPublicGuidePolicyChanged(true);
 
             // Hotkeys — all rebindable in the vanilla controls screen, all gated to the held tool by the

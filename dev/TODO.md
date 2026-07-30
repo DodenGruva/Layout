@@ -1,38 +1,52 @@
-# Layout — TODO / Outstanding Items (current: v0.4.26 on `beta`)
+# Layout — TODO / Outstanding Items (current: v0.4.33 on `beta`)
 
 > **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
 > status), and `HANDOFF.md` (the consolidated current-state brief).
 
 ---
 
-## ⭐ Top of the list — the Session-33 polish queue (human-requested 2026-07-28, none started)
+## ⭐ Top of the list — NOTHING IS QUEUED
 
-All seven are cosmetic or small-UI. None blocks play. Full delivery record for the session in
-`SESSION_33.md`.
+The Session-33 polish queue is **delivered in full** (see below), the F-queue has been empty since Session
+33, and the Players dialog work the human asked for in Session 34 is done. What remains open is the
+long-standing review/documentation backlog in **A10**, and the "if asked" list in **B**.
 
-1. **Remove the admin voxel-limit warning message in the GUI.** The orange "your own limits are overridden"
-   line added in v0.4.24, in `GuideToolGui.BuildAdminSection`. It earned its keep once — a forgotten
-   10,000,000-voxel override was what made the caps look broken across six revisions — but the human does
-   not want it on the page. Removing the line is enough; leave the per-player override fields on
-   `LayoutAdminConfigPacket` (append-only, and the Players dialog's Overrides tab reads the same data).
-2. **Left-align the Players button.** It currently sits immediately left of Save at the right edge
-   (`BuildAdminSection`); move it to the row's left edge. Watch the unsaved-changes marker, which shares
-   that row and is currently sized to the space left of both buttons.
-3. **Alter the overflow text on the player's Overridden message.** The `Overridden: …` line in
-   `GuidePlayersDialog.BuildPlayerDetail` runs past its bounds; it is a single fixed-height static text
-   carrying a value, a name and a command. Shorten it or wrap it.
-4. **Work on the tile icons for rotate and tilt.** `LayoutToolIcons.DrawRotate` covers all four
-   (`RotateSpinLeft/Right`, `RotateTipLeft/Right`). **Use `dev/RenderIcon.ps1`** — add the glyph and LOOK at
-   it at 42 px before shipping, per the v0.4.18 reveal-near lesson.
-5. **Move the Down move arrow up one space, and add a double-down arrow that sends a guide to the ground.**
-   The Transform pad's vertical pair is in `GuideToolGui`'s Move section (`MoveArrowCodes` = away/toward/
-   left/right/up/down). The new action is NOT a step — it is "travel down until the guide rests on the
-   surface below", which is T1's contact rule (lowest voxel plane meets the surface) applied downward, so
-   reuse `TryGuideFloorSixteenths` in `GuideToolController` rather than deriving it twice.
-6. **Redo the mirror icon** so it has a mirror on BOTH sides of the line. `LayoutToolIcons.DrawActionMirror`.
-7. **Make the teeth taller on the Settings gear icon.** `LayoutToolIcons.DrawGear`; `rTip`/`rRoot` are the
-   two radii. `dev/RenderIcon.ps1 -Glyph gear` renders it — that harness is what settled the tooth count
-   and stroke weight in Session 32, and the same check applies to any change here.
+---
+
+## ⭐ ✅ The Session-33 polish queue — ALL SEVEN DELIVERED (v0.4.28, Session 34)
+
+Full record in `SESSION_34.md` §1. Kept for the record of what was asked.
+
+1. ~~**Remove the admin voxel-limit warning message in the GUI.**~~ **DONE.** The override data is
+   untouched — the packet fields, the Overrides tab and `/layout info <player>` all still report it.
+2. ~~**Left-align the Players button.**~~ **DONE.** The unsaved-changes marker moved to its own line: with
+   a button at each end of the row the gap is ~110 px, which is what "2 unsaved changes" needs, and any
+   rewording would have clipped.
+3. ~~**Alter the overflow text on the player's Overridden message.**~~ **DONE**, then superseded in v0.4.31
+   by marking each limit `(override)` / `(server)` inline. Fixed a second defect on the way: the old line
+   named `/layout voxelcap` whatever the override actually was.
+4. ~~**Work on the tile icons for rotate and tilt.**~~ **DONE.** The stroked chevron's trailing leg lay
+   along the ring and vanished into it; it is a filled triangle now, with the arc stopping short of it.
+5. ~~**Move the Down move arrow up one space, and add a double-down arrow that sends a guide to the
+   ground.**~~ **DONE.** `GuideToolController.GroundDropSixteenths`, reusing `TryGuideFloorSixteenths` as
+   directed. See `SESSION_34.md` §2.
+6. ~~**Redo the mirror icon.**~~ **DONE** — two closed, handed forms either side of the axis.
+7. ~~**Make the teeth taller on the Settings gear icon.**~~ **DONE** (v0.4.28, taper refined in v0.4.33).
+
+---
+
+## ⭐ Session-34 additions (human-requested 2026-07-29, all delivered)
+
+Full record in `SESSION_34.md`.
+
+- ~~**Momentary tiles give no click feedback.**~~ **FIXED (v0.4.29).** Move arrows, rotate corners and the
+  Reveal tiles reset themselves in the same call that ran their action, so the lit state never survived a
+  frame. **Still open:** the bare chevrons (`BareIconElement`) draw no chrome at all and have no press
+  state — one would have to be drawn from scratch.
+- ~~**Make player caps editable through the Players dialog.**~~ **DONE (v0.4.31–v0.4.33, protocol 24).**
+  Staged edits with Save, jail/free behind a confirmation, sorting, a name filter, a scroll pane, world
+  totals, and shared cap step sizes. **Scoped out at the human's direction:** detail panes on the
+  Overrides/Jail tabs, and per-player guide deletion.
 
 ---
 
@@ -338,10 +352,16 @@ reports intuitive block dimensions.
    messages printing their own format placeholders).
 3. **Perform a performance-focused code review.** — **PARTLY ADDRESSED** by Session 28's measured renderer
    work, but a general review of the non-render code has not been done.
-4. **Explore alternative rendering options for performance gains.** — **IN PROGRESS**, see
-   `PLAN_RENDER_PERFORMANCE.md` and `SESSION_28.md`. Vertex welding (v0.3.57) removed 41% of guide frame
-   cost with no visible change and is spent. A custom shader is under discussion. Ordering + spatial
-   culling remain gated behind a visible change to the accepted look.
+4. ~~**Explore alternative rendering options for performance gains.**~~ **DELIVERED — the custom shader
+   shipped and is what the mod renders with today** (human-confirmed 2026-07-29). Two levers were taken:
+   vertex welding (v0.3.57, −41% guide frame cost, no visible change, and now at the theoretical floor of
+   ~1.0 vertices per quad — spent), and the **custom guide shader** (v0.3.60, `assets/layout/shaders/
+   guide.vsh`/`.fsh`), which took an 8M-voxel guide from **8.2 ms to 1.8 ms — 78% removed**. Guides are
+   self-lit as a consequence; `shaderGuideBrightness` / `shaderAmbientResponse` approximate the old look
+   back, and `/layout shader off` restores the engine path for A/B. Detail in `PLAN_RENDER_PERFORMANCE.md`
+   and `SESSION_28.md`. **Still gated, and deliberately not the next step:** primitive ordering and spatial
+   culling, both of which regroup primitives and therefore change the accepted appearance (see the standing
+   constraint under A12). Reopen only from a NEW measured bottleneck.
 5. **Clean up and consolidate the documentation.** — **OPEN**, though Session 28 corrected the false
    performance claims in `SESSION_26.md`.
 
@@ -363,46 +383,27 @@ reports intuitive block dimensions.
 5. **Next playtest focus:** world load with the 8M guide (scaffold → grow-in, no hang); whether 100,000 is
    the right threshold; a second player watching a large guide arrive.
 
-### A12. Open — minor ground z-fighting (reported 2026-07-25, v0.3.6x)
+### A12. ✅ CLOSED — minor ground z-fighting (reported 2026-07-25, struck 2026-07-29)
 
-Guide voxels resting **on the ground** show very minor z-fighting. Not reproduced or judged from outside
-the game; the reporter was away from their machine.
+**Struck at the human's direction: the permanent face OUTSET settled it and the shimmer is not an issue.**
+v0.3.70 replaced the old inset with an outset derived from the guide's own voxel set, consulting the world
+not at all — the solidity probe and `_deferredSolidity` went with it — and `ZFightInset` defaulted to
+**0.0006**, five times smaller than the value this entry was arguing about. That removed the third and most
+likely candidate cause outright (there is no longer a probe that can fail to lift a face over farmland or a
+slab), and playtest settled the constant. `/layout inset <blocks>` remains as a live tuning knob if it ever
+comes back. Do not reopen without a fresh report.
 
-**Made tunable rather than guessed at (v0.3.65).** `/layout inset <blocks>` sets the anti-z-fight inset
-live, saves to `layout-client.json` as `zFightInset`, and rebuilds every guide. Default is the historical
-**0.003**, so nothing changes until it is deliberately dialled.
+### A12a. Standing renderer constraint — NOT a to-do, and not to be lost
 
-**Read this before picking a value.** The inset was settled by three rounds of playtest — 0.004 rejected as
-"seamy", 0.001 shimmered with distance, 0.003 chosen — but **the objection to 0.004 is obsolete**. That seam
-was between two adjacent guide voxels meeting across a block boundary, and exposed-face meshing (0.2.14) no
-longer emits those faces at all. The inset now only ever separates a guide face from a **world block** face,
-so values above 0.003 are safer today than when the ceiling was set.
+> **Discovered in Session 28.** Guides are *order-dependent* translucent geometry: Opaque stage, manual
+> alpha blending, depth-tested, double-sided. On a hollow shell the guide overlaps itself at nearly every
+> pixel, so whichever batch draws first wins. The accepted appearance is therefore partly a by-product of
+> voxel emission order, and **any change that regroups primitives changes the picture**. Welding was safe
+> precisely because it regroups nothing.
 
-**Candidate causes, most to least likely:**
-
-1. **0.003 is simply too small at distance or shallow angles.** Depth precision falls with distance, and the
-   `CameraNudge` (0.003, in `GuideRenderer.SetModelMatrix`) pulls the mesh toward the camera — which helps
-   a horizontal ground face when looking down at it, and barely at all when viewing from far away at a
-   shallow angle. Try `/layout inset 0.006` then `0.01`.
-2. **The custom shader does not implement `extraZOffset`.** `standard.vsh` applies
-   `gl_Position.w += extraZOffset`; the lean shader omits it. If the engine sets a nonzero value for the
-   Opaque stage, guides lost a small depth bias in v0.3.60. **Check first: does `/layout shader off` make
-   the shimmer go away?** That single test separates cause 1 from cause 2, and no code change is needed
-   to run it.
-3. **The lift is not being applied at all on that surface.** The lowest layer's bottom face is only lifted
-   when the solidity probe reports a solid block below (`GuideMeshBuilder`, `fy0`). A guide resting on
-   something the probe reads as non-solid — snow layer, farmland, a slab top — would get no lift. If the
-   shimmer is specific to certain ground types, this is the cause and the fix is in the probe, not the
-   constant.
-
-**Do not raise `CameraNudge` to compensate.** It is view-dependent by design and scales with distance from
-the mesh origin; using it to paper over a face-inset problem would shift every guide, not just ground faces.
-
-> **Standing constraint discovered in Session 28 — do not lose this.** Guides are *order-dependent*
-> translucent geometry: Opaque stage, manual alpha blending, depth-tested, double-sided. On a hollow shell
-> the guide overlaps itself at nearly every pixel, so whichever batch draws first wins. The accepted
-> appearance is therefore partly a by-product of voxel emission order, and **any change that regroups
-> primitives changes the picture**. Welding was safe precisely because it regroups nothing.
+This is what gates primitive ordering and spatial culling under A10.4, and it is why the Session 25–26
+experiments failed. It outlived A12, which is why it now sits in its own entry rather than inside a closed
+one. Also stated in `CLAUDE.md`'s renderer note and `SESSION_28.md`.
 
 ### A. Human backlog — queued at Session-16 end — ✅ ALL SEVEN DELIVERED (v0.2.22–v0.2.23)
 

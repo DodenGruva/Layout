@@ -159,6 +159,12 @@ namespace Layout.Network
         /// <summary>How many guides that player has in total, which may exceed the listed ones.</summary>
         public int PlayerGuidesTotal { get; private set; }
 
+        /// <summary>Every guide on the server, summed — what the world-wide caps are measured against.</summary>
+        public long WorldVoxelTotal { get; private set; }
+
+        /// <summary>How many guides exist on the server in total.</summary>
+        public int WorldGuideCount { get; private set; }
+
         /// <summary>The roster arrived; redraw the Players dialog.</summary>
         public event Action PlayerRosterChanged;
 
@@ -177,6 +183,30 @@ namespace Layout.Network
         {
             if (!_serverLayoutAvailable || string.IsNullOrEmpty(uid)) return;
             _channel?.SendPacket(new PlayerGuidesRequestPacket(uid));
+        }
+
+        /// <summary>
+        /// Sets one player's three cap overrides. 0 in a field clears that override. The server validates,
+        /// applies, and sends the whole roster back, so the dialog ends up showing what was really stored.
+        /// </summary>
+        public void SendPlayerPolicyEdit(
+            string uid, int voxelCap, int totalVoxelCap, int guideLimit)
+        {
+            if (!_serverLayoutAvailable || string.IsNullOrEmpty(uid)) return;
+            _channel?.SendPacket(new PlayerPolicyEditPacket
+            {
+                Uid = uid,
+                VoxelCapOverride = Math.Max(0, voxelCap),
+                TotalVoxelCapOverride = Math.Max(0, totalVoxelCap),
+                GuideLimitOverride = Math.Max(0, guideLimit)
+            });
+        }
+
+        /// <summary>Jails or frees one player. Separate from the cap edits by design — see PlayerJailPacket.</summary>
+        public void SendPlayerJail(string uid, bool jailed)
+        {
+            if (!_serverLayoutAvailable || string.IsNullOrEmpty(uid)) return;
+            _channel?.SendPacket(new PlayerJailPacket { Uid = uid, Jailed = jailed });
         }
 
         // v0.2.22: the chalk refill channels moved from server policy to a CLIENT preference, so the two
@@ -277,6 +307,8 @@ namespace Layout.Network
         private void OnPlayerRoster(PlayerRosterPacket packet)
         {
             PlayerRoster = packet?.Players ?? Array.Empty<PlayerRosterEntryDto>();
+            WorldVoxelTotal = packet?.WorldVoxelTotal ?? 0;
+            WorldGuideCount = packet?.WorldGuideCount ?? 0;
             PlayerRosterChanged?.Invoke();
         }
 
