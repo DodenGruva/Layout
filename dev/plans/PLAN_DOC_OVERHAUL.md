@@ -1,7 +1,52 @@
 # Plan — Documentation Overhaul
 
-> **Status: NOT STARTED.** Written 2026-07-29 at v0.4.33. To be executed as its own session, with **no
-> code changes in the same commits**. Everything here is text movement; nothing in `src/` is touched.
+> **Status: ✅ COMPLETE — executed 2026-07-30 at v0.4.33, all eight phases.** Written 2026-07-29. Reviewed and corrected on
+> 2026-07-30 before any file moved — see §0's re-measurement note, §7.1 (the trap baseline was understated),
+> §5.2 (the doc-debt conflict), §6 checks 6 and 10, and §8's `STATUS.md` criterion. Executed as its own
+> session, with **no code changes in the same commits**. Everything here is text movement; nothing in
+> `src/` is touched.
+>
+> **Phase log.**
+> - **Phase 0 — Archive. COMPLETE 2026-07-30.** Six documents frozen into
+>   `dev/archive/superseded-2026-07-30/` with banners, plus `dev/archive/README.md`. Every original verified
+>   **byte-identical** after its banner by direct byte comparison, not assumed. Publication-safety scan clean.
+> - **Phase 1 — Harvest. COMPLETE 2026-07-30.** `dev/GOTCHAS.md`: 25 traps, 8 reversals, and an appendix
+>   accounting for all 54 baseline markers. Post-harvest count re-run: **54, unchanged — nothing lost.**
+> - **Phase 2 — Split `TODO.md`. COMPLETE 2026-07-30.** 1,124 → **142 lines** (target ≤150), open items
+>   only. Delivered work extracted **verbatim** into `dev/history/DONE.md` (1,031 lines; 1,008 of them
+>   byte-identical lines from the original, the rest being its header and section notes). All 7 of
+>   `TODO.md`'s ⚠️ markers landed in `DONE.md`; repo-wide count re-run at **54, unchanged**.
+> - **Phase 3 — Foldering. COMPLETE 2026-07-30.** 26 session records → `dev/sessions/`, 5 plans (this file
+>   included) → `dev/plans/`, `CHANGELOG_ARCHITECTURE.md` → `dev/history/`. All via `git mv`, all recorded
+>   as renames. Added `dev/sessions/INDEX.md` (26 rows + a reading order) and `dev/sessions/TEMPLATE.md`.
+>   `CLAUDE.md`'s 38 now-broken references were folder-qualified mechanically; a check-10 dry run finds every
+>   backticked path in the living documents resolving.
+> - **Phase 4 — `ARCHITECTURE.md` rewrite. COMPLETE 2026-07-30.** 1,117 → **652 lines**. Built by verbatim
+>   extraction: 42 lines newly written (the header and the two removal notes), the rest byte-identical.
+>   **The Settled Decisions Register was verified character-for-character identical** before the file was
+>   installed — the install aborts otherwise. Sections 1 and 3 are emptied but retained by number, so older
+>   references still resolve and the removal is visible rather than a silent gap. Also dropped: a
+>   version-bound closing paragraph that claimed current state and pointed at two documents being archived.
+> - **Phase 5 — `STATUS.md`. COMPLETE 2026-07-30.** **265 lines** (target ~350), folding in `HANDOFF.md`
+>   (753) and `dev/PROJECT_STATUS.md` (423). Both retired from the living tree — each `git rm` is gated on
+>   its frozen copy existing. `dev/BUILD_INSTRUCTIONS.txt` retired likewise (its one unique item is
+>   `GOTCHAS` G23). `CHANGELOG.md`'s permanently-empty `## Unreleased` heading dropped. Mined forward from
+>   the two status docs: the module map, the exact configuration/limits table, and the data-flow summaries.
+>   **Closes the standing doc-debt item.**
+> - **Phase 6 — `CLAUDE.md` rewrite. COMPLETE 2026-07-30.** 376 → **116 lines** (acceptance ≤130), with the
+>   task index. Zero per-session narrative blocks; the 16 inlined traps are now `GOTCHAS` pointers. Removed
+>   two stale claims it had been carrying: `Current: v0.4.1` (build was v0.4.33) and "v0.3.59–v0.3.69 are on
+>   `beta-shader`, not yet merged" — that branch no longer exists and the shader is live on `beta`.
+> - **Phase 7 — `DocCheck.ps1` + `WIRE_HISTORY.md`. COMPLETE 2026-07-30.** `WIRE_HISTORY.md` built by
+>   reading `RegistrationOrder()` in `PacketTypes.cs`, whose per-packet comments name the protocol version
+>   each was added at — so the ledger is derived from the authority, not reassembled from prose. Six bumps
+>   that added no packet are marked *(none)* rather than invented. **`DocCheck.ps1` passes**, and all ten
+>   checks were negative-tested with planted faults.
+>
+> **ALL PHASES COMPLETE.** `dotnet build -c Release`: 0 warnings, 0 errors. `src/`, `Layout.csproj` and
+> `assets/` are untouched — verified by `git status`.
+>
+> **Not committed.** Commits are made only when the human instructs (standing rule, `CLAUDE.md`).
 >
 > ⚠️ **NOTHING IS DELETED. EVER.** Every document being overhauled is **archived intact** first — see §2.
 > This is a human-set constraint, not a preference to be optimised away.
@@ -12,13 +57,18 @@
 
 Taken 2026-07-29 against the live tree. These are the argument; re-measure before starting.
 
+> **Re-measured 2026-07-30 before execution.** Everything below held except the trap count, which was
+> understated — see the row and §7.1. `ARCHITECTURE.md`'s §1 + §3 are exactly 355 lines and its KEEP
+> sections exactly 600, so §3's arithmetic is confirmed. Total documentation is now 107,773 words; the
+> ~3,800-word delta is this plan itself.
+
 | Symptom | Measurement |
 |---|---|
 | Total documentation | **~104,000 words** across 30 files — likely more than the source it describes |
 | `CLAUDE.md`, loaded **every session** | 376 lines, growing by a "Session-3x additions" block per session |
 | `dev/TODO.md`, read often | 1,118 lines, of which **~710 (63%) are delivered/resolved archive** |
 | `dev/ARCHITECTURE.md` | 1,117 lines, of which **355 (32%) are file structure + module map** — derivable from source, and the fastest-rotting content in the repo. A further ~180 lines are version preamble and a document-changelog index duplicating `CHANGELOG_ARCHITECTURE.md`. |
-| Hard-won ⚠️ traps | **45 markers scattered across 10 files**, with no home and no index |
+| Hard-won ⚠️ traps | **54 markers scattered across 12 files**, with no home and no index (the 2026-07-29 figure of 45/10 missed two files outright — §7.1) |
 | Session records | **26 files** (`SESSION_9` … `SESSION_34`), no index, ~6,500 lines |
 
 **The root cause is not size. It is that documents are organised by SUBJECT, while maintenance cost is
@@ -59,7 +109,7 @@ practical purposes rather than wrong.)
 | **1 · Durable** | `dev/ARCHITECTURE.md`, `dev/GOTCHAS.md` | When a decision changes | **Never mentions a version or a date.** |
 | **2 · Current state** | `STATUS.md` | Every session | **Regenerated wholesale, never edited.** |
 | **3 · History** | `CHANGELOG.md`, `dev/sessions/`, `dev/plans/`, `dev/history/` | Append-only | **Never revised, therefore never stale.** |
-| **4 · Archive** | `dev/archive/superseded-2026-07-29/` | Never | **Frozen. Read-only. Never cited as current.** |
+| **4 · Archive** | `dev/archive/superseded-2026-07-30/` | Never | **Frozen. Read-only. Never cited as current.** |
 
 ### 1.1 File-by-file disposition
 
@@ -77,7 +127,7 @@ practical purposes rather than wrong.)
 | `dev/SESSION_*.md` (26) | **MOVE** to `dev/sessions/`, content untouched — history is not revised. Add `INDEX.md` (§5.3). |
 | `dev/PLAN_*.md` (5, incl. this one) | **MOVE** to `dev/plans/`, content untouched. |
 | `dev/RenderIcon.ps1` | **KEEP.** Tooling, not documentation. |
-| `BUILD_INSTRUCTIONS.txt` | **ARCHIVE** if superseded by `CLAUDE.md`'s build section — verify first, it may hold unique setup detail. |
+| `BUILD_INSTRUCTIONS.txt` | **ARCHIVE — verified 2026-07-30.** Superseded (its own banner says so; it describes v0.1.0 at 35 source files). It holds **one** thing `CLAUDE.md` does not, and phase 6 must carry it across: **if a build cannot find `Newtonsoft.Json.dll` or `protobuf-net.dll`, the install may keep them in the root rather than `Lib\` — drop the `\Lib` from that one `HintPath`.** That is a real setup failure with a non-obvious fix and it exists nowhere else. Everything else in the file is either in `CLAUDE.md` already or derivable from `assets/` and `src/`. |
 | — | **NEW:** `dev/GOTCHAS.md` (§5.1), `STATUS.md` (§5.2), `dev/sessions/INDEX.md` (§5.3), `dev/WIRE_HISTORY.md` (§5.4), `dev/sessions/TEMPLATE.md` (§5.6), `dev/DocCheck.ps1` (§6). |
 
 ---
@@ -85,7 +135,7 @@ practical purposes rather than wrong.)
 ## 2. Archiving — the human-set constraint
 
 **Every document that is rewritten, split, folded or superseded is copied intact into
-`dev/archive/superseded-2026-07-29/` FIRST, preserving its original filename.** The folder is a snapshot of
+`dev/archive/superseded-2026-07-30/` FIRST, preserving its original filename.** The folder is a snapshot of
 the doc set exactly as it stood at v0.4.33, immediately before the overhaul.
 
 Git already preserves all of this in history, but **that is not sufficient here**: the person who most needs
@@ -94,10 +144,13 @@ the reassurance does not use `git show`, and a working-tree copy is a working-tr
 **The one genuine risk of archiving is that a frozen copy gets read as current.** Three mitigations, all
 required:
 
-1. **The folder name carries the verdict** — `superseded-2026-07-29`, not `old` or `backup`.
+1. **The folder name carries the verdict** — `superseded-2026-07-30`, not `old` or `backup`. The date is
+   the date the snapshot was TAKEN (execution began 2026-07-30), not the date the plan was written. The
+   doc-state it freezes is pinned by `v0.4.33` in the banner, so the folder name is free to mean what it
+   says. A banner asserting a date on which nothing happened is the same defect §0 diagnoses.
 2. **Every archived file gets a banner prepended at archive time**, before the original first line:
    ```markdown
-   > 🗄️ **ARCHIVED 2026-07-29 at v0.4.33 — SUPERSEDED, DO NOT USE AS CURRENT.**
+   > 🗄️ **ARCHIVED 2026-07-30 at v0.4.33 — SUPERSEDED, DO NOT USE AS CURRENT.**
    > Frozen exactly as it stood before the documentation overhaul. Its successor is `<path>`.
    > Kept so nothing is ever lost. Never edit this file; never cite it as current.
    ```
@@ -145,7 +198,7 @@ Eight phases. **Each is independently committable and reviewable.** Stop after a
 
 | # | Phase | Risk | Notes |
 |---|---|---|---|
-| 0 | **Archive** — snapshot every affected doc into `dev/archive/superseded-2026-07-29/` with banners + README | **None (pure addition)** | Do this before anything else touches a byte |
+| 0 | **Archive** — snapshot every affected doc into `dev/archive/superseded-2026-07-30/` with banners + README | **None (pure addition)** | Do this before anything else touches a byte |
 | 1 | **Harvest** — build `dev/GOTCHAS.md` from all 45 ⚠️ markers | **None (additive)** | See §7 |
 | 2 | **Split `TODO.md`** — open items stay, delivered → `dev/history/DONE.md` | Low | Biggest read-cost win |
 | 3 | **Foldering** — `dev/sessions/`, `dev/plans/`, `dev/history/`; write `INDEX.md` + `TEMPLATE.md` | Low | `git mv`; update pointers in `CLAUDE.md` |
@@ -203,6 +256,20 @@ Folds in `HANDOFF.md` + `dev/PROJECT_STATUS.md`. Target ~350 lines.
 
 **Regenerated wholesale each session, never edited.** Editing is precisely how `PROJECT_STATUS.md` drifted
 three sessions behind. Keep it short enough that rewriting beats patching — that is a feature, not a cost.
+
+**Phase 5 must REWRITE the standing doc-debt note, not tick it.** `dev/TODO.md` lines 112–119 carry a
+human-requested item from 2026-07-27 that this plan overrides on two points:
+
+| The doc-debt note says | This plan does |
+|---|---|
+| "then **delete** `PROJECT_STATUS.md`" | Archives it. **The no-delete constraint in §2 wins** — it is the later and more explicit human instruction. |
+| Keep `HANDOFF.md` as the single current-state document | Archives `HANDOFF.md` too; `STATUS.md` is the survivor. |
+
+Its remaining instructions still stand and must be carried out: fold across `PROJECT_STATUS.md`'s
+per-module descriptions (the note and §1.1 independently identify these as the likeliest unique content),
+update every reference — `CLAUDE.md`, `ARCHITECTURE.md`'s banner, `TODO.md`'s own Purpose line at line 3,
+and the "Next session — start here" reference at line 1088 — and honour its closing warning: **maintaining
+one fewer status doc is the goal, so do not simply move the redundancy into `STATUS.md`.**
 
 ### 5.3 `dev/sessions/INDEX.md` — the archive index (Tier 3, append-only)
 
@@ -287,13 +354,36 @@ checks only — it must never try to judge prose.**
 4. `CHANGELOG.md` has an entry for the current `modinfo.json` version.
 5. Every `dev/sessions/SESSION_*.md` has a row in `INDEX.md`.
 6. **No tracked file contains `C:\Users` or a personal username.** *(Publication safety — the repo is
-   public. Highest-value check here.)*
+   public. Highest-value check here.)* **This check runs repo-wide, `dev/archive/` INCLUDED** — the archive
+   is tracked and therefore published, so a personal path in a frozen copy ships exactly as readily as one
+   in a living file. Publication safety is not a currency check and the archive gets no exemption from it.
+   *(Verified clean at 2026-07-30: `git grep "C:\Users"` returns nothing, and `dev/` is 37 tracked files.)*
 7. **No non-ASCII byte in `modinfo.json` outside the BOM.** *(The description was double-encoded and shipped
    mojibake to players; caught in Session 34.)*
 8. **No file outside `dev/archive/` links into `dev/archive/`** other than `dev/archive/README.md` itself.
 9. Every file in `dev/archive/` carries the archived banner.
+10. **Every pointer resolves.** Two parts, both purely mechanical:
+    - Every relative markdown link and every backticked path in `CLAUDE.md`, `STATUS.md` and
+      `dev/GOTCHAS.md` names a file that exists.
+    - Every GOTCHAS trigger quoted in `CLAUDE.md`'s task index (§5.7) matches the text of a real
+      `GOTCHAS.md` entry.
 
-Exit non-zero on any failure; print one line per problem. `dev/archive/` is otherwise excluded from all checks.
+    **Resolve bare filenames by convention.** Tier 3 files moved intact in phase 3 still refer to
+    `SESSION_28.md` and `PLAN_RENDER_PERFORMANCE.md` without a folder, because rewriting them would destroy
+    the verbatim property that makes them trustworthy. The check must therefore resolve a bare
+    `SESSION_*.md` against `dev/sessions/`, a bare `PLAN_*.md` against `dev/plans/`, and only then report a
+    failure. **Living documents get no such latitude** — in `CLAUDE.md`, `STATUS.md` and `GOTCHAS.md` a path
+    must be written out and must resolve as written.
+
+    **This is the most valuable check in the list and the one the first draft omitted.** §0.1 names a
+    document that "sends you somewhere else entirely" as the single highest cost in this scheme — and after
+    the overhaul `CLAUDE.md` is almost nothing *but* pointers, indexed by hand-copied trigger strings.
+    A broken pointer is that exact failure mode, made likelier by the very restructuring this plan performs,
+    and it is catchable without judging one word of prose. Renaming a GOTCHAS entry and forgetting its index
+    row is not a hypothetical: it is what §5.7 asks a future session to do by hand, every time.
+
+Exit non-zero on any failure; print one line per problem. Apart from checks 6, 8 and 9 — which exist
+*because* of the archive, not in spite of it — `dev/archive/` is excluded from every check.
 
 ---
 
@@ -304,18 +394,54 @@ trap that is archived and then never carried forward — present in the repo, ab
 The Session-28 order-dependence constraint already had a near-miss: it lived inside `TODO` item A12 and had
 to be rescued into its own entry when A12 was struck.
 
-1. Baseline the count before anything moves:
-   ```
-   grep -c "⚠️" CLAUDE.md HANDOFF.md dev/*.md
-   ```
-   Expected at time of writing: **45 across 10 files** (CLAUDE 16, HANDOFF 6, SESSION_34 7, SESSION_33 4,
-   SESSION_32 3, TODO 3, PROJECT_STATUS 2, SESSION_17 2, ARCHITECTURE 1, SESSION_26 1).
+1. Baseline the count before anything moves — see §7.1, which is the authoritative figure.
 2. Every one becomes a `GOTCHAS.md` entry **or** is consciously judged redundant with one, and the
    judgement is written into the harvest commit message.
 3. **Session records keep their ⚠️ text.** Not duplication: the session holds the *narrative* ("here is what
    happened and how we found it"), `GOTCHAS` holds the *rule* ("do this, never that") plus a pointer back.
    Different content, different lifetime.
 4. Re-run the count afterwards. It must not have dropped in any Tier 3 file.
+
+### 7.1 The baseline — measured 2026-07-30, at v0.4.33
+
+The 2026-07-29 figure quoted throughout the first draft of this plan (**45 across 10 files**) was **wrong**.
+It missed `SESSION_9.md` and `SESSION_10.md` entirely, and understated `TODO.md` and `PROJECT_STATUS.md`.
+Recorded here rather than silently corrected, because a harvest gate that starts from a short count is
+precisely the near-miss this section exists to prevent — it would have declared success while four traps
+in two never-inspected files sat outside the sweep.
+
+**Count the same way both times.** Occurrences, not marker-lines:
+
+```
+grep -o "⚠" CLAUDE.md HANDOFF.md dev/*.md | wc -l
+```
+
+(As of 2026-07-30 the two metrics agree — no line carries two markers — but that is a coincidence, not a
+guarantee. Note the pattern is the bare `⚠`, not `⚠️`: the marker appears both with and without its
+variation selector, and matching the two-codepoint form silently misses the bare ones.)
+
+| File | Markers |
+|---|---|
+| `CLAUDE.md` | 16 |
+| `dev/TODO.md` | 7 |
+| `dev/SESSION_34.md` | 7 |
+| `HANDOFF.md` | 6 |
+| `dev/SESSION_33.md` | 4 |
+| `dev/SESSION_32.md` | 3 |
+| `dev/SESSION_9.md` | 3 |
+| `dev/PROJECT_STATUS.md` | 3 |
+| `dev/SESSION_17.md` | 2 |
+| `dev/ARCHITECTURE.md` | 1 |
+| `dev/SESSION_10.md` | 1 |
+| `dev/SESSION_26.md` | 1 |
+| **Total** | **54 across 12 files** |
+
+`dev/PLAN_DOC_OVERHAUL.md` carries a further 6 markers of its own. They are **excluded** from the
+baseline — they are this document's prose, not harvestable traps. Total repo-wide is therefore 60.
+
+**`SESSION_9.md` and `SESSION_10.md` must be read during the harvest**, not skipped as "early sessions
+long superseded." They were never inspected for the 2026-07-29 list, so their four markers are the only
+ones in the set whose content is entirely unreviewed.
 
 **Known do-not-lose items** (non-exhaustive; the grep is authoritative):
 
@@ -336,14 +462,24 @@ to be rescued into its own entry when A12 was struck.
 
 ## 8. Acceptance criteria
 
-- [ ] `dev/archive/superseded-2026-07-29/` holds an intact copy of every overhauled document, each with the
+- [ ] `dev/archive/superseded-2026-07-30/` holds an intact copy of every overhauled document, each with the
       §2 banner, plus a `README.md`. **No original content exists only in git history.**
-- [ ] `grep -c "⚠️"` across the repo has not decreased, and every pre-existing trap is either a `GOTCHAS`
-      entry or a written-down judgement of redundancy.
+- [ ] The §7.1 marker count (54 across 12 files) has not decreased, counted the same way, and every
+      pre-existing trap is either a `GOTCHAS` entry or a written-down judgement of redundancy.
 - [ ] `CLAUDE.md` ≤ ~130 lines, contains no per-session narrative, and carries the task index.
-- [ ] `dev/ARCHITECTURE.md` contains no version number, no date, and no staleness banner.
+- [ ] `dev/ARCHITECTURE.md` makes **no claim about the current state** — no current version, no date, no
+      staleness banner, no "consolidated to current state" closer, and no version in its title.
+      **Historical version citations in the Settled Decisions Register are correct and must stay**
+      ("filled volumes retired in v0.2.17"): they record *when a decision was made or reversed*, which is
+      permanent fact and cannot rot. The original criterion said "contains no version number" flatly, which
+      would have condemned the single most valuable section in the file — the same blunt-criterion mistake
+      as the `STATUS.md` line above. What rots is a claim about *now*, not a citation of *then*.
 - [ ] `dev/TODO.md` ≤ ~150 lines and contains only open items.
-- [ ] `STATUS.md` covers everything `HANDOFF.md` and `PROJECT_STATUS.md` did.
+- [ ] `STATUS.md` orients a reader on everything `HANDOFF.md` and `PROJECT_STATUS.md` were read *for*,
+      and every fact it drops is either derivable from source in one tool call, rehomed into a Tier 1/3
+      document, or sitting in the archive. **Not** "covers everything they did" — that was the original
+      wording and it is arithmetically impossible: 1,176 lines do not survive into ~350. Stating it the
+      honest way is what stops the criterion being quietly reinterpreted while phase 5 is in flight.
 - [ ] Every session file is reachable from `dev/sessions/INDEX.md`.
 - [ ] `dev/DocCheck.ps1` passes.
 - [ ] `dotnet build -c Release` still clean — **no `src/` file was touched.**

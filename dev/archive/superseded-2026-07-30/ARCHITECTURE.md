@@ -1,24 +1,165 @@
-# Layout - Architecture
+> 🗄️ **ARCHIVED 2026-07-30 at v0.4.33 — SUPERSEDED, DO NOT USE AS CURRENT.**
+> Frozen exactly as it stood before the documentation overhaul. Its successor is `dev/ARCHITECTURE.md (rewritten)`.
+> Kept so nothing is ever lost. Never edit this file; never cite it as current.
 
-> **Tier 1 - durable.** This is the blueprint: what Layout is, what was decided, and why. It changes
-> when a DECISION changes, not when the build does.
->
-> **It states no current version, no date, and carries no staleness banner - deliberately.** Its
-> predecessor carried all three and all three went stale, including the banner announcing the staleness.
-> A banner is itself a fact requiring maintenance, and needing one is the signal that content sits in the
-> wrong document. **For where things stand right now, read `STATUS.md`** - that is its whole job, and it
-> is regenerated rather than edited so it cannot drift.
->
-> Version numbers DO appear below, in the Settled Decisions Register, and they belong there: they cite
-> **when a decision was made or reversed**, which is permanent historical fact. What this document must
-> never contain is a claim about the CURRENT state, because that is what rots.
->
-> **The Settled Decisions Register is the highest-value section here.** Do not reopen a settled decision
-> without the human explicitly asking.
->
-> Sections 1 and 3 are retained but emptied - see the notes in place. Numbering is unchanged so older
-> references keep resolving. This document's own revision history lives in
-> `dev/history/CHANGELOG_ARCHITECTURE.md`.
+# Layout — Architecture Document (v3.14)
+
+> ⚠️ **THIS FILE TRAILS BY FOUR SESSIONS (last revised at v0.3.53; current build is v0.4.0).** Its plan
+> and its **Settled Decisions Register remain authoritative** — nothing since has reopened a settled
+> decision — but it predates **Session 28** (vertex welding, settled-shell streaming, the custom guide
+> shader, voxel outlines), **Session 29** (block occupancy, the face outset) and **Sessions 30–31** (the
+> **Transform** tool mode — move, rotate, copy, mirror; **wire protocol 16 → 19**; a fourth `ToolMode`;
+> 81 source files). Read `HANDOFF.md` and `SESSION_28/29/30/31.md` for those.
+
+**Supersedes v3.13 — persistent per-player cumulative-cap overrides and the final release
+(v0.3.53).** v2.5 consolidated five
+revisions into the **Settled Decisions Register** below; v2.6 folded in **Session 9** (extended shape
+catalog, Divisions overlay, slave-regime flow); v2.7 folded in **Session 10** (icon-tile GUI, the B-S10-1
+surface-reload fix, the divisions number input, the third **Edit** tool mode, paired division markers).
+v2.8 folded in Session 11 and the post-finalize 3D work: the **three-click triangle**, the
+**CTRL/SHIFT remap** (CTRL = cardinal, SHIFT = draft-invert + placed-guide spring-back) with
+**every-shape-defaults-up**, the **Polygon** and **Free-Shape**, the **hard-kept favorites picker + catalog
+fold-out**, a long GUI-polish loop, the **3D VOLUME family** (Sphere/Dome/Cylinder/Cone/Box — cell-lattice
+scan, always Volumetric), the **`/layout dispel` admin commands**, the **hard voxel ceiling**, and the
+**running-total→`long`** widening. **v2.9 folds in F4:** automatic local authority on servers without Layout,
+policy-controlled private overlays on Layout servers, the side-neutral `GuideManager` seam, per-world/per-UID
+client persistence, mixed ownership/undo routing, private publication, and ownership presentation. **v3.0
+folds in the cap-performance and interaction pass:** threshold-aware 3D counting, natural at-cap drag
+clamping, rendered-voxel first-hit picking, complete drag snapshots, robust curve-cache invalidation, and
+passive non-deforming Arch lock markers. **v3.1 added the exact surface-area-oriented hollow Sphere/Dome
+scanner and recorded the now-playtest-confirmed mesh frontier. v3.2 folded in F5 — the Chalking Kit: the
+custom deflating 4-state model, 32-chalk durability with powder refills, ground storage + in-place ground
+refill, the private-placement charge packet (protocol 4), and the placement/refill feedback effects. **v3.3
+folds in the mesh + polish arc (v0.2.10–v0.2.21):** large-guide **exposed-face meshing (Stage A)** with a
+solidity-aware z-fight inset, the **retirement of filled 3D volumes** (always hollow shells now), the
+dome-faces-clicked-surface fix, the HUD hover re-measure fix, GUI number-field alignment, the restored
+draft-cap clamp, the fifth (**High**) fill state, and **server-config-gated hotbar/inventory refill
+channels** (protocol 5). **v3.4 folds in the seven-item human backlog (v0.2.22–v0.2.23):** the chalk refill
+channels moved from server config to a **client preference** (protocol 6, via the new
+`ChalkRefillPrefsPacket`), a **hard 32-chalk ceiling** immune to other mods' crafting-quality bonuses, the
+removal of the hotbar refill-off warning, an audit of the multiplayer draft packet rate (no change needed),
+and publication readiness — authorship, **all-1.22.x** targeting, and portable build paths. **v3.5 folded in
+the Tapered Cylinder delta (v0.2.24–v0.2.28); v3.6 removes its fixed scan ceiling when server caps are
+raised/unlimited, stabilizes the height→rim transition with release-and-annulus capture, adds voxel-count-aware
+throttling for expensive draft work, and expands placement feedback with capped zero-gravity dust across 2D
+curves and full 3D shells. **v3.7 closes B-S9-1 through exact rendered-cell ownership, adds straight and
+tapered Polygonal Prisms, simplifies the private dispel and ground-storage gestures, introduces stage-aware
+native modifier notes, persists polygon flat-side alignment, adds 45-degree Line/Free-Shape constraints, and
+makes tapered-rim flare opt-in. **v3.8 adds motion-sensitive structural previews, selected-scale cursor
+precision, generation-safe background refinement and batched materialization, cached placed-guide metadata,
+retained-mesh cancel quarantine, canonical/persistent Shell↔Wireframe form, size-weighted placement sound,
+and surface-proportional oversized Cylinder/Cone/Box fallback generation.** The register, file tree, module
+map, persistence, and edge cases below are updated in place to the v0.3.53 / DataVersion 12 / protocol-16 /
+77-file state; the per-revision deltas live
+in **`CHANGELOG_ARCHITECTURE.md`** (indexed below).
+
+**v3.9 adds the fixed-footprint action-aware HUD and contextual shape tile; creator/Last Sculptor tracking
+with on-demand `/layout who`; Edit right-click deselection and selected-setting reflection; settled
+selected-scale materialization for large sculpted guides; tapered-rim sculpt parity; and signed half-voxel
+translation when an active draft switches Surface↔Volumetric.**
+
+**v3.10 folds in Session 23 (v0.3.22–v0.3.34): persistent moderation and per-player capacity policy;
+claim-authoritative public geometry; comatose-draft HUD treatment; one low-priority immense create/sculpt
+validation lane with bounded claim ticks; retained placement/sculpt visual handoffs; cancellable progressive
+shape scans; organic neighbour-growth materialization; whole-guide view-distance culling; and personal
+`/layout off|on` rendering control.**
+
+**v3.11 folds in Session 24 (v0.3.35–v0.3.40): base-plus-proportional nucleation and size-aware reveal
+cadence; a complete-growth hold followed by an atomic clean-shell swap; scaffold and placement-effect
+gating; cancellable Wireframe→Shell materialization; below-threshold sculpt-latch closure; polygonal-prism
+scan rejection; and shape-intrinsic HUD dimensions.**
+
+**v3.12 folds in Session 25 (v0.3.41–v0.3.43): whole-guide camera-frustum rejection; local last-frame render
+statistics; and 32-block independently culled clean final meshes with cross-region occupancy and
+reload-time background materialization.**
+
+**v3.13 folds in Session 26 (v0.3.44–v0.3.52): the rejected greedy/depth experiments; exact restoration of
+the v0.3.42 renderer after spatial seams, fidelity defects, and worse real-play FPS; persistent personal
+render state; a 500,000 per-guide default and 1,000,000 cumulative original-creator cap; a narrowly migrated
+unlimited world default; and login/tool/HUD guidance while rendering is off.**
+
+**v3.14 folds in Session 27 (v0.3.53): persistent `/layout totalvoxelcap` overrides for one original
+creator's cumulative public-guide allowance, effective-cap enforcement across every ordinary/immense/
+restore path, expanded administrator reporting, and the final release package.**
+
+**Where the project stands:** Layout **v0.3.53 final release** is built, packaged, and documented.
+All seven modules, the complete 2D/3D catalog, normal public multiplayer, vanilla-server local
+fallback, mixed public/private operation, and the full F5 chalk system run against **VS 1.22.x** / .NET 10.
+The catalog is **15 shape types / 21 picker tiles**, **DataVersion 12**, **protocol 16**, and **77 source
+files**. F4 and F5 are feature-complete. The large-guide mesh Stage A remains; v0.3’s immense path keeps
+motion, final placement/sculpt, and public validation off the main-frame/tick cliffs through bounded client
+and server pipelines. Filled 3D interiors are retired; volumes persist as a hollow Shell or canonical
+structural Wireframe. Whole guides outside view distance/frustum are culled; spatial final meshes and greedy
+face merging are not part of the accepted renderer.
+The Session-16 backlog is fully delivered. Public/private multiplayer passed the v0.2.35 release test,
+fired-jug/raw-jug crafting is confirmed, and B-S9-1 closed with a human-approved v0.2.36 playtest. Remaining:
+field soak for v0.3.53 visibility persistence, creator-budget overrides, and off-state tool gating.
+Two items carry
+verification debt — the chalk ceiling has not been tested against xskills itself, and 1.22.0 support is
+declared but untested. See `TODO.md` and `SESSION_17.md`.
+
+> **▶ IMPLEMENTED — client-only / server-less fallback mode (F4, v0.1.28–v0.1.45).** On a server without
+> Layout, a three-second positive-proof detection window falls back to a client-side
+> `LocalGuideAuthority`; Hammer offhand + Flax Twine main hand activates the normal HUD and F-menu. On a
+> Layout server, private overlays are denied by default and require `allowClientOnlyMode=true`; the real
+> Layout tool remains the gate in both public and private placement modes. The same side-neutral
+> `GuideManager` supplies local parity, while guide ownership routes edits and last-operation authority
+> routes undo/redo. Private guides persist per server/world + player UID. `PLAN_CLIENT_ONLY.md` is the final
+> behavior and implementation record; `SESSION_12.md` is the version history.
+
+> **▶ IMPLEMENTED — the Chalking Kit (F5, v0.2.0–v0.2.9; refill channels v0.2.21, moved client-side v0.2.22;
+> hard 32 ceiling v0.2.23).** The tool is the
+> **Chalking Kit** (custom deflating **5-state** model — full/high/medium/low/empty, FULL reserved for a
+> completely full kit; mod name stays Layout) with **32-chalk durability**: completed placements cost
+> 2D −1 / 3D −2 (flat, never size-scaled), nothing else costs anything, undo never refunds, and at 0 only
+> NEW placement is blocked — the kit can never break (custom clamp; vanilla `DamageItem` is never called).
+> **32 is a HARD ceiling** (`ItemGuideTool.MaxChalk`, v0.2.23): chalk is read straight off the stack
+> attribute and clamped, and `GetMaxDurability`/`GetRemainingDurability` are overridden **without calling
+> base**, because base walks the collectible's BEHAVIORS — the hook other mods (xskills) use to grant a
+> crafting-quality durability bonus. An inflated kit self-heals to 32 on next use.
+> **Chalking Powder** refills +4 per powder through three channels: **ground storage** (SHIFT+right-click a
+> set-down kit; always allowed, the bag re-inflates live), the **hotbar** tap/hold shortcut, and a
+> **cursor-onto-inventory-slot** click — the latter two are **client-preference opt-in**
+> (`allowHotbarChalkRefill` / `allowInventoryChalkRefill` in `layout-client.json`, both default false; a
+> player setting, not server policy as of v0.2.22). **Private placements on a
+> Layout server charge too** via the client-reported, server-validated `ChalkChargePacket`; the only chalk-free
+> case is a server without Layout, where no custom item can exist. Creative exempt; `enableChalkDurability`
+> server config. Ground storage: SHIFT+right-click set-down, idle-gated. Placement feedback keeps the
+> falling whole-guide chalk flecks and bow-release snap, plus capped zero-gravity dust: broad sideways scatter
+> along 2D curves and outward/upward drift distributed across full 3D shells.
+> `PLAN_CHALKING_KIT.md` carries the design rationale and plan-vs-shipped deltas; `SESSION_15.md` +
+> `SESSION_16.md` are the version history.
+
+---
+
+## Document changelog — index
+
+Per-revision deltas for THIS document (v2.5 → v3.14) now live in **`CHANGELOG_ARCHITECTURE.md`**. They are
+not repeated here: every delta is already folded in place into the register / file tree / module map /
+persistence / edge cases below, and each has a fuller narrative in its session record. Use this table to find
+*when* something changed; read the body below for *what is true now*.
+
+| Doc rev | Mod versions | Theme | Session record |
+|---|---|---|---|
+| v3.14 | v0.3.53 | Per-player cumulative-cap override; final release | `SESSION_27.md` |
+| v3.13 | v0.3.44 → v0.3.52 | Meshing rollback; persistent visibility; cumulative creator cap; off-state tool lockout | `SESSION_26.md` |
+| v3.12 | v0.3.41 → v0.3.43 | Whole-guide frustum culling; render stats; 32-block spatial settled meshes | `SESSION_25.md` |
+| v3.11 | v0.3.35 → v0.3.40 | Materialization completion; clean-shell transitions; intrinsic HUD dimensions | `SESSION_24.md` |
+| v3.10 | v0.3.22 → v0.3.34 | Moderation/claims; bounded immense validation; organic materialization; render controls | `SESSION_23.md` |
+| v3.9 | v0.3.9 → v0.3.21 | Action-aware HUD; attribution; sculpt parity; projection-transition fix | `SESSION_22.md` |
+| v3.8 | v0.3.0 → v0.3.8 | Adaptive draft/materialization; cached hover; safe cancel; persistent Shell/Wireframe | `SESSION_21.md` |
+| v3.7 | v0.2.36 → v0.2.47 | Precise locks; polygonal volumes; stage-aware help; flat/diagonal/rim modifiers | `SESSION_20.md` |
+| v3.6 | v0.2.29 → v0.2.35 | Unlimited-cap tapered-cylinder semantics; safe rim capture; adaptive draft work; full-shape dust | `SESSION_19.md` |
+| v3.5 | v0.2.24 → v0.2.28 | Tapered Cylinder (4-click frustum, protocol 7); scan-guard and cap-clamp fixes; raw-vessel recipe fix | `SESSION_18.md` |
+| v3.4 | v0.2.22 → v0.2.23 | Refill config → client (protocol 6), hard 32-chalk ceiling, publication readiness | `SESSION_17.md` |
+| v3.3 | v0.2.10 → v0.2.21 | Mesh Stage A (exposed-face), filled-volume retirement, refill channels, polish | `SESSION_16.md` |
+| v3.2 | v0.2.0 → v0.2.9 | The Chalking Kit (F5): durability, powder refills, ground storage | `SESSION_15.md` |
+| v3.1 | v0.1.53 | Hollow-shell scaling (`SphericalShellScan`); mesh frontier confirmed | `SESSION_14.md` |
+| v3.0 | v0.1.46 → v0.1.52 | Cap performance + interaction correctness; passive lock markers | `SESSION_13.md` |
+| v2.9 | v0.1.28 → v0.1.45 | ClientOnlyFallback (F4): local authority, private overlays | `SESSION_12.md` |
+| v2.8 | v0.1.14 → v0.1.27 | Session 11 + the 3D volume family; CTRL/SHIFT remap; voxel ceiling | `SESSION_11.md` |
+| v2.7 | — | Session 10: icon-tile GUI, Edit mode, divisions input | `SESSION_10.md` |
+| v2.6 | — | Session 9: extended shape catalog, divisions overlay, slave regime | `SESSION_9.md` |
 
 ---
 
@@ -390,28 +531,120 @@ reason it won. Reversing any of these needs an explicit call from the human, not
 
 ---
 
-
----
-
-## 1. File Structure - REMOVED, derivable from source
-
-**This section was 117 hand-maintained lines listing the contents of `src/`. It is gone on purpose.**
-
-`Glob` and `Grep` answer this instantly and *correctly*. A hand-maintained file list is guaranteed to
-drift, and it drifts while still looking authoritative - which is the expensive kind of wrong. It was
-already the fastest-rotting content in the repository.
+## 1. File Structure
 
 ```
-Glob   src/**/*.cs           - the whole tree
-Glob   src/Shapes/*.cs       - one area
-Grep   "class GuideManager"  - where something lives
+Layout/
+├── modinfo.json
+├── assets/
+│   └── layout/
+│       ├── itemtypes/
+│       │   ├── guidetool.json            [Chalking Kit: durability 32, GroundStorable, chalkbag-full shape]
+│       │   └── chalkingpowder.json       [S15: the refill item; powdered-sulfur look, Messy12 storable]
+│       ├── recipes/grid/                 [guidetool (8-powder kit craft) + chalkingpowder (dye mixes)]
+│       ├── shapes/tools/                 [chalkbag-{full,high,medium,low,empty}.json — the 5 fill states]
+│       ├── textures/                     [per-state kit textures + sulfur + white]
+│       └── lang/
+│           └── en.json
+└── src/
+    ├── LayoutModSystem.cs
+    ├── Items/
+    │   ├── ItemGuideTool.cs              [S15: + chalk helpers, fill-state OnBeforeRender, IContainedMeshSource, ground-store gesture]
+    │   └── ItemChalkingPowder.cs         [S15: tap/hold refill — hotbar or ground-stored kit in place]
+    ├── Guide/                            [pure data]
+    │   ├── GuideData.cs                  [DataVersion 12; + creator/Last Sculptor, IsWireframe, cached metadata]
+    │   ├── ControlPoint.cs               [+ IsLockMarker: passive, non-deforming Arch lock]
+    │   ├── VoxelPosition.cs              [VoxelRenderType: … Grabbed, Division (magenta, S9)]
+    │   ├── GuideShapeType.cs             [15 pinned types through PolygonalPrism/TaperedPolygonalPrism; + IsVolume/UsesSides]
+    │   ├── ShapeConstraint.cs            [None, SemiCircle, Circle, Right, Equilateral, Isosceles, Square]
+    │   ├── ProjectionMode.cs
+    │   ├── ProjectionPlane.cs
+    │   └── GuideRenderSettings.cs
+    ├── Shapes/                           [pure math]
+    │   ├── IGuideShape.cs
+    │   ├── CatmullRomSpline.cs
+    │   ├── ArchShape.cs                  [free spline + SemiCircle arc mode + ruled fill]
+    │   ├── EllipseShape.cs               [closed planar primitive; Circle = constraint]
+    │   ├── LineShape.cs                  [S9: two anchors, no fill, insert no-op]
+    │   ├── TriangleShape.cs              [S9/S11: base anchors + apex, THREE-click (free/right/isosceles); Right/Equilateral/Isosceles]
+    │   ├── RectangleShape.cs             [S9: diagonal corners stored, other two derived; Square]
+    │   ├── PolygonShape.cs               [S11: regular N-gon, MinSides 3 / MaxSides 24 (GuideData.Sides)]
+    │   ├── FreeShape.cs                  [S11 (0.1.15): irregular polyline; IsClosed; MaxCorners 64; takes body inserts]
+    │   ├── SphereShape.cs                [3D (0.1.20; S14 hollow shell scan / guarded filled scan)]
+    │   ├── DomeShape.cs                  [3D (0.1.21; S14 exact shell + half-space clip)]
+    │   ├── SphericalShellScan.cs         [S14: shared surface-area-oriented hollow Sphere/Dome scan]
+    │   ├── CylinderShape.cs              [3D (0.1.21): centre-banded lateral shell; 3-click]
+    │   ├── TaperedCylinderShape.cs       [3D (0.2.24): independent top radius; 4-click]
+    │   ├── PolygonalPrismShape.cs        [3D (0.2.38): straight/tapered regular-polygon volumes]
+    │   ├── ConeShape.cs                  [3D (0.1.21): centre-banded sloped shell; 3-click]
+    │   ├── BoxShape.cs                   [3D (0.1.21): independent side lengths; exact shell; 3-click]
+    │   ├── ShapeWireframe.cs             [S21: canonical structural topology → selected-scale voxels]
+    │   ├── LargeVolumeShellFallback.cs   [S21: surface-only oversized Cylinder/Cone/Box fallback]
+    │   ├── ShapeGeometry.cs              [S9: shared planar frame + nearest-claim marker; S11 BaseNormal deterministic up-axis]
+    │   ├── ShapeFactory.cs               [the single shape construction point]
+    │   ├── SoftPointFlow.cs              [S9: slave-regime (interior grabs) + proportional (structural); both sides]
+    │   ├── DivisionMarks.cs              [S9: renderer-side equal-part recolor; MaxDivisions = 256]
+    │   └── VoxelMarch.cs                 [shared cell marching, spline-identical quantise]
+    ├── Systems/
+    │   ├── GuideManager.cs
+    │   ├── GuideManagerDependencies.cs  [F4: persistence/recovery, block-probe, and logging seams]
+    │   ├── GuideLockManager.cs
+    │   ├── DraftManager.cs
+    │   ├── DraftPreviewSpec.cs           [S21: immutable generation-tagged refinement work]
+    │   ├── UndoManager.cs
+    │   ├── GuideRenderer.cs
+    │   ├── GuideMeshBuilder.cs
+    │   └── ChalkEffects.cs               [S15/S19/S20: falling flecks, shell dust, placement snap]
+    ├── Network/
+    │   ├── PacketTypes.cs
+    │   ├── ServerNetworkHandler.cs
+    │   └── ClientNetworkHandler.cs
+    ├── UI/
+    │   ├── GuideToolGui.cs               [icon-tile GUI (S10)]
+    │   ├── LayoutToolIcons.cs            [S10: Cairo glyphs → CustomIcons registry]
+    │   └── GuideHud.cs
+    ├── Config/
+    │   ├── LayoutServerConfig.cs
+    │   └── LayoutClientConfig.cs
+    ├── Client/
+    │   ├── ClientAuthorityMode.cs        [F4: Detecting / Networked / Local]
+    │   ├── ClientToolGate.cs             [F4: Layout tool vs. Hammer + Flax Twine]
+    │   ├── ClientWorldGuidePersistence.cs [F4: world+UID JSON, atomic replace, backup recovery]
+    │   ├── LocalGuideAuthority.cs        [F4: client-side GuideManager + UndoManager]
+    │   └── GuideToolController.cs
+    └── Undo/
+        ├── IGuideCommand.cs
+        ├── UndoStack.cs
+        └── Commands/
+            ├── CreateGuideCommand.cs
+            ├── DeleteGuideCommand.cs
+            ├── MoveControlPointCommand.cs
+            ├── InsertControlPointCommand.cs
+            ├── LockPointCommand.cs
+            ├── RemoveLockMarkerCommand.cs [S13: remove/restore passive markers on unlock]
+            ├── RescaleGuideCommand.cs
+            ├── HideGuideCommand.cs
+            ├── SetProjectionCommand.cs   [optional pre-bake point snapshot]
+            ├── SetFilledCommand.cs
+            ├── SetWireframeCommand.cs    [S21: persistent volume Form undo/redo]
+            ├── SetDivisionsCommand.cs    [S9: old/new count; undo/redo re-applies]
+            ├── SetSidesCommand.cs        [S11: old/new polygon side count]
+            ├── SpringBackCommand.cs      [S11: pre/post point+constraint snapshots around a SHIFT spring-back]
+            └── BreakConstraintCommand.cs
 ```
 
-Namespaces match folders. `src/` holds `Guide/` (data types), `Shapes/` (pure geometry math),
-`Systems/` (managers, renderer, undo), `Network/` (packets + handlers), `UI/`, `Config/`, `Items/`,
-`Client/` (the tool controller) and `Undo/Commands/`. That much is durable; the file list was not.
-
-The frozen original is in `dev/archive/`.
+**77 source files** (74 through Session 22, plus Session 23’s `ProgressiveVoxelGeneration`,
+`GuideClaimAccessValidator`, and `LayoutAdminPolicyManager`). Historical breakdown: 43 at Session-8 end + 6 new in Session 9: LineShape, TriangleShape, RectangleShape,
+ShapeGeometry, DivisionMarks, SetDivisionsCommand; + 1 in Session 10: LayoutToolIcons; + 4 in Session 11:
+PolygonShape, SetSidesCommand, SpringBackCommand, FreeShape; + 5 for the 3D family (v0.1.20–0.1.21):
+SphereShape, DomeShape, CylinderShape, ConeShape, BoxShape; + 5 for F4: ClientAuthorityMode,
+ClientToolGate, ClientWorldGuidePersistence, LocalGuideAuthority, GuideManagerDependencies; + 1 in Session 13:
+RemoveLockMarkerCommand; + 1 in Session 14: SphericalShellScan; + 2 in Session 15: ItemChalkingPowder,
+ChalkEffects; + 1 in Session 20: PolygonalPrismShape). Namespaces match
+folders: `Layout`, `Layout.Guide`, `Layout.Shapes`, `Layout.Systems`,
+`Layout.Network`, `Layout.UI`, `Layout.Config`, `Layout.Items`, `Layout.Client`, `Layout.Undo`,
+`Layout.Undo.Commands`. (`UndoManager` is the one file whose folder differs from its namespace: it lives in
+`src/Systems/` as `Layout.Systems.UndoManager`.)
 
 ---
 
@@ -506,23 +739,241 @@ Unchanged since v2: `ProjectionMode { Volumetric, Surface }`; `ProjectionPlane` 
 
 ---
 
+## 3. Module Map
 
----
+### `LayoutModSystem.cs`
+Entry point and composition root: registers systems, the tool item, protocol-16 network channels, commands,
+keybinds, and HUD on both sides; owns the shared instances per side; seeds `DraftManager` from client config
+and persists it back. Client startup begins in Detecting, creates the local-authority/persistence stack, and
+lets the network handler resolve Networked vs. Local. All keybinds are rebindable, none hard-coded.
 
-## 3. Module Map - REMOVED, derivable from source
+### Items — `ItemGuideTool.cs`
+Stateless glue (VS items are singletons); all interaction lives in `GuideToolController` (below). F opens the
+GUI; clicks route to the controller.
 
-**This section was 238 lines describing what each module does, class by class.** It is gone for the
-same reason as section 1, only more so: it restated responsibilities that the source states
-authoritatively, and it was the single largest maintenance liability in the document.
+### Client — authority and `GuideToolController.cs`
+`ClientAuthorityMode`, `ClientToolGate`, `ClientWorldGuidePersistence`, and `LocalGuideAuthority` provide
+detection, activation, durable local storage, and the client-side manager/undo stack. The controller remains
+the interaction brain, ticking while the active gate is satisfied (30 ms):
+- **Left-click priority chain (Create):** release grab → second foot → point grab (radius
+  `max(0.10, voxel)`) → body hit (arch family: insert+grab in one gesture; ellipse family: nearest-handle
+  grab) → first anchor. **Edit:** release grab → SELECT the aimed guide (empty click deselects) — select-only,
+  no grab/insert/lock. **Delete:** dispel the aimed guide.
+- **Right-click (Create only):** cancel grab (insert-born point removed; pre-existing point snaps back via
+  `GuideCancelGrabPacket`); discard draft; idle point → lock toggle; idle body → lock-in-place insert
+  (ellipse family: nearest-handle lock toggle). Edit/Delete have no right-click action.
+- **Targeting** tests real points plus the **sampled curve** (`IGuideShape.SampleCurve`), cached per guide
+  behind a content fingerprint (count + coordinate sum + constraint) — resampled only on change.
+- **Drag:** raycast target (anchors need a block; interior points retained-depth), local mirror preview +
+  ~10 Hz sends; **soft-flow preview** runs the same `SoftPointFlow` math locally; **SHIFT** on an anchor
+  drag constrains to the cardinal line through the other anchor; a grab that a constraint can't absorb
+  clears the mirror constraint immediately (server confirms).
+- **Draft:** first click captures the intrinsic plane axis from the block face; ghost preview via the placed
+  pipeline with live settings; completion sends shape + constraint + plane with the two points.
+- Comatose grabs on tool swap; adopt-as-grab handshake for server-side inserts; hotkeys inert unless held.
 
-What is NOT derivable - the *why* behind a design, the constraints, the things that will bite you - is
-kept, and lives in three places:
+### Shapes (pure math — only depends on `Vec3d`)
 
-- **The Settled Decisions Register above** - locked-in design choices and their reasoning.
-- **`dev/GOTCHAS.md`** - traps, and reversals of things deliberately undone.
-- **The session records** (`dev/sessions/`, indexed by `INDEX.md`) - how each decision was arrived at.
+**`IGuideShape.cs`** — the seam decoupling everything from any specific shape:
 
-The frozen original is in `dev/archive/`.
+```
+interface IGuideShape {
+    List<ControlPoint>  ControlPoints                              // the shared list (GuideData binding)
+    ShapeConstraint     Constraint
+    List<VoxelPosition> GetVoxelPositions(int scale, bool filled)
+    int                 GetVoxelCount(int scale, bool filled)      // exact, == positions count
+    float               GetNearestT(Vec3d worldPos)
+    Vec3d               GetPointAt(float t)                        // lock-in-place lands ON the curve
+    List<Vec3d>         SampleCurve(int samples)                   // targeting polyline (closed shapes close)
+    int                 GetNearestControlPointIndex(Vec3d worldPos)
+    void                InsertControlPoint(float t, Vec3d position)
+    void                MoveControlPoint(int index, Vec3d newPosition)
+    void                RecalculatePhantomPoints()
+    bool                WouldBreakOnMove(int index)                // constraint can't absorb this drag
+    bool                BreakConstraint()                          // demote to free parent, materialising
+}
+```
+
+**`CatmullRomSpline.cs`** — centripetal Catmull-Rom (α = 0.5); `Evaluate`, `EvaluateTangent`, `GetArcLength`,
+`SampleVoxelPositions(scale)`, `CountVoxels(scale)`. Tangent = secant, which makes the arch's phantoms give
+provably vertical feet.
+
+**`ArchShape.cs`** — the open-curve primitive over the spline; owns the shared point list. Free arch: 5-point
+spine (phantom, anchor, apex/primary, anchor, phantom), apex at 40% of chord. **SemiCircle mode:** stores
+only its feet ([phantom, A, B, phantom]), samples a true circular arc, synthesises the apex marker at the
+arc's top; breaking materialises quarter/apex/three-quarter points ON the arc. **Fill:** the ruled region
+between the curve and the foot-to-foot chord (half-circle → exact half-disc). Marker voxels by nearest-claim
+(Locked > Primary > Anchor), even-span apex pairing.
+
+**`EllipseShape.cs`** — the closed planar primitive: two diameter anchors + a minor-axis handle (Primary), no
+phantoms. The frame derives per query (plane normal = `ShapePlaneAxis` projected ⊥ the major axis; robust to
+arbitrary 3D anchor drags). The minor handle slides along its axis; A/B moves re-derive it. Under Circle the
+handle is derived (= major radius) and dragging it is the break trigger (lossless). Body inserts are no-ops
+by design. Fill = radial-fan disc.
+
+**`ShapeFactory.cs`** — `Create` (two clicks) / `Adopt` (existing list or GuideData); the only construction
+point. **`VoxelMarch.cs`** — shared point-sequence → cell marching, mirroring the spline's quantise exactly.
+**`SoftPointFlow.cs`** — `Capture(pts, grabbedIndex)` folds the held point into the baseline, then selects
+the regime: an **interior grab** (held point unlocked, non-anchor) slaves each soft point onto the curve at
+its station with **zero offset**; a **structural grab** (anchor/lock) keeps the station + frame-local,
+length-scaled offset. Reflow is non-mutating; identical code runs server-side (composed into the same edit
+batch as the grabbed point) and client-side (drag preview). Three capture call sites: server move handler,
+client `StartGrab`, client insert-adoption.
+
+### Systems
+
+**`GuideManager.cs`** — side-neutral guide authority. Registry + injected `IGuidePersistence` (versioned
+JSON on the server or per-world/per-UID JSON on the client), optional recovery, injected block probe/logger;
+builds shapes via the factory on create (shape/constraint/plane from the request) and
+re-adopts on load/restore; validates every mutation (**form/fill-aware voxel caps**, lock, existence) and
+reverts on rejection. Mutations: `CreateGuide`, `RestoreGuide`, `UpdateControlPoints` (multi-edit, atomic),
+`InsertControlPoint`, `RemoveControlPoint`, `SetPointLocked`, `DeleteGuide`, `SetHidden`, `SetProjection`
+(**bakes flattened positions into the points when leaving Surface**; preserves the stored plane through
+Volumetric), `SetFilled` and `SetWireframe` (recount with the new value, roll back over cap), `Rescale`, `BreakConstraint` /
+`RestoreConstraint`, `RestoreControlPoints`. It exposes progressive generation for the immense server/client
+lanes without changing the canonical final voxel set. Communicates by `GuideOperationResult` return values,
+not events.
+
+**`GuideLockManager.cs`** — pure; one edit lock per guide, first grab wins; `ReleaseAllLocksForPlayer`,
+`ClearLock`, `IsHeldBy`.
+
+**`DraftManager.cs`** — client-side draft + tool state: mode, scale, projection, plane override, 2D fill,
+3D form (`Wireframe`),
+**shape + constraint** (the picker's target), the per-draft intrinsic plane axis, and the selected guide.
+Holds only the draft's start point; settings are read live at completion. Cap pre-check builds a throwaway
+shape via the factory, counted with the current 2D fill / 3D form.
+
+**`UndoManager.cs`** — per-authority, per-player bounded stacks (server default 50; local uses the same
+semantics). Validate-then-apply
+with stale-command skip; `Blocked` for valid-but-cap-rejected commands (pushed back, history preserved);
+returns results, never broadcasts.
+
+**`GuideRenderer.cs`** — client-side; placed meshes rebuild on accepted change events. Shapes adopt through
+the factory; settled Shells and persistent Wireframes use the true selected scale. Cheap drafts show their
+normal shell. Expensive motion uses adaptive structural wireframes plus a selected-scale cursor region;
+`DraftPreviewSpec` identifies one deep-copied generation, background refinement rejects stale completions,
+and `ProgressiveVoxelGeneration` streams exact selected-scale voxels in deterministic organic
+multi-seed/26-neighbour order through a bounded producer/consumer queue. Placement and sculpt handoffs retain
+their scaffold/settled mesh until replacement batches arrive; obsolete meshes retire over later frames.
+Giant-grab cancel is instant, and confirming echoes are fingerprint-quarantined. A conservative whole-guide
+bound check uses the live game view distance before any draw submission; the player's off/on preference can
+skip the render pass entirely. Surface: flatten to the **air-side** cell layer (world
+solidity probe, majority fallback) as **0.01-block slabs** with a plane-axis-only inset; volumetric meshes
+get a 0.003-block per-frame camera nudge. Grabbed point painted White (single voxel); hidden guides =
+anchors-only at low alpha. No selection/collision geometry.
+
+**`GuideMeshBuilder.cs`** — stateless `List<VoxelPosition>` → `MeshData`; cube and slab paths; the color
+table (client-configurable alphas):
+
+```
+Yellow   (1.0, 0.85, 0.1)   Normal body          Red    (0.9, 0.15, 0.15)  Locked
+Green    (0.2, 0.9, 0.3)    Primary/apex/handle  Blue   (0.2, 0.5, 1.0)    Anchors (coplanar)
+Indigo   (0.45, 0.45, 1.0)  Far-foot off-shade   White  (1.0, 1.0, 1.0)    Grabbed
+```
+Only on a mixed Layout server, locally-owned anchors substitute orange/burnt-orange for blue/indigo. A
+vanilla-server local fallback retains blue/indigo as Layout's normal visual identity. Color is derived from
+current ownership/context at render time, so a published guide immediately renders blue.
+
+### Network
+
+**`PacketTypes.cs`** — protobuf DTOs, one fixed shared registration order, **append-only**. Enums as pinned
+ints, Guids as 16 bytes, positions as three doubles, full point lists verbatim (mirrors are exact copies).
+
+| Packet | Direction | Contents |
+|---|---|---|
+| `GuideBulkSyncPacket` | S→C | All guides + active caps + lock states + draft anchors, on join. (Fields 6–7 carried the server's refill-channel policy in 0.2.21; **dead since v0.2.22**, retained unwritten as append-only padding) |
+| `GuideCreateRequestPacket` | C→S | Base points + settings + **shape/constraint/plane, sides, optional apex/chain/rim, and flat-side alignment** |
+| `GuideCreatePacket` | S→C | Full `GuideData` (also the generic full-state broadcast) |
+| `GuideHudMetadataPacket` (protocol 12) | S→C | Incremental Last Sculptor + cached measurement refresh after a committed perceptible change |
+| `GuideWhoQueryPacket` (protocol 13) | S→C | Ask only the invoking client to resolve its selected/grabbed/crosshair guide for `/layout who` |
+| `PlayerGuidePolicyPacket` (protocol 14) | S→C | Synchronize the invoking player's persistent jail/guide-limit/voxel-cap policy |
+| `GuidePlacementRejectedPacket` (protocol 15) | S→C | Explicitly finish a pending create/sculpt handoff when asynchronous authority rejects it |
+| `GuideRenderingPacket` (protocol 16) | S→C | Apply the invoking player's `/layout off|on` render preference |
+| `GuideUpdatePacket` | S→C, C→S | Guide ID + edit array (client sends its one; server broadcasts the composed batch incl. soft-flow edits) |
+| `GuideInsertPointPacket` | S→C, C→S | Guide ID + index + position (+ `Locked` for lock-in-place) |
+| `GuideCancelGrabPacket` | C→S | Cancel the grab: restore origins / remove an insert-born point |
+| `GuideDeletePacket` / `GuideHidePacket` / `GuideLockPointPacket` / `GuideRescalePacket` / `GuideSetProjectionPacket` / `GuideSetFilledPacket` / `GuideSetWireframePacket` / `GuideSetDivisionsPacket` | S→C, C→S | Atomic settings ops (wireframe = 3D Form; divisions = pure visual recolor) |
+| `GuideGrabPacket` / `GuideReleasePacket` / `GuideLockStatePacket` | C→S / S→C | Edit-lock lifecycle |
+| `DraftStartPacket` / `DraftCancelPacket` / `DraftAnchorBroadcastPacket` / `DraftAnchorRemovePacket` | mixed | Draft lifecycle (anchor dot only) |
+| `UndoRequestPacket` / `RedoRequestPacket` / `VoxelCapWarningPacket` | C→S / S→C | Undo + cap warnings |
+| `ClientOnlyPolicyPacket` / `ClientOnlyModeRequestPacket` / `ClientOnlyModeResultPacket` | mixed | Server permission and private/public placement negotiation |
+| `ClientGuidePushRequestPacket` / `ClientGuidePushResultPacket` | C→S / S→C | Publish up to 100 private guides and confirm accepted local removals |
+| `ChalkChargePacket` (S15, protocol 4) | C→S | Self-report a completed PRIVATE placement so the server (which owns the inventory but cannot see private guides) applies the chalk charge; validated + clamped 1–2 |
+| `ChalkInventoryRefillPacket` (S16, protocol 5) | C→S | Inventory-slot refill request (`InventoryId` + `SlotId`); server re-validates cursor=powder + slot=non-full kit before consuming one powder — a lost mouse-hook race degrades to a harmless swap |
+| `ChalkRefillPrefsPacket` (S17, protocol 6) | C→S | The player's OWN refill-channel preferences, sent on join. Required because `ItemChalkingPowder`'s held-interact runs on both sides and the SERVER mutates the stacks — without it the hotbar toggle would be a no-op |
+
+**`ServerNetworkHandler.cs`** — validates, calls the managers, reads results, broadcasts (or corrective
+resync / cap warning). Small create/sculpt requests remain immediate. Immense requests share one
+below-normal-priority pure-generation/count worker; claim access is then checked on the server thread in
+bounded slices (128 blocks or approximately 1 ms per 20 ms tick) before an atomic commit/rejection. Owns:
+the create request (shape-aware), **auto-break** before constrained inserts and
+on breaking moves (recording `BreakConstraintCommand` from a pre-break snapshot; break-flavoured mutations
+broadcast **full state** because the point list changed shape), **soft-flow composition** (capture per drag
+session, reflow edits folded into the same `UpdateControlPoints` batch — one cap check, one broadcast,
+generic origins), the projection bake snapshot, drag coalescing (one drag = one undo entry), join/leave
+cleanup (locks freed + broadcast, undo cleared, drag sessions and draft anchors dropped).
+
+**`ClientNetworkHandler.cs`** — applies S→C packets to a combined mirror, separately tracks server/local IDs,
+raises change events for renderer/HUD/GUI, and exposes ownership, locks, remote anchors, caps, policy, and
+send methods. Existing-guide operations route by ownership; new placement routes by current placement mode;
+undo/redo routes by last successful mutation authority. Networked writes still go only through packets;
+local writes go through `LocalGuideAuthority` and then update the same mirror.
+
+### UI
+
+**`GuideToolGui.cs`** — the tile GUI (modal, F, press-to-open; icon form since Session 10). Every control is
+a row of exclusive SQUARE ICON tiles (42 px; hover names the option, auto-sized to the text since Session
+11). **Mode-aware rows (Session 10):** the Mode row (Create/Edit/Delete) is always live; the rest re-bind by
+mode. **Create:** tool defaults for the next guide — the Mode row's far-right **Current Shape chip
+(0.1.15: always lit, guide-body yellow, hover names the pick — visible even when the selection isn't on a
+slot)** · Shape (**0.1.15: FOUR hard-kept pinned slots + a ▾
+expand tile that unfolds the full 21-tile catalog — split into a **2D section and a 3D section** under
+their own separators with centred "2D"/"3D" labels (0.1.22–0.1.23); pins shown as YELLOW glyphs (0.1.17);
+right-click pins/unpins (never evicts; message when full); the catalog STAYS OPEN after a pick (0.1.23) —
+only the ▾/▴ collapses it; selecting a shape never collapses; empty slots show faint placeholders; pins
+persist in `layout-client.json`; the old Favorites strip is gone**) · Scale (native N×N voxel-count icons;
+16× = one solid block) · **Projection + Fill/Form on ONE row** (Projection greys on volumes; 2D uses
+Hollow/Filled; 3D contextually uses Shell/Wireframe with dedicated skin/frame icons; Fill greys on the
+Free-Shape) · Plane · **Divisions (+ Sides for polygons on the same row; the whole row HIDDEN on 3D
+volumes, 0.1.23)**. All the primary row labels (Mode/Shape/Scale/…) are **centre-aligned** in their column
+(0.1.23). **Edit:** the SAME rows plus **Visibility** (no shape picker) act
+on the SELECTED guide via the send API, with a compact guide-info line + **Deselect**; no empty-state
+instruction row is reserved when nothing is selected. **Delete:** every row but
+Mode disabled (native `Enabled=false` + ghost labels). Divisions and Sides are native
+`GuiElementNumberInput`s (wheel ±1 — element-native plus a dialog-level hover fallback in `OnMouseWheel` —
+spinner buttons, typed input, clamped to their ranges: 0–256 and 3–24; `OnNumberTyped` snaps the display
+back on clamp, and tolerates transient under-min typing in the Sides field). Remote edits to the Edit-mode
+selected guide relight the (shared-key) tiles in place; row-set changes defer a recompose (never per-frame).
+
+**`LayoutToolIcons.cs`** (Session 10) — every GUI glyph, drawn with Cairo and registered once (client start)
+in `capi.Gui.Icons.CustomIcons`: the 15 shape glyphs (the arch is an open elliptical dome — the true
+Catmull-Rom silhouette; the polygon a point-up pentagon; the Free-Shape an irregular dotted-corner
+outline), the picker's expand chevrons (▾/▴), the empty-slot placeholder, and (0.1.15) per-shape
+**"-star"** (★-badged pinned catalog tiles) and **"-current"** (fixed guide-body-yellow, for the Current
+Shape chip) wrapper variants, plus mode/projection/fill/form/visibility pairs, plane cubes (active face filled),
+and the scale grids (`DrawScaleGrid(n)` + `DrawScaleFullBlock`). Uniform aspect-preserving design-box
+mapping; strokes/fills take the button's tint, so normal/hover/pressed states come free.
+
+**`GuideHud.cs`** — a fixed-footprint action HUD. Its centered heading reads Create/Sculpt/Creating/
+Sculpting/Edit/Editing/Delete/Deleting; active operations use italic state color and an outside outline around
+the unchanged 42-pixel contextual tile. The tile shows the next shape or current target, while idle Edit/Delete
+retain pencil/trash icons. Rows show Scale, concise projection + Fill/Form, separate horizontal/vertical
+dimensions in voxels and blocks, Total Voxels, and cap percentage (only a true overflow adds `OVER CAP`).
+Pending exact work uses cycling dots; placed targets use cached metadata. Edit reflects the selected guide's
+actual settings. Creator/Last Sculptor are intentionally omitted here and available through `/layout who`.
+
+### Undo
+
+**`IGuideCommand`** — `CanUndo` / `CanRedo` (direction-specific), `Execute` / `Undo` / `Redo` returning
+`GuideOperationResult`; the handler mutates directly and records, so `Execute` is reached via redo.
+**`UndoStack`** — pure bounded histories; new actions clear redo. **Commands:** Create / Delete (DeepClone
+snapshots) · MoveControlPoint (before/after; one per drag per moved point, soft-flow included) ·
+InsertControlPoint (landing index refreshed on re-insert) · LockPoint · RescaleGuide · HideGuide ·
+SetProjection (**+ optional pre-bake point snapshot**; undo restores mode/plane then the points) ·
+SetFilled · **SetWireframe** · **BreakConstraint** (pre-break constraint + points; undo restores both, redo re-breaks) ·
+**SetSides** (S11: old/new polygon side count) · **SpringBack** (S11: pre/post point+constraint snapshots
+around a SHIFT spring-back; undo restores the distorted form).
+Move/insert confirm the point is still where the command left it, so they never clobber another player's edit.
 
 ---
 
@@ -650,3 +1101,21 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
 - **Mixed selection/mode changes** → do not change ownership and do not reroute undo. A pushed guide receives
   a new public ID, creator UID, public anchor palette, and no inherited private undo entry.
 - **Block under a guide removed** → nothing happens; guides never bind to blocks.
+
+---
+
+This v3.14 document is the authoritative architecture, consolidated to current state: **Layout v0.3.53 final
+release built, packaged, and documented**. The full 2D catalog — arches, half-circles, circles, ellipses, lines, triangles
+(+ right/equilateral/isosceles), rectangles (+ square), polygons, and Free-Shapes — plus the **3D volume
+family** (spheres, domes, cylinders, tapered cylinders, straight/tapered polygonal prisms, cones, boxes)
+place, preview, reshape, fill/form, lock/unlock, divide, and
+project onto surfaces under server or local authority against VS 1.22.3 / .NET 10, drawn with the
+**Chalking Kit**'s finite, powder-refillable chalk. Status, flagged decisions, and the
+punch-list live in `PROJECT_STATUS.md` and `TODO.md`; the current-state brief for external analysis lives in
+`HANDOFF.md` at the repo root; F4's final behavior record lives in `PLAN_CLIENT_ONLY.md`, its implementation
+history in `SESSION_12.md`, the interaction checkpoint in `SESSION_13.md`, the mesh resume plan in
+`SESSION_14.md`, the adaptive large-guide record in `SESSION_21.md`, the HUD/attribution/sculpting record in
+`SESSION_22.md`, the moderation/claims/immense-guide record in `SESSION_23.md`, the materialization-completion/
+HUD-dimension record in `SESSION_24.md`, the superseded spatial experiment in `SESSION_25.md`, and the
+renderer/policy rollback record in `SESSION_26.md`, and final cumulative-cap override record in
+`SESSION_27.md`.

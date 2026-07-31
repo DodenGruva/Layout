@@ -2,8 +2,6 @@
 
 All notable changes to Layout will be recorded in this file going forward.
 
-## Unreleased
-
 ## 0.4.33 - 2026-07-29
 
 ### Changed

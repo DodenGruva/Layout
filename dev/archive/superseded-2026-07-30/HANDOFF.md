@@ -1,3 +1,7 @@
+> 🗄️ **ARCHIVED 2026-07-30 at v0.4.33 — SUPERSEDED, DO NOT USE AS CURRENT.**
+> Frozen exactly as it stood before the documentation overhaul. Its successor is `STATUS.md`.
+> Kept so nothing is ever lost. Never edit this file; never cite it as current.
+
 # Layout — Project Handoff & Analysis Brief
 
 > **Purpose.** A single, self-contained, current-state briefing for anyone (human or AI) picking this project
