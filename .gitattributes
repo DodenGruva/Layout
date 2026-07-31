@@ -1,0 +1,22 @@
+# Line endings. The repo is public, so a collaborator on macOS or Linux must not
+# see spurious whole-file diffs. Everything is stored LF in the index and checked
+# out native; this pins that rather than leaving it to each machine's core.autocrlf.
+#
+# Content-neutral when added: all 146 tracked text files were already LF in the
+# index, so this changed nothing and triggered no renormalisation.
+* text=auto
+
+*.md    text
+*.txt   text
+*.cs    text
+*.csproj text
+*.ps1   text
+*.json  text
+*.vsh   text
+*.fsh   text
+
+# Binary - never touch these.
+*.png   binary
+*.zip   binary
+*.dll   binary
+*.ico   binary

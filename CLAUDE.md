@@ -58,6 +58,12 @@ re-discovering the trap.
 release zip.** Versions increment monotonically, one per revision. That per-revision zip is what the human
 playtests, so it is not optional bookkeeping — it is the delivery.
 
+**The one exception: a change with no behaviour to test does not bump** (comments, docs, `.gitattributes`,
+dev tooling). The rule exists so every behavioural change reaches the human as a playable zip; a build that
+behaves identically has nothing to playtest, and bumping would burn a version number on a no-op release.
+**If the compiled DLL behaves differently in any way, it bumps** — when in doubt, bump.
+*(Human-decided 2026-07-31, on the comment-only fix to `LayoutClientConfig` and `GuideMeshBuilder`.)*
+
 **Zip layout matters:** `modinfo.json` + `modicon.png` + `assets/` + `Layout.dll` at the **zip root**, entry
 paths with **forward slashes**, no directory entries, root files first. Build it with
 `System.IO.Compression.ZipFile` and explicit entry names — `Compress-Archive` is wrong here (`GOTCHAS` G21).
