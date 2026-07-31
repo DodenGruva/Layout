@@ -25,7 +25,7 @@ guides on servers without Layout, and alongside public guides where permitted. T
 | | |
 |---|---|
 | **Current build** | **v0.4.33** on `beta` |
-| **Last `main` release** | **v0.3.69** — verified against `origin/main`'s `modinfo.json`, not taken from another document |
+| **Last `main` release** | **v0.4.33** — `beta` was merged to `main` on 2026-07-31, so the two are level. Verified against `origin/main`'s `modinfo.json`, not taken from another document |
 | **Published at** | `github.com/DodenGruva/Layout` — **the repo is public; no personal paths or usernames in tracked files** |
 | **Branches** | `main`, `beta`. `beta-shader` no longer exists — the shader work landed and is what the mod renders with (human-confirmed 2026-07-29) |
 
