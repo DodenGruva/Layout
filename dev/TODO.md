@@ -24,19 +24,28 @@ in `DONE.md`.
 
 ## A10. Review backlog — the long-standing one
 
-1. **Perform an adversarial code review.** — **OPEN, and now BRIEFED: `dev/plans/PLAN_CODE_REVIEW.md`.**
-   Session 33 raises the value of this considerably:
-   four real bugs in shipped code were found just by *reading*, during one debugging session — a silently
-   dropped admin packet, a Reveal All filter that could never match, a cap bypass via private mode, and
-   eleven player-facing messages printing their own format placeholders (`GOTCHAS` G11).
-   **Run it in a FRESH session** — the brief's §1 explains why, and it is not a context-budget argument.
-   The brief carries the do-not-re-litigate list, which is what stops a reviewer filing four settled
-   decisions as bugs.
+1. **Perform an adversarial code review.** — **OPEN, and BRIEFED: `dev/plans/PLAN_CODE_REVIEW.md`. Run it
+   in a FRESH session** (its §1 says why; the argument is bias, not context budget). Session 33 is the case
+   for it: four real bugs in shipped code found just by *reading* — a dropped admin packet, a Reveal All
+   filter that could never match, a cap bypass via private mode, and eleven messages printing their own
+   placeholders (`GOTCHAS` G11). The brief's do-not-re-litigate list is what stops a reviewer filing four
+   settled decisions as bugs.
 2. **Perform a performance-focused code review of the NON-RENDER code.** — **PARTLY ADDRESSED.** Session 28
    measured and fixed the renderer; nothing equivalent has been done elsewhere.
 
 *(The third item — consolidate the documentation — was delivered on 2026-07-30 and has moved to
 `dev/history/DONE.md`, per the rule at the top of this file.)*
+
+## A13. Sweep the XML doc comments on the pinned enums and config classes
+
+**OPEN.** The overhaul dropped `ARCHITECTURE.md`'s module map because source is authoritative — which
+delegates authority to the code, so **a wrong comment is now the thing a reader is told to trust.** Two were
+already wrong (both fixed 2026-07-31): `LayoutClientConfig.colorScheme` documented a retired scheme value
+that players read when hand-editing, and `GuideMeshBuilder` named a method that does not exist — which
+`GOTCHAS` G8 had copied straight from it.
+
+**Where:** the pinned enums, both config classes, `PacketTypes.cs`. Check every value, default and
+cross-reference against what the code does. Detail in `sessions/SESSION_35.md`.
 
 ## A11. Open playtest focus
 

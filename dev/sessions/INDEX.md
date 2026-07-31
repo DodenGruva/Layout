@@ -14,6 +14,7 @@
 
 | # | Versions | Wire | Summary |
 |---|---|---|---|
+| 35 | — *(none shipped)* | — | **Audit of the doc overhaul against source.** Five stale current-state claims in `ARCHITECTURE.md`, the chalk flags in the wrong config, a plan reading "not started" for delivered work; `GOTCHAS` R9 + G26; `DocCheck` 10 → 13 checks; **`main` levelled at v0.4.33**; the code-review brief |
 | 34 | 0.4.28–0.4.33 | proto 23 → 24 | Session-33 polish queue in full, send-to-ground, momentary tile press feedback, the Players dialog made editable |
 | 33 | 0.4.15–0.4.27 | **DV 12 → 13**, proto 19 → 23 | Admin server-settings section + Save flow, Players dialog, T1 surface snap, free-angle Rectangle/Box re-gesture, Reveal Near/All, private guides confirmed uncapped |
 | 32 | 0.4.2–0.4.14 | — | The settings page: F9 panel + hover text, F10 gear glyph, F11 colour schemes with custom palette, sliding Public/Private, Publish |
