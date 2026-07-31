@@ -45,6 +45,11 @@ Mark them with ⚠️ in the text. The harvest greps for that marker and the cou
 `dev/plans/PLAN_DOC_OVERHAUL.md` §7. Note the marker appears both with and without its variation selector;
 either is found, because the grep matches the bare `⚠`.
 
+**This template's own markers are not traps** and must be excluded from any harvest count, exactly as
+`PLAN_DOC_OVERHAUL.md`'s were. So are the markers in `GOTCHAS.md`, `STATUS.md`, `WIRE_HISTORY.md` and
+`INDEX.md` — those are living documents quoting rules, not session records recording them. **A harvest
+counts session records and `history/DONE.md`.**
+
 **Keep the ⚠️ text here even after it becomes a `GOTCHAS` entry.** That is not duplication: this file holds
 the *narrative* — here is what happened and how we found it — while `GOTCHAS.md` holds the *rule*, plus a
 pointer back. Different content, different lifetime.

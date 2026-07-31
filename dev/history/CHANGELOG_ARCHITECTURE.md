@@ -1,5 +1,12 @@
 # Layout — Architecture Changelog (document-version history)
 
+> 📌 **Annotation added 2026-07-30 — the body below is unrevised, per Tier 3.** The banner's claim that
+> *"nothing here is unique"* no longer holds in full. `ARCHITECTURE.md` was rewritten that day and its **§1
+> File Structure and §3 Module Map were removed** as derivable from source, so deltas below that describe
+> the file tree or the module map now have no counterpart in the living blueprint. They are not lost — the
+> complete pre-overhaul document is frozen at `dev/archive/superseded-2026-07-30/ARCHITECTURE.md` — but do
+> not go looking for them in `dev/ARCHITECTURE.md`. Everything else the banner says still stands.
+
 > **Split out of `ARCHITECTURE.md` to keep the orientation read cheap.** These are the per-revision deltas
 > for the architecture document itself, v2.5 → v3.14. **Nothing here is unique:** each delta is already folded
 > in place into `ARCHITECTURE.md`'s body (Settled Decisions Register, file tree, module map, persistence,

@@ -57,8 +57,6 @@ if ($status -notmatch [regex]::Escape($modVersion)) {
 }
 
 # ------------------------------------------------------------------ 2. source-file count vs STATUS.md
-$statusSrc = ([regex]::Match($status, '\*\*(\d+)\*\*\s*\|?\s*\r?\n?|(\d+)\s*source files')).Value
-if ($status -match '(\d+)\s*\|\s*\r?\n?\s*\|\s*\*\*Shape catalog') { }
 $declaredSrc = ([regex]::Match($status, '\*\*Source files\*\*\s*\|\s*\*\*(\d+)\*\*')).Groups[1].Value
 if (-not $declaredSrc) {
     Fail 2 "STATUS.md does not declare a source-file count in the expected form."
@@ -231,6 +229,119 @@ if (Test-Path $gotchasPath) {
             $id = $m.Groups[1].Value
             if (-not $ids.ContainsKey($id)) { Fail 10 "$rel cites GOTCHAS $id, which has no entry." }
         }
+    }
+}
+
+# ------------------------------------------------------------------ 11. no present-tense wire claims in Tier 1
+#
+# EVERY defect found in the 2026-07-30 documentation audit was the same shape: a claim about the PRESENT
+# left in a document whose job is durable fact. `ARCHITECTURE.md` said DataVersion was "currently 12" when
+# the source said 13. Nothing caught it, because checks 1-3 only compare STATUS.md against source.
+#
+# This does NOT check whether the number is right. It checks that a Tier 1 document does not make the claim
+# AT ALL -- which is the actual rule (see ARCHITECTURE.md's own header), and is stricter and cheaper than
+# verifying a number that should not be there in the first place.
+#
+# HISTORICAL CITATIONS MUST SURVIVE. "v11 added IsWireframe (DataVersion/protocol 11)" records WHEN a
+# decision was made -- permanent fact that cannot rot -- and the overhaul plan's acceptance criteria call
+# out condemning those as a blunt-criterion mistake. So the test is not "mentions a version"; it is
+# "mentions a version IN A SENTENCE THAT CLAIMS CURRENCY". Adjacency to a currency word is the proxy.
+#
+# WHAT MAKES A CLAIM "CURRENT" IS A NUMBER, NOT THE WORD DataVersion. The trigger is a currency word sitting
+# next to a LITERAL NUMBER on a line about the wire -- "(currently 12)". A line that merely mentions
+# DataVersion near the word "current" is usually the CORRECT pattern: "GuideData.CurrentDataVersion is the
+# authority on which version is current" is a pointer, not a claim, and is exactly what a durable document
+# should say instead of quoting a number. Requiring the digit is what separates the two.
+#
+# Fenced code blocks are skipped -- a struct listing legitimately names the field.
+#
+$tier1 = @('dev\ARCHITECTURE.md','dev\GOTCHAS.md') | Where-Object { Test-Path (Join-Path $repo $_) }
+$currency = 'currently|current|as of|at present|right now|today'
+foreach ($rel in $tier1) {
+    $lines  = [System.IO.File]::ReadAllLines((Join-Path $repo $rel))
+    $inFence = $false
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        $line = $lines[$i]
+        if ($line -match '^\s*```') { $inFence = -not $inFence; continue }
+        if ($inFence) { continue }
+        if ($line -notmatch '(?i)DataVersion|protocol') { continue }
+        $m = [regex]::Match($line, "(?i)(($currency).{0,40}?\d)|(\d.{0,40}?($currency))")
+        if ($m.Success) {
+            Fail 11 ("{0}:{1} states a CURRENT wire number in a Tier 1 document ('{2}'). Cite WHEN it changed, or point at the source symbol -- never what it is now." -f `
+                    $rel, ($i + 1), ($m.Value -replace '\s+', ' '))
+        }
+    }
+}
+
+# ------------------------------------------------------------------ 12. a plan's status must not contradict its body
+#
+# PLAN_RENDER_PERFORMANCE.md carried "Status: proposed, not started" for work that shipped in Session 28 --
+# while its own body, thirteen lines further down, read "Stage 1 result - DELIVERED v0.3.57". That file is
+# where CLAUDE.md sends anyone touching the renderer, so the first thing they read was that none of it had
+# happened.
+#
+# Only the STATUS LINE is judged, not the prose. A delivered plan may still say a later stage is "not
+# started" -- that is a real and useful statement -- so the contradiction is only reported when the
+# document-level status itself claims the work is unstarted.
+#
+$planDir = Join-Path $repo 'dev\plans'
+if (Test-Path $planDir) {
+    foreach ($f in Get-ChildItem $planDir -Filter 'PLAN_*.md' -File) {
+        $txt = [System.IO.File]::ReadAllText($f.FullName)
+        $statusLine = ([regex]::Match($txt, '(?im)^[>\s*]*\*{0,2}Status\b[^\r\n]*')).Value
+        if (-not $statusLine) { continue }
+        $unstarted = $statusLine -match '(?i)not started|proposed|unstarted'
+        $done      = $statusLine -match '(?i)delivered|implemented|complete|shipped'
+        if ($unstarted -and -not $done -and $txt -match '(?i)\bDELIVERED\b|\bSHIPPED\b') {
+            Fail 12 ("dev/plans/{0} says it is unstarted but its body reports delivered work. Status line: '{1}'" -f `
+                    $f.Name, ($statusLine.Trim() -replace '\s+', ' '))
+        }
+    }
+}
+
+# ------------------------------------------------------------------ 13. no mojibake in any tracked text file
+#
+# THE RECURRING FAILURE. Every markdown file in this repo is UTF-8 with **no BOM** and every one of them
+# contains non-ASCII -- em-dashes, the trap marker, arrows, multiplication signs. 61 of the .cs files do too.
+# Windows PowerShell 5.1 decodes a BOM-less file as the system ANSI codepage, so a careless round-trip
+# turns every em-dash into "a-euro-quote" and every trap marker into gibberish, in one silent pass over the
+# whole file. That is not hypothetical here: it shipped to players once already in modinfo.json (GOTCHAS
+# G25), and it happened again to ARCHITECTURE.md during the 2026-07-30 audit.
+#
+# Check 7 already guards modinfo.json, but it only asserts "ASCII only", which the rest of the repo cannot
+# satisfy -- the docs are supposed to contain em-dashes. This check asks the other question: are the
+# non-ASCII characters the RIGHT ones, or are they the wreckage of a bad decode?
+#
+# DETECTION. Mojibake from a UTF-8-read-as-ANSI round-trip always begins with A-circumflex, A-tilde or
+# a-circumflex followed by another non-ASCII character. In genuine English-plus-code text that pairing
+# essentially never occurs, which makes it a clean signature rather than a heuristic. Verified against all
+# 148 tracked text files: exactly one hit, and it is a deliberate quotation (see below).
+#
+# THE PATTERN IS WRITTEN AS \u ESCAPES, AND THIS FILE MUST STAY PURE ASCII. Writing the three characters
+# literally is what broke this check the first time it was added: DocCheck.ps1 had no non-ASCII bytes until
+# then, PowerShell 5.1 read the new ones as ANSI, and the script died on its own regex. A checker must not
+# contain the bytes it hunts -- the same reasoning as check 6's note about never writing a literal home
+# path in a comment here.
+#
+# CODE SPANS ARE EXEMPT, IN MARKDOWN ONLY. SESSION_34.md quotes the mojibake it fixed, inside backticks --
+# that is a record of the bug, not an instance of it. A quoted defect is data. Outside markdown there is no
+# such convention, so any hit is a failure.
+#
+$mojibake = '[\u00C2\u00C3\u00E2](?=[^\x00-\x7F])'
+foreach ($rel in $tracked) {
+    $full = Join-Path $repo $rel
+    if (-not (Test-Path $full)) { continue }
+    if ($rel -notmatch '\.(md|ps1|json|txt|csproj|cs|vsh|fsh)$') { continue }
+    $txt = [System.IO.File]::ReadAllText($full)
+    if ($rel -match '\.md$') {
+        $txt = [regex]::Replace($txt, '(?s)```.*?```', ' ')   # fenced blocks
+        $txt = [regex]::Replace($txt, '`[^`\r\n]*`', ' ')     # inline code spans
+    }
+    $m = [regex]::Match($txt, $mojibake)
+    if ($m.Success) {
+        $lineNo = ($txt.Substring(0, $m.Index) -split "`n").Count
+        Fail 13 ("{0}:{1} contains MOJIBAKE -- UTF-8 read as ANSI and written back. Restore the file; do not hand-repair it. To edit from PowerShell use [System.IO.File]::ReadAllText / WriteAllText, never Get-Content -Raw + Set-Content. See GOTCHAS G26." -f `
+                $rel, $lineNo)
     }
 }
 

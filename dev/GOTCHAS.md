@@ -84,9 +84,11 @@ recomposed.
 background workers. A change part-way through a large guide's build could be seen by some batches and not
 others — **one guide wearing two palettes** until the rebuild settled.
 **Do:** `GuidePalette` is now immutable and swapped by a single aligned reference write;
-`GuideMeshBuilder.BuildGuideMesh` reads that reference **once into a local** and uses that instance for every
+`GuideMeshBuilder.Build` reads that reference **once into a local** and uses that instance for every
 voxel, so a batch is always internally consistent — old palette or new, never a mixture. No lock on either
 side. **Do not reintroduce in-place mutation.**
+**Note the name:** a comment in `GuideMeshBuilder.cs` still calls that method `BuildGuideMesh`. There is no
+such method — the entry point is `Build`.
 **Note:** this hazard was **fixed, not inherited** — older notes that describe it as an open risk (including
 `PLAN_BLOCK_OCCUPANCY.md` §7.4's framing) predate the fix.
 **Found:** flagged in the F11 plan, fixed in Session 32. Detail: `dev/sessions/SESSION_32.md`.
@@ -235,6 +237,28 @@ carries a BOM, which makes a byte-level eyeball check ambiguous.
 **Enforced by:** `dev/DocCheck.ps1` check 7.
 **Found:** Session 34.
 
+### G26 — Never round-trip a repo file through `Get-Content` + `Set-Content`. It eats every em-dash.
+**Trigger:** before editing ANY tracked file from PowerShell — a script, a bulk rename, a quick fix.
+**Trap:** every markdown file here is **UTF-8 with no BOM**, and every one contains non-ASCII: em-dashes,
+the ⚠ trap marker, `×`, `≤`, arrows. **61 of the `.cs` files do too.** Windows PowerShell 5.1 decodes a
+BOM-less file as the system ANSI codepage, so `Get-Content -Raw` hands you mojibake and `Set-Content` writes
+it back — **the whole file, in one silent pass.** It builds clean, it renders, and nothing complains. This
+already shipped to players once in `modinfo.json` (**G25**) and it happened again to `ARCHITECTURE.md`
+during the 2026-07-30 documentation audit.
+**Do:** `[System.IO.File]::ReadAllText(...)` and `WriteAllText(...)` — `ReadAllText` detects UTF-8 correctly
+with or without a BOM. Better still, use the editing tools rather than a shell round-trip; they are not
+subject to this at all.
+**Never hand-repair mojibake.** Restore the file. A corrupted pass mangles characters you will not notice,
+and patching the visible ones leaves the rest.
+**Also, keep `dev/DocCheck.ps1` PURE ASCII.** Writing the three mojibake lead characters into it literally
+is what broke check 13 the first time it was added: the script had no non-ASCII bytes until then,
+PowerShell read the new ones as ANSI, and it died parsing its own regex. The pattern is written as `\u`
+escapes for exactly this reason — **a checker must not contain the bytes it hunts**, the same rule as
+check 6 and personal paths.
+**Enforced by:** `dev/DocCheck.ps1` check 13, across every tracked text file. Mojibake inside a markdown
+code span is exempt — `SESSION_34.md` quotes the bug it fixed, and a quoted defect is data, not damage.
+**Found:** Session 34 (as `modinfo.json` only); generalised 2026-07-30 after it recurred.
+
 ---
 
 ## Reversals and disproved claims
@@ -304,6 +328,27 @@ remain **explicitly gated behind G2**.
 Reopen performance work only from a **new measured bottleneck and a fidelity-preserving design** — not from
 the assumption that subdivision or merging must be next.
 
+### R9 — The volumetric z-fight world probe. Removed v0.3.70; do not bring it back.
+**`GuideMeshOptions.IsNeighborSolid`** — the world-solidity probe that decided, per face, whether a guide
+voxel's face needed clearing off a block-grid plane — **is gone.** The face offset is now a uniform outward
+push decided by the guide's own voxel set, and the world is deliberately not consulted.
+
+Re-adding a world probe here looks obviously right (why push a face out where there is nothing to z-fight
+against?) and is wrong twice over:
+
+- **It flips on rebuild.** A player filling the volume the guide sits in changes the probe's answer, so the
+  face offsets invert underneath them — a rendering change caused by building, which is the one thing a
+  planning overlay must not do.
+- **It breaks welding.** A probe-driven offset varies face to face, so coplanar faces of adjacent voxels
+  disagree and the v0.3.57 welder cannot share them. A uniform offset lets every one of those welds happen.
+
+**`GuideMeshOptions.OccupancyProbe` is NOT this returning.** It asks about a voxel's OWN cell rather than its
+neighbour, and it feeds **colour only, never geometry** — so a rebuild simply re-reads the truth and the
+failure mode above cannot occur. The distinction is the whole reason it was allowed to exist.
+
+**The Surface-mode air-side probe is a different thing again, and is still live.** It picks which side of a
+wall a flat decal hugs. Only the volumetric one was retired.
+
 ---
 
 ## Appendix — markers judged NOT to be traps
@@ -311,6 +356,16 @@ the assumption that subdivision or merging must be next.
 Recorded under the harvest protocol (`dev/plans/PLAN_DOC_OVERHAUL.md` §7 step 2), which requires that every
 pre-existing ⚠️ marker become an entry above **or** carry a written judgement of why it did not. Baseline:
 **54 markers across 12 files**, measured 2026-07-30 (§7.1).
+
+> **Re-running this count after the overhaul.** The baseline figure is a *pre-overhaul* measurement and will
+> never reproduce against the living tree again — four of its twelve files are now in `dev/archive/`, and
+> `CLAUDE.md`'s sixteen dissolved into the task index by design. **Where the 54 went, verified by count:**
+> 21 still stand in the session records, 7 moved verbatim into `dev/history/DONE.md`, and the remaining 26
+> (`CLAUDE.md` 16, `HANDOFF.md` 6, `PROJECT_STATUS.md` 3, `ARCHITECTURE.md` 1) sit frozen in the archive,
+> which holds **33** — those 26 plus `TODO.md`'s 7. Nothing is unaccounted for.
+> **A future harvest counts session records and `DONE.md`.** Markers in `GOTCHAS.md`, `STATUS.md`,
+> `WIRE_HISTORY.md`, `INDEX.md`, `TEMPLATE.md` and the plans are living-document prose quoting rules — not
+> traps awaiting harvest — and are excluded, exactly as `PLAN_DOC_OVERHAUL.md`'s own were (§7.1).
 
 | Source | Markers | Judgement |
 |---|---|---|

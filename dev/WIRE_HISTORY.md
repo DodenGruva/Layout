@@ -79,9 +79,14 @@ DataVersion stamps the **saved guide record**, not the wire. `GuideData.CurrentD
 | 6–7 | 11 | The 3D volume family |
 | 8 | 13 | — |
 | 9 | 20 | Polygonal volumes |
+| 10 | 21 | Cached display name / voxel count / dimensions (v0.3.3, the placed-behemoth safeguards) |
 | 11 | 21 | Adaptive large-guide / structural wireframe persistence |
 | 12 | 22 | — |
 | **13** | 33 | **The Rectangle/Box re-gesture** — Rectangle became 3 clicks, Box 4, Square stayed 2 |
+
+**The ledger starts at DV 5**, which is as far back as the session records reach. What DataVersions 2–4
+added is recorded in `dev/ARCHITECTURE.md` → *Data & wire* (v4 `Constraint` + `ShapePlaneAxis`, v3
+`CreatorUid`, v2 `Projection`/`Plane`/`IsFilled`); no session is claimed for them here rather than guessed.
 
 ⚠️ **Legacy encodings are READ IN PLACE, never migrated.** Two-point rectangles and three-point boxes
 reproduce to the voxel from their old encoding. This is not laziness: **shapes are adopted on renderer worker

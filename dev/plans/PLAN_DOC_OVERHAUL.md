@@ -46,6 +46,25 @@
 > **ALL PHASES COMPLETE.** `dotnet build -c Release`: 0 warnings, 0 errors. `src/`, `Layout.csproj` and
 > `assets/` are untouched — verified by `git status`.
 >
+> **Post-execution audit, 2026-07-30.** The delivered set was checked line-by-line against source. The
+> mechanical claims all held — the six archived files are **byte-identical** to their originals after their
+> banners, `DONE.md` is a verbatim extraction, and the 54 harvested markers are fully accounted for (21 in
+> session records, 7 in `DONE.md`, 26 frozen in the archive). What the audit found was a single recurring
+> defect: **claims about the PRESENT tense left in documents whose job is durable fact** — `ARCHITECTURE.md`
+> stating DataVersion "currently 12", the three-mode scheme after Transform shipped, the pre-v0.4.15
+> Rectangle/Box gestures, a retired z-fight probe described as live, and `PLAN_RENDER_PERFORMANCE.md`
+> reading "proposed, not started" for work delivered in Session 28. All corrected.
+>
+> **§6's list of ten checks is therefore out of date: `DocCheck.ps1` now has THIRTEEN.** Checks **11** (no
+> current wire number in a Tier 1 document) and **12** (a plan's status line must not contradict its body)
+> were added because every defect above was of a kind the original ten could not see — they compare
+> `STATUS.md` against source and leave the durable tier unguarded. Check **13** (no mojibake in any tracked
+> text file) followed, after a PowerShell round-trip corrupted every em-dash in `ARCHITECTURE.md` mid-audit:
+> §6's check 7 guards `modinfo.json` by demanding pure ASCII, which the documents — full of em-dashes and
+> ⚠ markers — can never satisfy, so the rest of the repo had no encoding guard at all. All three were
+> negative-tested by replanting the exact original faults. The script is the authority on what is checked;
+> this section records what was planned.
+>
 > **Not committed.** Commits are made only when the human instructs (standing rule, `CLAUDE.md`).
 >
 > ⚠️ **NOTHING IS DELETED. EVER.** Every document being overhauled is **archived intact** first — see §2.

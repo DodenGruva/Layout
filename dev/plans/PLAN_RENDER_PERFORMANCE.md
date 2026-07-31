@@ -1,8 +1,28 @@
 # PLAN — Guide render performance (post-v0.3.54, `beta` branch)
 
-> **Status:** proposed, not started. Written 2026-07-24 after re-examining the Session 25–26 rendering arc
-> with corrected measurements from the human. Supersedes `SESSION_26.md` §7's conclusion that the renderer
-> is finished — see §1, which invalidates the performance evidence that closed that arc.
+> **Status: ✅ DELIVERED — Stages 0–3 shipped in Session 28 (v0.3.55–v0.3.61). Stage 4 is deliberately
+> NOT started and is gated.** Written 2026-07-24 as *proposed, not started*; that banner was left standing
+> after the work landed and was corrected on 2026-07-30. Supersedes `SESSION_26.md` §7's conclusion that the
+> renderer is finished — see §1, which invalidates the performance evidence that closed that arc.
+>
+> **Phase log.**
+> - **Stage 0 — measure first. DELIVERED v0.3.55.** Its figures (§1a) supersede every earlier number in
+>   Sessions 25–27.
+> - **Stage 1 — vertex welding. DELIVERED v0.3.57.** −72.9% vertices, −58.4% mesh data, −41.5% frame cost on
+>   an 8M-voxel guide, with the triangle and index streams **provably identical** (§5). Now at ~1.0 vertices
+>   per quad — **the theoretical floor, and therefore spent.**
+> - **Stage 2 — custom guide shader. DELIVERED v0.3.60.** 8M-voxel guide **8.2 ms → 1.8 ms, 78% removed.**
+>   Guides became self-lit as a consequence; `shaderGuideBrightness` / `shaderAmbientResponse` approximate
+>   the old look back, and `/layout shader off` restores the engine path for A/B.
+> - **Stage 3 — client performance options. DELIVERED v0.3.58** (settled-shell streaming above 100,000
+>   voxels).
+> - **Stage 4 — ordering and spatial culling. NOT STARTED, and gated behind `dev/GOTCHAS.md` G2** — guides
+>   are order-dependent translucent geometry, so anything that regroups primitives changes the picture.
+>   This is the explicit reason it is unstarted, not an oversight. **Reopen only from a NEW measured
+>   bottleneck and a fidelity-preserving design** (`GOTCHAS` R8).
+>
+> **The arc is closed and both remaining levers are spent or gated.** Read `dev/GOTCHAS.md` G2 and
+> R2/R4/R5/R8 before proposing renderer work.
 
 ---
 

@@ -9,8 +9,8 @@
 > treatment is to annotate it — see the correction banner on `SESSION_26.md` — never to rewrite it.
 >
 > **Wire** shows the *change* a session made, not the running total. "—" means neither DataVersion nor the
-> protocol moved. `dev/WIRE_HISTORY.md` is the authoritative ledger; a few early rows are marked "?" rather
-> than guessed, and are to be resolved from source when that ledger is built.
+> protocol moved. **`dev/WIRE_HISTORY.md` is the authoritative ledger** — it was built by reading
+> `RegistrationOrder()` in `PacketTypes.cs`, so where the two differ, it wins over this column.
 
 | # | Versions | Wire | Summary |
 |---|---|---|---|
@@ -36,7 +36,7 @@
 | 15 | 0.2.0–0.2.9 | proto 3 → 4 | **The Chalking Kit (F5)** — reskin, ground storage, chalk durability and the refill loop |
 | 14 | 0.1.53 | DV 8, proto 3 | Hollow-shell scaling and the mesh frontier — the handoff that set up Session 16 |
 | 13 | 0.1.46–0.1.52 | DV 8, proto 3 | Optimization and guide-interaction correctness pass |
-| 12 | 0.1.28–0.1.45 | ? | **ClientOnlyFallback (F4)** — client-only authority, then private guides alongside public ones |
+| 12 | 0.1.28–0.1.45 | proto → 2 | **ClientOnlyFallback (F4)** — client-only authority, then private guides alongside public ones |
 | 11 | 0.1.14–0.1.27 | DV 5 → 7 | The backlog, the Free-Shape, GUI polish, **the 3D volume family** (Sphere, Dome), and hardening |
 | 10 | 0.1.10–0.1.13 | — | First full UI refinement pass — the icon-driven panel; B-S10-1 fixed; divisions scroll-wheel |
 | 9 | 0.1.0 | DV 4 → 5 | Line/Triangle/Rectangle shapes, division marks, the soft-flow regime split |

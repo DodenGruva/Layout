@@ -30,6 +30,7 @@ of that here; it goes stale the moment it is copied.
 | adding an optional command argument | `dev/GOTCHAS.md` **G3** — optional parsers return their DEFAULT, not null |
 | debugging "X doesn't work" | `dev/GOTCHAS.md` **G12** — run the existing diagnostic before writing a fix |
 | drawing or editing an icon glyph | `dev/GOTCHAS.md` **G10**, and render it with `.\dev\RenderIcon.ps1` |
+| editing any file from a PowerShell script | `dev/GOTCHAS.md` **G26** — a `Get-Content`/`Set-Content` round-trip destroys every em-dash |
 | packaging a release | `dev/GOTCHAS.md` **G21** and **G25**, plus the versioning rule below |
 | a design question that feels settled | `dev/ARCHITECTURE.md` → **Settled Decisions Register** |
 
@@ -40,7 +41,8 @@ re-discovering the trap.
 ## Build & run
 
 - **Build:** `dotnet build` from the repo root (the folder with `Layout.csproj`).
-- **Target:** .NET 10, Vintage Story 1.22.x (`modinfo.json` declares a 1.22.0 minimum).
+- **Target:** .NET 10, Vintage Story 1.22.x. `modinfo.json` declares the minimum game version — read it
+  there rather than restating it here.
 - **Dependencies** (all ship with the game): `VintagestoryAPI.dll`, `Newtonsoft.Json.dll`, `protobuf-net.dll`,
   `cairo-sharp.dll` (GUI icon glyphs), `VSSurvivalMod.dll` (from the game's `Mods/`).
 - **`Layout.csproj` finds the install itself** — `-p:VintagestoryDir=…` → the `VINTAGE_STORY` env var → the

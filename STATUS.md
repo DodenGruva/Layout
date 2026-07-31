@@ -25,7 +25,7 @@ guides on servers without Layout, and alongside public guides where permitted. T
 | | |
 |---|---|
 | **Current build** | **v0.4.33** on `beta` |
-| **Last `main` release** | v0.3.53 |
+| **Last `main` release** | **v0.3.69** — verified against `origin/main`'s `modinfo.json`, not taken from another document |
 | **Published at** | `github.com/DodenGruva/Layout` — **the repo is public; no personal paths or usernames in tracked files** |
 | **Branches** | `main`, `beta`. `beta-shader` no longer exists — the shader work landed and is what the mod renders with (human-confirmed 2026-07-29) |
 
@@ -199,16 +199,21 @@ restart**; 0 or negative = unlimited; synced to clients on join):
 | `adminCanOverrideLocks` | true |
 | `allowClientOnlyMode` | false |
 | `enableChalkDurability` | true |
-| `allowHotbarChalkRefill` | false |
-| `allowInventoryChalkRefill` | false |
 
-Ground-storage chalk refill is **always** allowed and ungated; the two flags opt in the hotbar and
-inventory-slot shortcuts. Five of these caps are live-editable by admins from the settings page, which stages
+`configVersion` is 1 in any file on disk — the class default is 0 and `Normalize()` migrates it on load,
+which is what carries the old generated cap defaults forward.
+
+**The two chalk refill-channel flags are NOT here.** `allowHotbarChalkRefill` and
+`allowInventoryChalkRefill` moved to the CLIENT config in v0.2.22 — they are player convenience toggles, not
+server policy, since a refill costs the same powder wherever it happens. Stale keys left in an existing
+`layout.json` are ignored. Five of these caps are live-editable by admins from the settings page, which stages
 edits until **Save**; `GuideManager.ApplyCaps` makes them live and `layout.json` is rewritten on every change.
 **Lowering a cap never deletes anything.**
 
-**Hard-coded limits (in code, not config):** `HardVoxelCeiling` **10M** · legacy `MaxScanCells` 4M (selects
-the surface-only fallback for oversized Cylinder/Cone/Box rather than rejecting them) · `MaxDivisions` 256 ·
+**Hard-coded limits (in code, not config):** `HardVoxelCeiling` **10M** · legacy `MaxScanCells` 4M (on
+Cylinder/Cone/Box it selects the surface-only fallback rather than rejecting them; Sphere and Dome carry the
+same constant purely as a *filled*-scan guard, which filled volumes being retired has left inert) ·
+`MaxDivisions` 256 ·
 Polygon `MinSides` 3 / `MaxSides` 24 · Free-Shape `MaxCorners` 64 · `PreviewFullResVoxelCap` 8,000
 (draft-ghost coarsening only) · valid voxel scales {1, 2, 4, 8, 16}.
 
@@ -223,7 +228,10 @@ any override** — reach for it before writing a fix (`dev/GOTCHAS.md` G12).
 
 **Client `layout-client.json`** (`LayoutClientConfig`): `forceClientOnly` (subject to server policy), last
 scale / projection / 2D fill / 3D wireframe form / shape+constraint / divisions / sides, six role opacities,
-up to four hard-kept pinned favourites, and both chalk-refill flags. `guideRenderingEnabled` defaults true.
+up to four hard-kept pinned favourites, and **both chalk-refill flags** (`allowHotbarChalkRefill`,
+`allowInventoryChalkRefill`, both false — they live here, not in `layout.json`). Ground-storage refill
+(Shift+right-click a set-down kit) is **always** allowed and ungated; the two flags only opt in the hotbar
+and inventory-slot shortcuts. `guideRenderingEnabled` defaults true.
 Rendering knobs: `shaderGuideBrightness` 0.78, `shaderAmbientResponse` 0.55, `voxelFrameStrength` 0.25,
 `zFightInset` **0.0006** (an OUTSET since v0.3.70), `occupancyRecolour` false. Colour: `colorScheme`
 (0 Default / 1 Red-Green Safe / 3 Custom; **2 is retired**) and `customColors`, seven `"#RRGGBB"` strings in
