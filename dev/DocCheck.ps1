@@ -292,7 +292,12 @@ if (Test-Path $planDir) {
         if (-not $statusLine) { continue }
         $unstarted = $statusLine -match '(?i)not started|proposed|unstarted'
         $done      = $statusLine -match '(?i)delivered|implemented|complete|shipped'
-        if ($unstarted -and -not $done -and $txt -match '(?i)\bDELIVERED\b|\bSHIPPED\b') {
+        # The body "reports delivered work" only when DELIVERED/SHIPPED sits next to a VERSION -- that is a
+        # status assertion ("Stage 1 result - DELIVERED v0.3.57"), which is the defect this check exists for.
+        # A bare prose use is not: a brief may legitimately say "delivered fixes follow the zip discipline"
+        # while being genuinely unstarted. Requiring the version is what separates an assertion from a
+        # sentence, and PLAN_CODE_REVIEW.md is the document that proved the looser form false-positives.
+        if ($unstarted -and -not $done -and $txt -match '(?i)\b(DELIVERED|SHIPPED)\b[^\r\n]{0,30}v?\d+\.\d+\.\d+') {
             Fail 12 ("dev/plans/{0} says it is unstarted but its body reports delivered work. Status line: '{1}'" -f `
                     $f.Name, ($statusLine.Trim() -replace '\s+', ' '))
         }

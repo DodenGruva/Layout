@@ -24,10 +24,14 @@ in `DONE.md`.
 
 ## A10. Review backlog — the long-standing one
 
-1. **Perform an adversarial code review.** — **OPEN.** Session 33 raises the value of this considerably:
+1. **Perform an adversarial code review.** — **OPEN, and now BRIEFED: `dev/plans/PLAN_CODE_REVIEW.md`.**
+   Session 33 raises the value of this considerably:
    four real bugs in shipped code were found just by *reading*, during one debugging session — a silently
    dropped admin packet, a Reveal All filter that could never match, a cap bypass via private mode, and
    eleven player-facing messages printing their own format placeholders (`GOTCHAS` G11).
+   **Run it in a FRESH session** — the brief's §1 explains why, and it is not a context-budget argument.
+   The brief carries the do-not-re-litigate list, which is what stops a reviewer filing four settled
+   decisions as bugs.
 2. **Perform a performance-focused code review of the NON-RENDER code.** — **PARTLY ADDRESSED.** Session 28
    measured and fixed the renderer; nothing equivalent has been done elsewhere.
 
