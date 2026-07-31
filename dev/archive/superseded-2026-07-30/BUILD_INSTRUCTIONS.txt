@@ -1,4 +1,11 @@
 ======================================================================
+🗄️ ARCHIVED 2026-07-30 at v0.4.33 — SUPERSEDED, DO NOT USE AS CURRENT.
+Frozen exactly as it stood before the documentation overhaul.
+Its successor is the Build and run section of CLAUDE.md.
+Kept so nothing is ever lost. Never edit this file; never cite it as current.
+======================================================================
+
+======================================================================
 NOTE (updated 2026-07-19): This is the ORIGINAL first-build doc
 (Module 7 / v0.1.0 / 35 source files). The BUILD, RUN, and first-run
 steps below are still accurate, but the project has moved on:

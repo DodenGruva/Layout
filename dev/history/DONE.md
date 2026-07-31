@@ -1,11 +1,160 @@
-# Layout — TODO / Outstanding Items (current: v0.3.58 on `beta`)
+# Layout - DONE: the delivered and resolved archive
 
-> **Purpose.** The running punch-list. Companion to `ARCHITECTURE.md` (the plan), `PROJECT_STATUS.md` (the
-> status), and `HANDOFF.md` (the consolidated current-state brief).
+> **Tier 3 - history. Append-only, never revised, therefore never stale.**
+>
+> Extracted verbatim from `dev/TODO.md` on 2026-07-30 at v0.4.33, when the punch-list was split so that
+> `TODO.md` could hold **open items only**. It was 1,124 lines, of which the great majority was delivered
+> work being re-read every time anyone opened it.
+>
+> **Nothing here was rewritten.** Every section below is the original text, moved. The complete
+> pre-split file is also frozen at `dev/archive/superseded-2026-07-30/TODO.md`.
+>
+> Read this to find out **what was asked for and what shipped**. For what is still open, read
+> `dev/TODO.md`. For why a decision looks the way it does, read `dev/GOTCHAS.md` and the session records.
+>
+> **A note on the references below.** The text names files as `SESSION_28.md` and `PLAN_RENDER_PERFORMANCE.md`,
+> which is where they lived when it was written. They are now in `dev/sessions/` and `dev/plans/`. Those
+> references were **deliberately not rewritten** — this file's value is that it is the original text, moved,
+> and a verbatim extraction stops being verifiable the moment it is edited. Resolve a bare `SESSION_*.md`
+> against `dev/sessions/` and a bare `PLAN_*.md` against `dev/plans/`.
 
 ---
 
-## ⭐ Top of the list (v0.3.53 final release → field reports)
+## Documentation overhaul — ✅ DELIVERED 2026-07-30 (was `TODO` A10, item 5)
+
+**"Clean up and consolidate the documentation"** — open since Session 28, planned in detail on 2026-07-29 and
+executed the next day at v0.4.33, in eight phases, with no code changes. Full plan and phase log in
+`dev/plans/PLAN_DOC_OVERHAUL.md`.
+
+**The diagnosis** was that documents were organised by SUBJECT while maintenance cost is driven by RATE OF
+CHANGE, so every file mixed durable fact with time-stamped narrative, every file went stale, and every file
+ended up needing a staleness banner — which then went stale too. The scheme is now organised by lifetime:
+always-loaded, durable, current-state, history, archive.
+
+| | Before | After |
+|---|---|---|
+| `CLAUDE.md` (paid every session) | 376 lines | 116 |
+| `TODO.md` | 1,124 | 142 |
+| `ARCHITECTURE.md` | 1,117, trailing six sessions | 652, no current-state claim |
+| Status docs | 2 files, 1,176 redundant lines | 1 file, 265 |
+| Traps | 54 scattered over 12 files | 25 traps + 8 reversals, indexed by trigger |
+
+**Nothing was deleted.** Six superseded documents are frozen intact in
+`dev/archive/superseded-2026-07-30/`, each verified byte-identical after its banner.
+
+**New in this work:** `dev/GOTCHAS.md` (traps + reversals), `STATUS.md` (regenerated, never edited),
+`dev/sessions/INDEX.md` and `TEMPLATE.md`, `dev/history/DONE.md` (this file), `dev/WIRE_HISTORY.md`, and
+`dev/DocCheck.ps1` — ten mechanical checks that make the scheme self-policing, all negative-tested.
+
+**It also closed the standing doc-debt item** (merge `PROJECT_STATUS.md` away), overriding two of that
+note's instructions: nothing was deleted, and `HANDOFF.md` was archived too rather than kept.
+
+---
+
+## ⭐ ✅ The Session-33 polish queue — ALL SEVEN DELIVERED (v0.4.28, Session 34)
+
+Full record in `SESSION_34.md` §1. Kept for the record of what was asked.
+
+1. ~~**Remove the admin voxel-limit warning message in the GUI.**~~ **DONE.** The override data is
+   untouched — the packet fields, the Overrides tab and `/layout info <player>` all still report it.
+2. ~~**Left-align the Players button.**~~ **DONE.** The unsaved-changes marker moved to its own line: with
+   a button at each end of the row the gap is ~110 px, which is what "2 unsaved changes" needs, and any
+   rewording would have clipped.
+3. ~~**Alter the overflow text on the player's Overridden message.**~~ **DONE**, then superseded in v0.4.31
+   by marking each limit `(override)` / `(server)` inline. Fixed a second defect on the way: the old line
+   named `/layout voxelcap` whatever the override actually was.
+4. ~~**Work on the tile icons for rotate and tilt.**~~ **DONE.** The stroked chevron's trailing leg lay
+   along the ring and vanished into it; it is a filled triangle now, with the arc stopping short of it.
+5. ~~**Move the Down move arrow up one space, and add a double-down arrow that sends a guide to the
+   ground.**~~ **DONE.** `GuideToolController.GroundDropSixteenths`, reusing `TryGuideFloorSixteenths` as
+   directed. See `SESSION_34.md` §2.
+6. ~~**Redo the mirror icon.**~~ **DONE** — two closed, handed forms either side of the axis.
+7. ~~**Make the teeth taller on the Settings gear icon.**~~ **DONE** (v0.4.28, taper refined in v0.4.33).
+
+---
+
+## ⭐ Session-34 additions (human-requested 2026-07-29, all delivered)
+
+Full record in `SESSION_34.md`.
+
+- ~~**Momentary tiles give no click feedback.**~~ **FIXED (v0.4.29).** Move arrows, rotate corners and the
+  Reveal tiles reset themselves in the same call that ran their action, so the lit state never survived a
+  frame. **Still open:** the bare chevrons (`BareIconElement`) draw no chrome at all and have no press
+  state — one would have to be drawn from scratch.
+- ~~**Make player caps editable through the Players dialog.**~~ **DONE (v0.4.31–v0.4.33, protocol 24).**
+  Staged edits with Save, jail/free behind a confirmation, sorting, a name filter, a scroll pane, world
+  totals, and shared cap step sizes. **Scoped out at the human's direction:** detail panes on the
+  Overrides/Jail tabs, and per-player guide deletion.
+
+---
+
+## ⭐ Previously top of the list — both delivered in Session 33
+
+> **✅ T1 DELIVERED (v0.4.15).** CTRL on free-move drops the guide onto the targeted surface, with the
+> decided contact rule: the guide's LOWEST VOXEL PLANE meets the face. Measured from the shape's own
+> sampled outline (never the voxel set — this runs every tick of a drag), phantom points excluded, and a
+> Surface guide reads its plane offset instead. `GuideToolController.TryGuideFloorSixteenths`.
+
+> **✅ THE BOX/SQUARE CARDINAL DEFECT IS FIXED (v0.4.15).** Rectangle and Box were the only two shapes in
+> the catalog reading their sides off the plane's world axes; every other shape derives its frame from the
+> clicks. The gesture now supplies the missing rotation — Rectangle is 3 clicks (corner · edge end · width),
+> Box is 4 (…· height), Square stays 2 with SHIFT choosing the side. Legacy guides read in their old
+> encoding and reproduce to the voxel (21/21 harness). DataVersion 12 → 13.
+
+---
+
+## Older top of the list
+
+> **✅ THE SETTINGS PAGE IS COMPLETE — v0.4.2–v0.4.14 (SESSION_32).**
+> **F9 (in-game settings panel), T2 (its formatting + hover text), F10 (the gear glyph) and F11 (colour
+> schemes) are all delivered.** DataVersion 12 and protocol 19 both unchanged — none of it touches the wire.
+> **82 source files** (one added: `GuidePalette.cs`).
+>
+> The page is now a two-section panel: a coloured **Layout: On/Off** master switch above the sections, then
+> **Appearance** (opacity + Reset, colour scheme, Chiseling Highlight) and **Behaviour** (a sliding
+> Public/Private control with the server's policy above it and a Publish button below, plus the two chalk
+> refill shortcuts). Every row carries hover text.
+>
+> **Colours** ship as Default / Red-Green Safe / **Custom**, the last with a seven-role table and a
+> sixteen-swatch grid. The human overrode the preset-only design and was right to: presets answer "I cannot
+> tell these apart", not "yellow disappears against sandstone".
+>
+> Full record in `SESSION_32.md`; its §9 carries nine flagged items, none blocking. **§8 records two
+> mistakes worth not repeating** — the `LoadedTexture` null-ref that crashed v0.4.4, and a PowerShell text
+> round-trip that double-encoded a source file.
+>
+> **QUEUED, not started:** **T1** below. That is the whole of the old F-queue backlog.
+
+> **✅ F9 / T2 DELIVERED (SESSION_32).** The settings panel and its formatting both shipped across
+> v0.4.2–v0.4.14. Detail below under F9; the per-revision record is in `SESSION_32.md`.
+
+> **🔧 OPEN FROM THE TRANSFORM ARC (human-requested 2026-07-27, not started):**
+>
+> **T1. CTRL on free-move constrains the guide to the targeted surface.** While free-moving, holding CTRL
+> should drop the guide onto the block face under the crosshair instead of riding the fixed view-ray depth
+> (`MoveSession.Depth`) — the same idea as CTRL's level/cardinal snap while drafting.
+> **✅ DECIDED 2026-07-27: the guide's LOWEST VOXEL PLANE meets the surface.** Unambiguous on every shape
+> and matches the common case of setting a build down on the ground. Accepted consequence: aiming at a wall
+> or ceiling still pushes the guide's BOTTOM to that face, which may read oddly — predictable was preferred
+> over clever. (Rejected: nearest-face, which handles walls but has no sane meaning on a sphere; base
+> anchors, which would sink a dome halfway into the floor since its anchors are its base ring, not its
+> lowest point.)
+> The offset must stay a whole number of the guide's own voxels or `TranslateGuide` will refuse it — snap
+> AFTER computing the contact, not before. The controller already has `CtrlHeld()` and the block raycast;
+> the work is the contact rule, not the plumbing.
+>
+> **T2. Settings page: better formatting + mouse-over descriptions. — ✅ DELIVERED (v0.4.2, SESSION_32).**
+> Every row carries `AddAutoSizeHoverText`, restoring the prose removed in v0.3.87, and the page is grouped
+> into Appearance and Behaviour with consistent label-left / control-right rows.
+
+> **📄 DOC DEBT (human-requested 2026-07-27): merge `PROJECT_STATUS.md` into `HANDOFF.md`.** The two are
+> largely redundant — both are "where the project stands" briefs, and `PROJECT_STATUS.md` has been left to
+> trail (it now carries a banner saying it is three sessions behind, which is itself the evidence). Keep
+> **`HANDOFF.md`** as the single current-state document, fold across anything `PROJECT_STATUS.md` says that
+> HANDOFF does not (its per-module descriptions are the likeliest unique content), then delete
+> `PROJECT_STATUS.md` and update every reference: `CLAUDE.md`, `HANDOFF.md`'s own header and §3 repo tree,
+> `ARCHITECTURE.md`'s banner, and this file's Purpose line. Note that maintaining one fewer status doc is
+> the actual goal — do not simply move the redundancy into HANDOFF.
 
 > **Session-16 playtest results (human-confirmed):** the v0.2.21 **inventory refill and hotbar refill both
 > work** — the MouseDown-hook ordering and the `InventoryID` round-trip both hold, closing `SESSION_16.md` §8.
@@ -231,19 +380,52 @@ reports intuitive block dimensions.
 5. ~~**Verify and package the final release.**~~ **DONE.** Focused cumulative-cap smoke test passed; Release
    build has 0 warnings/errors; `Layout0.3.53.zip` has 40 entries and 37 assets.
 
-### A10. Current human backlog (status at v0.3.58)
 
-1. **Fix Box and Square guides automatically constraining to cardinal directions.** — **OPEN.** The only
-   outstanding functional defect; nothing in Sessions 25–28 touched it.
-2. **Perform an adversarial code review.** — **OPEN.**
+---
+
+> **The four sections below were MIXED** - part delivered, part open - and are reproduced here in full
+> because they are the record of what was asked. Their still-open items were carried into the new
+> `dev/TODO.md` and are the authoritative copy there:
+>
+> - **A10.2** (adversarial code review) and **A10.3** (performance code review) - still open.
+> - **A10.5** (documentation consolidation) - **✅ DELIVERED 2026-07-30**; see the section at the top of
+>   this file, and the phase log in `dev/plans/PLAN_DOC_OVERHAUL.md`.
+> - **A11.5** (next playtest focus: settled-shell streaming, remote arrival) - still open.
+> - **A12a** (the standing renderer constraint) - **now `GOTCHAS.md` G2**, its permanent home.
+> - **B.1** (large-guide follow-up gate), **B.4** (cosmetic flags), **B.5** (the "if asked" list) - open.
+>
+> The doc-debt note quoted inside A10.5 asked for `PROJECT_STATUS.md` to be **deleted** and `HANDOFF.md`
+> kept. The overhaul overrode both points: nothing is deleted, and **both** files were archived in favour
+> of `STATUS.md`. See `PLAN_DOC_OVERHAUL.md` section 5.2.
+
+### A10. Current human backlog (status at v0.3.58; item 1 closed in Session 33)
+
+1. ~~**Fix Box and Square guides automatically constraining to cardinal directions.**~~ **FIXED (v0.4.15).**
+   See the Session-33 entry at the top of this file and `SESSION_33.md` §2.
+2. **Perform an adversarial code review.** — **OPEN.** Session 33 raises the value of this: four real bugs
+   in shipped code were found by reading during one debugging session (a silently-dropped admin packet, a
+   Reveal All filter that could never match, a cap bypass via private mode, and eleven player-facing
+   messages printing their own format placeholders).
 3. **Perform a performance-focused code review.** — **PARTLY ADDRESSED** by Session 28's measured renderer
    work, but a general review of the non-render code has not been done.
-4. **Explore alternative rendering options for performance gains.** — **IN PROGRESS**, see
-   `PLAN_RENDER_PERFORMANCE.md` and `SESSION_28.md`. Vertex welding (v0.3.57) removed 41% of guide frame
-   cost with no visible change and is spent. A custom shader is under discussion. Ordering + spatial
-   culling remain gated behind a visible change to the accepted look.
-5. **Clean up and consolidate the documentation.** — **OPEN**, though Session 28 corrected the false
-   performance claims in `SESSION_26.md`.
+4. ~~**Explore alternative rendering options for performance gains.**~~ **DELIVERED — the custom shader
+   shipped and is what the mod renders with today** (human-confirmed 2026-07-29). Two levers were taken:
+   vertex welding (v0.3.57, −41% guide frame cost, no visible change, and now at the theoretical floor of
+   ~1.0 vertices per quad — spent), and the **custom guide shader** (v0.3.60, `assets/layout/shaders/
+   guide.vsh`/`.fsh`), which took an 8M-voxel guide from **8.2 ms to 1.8 ms — 78% removed**. Guides are
+   self-lit as a consequence; `shaderGuideBrightness` / `shaderAmbientResponse` approximate the old look
+   back, and `/layout shader off` restores the engine path for A/B. Detail in `PLAN_RENDER_PERFORMANCE.md`
+   and `SESSION_28.md`. **Still gated, and deliberately not the next step:** primitive ordering and spatial
+   culling, both of which regroup primitives and therefore change the accepted appearance (see the standing
+   constraint under A12). Reopen only from a NEW measured bottleneck.
+5. **Clean up and consolidate the documentation.** — **OPEN, and now PLANNED IN DETAIL:
+   `PLAN_DOC_OVERHAUL.md`.** To be executed as its own session, with no code changes in the same commits.
+   The plan reorganises the doc set **by rate of change rather than by subject** — which is the actual
+   cause of the drift — and **archives every overhauled document intact** into
+   `dev/archive/superseded-<date>/` rather than deleting anything (human-set constraint).
+   It subsumes the `PROJECT_STATUS.md` → `HANDOFF.md` doc-debt item below, and adds a trap/reversal
+   register, a session index, a wire-history ledger and a `DocCheck.ps1` that makes the scheme
+   self-policing. Measurements motivating it are in its §0.
 
 ### A11. Session-28 rendering arc (v0.3.55–v0.3.58) — full detail in `SESSION_28.md`
 
@@ -263,46 +445,27 @@ reports intuitive block dimensions.
 5. **Next playtest focus:** world load with the 8M guide (scaffold → grow-in, no hang); whether 100,000 is
    the right threshold; a second player watching a large guide arrive.
 
-### A12. Open — minor ground z-fighting (reported 2026-07-25, v0.3.6x)
+### A12. ✅ CLOSED — minor ground z-fighting (reported 2026-07-25, struck 2026-07-29)
 
-Guide voxels resting **on the ground** show very minor z-fighting. Not reproduced or judged from outside
-the game; the reporter was away from their machine.
+**Struck at the human's direction: the permanent face OUTSET settled it and the shimmer is not an issue.**
+v0.3.70 replaced the old inset with an outset derived from the guide's own voxel set, consulting the world
+not at all — the solidity probe and `_deferredSolidity` went with it — and `ZFightInset` defaulted to
+**0.0006**, five times smaller than the value this entry was arguing about. That removed the third and most
+likely candidate cause outright (there is no longer a probe that can fail to lift a face over farmland or a
+slab), and playtest settled the constant. `/layout inset <blocks>` remains as a live tuning knob if it ever
+comes back. Do not reopen without a fresh report.
 
-**Made tunable rather than guessed at (v0.3.65).** `/layout inset <blocks>` sets the anti-z-fight inset
-live, saves to `layout-client.json` as `zFightInset`, and rebuilds every guide. Default is the historical
-**0.003**, so nothing changes until it is deliberately dialled.
+### A12a. Standing renderer constraint — NOT a to-do, and not to be lost
 
-**Read this before picking a value.** The inset was settled by three rounds of playtest — 0.004 rejected as
-"seamy", 0.001 shimmered with distance, 0.003 chosen — but **the objection to 0.004 is obsolete**. That seam
-was between two adjacent guide voxels meeting across a block boundary, and exposed-face meshing (0.2.14) no
-longer emits those faces at all. The inset now only ever separates a guide face from a **world block** face,
-so values above 0.003 are safer today than when the ceiling was set.
+> **Discovered in Session 28.** Guides are *order-dependent* translucent geometry: Opaque stage, manual
+> alpha blending, depth-tested, double-sided. On a hollow shell the guide overlaps itself at nearly every
+> pixel, so whichever batch draws first wins. The accepted appearance is therefore partly a by-product of
+> voxel emission order, and **any change that regroups primitives changes the picture**. Welding was safe
+> precisely because it regroups nothing.
 
-**Candidate causes, most to least likely:**
-
-1. **0.003 is simply too small at distance or shallow angles.** Depth precision falls with distance, and the
-   `CameraNudge` (0.003, in `GuideRenderer.SetModelMatrix`) pulls the mesh toward the camera — which helps
-   a horizontal ground face when looking down at it, and barely at all when viewing from far away at a
-   shallow angle. Try `/layout inset 0.006` then `0.01`.
-2. **The custom shader does not implement `extraZOffset`.** `standard.vsh` applies
-   `gl_Position.w += extraZOffset`; the lean shader omits it. If the engine sets a nonzero value for the
-   Opaque stage, guides lost a small depth bias in v0.3.60. **Check first: does `/layout shader off` make
-   the shimmer go away?** That single test separates cause 1 from cause 2, and no code change is needed
-   to run it.
-3. **The lift is not being applied at all on that surface.** The lowest layer's bottom face is only lifted
-   when the solidity probe reports a solid block below (`GuideMeshBuilder`, `fy0`). A guide resting on
-   something the probe reads as non-solid — snow layer, farmland, a slab top — would get no lift. If the
-   shimmer is specific to certain ground types, this is the cause and the fix is in the probe, not the
-   constant.
-
-**Do not raise `CameraNudge` to compensate.** It is view-dependent by design and scales with distance from
-the mesh origin; using it to paper over a face-inset problem would shift every guide, not just ground faces.
-
-> **Standing constraint discovered in Session 28 — do not lose this.** Guides are *order-dependent*
-> translucent geometry: Opaque stage, manual alpha blending, depth-tested, double-sided. On a hollow shell
-> the guide overlaps itself at nearly every pixel, so whichever batch draws first wins. The accepted
-> appearance is therefore partly a by-product of voxel emission order, and **any change that regroups
-> primitives changes the picture**. Welding was safe precisely because it regroups nothing.
+This is what gates primitive ordering and spatial culling under A10.4, and it is why the Session 25–26
+experiments failed. It outlived A12, which is why it now sits in its own entry rather than inside a closed
+one. Also stated in `CLAUDE.md`'s renderer note and `SESSION_28.md`.
 
 ### A. Human backlog — queued at Session-16 end — ✅ ALL SEVEN DELIVERED (v0.2.22–v0.2.23)
 
@@ -394,6 +557,9 @@ the mesh origin; using it to paper over a face-inset problem would shift every g
 **Standing workflow rule (human-set — also in CLAUDE.md):** ship a NEW zip per code iteration into
 `..\LayoutZips\`, but update docs / commit ONLY when the human says so. Warn before any context trim if
 the docs are stale.
+
+---
+
 
 ---
 
@@ -626,107 +792,12 @@ playtest). Kept for the record of what was asked:
 
 ---
 
-## Flagged decisions awaiting the human's review
-
-Made under the standing "decide, note for review" rule; each is cheap to reverse. None block play.
-
-**Session-11 additions — full text in `SESSION_11.md` §8 (11a–11j) and §11 (11k–11r):** spring-back
-restores the as-placed POSITION too (11a) · spring-back vs a baked Surface exit (11b) · spring-back skips
-the cap check (11c) · ~~newest pin evicts (11d)~~ superseded by the 0.1.15 hard-kept model · catalog folds
-shut on select (11e) · legacy below-the-feet arches re-derive phantoms toward the body (11f) · sides not
-restored by spring-back (11g) · draft right-click steps back per-click (11h) · invert is live-while-held
-(11i) · N=3/N=4 polygons overlap the constraint tiles (11j) · chip at the far right of the Mode row, not
-touching + (11k) · Free-Shape finish is position-based, ~1.5-cell snap (11l) · 64-corner cap (11m) · Fill
-toggle inert on Free-Shapes (11n) · no auto-added 4th pin on upgrade (11o) · ★ badge catalog-only (11p) ·
-others still see only your first chain corner (11q) · Free-Shape can hand-draw triangles/rectangles —
-deliberate (11r).
-
-**Session-10 additions (the icon UI pass; partially reviewed in play already):**
-
-0f. **Edit mode is SELECT-ONLY** — clicking a guide in Edit selects it for the button-driven settings but
-    does NOT grab/insert/lock (so a select-click can't accidentally reshape). All geometry editing stays in
-    Create. Alternative if you want it: allow grabbing in Edit too, with body-click = select and point-click
-    = grab to keep insert from firing on a select.
-0a. **Divisions wheel works on hover** (point at the field and scroll), not only while focused — more
-    discoverable than the original "while focused" spec. The native number input additionally responds
-    when focused, and its spinner buttons are a third path.
-0b. **2×2 scale icon stays mid-sized** while 4×4/8×8 run edge-to-edge (reading of the vanilla icons);
-    the 16× icon is one solid square (human-confirmed choice).
-0c. **Tile edge = 42 px**, label column 74 px — the "compact / native proportions" dial, one constant each.
-0d. **Triangle constraint glyphs** rely on small geometry notation (right-angle mark, equal-side ticks);
-    if illegible at tile size, differentiate by proportion instead.
-0e. **Plane glyphs** (iso cube, active face filled) — N–S vs E–W legibility unproven in play.
-
-**Session-9 additions:**
-
-1. **Soft-flow regime split** (slave for interior grabs, shape-preserving for structural grabs). The decisive
-   fix for "the apex acts like a pin." Human confirmed grabbing "MUCH better"; the split itself is Claude's
-   call and can be revisited.
-2. ~~**Triangle gesture: 2 clicks + a born apex.**~~ **Superseded (Session 11, 0.1.14):** the human reopened
-   it and the THREE-click anchor·anchor·height placement is now built (Equilateral stays two-click).
-3. **Right / Isosceles / Square have no break gesture in v1** — their constrained drags always absorb
-   (slide/resize), so they never demote to the free parent. They live as separate catalog tiles (like
-   circle/ellipse). Equilateral *does* break (apex drag → free triangle).
-4. **Rectangle's derived corners are markers, not grabbable** — body clicks map to the nearest stored anchor.
-5. **Division marks are magenta** (`VoxelRenderType.Division`) — the one hue distinct from the six existing
-   roles. Open to review.
-6. **Divisions type-in field applies per keystroke** with a changed-value guard — typing "12" briefly applies
-   1 then 12, i.e. two sends / two undo steps on a selected guide. Acceptable v1; a commit-on-blur pass is the
-   upgrade. (Superseded in part by the scroll-wheel request above, but the per-keystroke behavior of the
-   remaining field still applies.)
-
-**Session-8, still unreviewed (carried):**
-
-7. **Ellipse body left-click → grab nearest handle** (parametric ring has nothing to insert).
-8. **Ellipse body right-click → toggle nearest handle's lock.**
-9. **New ellipse minor radius = ½ major** (visibly elliptical default; circles come from the Circle tile).
-10. **Minor handle slides along its axis** (free-space drags project onto it).
-11. **A placed guide's shape isn't menu-editable** — live guides reshape by grabbing, not menus (a
-    menu-driven re-constrain op is possible future work — see F3). *(Session 10: Edit mode simply hides the
-    shape picker rather than showing it read-only; the decision is unchanged.)*
-12. ~~**The appended Selected-guide section itself.**~~ **Superseded (Session 10, 0.1.13):** the appended
-    section is gone; per-guide editing now happens in the new **Edit mode**, reusing the main rows (see
-    Resolved / flag 0f).
-13. **Re-grab constraint reference = the guide's OTHER ANCHOR** (reproduces the drafting feel). *(Session
-    11: the key is CTRL now; the reference-point decision itself is unchanged.)*
-14. **Circle → ellipse is the break floor** — an ellipse does not break further into a free closed spline in
-    v1 (terminate-at-ellipse).
-15. ~~**Bake cell-side.**~~ **CLOSED (Session 11, 0.1.14):** became bug B-S10-2 and got exactly the proposed
-    fix — the server-side air-probe bake (`GuideManager.ProbeAirSide`). Awaiting playtest.
-16. **Proportional soft flow (structural-grab regime)** — deserves a stretch/shrink/rotate torture test on an
-    arch with several inserted points.
 
 ---
 
-## Known costs / tuning (deliberate, watch in real play)
-
-- **Filled guides recount exactly per drag update** (cells generated each move packet). If big filled discs
-  drag sluggishly → add a per-drag count cache. Correctness-first per the standing rule.
-- **Settled Shells and persistent Wireframes use true selected scale.** Adaptive coarsening is motion-only;
-  the cursor neighbourhood and final-click scaffold stay precise while exact Shell refinement streams.
-- **`PreviewFullResVoxelCap` = 8,000** — the cheap/full-shell moving threshold. Tune only from playtest data;
-  adaptive scale, work time, and frame pressure already provide secondary controls.
-- **Immense materialization is streamed and cancellable.** Shape scans feed a capacity-three queue, and
-  deterministic multi-seed 26-neighbour ordering creates exact torn/frayed growth. Current client targets:
-  about 750 voxels per upload, 8–128 total batches, nominal 45 ms cadence, with frame-pressure backoff.
-  Preserve exact final occupancy; never upload one voxel at a time or rebuild one growing mesh each frame.
-- **Immense public validation is intentionally serialized.** One below-normal worker performs pure
-  generation/counting; claim checks consume no more than 128 blocks or about 1 ms per 20 ms server tick.
-  Longer build time is acceptable; server tick health is the priority.
-- **Whole-guide + regional culling is conservative and measured.** A complete bound outside live
-  `viewDistance`/camera frustum submits nothing; an intersecting immense clean Shell then tests fixed 32-block
-  regions independently. Cross-region neighbours use the complete guide occupancy, so boundaries add no
-  internal faces. The measured partial-view win is recorded in `SESSION_25.md`.
-- **Division marks add a render-side pass** *(verified)* — `DivisionMarks.Apply` is called on every mesh
-  rebuild in `GuideRenderer` (both the draft ghost and placed guides), walking `SampleCurve(128)` for arc
-  length then a nearest-cell claim per boundary; cheap, but it does walk the cell list. Watch on very high
-  division counts × large guides.
-- **Ghost-greying** — if the API's toggle buttons expose an `Enabled` flag, native disabled state beats the
-  alpha-ghost approach (`GuideToolGui` tile-row seam).
-- Carried from Session 7: item transforms; recipe balance; scroll-wheel bindings (the divisions field is the
-  first concrete use — see Deferred); Surface flatten's eventual move into the shape layer (`TODO(Surface)`).
-
----
+> **Feature ledger.** Delivered features with their design reasoning. The one entry here that is NOT
+> delivered is **F3 (re-constrain op)** - an unrequested idea, parked until asked; it is carried in
+> `dev/TODO.md`.
 
 ## Feature ledger (delivered and future)
 
@@ -763,6 +834,199 @@ The inverse of a break: a menu action to snap a free shape back under a constrai
 ellipse → circle, triangle → equilateral, rectangle → square) with a best-fit. Natural undo pairing exists.
 Park until asked.
 
+### F6. "Move" tool mode — ✅ DELIVERED (Session 30, v0.3.86–v0.3.89)
+A fourth tool mode beside Create · Edit · Delete. Select a guide, then slide the ENTIRE guide, its shape
+untouched. **The motivating case: a guide sculpted over a long session that turns out to be one voxel off.**
+
+**Shipped as:** an arrow pad in the GUI (steps of ×1/×2/×4/×8/×16 of the moved guide's own voxel; the four
+horizontal arrows read from the player's facing snapped to the nearest world axis, Up/Down are world
+vertical) plus a free-move toggle that drags the guide on the crosshair. One nudge or one drag is one undo
+step. No chalk charged; claims re-checked at the destination.
+
+**Plan-vs-shipped deltas — read these before touching it:**
+- **The locked-point worry was wrong.** This entry claimed Session-20 adjacent locks "tie a point to a
+  neighbouring guide" and recommended refusing to move a locked guide. **No such relationship exists** —
+  `IsLocked`/`IsLockMarker` are plain per-control-point flags; B-S9-1 was a click-*targeting* defect, not
+  stored data. Locks travel with the guide, which matters because a long-sculpted guide is exactly the one
+  covered in them. (`UpdateControlPoints` does refuse locked points, so the translate needed its own seam.)
+- **No modifier for a finer step.** A move must be a WHOLE number of the guide's own voxels; `TranslateGuide`
+  enforces it and refuses anything finer, because a sub-voxel delta moves cells by a whole cell wherever it
+  crosses a quantise boundary and by nothing elsewhere. That restriction is also what makes the count
+  provably unchanged, so no cap check and no rescan of a behemoth.
+- **`OriginalControlPoints` does move too**, as this entry required.
+- The precedent used was `SpringBackCommand`/`OnSpringBack` (wholesale rewrite + full-state broadcast)
+  rather than `RescaleGuideCommand`; `GuideManager.RestoreControlPoints` was the seam to copy.
+
+Full record, including the two-round rendering defect it exposed, in `SESSION_30.md`.
+
+### F12. Rotate a guide — ✅ DELIVERED (Session 31, v0.3.90)
+Turn a whole guide about a vertical axis, in the Transform mode beside Move, Copy and Mirror. Raised while
+naming that mode; the human "likes the idea", which is interest rather than a commitment.
+
+**Expect this to be the hardest of the four, harder than Mirror.** The control points are trivial to rotate;
+the orientation state around them is not. `ShapePlaneAxis`, `ProjectionPlane`, `FlatSideAligned` and the
+apex/primary point of directional shapes (arch, tapered cylinder, cone, polygonal prism) all encode
+orientation, and a naive point rotation leaves a turned shape whose settings still describe the old facing —
+the same trap F7 documents, but worse, because mirror maps an axis to itself and rotation maps one axis onto
+another.
+
+Two constraints worth settling early:
+- **90-degree increments only, about the vertical.** Arbitrary angles would put control points off the
+  quantise lattice, so the rendered cells would no longer be a clean remap of the originals — the property
+  that makes Move exact and cheap (see F6). At 90 degrees the lattice maps onto itself and a rotation is as
+  exact as a translation. Free rotation is a much larger piece of work and probably should not be attempted.
+- **About what centre?** The guide's own bounding centre is the obvious default; rotating about a picked
+  anchor is the more useful behaviour when aligning to an existing build. Both are cheap; pick one in play.
+
+### F11. Configurable voxel colour scheme — ✅ DELIVERED (SESSION_32, v0.4.8–v0.4.14)
+Shipped as **Default / Red-Green Safe / Custom** on the settings page. Deltas from the plan below:
+
+- **Deuteranopia-safe and protanopia-safe merged into one "Red-Green Safe" preset** — separate palettes would
+  have differed only in ways neither group can see. High Contrast shipped in 0.4.8 and was **removed by the
+  human in 0.4.11**; its scheme number (2) is retired, not reused.
+- **"Prefer presets over pickers" was overruled by the human, correctly.** Presets answer "I cannot tell these
+  roles apart"; they do not answer "yellow disappears against sandstone". **Custom** adds a seven-role table
+  and a **sixteen-swatch grid** — a fixed grid rather than a free picker, because every swatch is guaranteed
+  legible at guide alpha over stone and an arbitrary colour is not.
+- ⚠ **The shared-static hazard was FIXED, not inherited.** The colour arrays became an immutable
+  `GuidePalette` behind one static reference, and `BuildGuideMesh` reads that reference once per batch. A
+  palette change can no longer produce a mesh built from two palettes.
+- Far-anchor off-shades are **derived** from the chosen anchor (a quarter-step toward white), not picked, so
+  the pair cannot drift apart. Grabbed stays white in every scheme.
+- Custom colours persist as `"#RRGGBB"` in `layout-client.json`; a bad entry degrades one role, not the set.
+
+**Playtested per revision** with the rest of Session 32. Red-Green Safe's apex-as-purple is the biggest
+departure from the mod's established colour language and was accepted in play.
+
+<details><summary>Original plan (retained)</summary>
+
+Let players change the guide colour palette from the settings page. **Motivation is accessibility, not
+taste:** the current palette can be unreadable for colour-blind players.
+
+The concrete problem. Today's roles and hues (`GuideMeshBuilder`, "Colour table"):
+
+| Role | Colour |
+|---|---|
+| Normal body | yellow |
+| Locked point | **red** |
+| Primary / apex | **green** |
+| Anchor (aligned / far off-shade) | blue / indigo |
+| Private anchor (aligned / far off-shade) | orange / burnt orange |
+| Grabbed | white |
+| Division mark | magenta |
+
+**Red and green are the two that matter.** They mark locked points and apex points — different meanings,
+both control-point markers, seen side by side — and red/green is exactly the pair that deuteranopia and
+protanopia collapse (around 8% of men). A player with that deficiency cannot tell a locked point from an
+apex. Yellow body vs orange private-anchor is a weaker second case; blue/indigo and orange/burnt-orange are
+deliberately close (same role, off-shade) and are fine.
+
+Implementation notes:
+- **The plumbing precedent exists.** Alphas are already client-configurable through
+  `GuideMeshBuilder.ConfigureOpacities()`, which writes the `[3]` slot of each colour array at client start.
+  A sibling `ConfigureColors()` writing `[0..2]` follows the identical shape. The RGBs are currently
+  `static readonly float[]` described in-code as "the settled colour language" — that comment is what this
+  item overturns.
+- **Prefer presets over six colour pickers.** A short list (default / deuteranopia-safe / protanopia-safe /
+  high contrast) is far less UI and colour-blind-safe palettes are a solved design problem — Okabe-Ito is
+  the usual starting point. Individual pickers can come later if anyone asks.
+- **Colours are baked into vertex data**, so changing them rebuilds every guide, exactly like opacity. Reuse
+  the debounce added for the v0.3.72 opacity slider (`QueueOpacityApply` in `GuideToolGui`) rather than
+  rebuilding per interaction.
+- ⚠ **Watch the shared-static hazard.** The colour arrays are static and are mutated in place, while
+  materialization batches build on background threads. `ConfigureOpacities` is documented as "called once at
+  client start, before any mesh is built" — the v0.3.72 opacity slider already breaks that assumption and
+  can in principle produce one guide meshed with two palettes until the rebuild settles. Transient and
+  probably invisible, but it should be handled properly rather than inherited.
+
+Interacts with **F9** (the settings page this lives on) and with `PLAN_BLOCK_OCCUPANCY.md` §7.4, whose
+"green is already taken" risk is softened considerably by a palette the player can change.
+
+</details>
+
+### F10. Redraw the settings gear glyph — ✅ DELIVERED (SESSION_32, v0.4.8–v0.4.11)
+Shipped as a **spoked wheel-gear** drawn from a reference image the human supplied: 8 trapezoidal teeth with
+rounded valleys, 6 spokes, a bored hub, phased half a tooth so a VALLEY sits at twelve and six o'clock.
+
+- **Filled, not stroked** — the guess in the original note was right, and it is what makes teeth possible at
+  icon size at all.
+- **Three separate fill passes.** Rim, spokes and hub overlap; under one even-odd path every overlap cancels
+  and the spokes punch holes through the hub.
+- **`gearSize` 18 → 22 in `GuideToolGui`.** The spoked design does not survive 18 px — the spoke gaps close
+  and the bore fills in. This was found by porting the glyph to GDI+ and rendering it at 18/22/28/40 px
+  before shipping, which also caught 12 teeth being too many and an 8-tooth variant whose teeth were half
+  again wider than its gaps.
+- ⚠ **Radii are bounded by the Canvas zoom** (box 60 × 1.12): past ~26.8 from centre falls outside the tile.
+
+### F7. Mirror / flip a guide — ✅ DELIVERED (Session 31, v0.3.93)
+Reflect a guide so it changes handedness. Rides in the Transform mode.
+
+**✅ DECIDED 2026-07-27: ONE button, mirroring about the guide's OWN CENTRE plane.**
+Quarter turns about two axes already reach all 24 axis-aligned orientations; a reflection is the one thing
+no rotation can produce, but adding **any single** reflection to that set generates all 48 — so three
+per-axis mirror buttons would only add new ways to reach results that one button plus the rotate buttons
+already reach. Mirroring about the guide's own centre also leaves it where it stands, so it composes with
+move and rotate instead of displacing the guide as a side effect.
+
+**The old "harder than F6, expect per-shape work" estimate predates F12 and no longer holds.** Rotate built
+the entire scaffold: snapshot, transform points + `OriginalControlPoints` together, remap `ShapePlaneAxis`,
+remap the Surface `Plane`, re-adopt the shape, recount, claim-check, roll back. `MirrorGuide` is
+`RotateGuide` with a different point transform and no pivot ambiguity. Rotate also PROVED the load-bearing
+assumption — that a volume's facing survives a transform, because its rise direction takes its sign from
+which side the apex control point sits on.
+
+**What mirror is actually for.** On a sphere, box, cylinder, dome, regular polygon, rectangle, circle or
+ellipse a mirror is either a no-op or the same as a rotation. Its value is concentrated in **Free-Shapes,
+scalene/right triangles, and anything hand-sculpted asymmetrically** — where a reflected copy genuinely
+cannot be reached any other way. Real, but narrower than "mirror any guide".
+
+### F8. Copy an existing guide — ✅ DELIVERED (Session 31, v0.3.93)
+Duplicate a guide, presumably placing the copy offset by a step so it is immediately visible, then let F6
+move it into position. **The cheapest of the three** — `GuideData.DeepClone()` already exists; a copy is a
+clone with a fresh `Guid`. **F6 has shipped**, so the compose story is now real: copy, then nudge into
+place. The Move mode's selection, arrow pad and grey-out behaviour are all reusable as-is.
+
+**✅ DECIDED 2026-07-27: a copy CHARGES CHALK as a placement** — 2D −1 / 3D −2, exactly like any completed
+placement, and it counts against the cumulative creator cap. Without that, copy is the obvious way to dodge
+the Chalking Kit's durability entirely: place one guide, then duplicate it for free forever.
+- **It can therefore be REFUSED** where move, rotate and mirror cannot (they are all free and can only be
+  refused by a land claim). That refusal must read clearly, not fail silently.
+- Follow the existing kit rule where they meet: the kit never LOCKS OUT at 0 chalk, so match whatever
+  placement does at 0 rather than inventing a second policy for copy.
+
+**Panel placement (agreed 2026-07-27):** Copy and Mirror get their own short labelled row BENEATH the pad,
+not slots inside it. The pad means position and facing; these two differ in kind — one makes a new guide,
+the other changes handedness — and the vertical column is better left with its free slot than filled with
+an unrelated button.
+
+```
+[spin<] [away]   [spin>]    [Up]
+[left]  [free]   [right]
+[tip <] [toward] [tip >]    [Down]
+
+Actions   [Copy]  [Mirror]
+```
+
+### F9. In-game settings panel in the GUI — ✅ DELIVERED (SESSION_32, v0.4.2–v0.4.14)
+Absorbed **T2** as planned. Full record in `SESSION_32.md`; deltas from the plan:
+
+- **Shipped:** the master on/off, guide opacity + Reset, the colour scheme (F11), Chiseling Highlight,
+  Public/Private, Publish, and both chalk-refill shortcuts. All grouped under **Appearance** / **Behaviour**,
+  all carrying hover text.
+- **Deliberately NOT shipped:** `ShaderGuideBrightness`, `ShaderAmbientResponse`, `VoxelFrameStrength` and
+  `ZFightInset`. They keep their `/layout` commands. These are tuning knobs for problems most players will
+  never hit, and the page was already long — **a candidate if anyone asks for them.**
+- **The `Default*` placement preferences were deliberately excluded.** They are ALREADY remembered
+  automatically (the tool writes them back on shutdown), so a second place to set them would create two
+  controls for one value with the tool page silently winning.
+- The plan's open question — whether `ForceClientOnly` and the refill flags belong beside the appearance
+  sliders — resolved as **yes, in their own Behaviour section**.
+- "Reset to defaults" narrowed to **"Reset"** beside the opacity slider, plus **"Reset colors"** in the
+  colour table. One page-wide reset would have implied it touched settings it never did.
+- ⚠ **A settings page that gates itself needs an escape hatch.** The pre-existing rendering lockout closed
+  the dialog when guides went off, stranding the player on the chat command; v0.4.3 changed the gate from
+  BLOCK to DISABLE. Anything else added here that can turn itself off needs the same treatment.
+
 ### F5. Chalking-kit durability + refill loop — ✅ DELIVERED AND CONFIRMED (Session 15, v0.2.0–v0.2.9)
 Shipped as designed with human-directed refinements during the build: 32 chalk, 2D −1 / 3D −2 on completed
 placements only, no refunds, NO lockout at 0 (the kit can never break); **Chalking Powder** refills (tap +4 /
@@ -776,16 +1040,6 @@ the inventory refill remains (Top of the list).
 
 ---
 
-## Next session — start here
-
-**The agenda is "⭐ Top of the list" at the top of this file** — it is not repeated here. Current state:
-v0.3.53 is the built, packaged, and documented final release. The v0.3.42 renderer baseline is restored;
-field-soak persistent visibility, `/layout totalvoxelcap`, and the off-state Chalking Kit lockout, then
-respond to field reports or explicit new feature requests.
-
-**Workflow reminders:** every code iteration ships a NEW `Layout<version>.zip` into `..\LayoutZips\`;
-docs are updated ONLY when the human says so; commits/pushes only when the human instructs. `main` is the
-mainline.
 
 ---
 

@@ -55,6 +55,9 @@ namespace Layout.UI
         /// <summary>An empty favorite slot (0.1.15): a faint placeholder square.</summary>
         public const string EmptySlot = "layout-empty-slot";
 
+        /// <summary>Settings gear — the title-bar button that swaps the panel to its settings page.</summary>
+        public const string Gear = "layout-gear";
+
         /// <summary>
         /// Suffix variants registered for every shape glyph (0.1.15): "&lt;name&gt;-star" draws the glyph
         /// with a small ★ badge (a pinned favorite in the catalog); "&lt;name&gt;-current" draws it in the
@@ -70,7 +73,34 @@ namespace Layout.UI
 
         public const string ModeCreate = "layout-mode-create";
         public const string ModeEdit = "layout-mode-edit";
+        public const string ModeTransform = "layout-mode-transform";
         public const string ModeDelete = "layout-mode-delete";
+
+        // F6 Move pad. Away/Toward/Left/Right are the four HORIZONTAL directions, read relative to the
+        // player's facing; Up/Down are vertical and wear a ground bar so they cannot be mistaken for the
+        // plain arrows beside them.
+        public const string MoveAway = "layout-move-away";
+        public const string MoveToward = "layout-move-toward";
+        public const string MoveLeft = "layout-move-left";
+        public const string MoveRight = "layout-move-right";
+        public const string MoveUp = "layout-move-up";
+        public const string MoveDown = "layout-move-down";
+        public const string MoveGround = "layout-move-ground";
+        public const string MoveFree = "layout-move-free";
+
+        // F12 Rotate, in the four corners of the Move pad. The SPIN pair (top corners) turns the guide about
+        // the vertical axis and is drawn as a flattened ellipse — a turntable seen at an angle. The TIP pair
+        // (bottom corners) turns it about the horizontal axis pointing away from the player and is drawn as
+        // an upright circle. Same silhouette family, different plane, so the two pairs read as siblings.
+        public const string RotateSpinLeft = "layout-rotate-spin-left";
+        public const string RotateSpinRight = "layout-rotate-spin-right";
+        public const string RotateTipLeft = "layout-rotate-tip-left";
+        public const string RotateTipRight = "layout-rotate-tip-right";
+
+        // F7/F8 Transform action row — what the direction pad DOES. These LATCH, unlike the pad tiles.
+        public const string ActionMove = "layout-action-move";
+        public const string ActionCopy = "layout-action-copy";
+        public const string ActionMirror = "layout-action-mirror";
         public const string ProjVolumetric = "layout-proj-vol";
         public const string ProjSurface = "layout-proj-surf";
         public const string FillHollow = "layout-fill-hollow";
@@ -79,6 +109,10 @@ namespace Layout.UI
         public const string FormWireframe = "layout-form-wireframe";
         public const string VisShown = "layout-vis-shown";
         public const string VisHidden = "layout-vis-hidden";
+        /// <summary>Reveal hidden guides within reach: an eye over a short measured run of blocks.</summary>
+        public const string RevealNear = "layout-reveal-near";
+        /// <summary>Reveal all of your own hidden guides: an eye casting rays outward.</summary>
+        public const string RevealAll = "layout-reveal-all";
 
         public const string PlaneAuto = "layout-plane-auto";
         public const string PlaneFloor = "layout-plane-floor";
@@ -134,6 +168,7 @@ namespace Layout.UI
             reg[ExpandDown] = (ctx, x, y, w, h, rgba) => DrawExpandChevron(ctx, x, y, w, h, rgba, down: true);
             reg[ExpandUp] = (ctx, x, y, w, h, rgba) => DrawExpandChevron(ctx, x, y, w, h, rgba, down: false);
             reg[EmptySlot] = DrawEmptySlot;
+            reg[Gear] = DrawGear;
 
             // 0.1.15: per-shape "-star" (pinned badge) and "-current" (always-yellow chip) variants.
             foreach (string shapeName in new[]
@@ -165,7 +200,26 @@ namespace Layout.UI
 
             reg[ModeCreate] = DrawModeCreate;
             reg[ModeEdit] = DrawModeEdit;
+            reg[ModeTransform] = DrawModeTransform;
             reg[ModeDelete] = DrawModeDelete;
+
+            reg[ActionMove] = DrawActionMove;
+            reg[ActionCopy] = DrawActionCopy;
+            reg[ActionMirror] = DrawActionMirror;
+
+            reg[RotateSpinLeft] = (ctx, x, y, w, h, rgba) => DrawRotate(ctx, x, y, w, h, rgba, false, false);
+            reg[RotateSpinRight] = (ctx, x, y, w, h, rgba) => DrawRotate(ctx, x, y, w, h, rgba, false, true);
+            reg[RotateTipLeft] = (ctx, x, y, w, h, rgba) => DrawRotate(ctx, x, y, w, h, rgba, true, false);
+            reg[RotateTipRight] = (ctx, x, y, w, h, rgba) => DrawRotate(ctx, x, y, w, h, rgba, true, true);
+
+            reg[MoveAway] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, 0, false);
+            reg[MoveRight] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, Math.PI / 2, false);
+            reg[MoveToward] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, Math.PI, false);
+            reg[MoveLeft] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, -Math.PI / 2, false);
+            reg[MoveUp] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, 0, true);
+            reg[MoveDown] = (ctx, x, y, w, h, rgba) => DrawMoveArrow(ctx, x, y, w, h, rgba, Math.PI, true);
+            reg[MoveGround] = DrawMoveGround;
+            reg[MoveFree] = DrawMoveFree;
             reg[ProjVolumetric] = DrawProjVolumetric;
             reg[ProjSurface] = DrawProjSurface;
             reg[FillHollow] = DrawFillHollow;
@@ -174,6 +228,8 @@ namespace Layout.UI
             reg[FormWireframe] = DrawFormWireframe;
             reg[VisShown] = DrawVisShown;
             reg[VisHidden] = DrawVisHidden;
+            reg[RevealNear] = DrawRevealNear;
+            reg[RevealAll] = DrawRevealAll;
 
             reg[PlaneAuto] = DrawPlaneAuto;
             reg[PlaneFloor] = DrawPlaneFloor;
@@ -386,6 +442,138 @@ namespace Layout.UI
         }
 
         // The shape picker's expand tile: a bold chevron (▾ collapsed / ▴ expanded).
+        /// <summary>
+        /// Settings gear (redrawn v0.4.9, refined v0.4.10, F10): a spoked wheel-gear, drawn from the human's
+        /// reference image — a rim of eight trapezoidal teeth with rounded valleys, six spokes, a bored hub,
+        /// and six large open segments between. The SPOKED WHEEL is the point of the design (human-directed);
+        /// the teeth are the frame around it, so they are deliberately few and the strokes deliberately light.
+        /// </summary>
+        /// <remarks>
+        /// FILLED, NOT STROKED, and that is the whole trick. The original drew eight radial spokes around a
+        /// ring because detail on a STROKED outline becomes a grey smudge at icon sizes — each tooth would be
+        /// a two-pixel box drawn with a two-pixel pen. As solid silhouette the same teeth are bumps on the
+        /// edge of a disc, and an edge bump survives at two pixels where an outlined box does not.
+        ///
+        /// Every hole is cut with the EVEN-ODD fill rule rather than painted in a background colour, so the
+        /// icon stays correct on any button state or backdrop.
+        ///
+        /// THREE SEPARATE FILL PASSES, and that is not an accident. Ring, spokes and hub overlap each other,
+        /// and under a single even-odd path every overlap would CANCEL — the spokes would punch holes through
+        /// the hub instead of joining it. Filling each part on its own path means an overlap simply paints
+        /// the same pixels twice, which is what "these pieces are one solid object" needs to look like.
+        ///
+        /// SIZE. Rendered and inspected at 18/22/28/40 px before it shipped. The spokes and the bore do not
+        /// survive 18 px — the spoke gaps close and the centre fills in — which is why the title bar draws
+        /// this at 22 (see GEAR_SIZE in GuideToolGui). Radii are bounded by the Canvas zoom: design box 60 at
+        /// 1.12 zoom means anything past about 26.8 from the centre falls outside the tile, so the tips sit
+        /// at 25.5. Do not raise them without lowering the zoom.
+        /// </remarks>
+        private static void DrawGear(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+            SetColor(ctx, rgba, 1.0);
+
+            const double cx = 30, cy = 30;
+            const int teeth = 8, spokes = 6;
+            // TALLER TEETH in v0.4.28 (human-directed). The height came out of the ROOT, not the tip: the
+            // tips already sit as far out as the Canvas zoom allows (see the size note above), so raising
+            // them would have pushed the silhouette outside the tile. Dropping the root from 21.5 to 19.5
+            // takes the tooth from 4.0 to 6.0 — half again as tall — and rRimIn follows it down so the rim
+            // keeps its 3.5-ish thickness instead of thinning to a wire that breaks up at 22 px.
+            const double rTip = 25.5;       // tooth tips — the outer silhouette
+            const double rRoot = 19.5;      // tooth roots = outer edge of the rim
+            const double rRimIn = 16.0;     // inner edge of the rim
+            const double rHub = 7.6;        // hub boss
+            const double rBore = 4.6;       // the hole through the middle
+            const double spokeHalf = 1.9;
+
+            // ---- 1. the toothed rim: the outer outline, with the rim's bore taken out of it ----
+            double pitch = Math.PI * 2 / teeth;
+            // TAPER. 0.22 originally; 0.19 was tried in v0.4.28 and the human could not see the difference,
+            // which was fair — at r = 25.5 it moved the tip chord by under a pixel at 42 px. 0.13 against a
+            // root of 0.32 makes the tip well under half the root's width, so the flanks visibly rake in
+            // over the tooth's whole height instead of rising straight. Do not go much below this: the tip
+            // chord is then about 4 design units, which is roughly one pixel at 18 px, and the teeth start
+            // to come to nothing at the smallest size the glyph is drawn.
+            double tipHalf = pitch * 0.13;           // narrower at the tip than at the root, so the flanks
+            double rootHalf = pitch * 0.32;          // taper like a cast tooth rather than being square
+
+            // HALF A TOOTH OF PHASE (human-directed, v0.4.10): puts a VALLEY at twelve and six o'clock
+            // instead of a tooth. With eight teeth that lands valleys on all four cardinals, so the glyph
+            // reads square to the title bar rather than tilted. The spokes are deliberately NOT rotated to
+            // match — six spokes cannot align with eight teeth at any phase, and rotating them 30 degrees
+            // aims a spoke straight into the top valley, which looks like a mistake.
+            double phase = pitch * 0.5;
+
+            ctx.NewPath();
+            ctx.FillRule = FillRule.EvenOdd;
+            for (int i = 0; i < teeth; i++)
+            {
+                double a = i * pitch + phase;
+                GearVertex(ctx, c, cx, cy, rRoot, a - rootHalf, moveTo: i == 0);
+                GearVertex(ctx, c, cx, cy, rTip, a - tipHalf, moveTo: false);
+                GearVertex(ctx, c, cx, cy, rTip, a + tipHalf, moveTo: false);
+                GearVertex(ctx, c, cx, cy, rRoot, a + rootHalf, moveTo: false);
+                // The valley is a genuine arc of the root circle, so the gaps between teeth are round like a
+                // cast gear rather than flat-bottomed. It ends exactly where the next tooth's root begins.
+                ctx.Arc(c.X(cx), c.Y(cy), c.L(rRoot), a + rootHalf, a + pitch - rootHalf);
+            }
+            ctx.ClosePath();
+            GearCircle(ctx, c, cx, cy, rRimIn);
+            ctx.Fill();
+
+            // ---- 2. the spokes ----
+            // Winding, not even-odd: all six are wound the same way, so where they meet at the centre they
+            // merge instead of cancelling. They start inside the hub and end inside the rim so both joints
+            // are overlaps rather than seams that could open up a pixel gap.
+            ctx.NewPath();
+            ctx.FillRule = FillRule.Winding;
+            for (int i = 0; i < spokes; i++)
+            {
+                double a = i * Math.PI * 2 / spokes;
+                double ca = Math.Cos(a), sa = Math.Sin(a);
+                SpokeCorner(ctx, c, cx, cy, ca, sa, rBore + 0.5, -spokeHalf, moveTo: true);
+                SpokeCorner(ctx, c, cx, cy, ca, sa, rRimIn + 0.6, -spokeHalf, moveTo: false);
+                SpokeCorner(ctx, c, cx, cy, ca, sa, rRimIn + 0.6, spokeHalf, moveTo: false);
+                SpokeCorner(ctx, c, cx, cy, ca, sa, rBore + 0.5, spokeHalf, moveTo: false);
+                ctx.ClosePath();
+            }
+            ctx.Fill();
+
+            // ---- 3. the hub, with the bore through it ----
+            ctx.NewPath();
+            ctx.FillRule = FillRule.EvenOdd;
+            GearCircle(ctx, c, cx, cy, rHub);
+            GearCircle(ctx, c, cx, cy, rBore);
+            ctx.Fill();
+        }
+
+        private static void GearVertex(
+            Context ctx, Canvas c, double cx, double cy, double r, double a, bool moveTo)
+        {
+            double px = c.X(cx + Math.Cos(a) * r);
+            double py = c.Y(cy + Math.Sin(a) * r);
+            if (moveTo) ctx.MoveTo(px, py); else ctx.LineTo(px, py);
+        }
+
+        // A full circle as its own subpath. The MoveTo (rather than NewSubPath) puts the current point on the
+        // arc's own start, so the lead-in line Cairo inserts has zero length and cannot streak across the face.
+        private static void GearCircle(Context ctx, Canvas c, double cx, double cy, double r)
+        {
+            ctx.MoveTo(c.X(cx + r), c.Y(cy));
+            ctx.Arc(c.X(cx), c.Y(cy), c.L(r), 0, Math.PI * 2);
+        }
+
+        // A spoke corner, given the spoke's axis: u runs along it from the centre, v across it.
+        private static void SpokeCorner(
+            Context ctx, Canvas c, double cx, double cy, double ca, double sa,
+            double u, double v, bool moveTo)
+        {
+            double px = c.X(cx + u * ca - v * sa);
+            double py = c.Y(cy + u * sa + v * ca);
+            if (moveTo) ctx.MoveTo(px, py); else ctx.LineTo(px, py);
+        }
+
         private static void DrawExpandChevron(Context ctx, int x, int y, float w, float h, double[] rgba, bool down)
         {
             var c = new Canvas(x, y, w, h, 60);
@@ -596,6 +784,233 @@ namespace Layout.UI
             ctx.MoveTo(c.X(31), c.Y(21)); ctx.LineTo(c.X(39), c.Y(29)); ctx.Stroke();
         }
 
+        private static void DrawModeTransform(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            // Four corner brackets around a centre pip. The brackets say "the WHOLE guide, taken hold of" —
+            // the category, not any one operation — which is what lets one glyph cover move, rotate, and
+            // later copy and mirror. Anything action-shaped in the middle (a four-way arrow, a curved arrow,
+            // an offset ghost) would sell one of those four and mis-sell the other three.
+            //
+            // The centre pip is deliberately NOT tiny, and the frame is deliberately NOT left empty: this
+            // GUI already uses a faint empty square to mean "unfilled favourite slot", so a hollow frame
+            // would read as a placeholder rather than as a mode.
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(3.0));
+
+            const double lo = 13, hi = 47, arm = 11;
+            ctx.MoveTo(c.X(lo), c.Y(lo + arm)); ctx.LineTo(c.X(lo), c.Y(lo)); ctx.LineTo(c.X(lo + arm), c.Y(lo));
+            ctx.Stroke();
+            ctx.MoveTo(c.X(hi - arm), c.Y(lo)); ctx.LineTo(c.X(hi), c.Y(lo)); ctx.LineTo(c.X(hi), c.Y(lo + arm));
+            ctx.Stroke();
+            ctx.MoveTo(c.X(hi), c.Y(hi - arm)); ctx.LineTo(c.X(hi), c.Y(hi)); ctx.LineTo(c.X(hi - arm), c.Y(hi));
+            ctx.Stroke();
+            ctx.MoveTo(c.X(lo + arm), c.Y(hi)); ctx.LineTo(c.X(lo), c.Y(hi)); ctx.LineTo(c.X(lo), c.Y(hi - arm));
+            ctx.Stroke();
+
+            SetColor(ctx, rgba, 1.0);
+            ctx.Arc(c.X(30), c.Y(30), c.L(4), 0, 2 * Math.PI);
+            ctx.Fill();
+        }
+
+        // The action row's four latching toggles. Each depicts WHAT HAPPENS TO A SHAPE, so they read as a
+        // family and stay distinct from the pad's directional arrows below them.
+
+        private static void DrawActionMove(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            // One square, shifted, with a motion arrow behind it.
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(2.8));
+            ctx.Rectangle(c.X(26), c.Y(20), c.L(22), c.L(22));
+            ctx.Stroke();
+            ctx.MoveTo(c.X(11), c.Y(31)); ctx.LineTo(c.X(23), c.Y(31)); ctx.Stroke();
+            ctx.MoveTo(c.X(17), c.Y(25)); ctx.LineTo(c.X(23), c.Y(31)); ctx.LineTo(c.X(17), c.Y(37));
+            ctx.Stroke();
+        }
+
+        private static void DrawActionCopy(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            // Two overlapping squares — the universal duplicate glyph.
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(2.6));
+            ctx.Rectangle(c.X(14), c.Y(14), c.L(24), c.L(24));
+            ctx.Stroke();
+            ctx.Rectangle(c.X(24), c.Y(24), c.L(24), c.L(24));
+            ctx.Stroke();
+        }
+
+        /// <summary>
+        /// Mirror: a dashed axis with a closed asymmetric form on each side, each the other's reflection.
+        /// </summary>
+        /// <remarks>
+        /// REDRAWN v0.4.28 (human-directed: "a mirror on BOTH sides of the line"). The old glyph drew two
+        /// OPEN polylines — a vertical edge with a single line running out to a point — so neither side was
+        /// a closed shape. The pair read as two arrowheads aimed outward from the axis, which is a "spread
+        /// apart" glyph, not a mirror one.
+        ///
+        /// THE FORM HAS TO BE ASYMMETRIC or the icon says nothing. A shape symmetric about the vertical
+        /// axis looks identical to its own reflection, so the glyph would depict mirroring by showing the
+        /// one case where mirroring changes nothing. A right triangle is the smallest form that reads as
+        /// handed at 42 px: its vertical edge hugs the axis on one side and faces away on the other, and
+        /// that swap is the whole message.
+        ///
+        /// Both sides are stroked identically. Filling one and outlining the other was tried on paper and
+        /// rejected — that reads as "original and copy", which is what the Copy tile already says.
+        /// </remarks>
+        private static void DrawActionMirror(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(2.4));
+
+            // The axis runs the full height of the glyph, so it reads as a mirror plane the forms sit
+            // against rather than a divider drawn only as far as they happen to reach.
+            for (double v = 10; v < 50; v += 7)
+            {
+                ctx.MoveTo(c.X(30), c.Y(v)); ctx.LineTo(c.X(30), c.Y(v + 3.6)); ctx.Stroke();
+            }
+
+            // Right triangles, upright edge against the axis, hypotenuse falling away outward.
+            Poly(ctx, c, rgba, true, 25, 16, 25, 44, 12, 44);
+            Poly(ctx, c, rgba, true, 35, 16, 35, 44, 48, 44);
+        }
+
+        /// <summary>
+        /// One rotate glyph: a ring with an arrowhead on it. <paramref name="upright"/> draws a true circle
+        /// (turning about a horizontal axis — tipping the guide over); otherwise a flattened ellipse, a
+        /// turntable seen at an angle (turning about the vertical axis). <paramref name="clockwise"/> mirrors
+        /// the whole thing, so a left button and a right button are exact reflections of one another.
+        /// </summary>
+        private static void DrawRotate(
+            Context ctx, int x, int y, float w, float h, double[] rgba, bool upright, bool clockwise)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(3.0));
+
+            double cx = c.X(30), cy = c.Y(30);
+            double rx = c.L(16);
+            double ry = upright ? c.L(16) : c.L(8.5);
+            // Cairo's y runs DOWN, so increasing t sweeps CLOCKWISE on screen. Mirroring x reverses it.
+            double m = clockwise ? 1.0 : -1.0;
+
+            // Gap centred on the top of the ring, so the head sits clear of it at the upper left/right.
+            const double start = -0.32 * Math.PI;
+            const double end = 1.32 * Math.PI;
+
+            // THE ARC STOPS SHORT OF THE HEAD (v0.4.28). Running it all the way to the tip put a full
+            // stroke width of ring underneath the whole arrowhead, and the two fused into one blunt slab
+            // that read as a bar across the top of the glyph. Ending the stroke where the head's base
+            // begins leaves a shaft that grows into a head, which is what an arrow looks like.
+            const double headArc = 24.0 * Math.PI / 180.0;
+
+            (double X, double Y) At(double t) =>
+                (cx + m * rx * Math.Cos(t), cy + ry * Math.Sin(t));
+
+            // Walked as a polyline rather than stroked under a non-uniform Scale, so the pen stays an even
+            // width all the way round instead of pinching where a squashed ellipse is steepest.
+            const int steps = 56;
+            for (int i = 0; i <= steps; i++)
+            {
+                (double ax, double ay) = At(start + (end - headArc - start) * i / steps);
+                if (i == 0) ctx.MoveTo(ax, ay); else ctx.LineTo(ax, ay);
+            }
+            ctx.Stroke();
+
+            // A FILLED TRIANGLE at the end of the sweep, on the true tangent there.
+            //
+            // IT WAS A STROKED CHEVRON UNTIL v0.4.28 AND THAT WAS THE BUG. A chevron's trailing leg runs
+            // back along the direction of travel, which on a ring of this radius is very nearly the ring
+            // itself — so that leg lay on top of the arc and vanished into it, leaving only the outward leg
+            // showing. The glyph read as a hook or a flag with a bar across the top, not as an arrow. The
+            // legs were also far too long for the ring (11.9 against a radius of 16), which is what made
+            // the surviving one look like a bar rather than a barb.
+            //
+            // A solid head cannot suffer that: it is a shape rather than two lines, and with the arc now
+            // stopping at its base it is the only thing at the end of the stroke. Half-width 4.5 against
+            // the 3.0 pen is what settled it — 5.2 was a blunt wedge wider than the ring it sat on, and
+            // 3.8 was too faint to see the direction of at 42 px. All four were rendered and compared.
+            (double hx, double hy) = At(end);
+            double dx = -m * rx * Math.Sin(end), dy = ry * Math.Cos(end);
+            double len = Math.Sqrt(dx * dx + dy * dy);
+            if (len < 1e-9) return;
+            dx /= len; dy /= len;
+
+            double nx = -dy, ny = dx;                       // unit normal to the direction of travel
+            double back = c.L(8.5), half = c.L(4.5), over = c.L(1.0);
+            ctx.NewPath();
+            ctx.FillRule = FillRule.Winding;
+            ctx.MoveTo(hx + dx * over, hy + dy * over);     // tip carried just past where the arc stops
+            ctx.LineTo(hx - dx * back + nx * half, hy - dy * back + ny * half);
+            ctx.LineTo(hx - dx * back - nx * half, hy - dy * back - ny * half);
+            ctx.ClosePath();
+            ctx.Fill();
+        }
+
+        // One Move-pad arrow, drawn pointing up and rotated into place. `groundBar` adds a floor line under
+        // a shortened arrow — the vertical Up/Down pair, so they read differently from Away/Toward.
+        private static void DrawMoveArrow(
+            Context ctx, int x, int y, float w, float h, double[] rgba, double rotation, bool groundBar)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(3.2));
+
+            double half = c.L(groundBar ? 12 : 16);
+            double spread = c.L(9), drop = c.L(11);
+            ctx.Save();
+            ctx.Translate(c.X(30), c.Y(groundBar ? 25 : 30));
+            ctx.Rotate(rotation);
+            ctx.MoveTo(0, half); ctx.LineTo(0, -half); ctx.Stroke();
+            ctx.MoveTo(-spread, -half + drop); ctx.LineTo(0, -half); ctx.LineTo(spread, -half + drop);
+            ctx.Stroke();
+            ctx.Restore();
+
+            if (!groundBar) return;
+            ctx.MoveTo(c.X(14), c.Y(48)); ctx.LineTo(c.X(46), c.Y(48)); ctx.Stroke();
+        }
+
+        /// <summary>
+        /// Send to ground (v0.4.28): a DOUBLE chevron falling onto the same floor bar the Up/Down pair
+        /// carries, so it reads as one more member of the vertical family rather than a new idea.
+        /// </summary>
+        /// <remarks>
+        /// NO SHAFT, unlike the single-step arrows, and that is the whole distinction. Down is a shaft with
+        /// one head — a measured step. This is two heads and no shaft: not a distance, but a fall that ends
+        /// at the bar. Two chevrons is also the settled convention for "go all the way" (the media
+        /// skip-to-end button), so it reads without a legend.
+        ///
+        /// The chevrons are DEEPER than the move arrowheads (11 down over 11 across, against the arrow's 9
+        /// over 11). A shallow chevron next to a shallow arrowhead was the pair that blurred together at
+        /// 42 px; making the fall steeper than the step separates them at a glance.
+        /// </remarks>
+        private static void DrawMoveGround(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(3.2));
+
+            // Two chevrons, the lower one nearly touching the bar so the fall reads as landing on it.
+            ctx.MoveTo(c.X(19), c.Y(15)); ctx.LineTo(c.X(30), c.Y(26)); ctx.LineTo(c.X(41), c.Y(15));
+            ctx.Stroke();
+            ctx.MoveTo(c.X(19), c.Y(28)); ctx.LineTo(c.X(30), c.Y(39)); ctx.LineTo(c.X(41), c.Y(28));
+            ctx.Stroke();
+
+            // The same floor bar, at the same 48, as the Up/Down pair.
+            ctx.MoveTo(c.X(14), c.Y(48)); ctx.LineTo(c.X(46), c.Y(48)); ctx.Stroke();
+        }
+
+        private static void DrawMoveFree(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            // A crosshair: free-move follows where you are aiming, not a fixed axis.
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(2.4));
+            ctx.Arc(c.X(30), c.Y(30), c.L(13), 0, 2 * Math.PI);
+            ctx.Stroke();
+            ctx.MoveTo(c.X(30), c.Y(10)); ctx.LineTo(c.X(30), c.Y(21)); ctx.Stroke();
+            ctx.MoveTo(c.X(30), c.Y(39)); ctx.LineTo(c.X(30), c.Y(50)); ctx.Stroke();
+            ctx.MoveTo(c.X(10), c.Y(30)); ctx.LineTo(c.X(21), c.Y(30)); ctx.Stroke();
+            ctx.MoveTo(c.X(39), c.Y(30)); ctx.LineTo(c.X(50), c.Y(30)); ctx.Stroke();
+            SetColor(ctx, rgba, 1.0);
+            ctx.Arc(c.X(30), c.Y(30), c.L(3), 0, 2 * Math.PI);
+            ctx.Fill();
+        }
+
         private static void DrawModeDelete(Context ctx, int x, int y, float w, float h, double[] rgba)
         {
             var c = new Canvas(x, y, w, h, 60);
@@ -692,6 +1107,79 @@ namespace Layout.UI
             EyeAlmond(ctx, c);
             ctx.Stroke();
             ctx.MoveTo(c.X(15), c.Y(16)); ctx.LineTo(c.X(45), c.Y(44)); ctx.Stroke();   // slash
+        }
+
+        // ---- reveal actions (v0.4.18) ----
+        // Both are an EYE plus a qualifier, because both do the same thing (unhide) and differ only in
+        // reach. The eye is lifted and shrunk to leave room underneath; the qualifier carries the meaning.
+
+        /// <summary>Eye over a measured run of six blocks — "unhide what is standing right here".</summary>
+        private static void DrawRevealNear(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+            Pen(ctx, rgba, c.L(2.4));
+            SmallEye(ctx, c, 22);
+            ctx.Stroke();
+            SetColor(ctx, rgba, 1.0);
+            ctx.Arc(c.X(30), c.Y(22), c.L(4), 0, 2 * Math.PI);
+            ctx.Fill();
+
+            // SIX blocks, drawn as filled squares with real gaps rather than a ruler with fine ticks: at a
+            // 42 px tile a tick every four pixels is a grey smear, whereas six separated blocks stay
+            // countable. They are the unit the range is measured in, so they read as the range too.
+            //
+            // Sized off a render, not by eye (dev/RenderIcon.ps1 -Glyph revealnear): the first attempt used
+            // 6.2-wide blocks 6.2 tall and they collapsed into a dashed underline at true size. Height is
+            // what rescued them — a mark needs vertical mass to read as a block rather than a dash — so
+            // these are TALLER than they are wide, which looks wrong in the source and right on screen.
+            const double count = 6, blockW = 6.8, gap = 1.4, blockH = 9.0;
+            double runW = count * blockW + (count - 1) * gap;
+            double bx = (60 - runW) / 2.0;
+            SetColor(ctx, rgba, 0.95);
+            for (int i = 0; i < count; i++)
+            {
+                ctx.Rectangle(c.X(bx + i * (blockW + gap)), c.Y(40), c.L(blockW), c.L(blockH));
+                ctx.Fill();
+            }
+        }
+
+        /// <summary>Eye casting rays outward — "unhide everything of mine, wherever it stands".</summary>
+        private static void DrawRevealAll(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 60);
+
+            // Rays first, so the eye's own stroke draws over any that reach too far inward.
+            Pen(ctx, rgba, c.L(2.2));
+            const double inner = 19, outer = 27;
+            for (int i = 0; i < 8; i++)
+            {
+                // Skipped at the horizontal, where a ray would run straight into the eye's own corners
+                // and read as the eye being wider rather than as light leaving it.
+                double deg = 22.5 + i * 45.0;
+                if (Math.Abs(Math.Sin(deg * Math.PI / 180.0)) < 0.2) continue;
+                double a = deg * Math.PI / 180.0;
+                double dx = Math.Cos(a), dy = Math.Sin(a);
+                ctx.MoveTo(c.X(30 + dx * inner), c.Y(30 + dy * inner));
+                ctx.LineTo(c.X(30 + dx * outer), c.Y(30 + dy * outer));
+            }
+            ctx.Stroke();
+
+            Pen(ctx, rgba, c.L(2.4));
+            SmallEye(ctx, c, 30);
+            ctx.Stroke();
+            SetColor(ctx, rgba, 1.0);
+            ctx.Arc(c.X(30), c.Y(30), c.L(4), 0, 2 * Math.PI);
+            ctx.Fill();
+        }
+
+        // The eye almond at ~three quarters scale, centred on an arbitrary row. Kept separate from
+        // EyeAlmond so the two full-size visibility tiles are untouched by anything done here.
+        private static void SmallEye(Context ctx, Canvas c, double cy)
+        {
+            ctx.MoveTo(c.X(17), c.Y(cy));
+            ctx.CurveTo(c.X(23), c.Y(cy - 9), c.X(37), c.Y(cy - 9), c.X(43), c.Y(cy));
+            ctx.CurveTo(c.X(37), c.Y(cy + 9), c.X(23), c.Y(cy + 9), c.X(17), c.Y(cy));
+            ctx.ClosePath();
         }
 
         private static void EyeAlmond(Context ctx, Canvas c)

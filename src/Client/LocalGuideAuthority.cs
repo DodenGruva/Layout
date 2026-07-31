@@ -105,12 +105,22 @@ namespace Layout.Client
                     e.Message);
             }
 
+            // EVERY cap is zero, and every one is passed explicitly. Private guides are deliberately not
+            // capped (see ClientNetworkHandler.PerGuideVoxelCap for why), and only the hard render ceiling
+            // applies — CreateGuide checks that one unconditionally.
+            //
+            // perPlayerTotalVoxelCap was previously LEFT OUT of this call and so inherited the
+            // constructor's 1,000,000 default, which quietly capped private guides at a cumulative million
+            // voxels — a handful of large guides — while every other cap here read as unlimited. It is
+            // named now for the same reason the others are: an omitted argument on a parameter with a
+            // non-zero default is invisible at the call site.
             _guides = new GuideManager(
                 persistence,
                 new BlockAccessorGuideProbe(() => _capi.World?.BlockAccessor),
                 _capi.Logger,
                 perGuideVoxelCap: 0,
                 totalVoxelCap: 0,
+                perPlayerTotalVoxelCap: 0,
                 maxGuidesPerPlayer: 0,
                 maxGuidesWorldWide: 0);
             _guides.Load();
@@ -636,6 +646,88 @@ namespace Layout.Client
                 ApplyFull(result.Guide);
             }
             else HandleFailure(id, result);
+        }
+
+        /// <summary>
+        /// F6 Move: slide a whole private guide. Geometry is rewritten wholesale, so the mirror gets the
+        /// full-state upsert rather than an incremental patch — the same shape as <see cref="SpringBack"/>.
+        /// </summary>
+        public void Translate(Guid id, Vec3d delta)
+        {
+            if (!TryGet(id, out _)) return;
+            GuideOperationResult result = _guides.TranslateGuide(id, delta);
+            if (result.IsSuccess)
+            {
+                if (delta.X != 0 || delta.Y != 0 || delta.Z != 0)
+                {
+                    _undo.Record(PlayerUid, new TranslateGuideCommand(id, delta));
+                    StampLastSculptor(result.Guide, publishIncremental: false);
+                }
+                ApplyFull(result.Guide);
+            }
+            else HandleFailure(id, result);
+        }
+
+        /// <summary>F12 Rotate: quarter-turn a whole private guide. Mirrors <see cref="Translate"/>.</summary>
+        public void Rotate(Guid id, PlaneAxis axis, int quarterTurns)
+        {
+            if (!TryGet(id, out _)) return;
+            Vec3d pivot = null;
+            GuideOperationResult result = _guides.RotateGuide(id, axis, quarterTurns, ref pivot);
+            if (result.IsSuccess)
+            {
+                if (quarterTurns % 4 != 0)
+                {
+                    _undo.Record(PlayerUid, new RotateGuideCommand(id, axis, quarterTurns, pivot));
+                    StampLastSculptor(result.Guide, publishIncremental: false);
+                }
+                ApplyFull(result.Guide);
+            }
+            else HandleFailure(id, result);
+        }
+
+        /// <summary>
+        /// F7/F8 Transform pad against a private guide. Returns the NEW guide when this was a copy, else
+        /// null — the caller reports the chalk charge and plays the placement effects, exactly as it does
+        /// for a fresh private placement (the server owns the inventory but cannot see private guides).
+        /// </summary>
+        public GuideData Transform(
+            Guid id, Vec3d delta, int mirrorAxis, PlaneAxis rotateAxis, int quarterTurns, bool asCopy)
+        {
+            if (!TryGet(id, out _)) return null;
+
+            if (asCopy)
+            {
+                GuideOperationResult copy = _guides.CopyGuide(
+                    id, delta, mirrorAxis, rotateAxis, quarterTurns, PlayerUid, PlayerName);
+                if (!copy.IsSuccess) { HandleFailure(id, copy); return null; }
+                _undo.Record(PlayerUid, new CreateGuideCommand(copy.Guide));
+                ApplyFull(copy.Guide);
+                return copy.Guide;
+            }
+
+            if (quarterTurns % 4 != 0)
+            {
+                Vec3d rotatePivot = null;
+                GuideOperationResult turned = _guides.RotateGuide(id, rotateAxis, quarterTurns, ref rotatePivot);
+                if (!turned.IsSuccess) { HandleFailure(id, turned); return null; }
+                _undo.Record(PlayerUid, new RotateGuideCommand(id, rotateAxis, quarterTurns, rotatePivot));
+            }
+
+            Vec3d pivot = null;
+            GuideOperationResult result = _guides.TransformGuide(id, delta, mirrorAxis, ref pivot);
+            if (result.IsSuccess)
+            {
+                bool changed = mirrorAxis >= 0 || delta.X != 0 || delta.Y != 0 || delta.Z != 0;
+                if (changed)
+                {
+                    _undo.Record(PlayerUid, new TransformGuideCommand(id, delta, mirrorAxis, pivot));
+                    StampLastSculptor(result.Guide, publishIncremental: false);
+                }
+                ApplyFull(result.Guide);
+            }
+            else HandleFailure(id, result);
+            return null;
         }
 
         public void Undo() => ApplyUndoRedo(_undo.Undo(PlayerUid));

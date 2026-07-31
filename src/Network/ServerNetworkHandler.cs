@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
+using Layout.Config;
 using Layout.Guide;
 using Layout.Shapes;
 using Layout.Systems;
@@ -82,9 +83,16 @@ namespace Layout.Network
 
         // Server-config policy (Module 7). Empty/null privilege = everyone may use the tool.
         private readonly string _requiredPrivilege;
+        // Readonly again as of v0.4.17: the panel no longer offers lock-override, so this is once more a
+        // layout.json-only setting, like the privilege string above it.
         private readonly bool _adminCanOverrideLocks;
-        private readonly bool _allowClientOnlyMode;
-        private readonly bool _chalkDurabilityEnabled;
+        // NOT readonly since v0.4.16: the settings page's Admin section changes these two in play.
+        private bool _allowClientOnlyMode;
+        private bool _chalkDurabilityEnabled;
+        // The live server config and the callback that writes it back to layout.json. Held so an admin
+        // change survives a restart instead of quietly reverting to whatever the file still says.
+        private readonly LayoutServerConfig _config;
+        private readonly Action<LayoutServerConfig> _persistConfig;
         private readonly HashSet<string> _clientOnlyPlayers = new HashSet<string>();
 
         // v0.2.22: per-player chalk refill-channel PREFERENCES (the player's own setting, reported on join),
@@ -191,20 +199,21 @@ namespace Layout.Network
             GuideLockManager lockManager,
             UndoManager undoManager,
             LayoutAdminPolicyManager adminPolicies,
-            string requiredPrivilege = null,
-            bool adminCanOverrideLocks = true,
-            bool allowClientOnlyMode = false,
-            bool chalkDurabilityEnabled = true)
+            LayoutServerConfig config = null,
+            Action<LayoutServerConfig> persistConfig = null)
         {
             _sapi = sapi ?? throw new ArgumentNullException(nameof(sapi));
             _guides = guideManager ?? throw new ArgumentNullException(nameof(guideManager));
             _locks = lockManager ?? throw new ArgumentNullException(nameof(lockManager));
             _undo = undoManager ?? throw new ArgumentNullException(nameof(undoManager));
             _policies = adminPolicies ?? throw new ArgumentNullException(nameof(adminPolicies));
-            _requiredPrivilege = string.IsNullOrWhiteSpace(requiredPrivilege) ? null : requiredPrivilege.Trim();
-            _adminCanOverrideLocks = adminCanOverrideLocks;
-            _allowClientOnlyMode = allowClientOnlyMode;
-            _chalkDurabilityEnabled = chalkDurabilityEnabled;
+            _config = config ?? new LayoutServerConfig();
+            _persistConfig = persistConfig;
+            _requiredPrivilege = string.IsNullOrWhiteSpace(_config.RequiredPrivilege)
+                ? null : _config.RequiredPrivilege.Trim();
+            _adminCanOverrideLocks = _config.AdminCanOverrideLocks;
+            _allowClientOnlyMode = _config.AllowClientOnlyMode;
+            _chalkDurabilityEnabled = _config.EnableChalkDurability;
 
             _channel = _sapi.Network.RegisterChannel(LayoutChannel.Name);
             LayoutPackets.RegisterMessageTypes(_channel);
@@ -229,10 +238,19 @@ namespace Layout.Network
                 .SetMessageHandler<GuideSetDivisionsPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetDivisions(p, x)))
                 .SetMessageHandler<GuideSetSidesPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetSides(p, x)))
                 .SetMessageHandler<GuideSpringBackPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSpringBack(p, x)))
+                .SetMessageHandler<GuideTranslatePacket>((p, x) => WithPlayerVoxelCap(p, () => OnTranslate(p, x)))
+                .SetMessageHandler<GuideRotatePacket>((p, x) => WithPlayerVoxelCap(p, () => OnRotate(p, x)))
+                .SetMessageHandler<GuideTransformPacket>((p, x) => WithPlayerVoxelCap(p, () => OnTransform(p, x)))
                 .SetMessageHandler<DraftStartPacket>(OnDraftStart)
                 .SetMessageHandler<DraftCancelPacket>(OnDraftCancel)
                 .SetMessageHandler<UndoRequestPacket>((p, x) => WithPlayerVoxelCap(p, () => OnUndo(p, x)))
                 .SetMessageHandler<RedoRequestPacket>((p, x) => WithPlayerVoxelCap(p, () => OnRedo(p, x)))
+                .SetMessageHandler<LayoutAdminConfigRequestPacket>(OnAdminConfigRequest)
+                .SetMessageHandler<GuideRevealMinePacket>((p, x) => WithPlayerVoxelCap(p, () => OnRevealMine(p, x)))
+                .SetMessageHandler<PlayerRosterRequestPacket>(OnPlayerRosterRequest)
+                .SetMessageHandler<PlayerGuidesRequestPacket>(OnPlayerGuidesRequest)
+                .SetMessageHandler<PlayerPolicyEditPacket>(OnPlayerPolicyEdit)
+                .SetMessageHandler<PlayerJailPacket>(OnPlayerJail)
                 .SetMessageHandler<ClientPlacementModeRequestPacket>(OnClientPlacementModeRequest)
                 .SetMessageHandler<ClientGuidePushPacket>((p, x) => WithPlayerVoxelCap(p, () => OnClientGuidePush(p, x)));
 
@@ -391,6 +409,7 @@ namespace Layout.Network
             if (limit < 0) return TextCommandResult.Error("The guide limit must be 0 or greater.");
 
             _policies.SetGuideLimit(target.Uid, target.Name, limit);
+            SendAdminConfig(target.Online);   // their panel's override notice follows the change
             int effective = _policies.EffectiveGuideLimit(target.Uid, _guides.MaxGuidesPerPlayer);
             int current = _guides.CountGuidesBy(target.Uid);
             return TextCommandResult.Success(limit == 0
@@ -410,6 +429,7 @@ namespace Layout.Network
             _policies.SetVoxelCap(target.Uid, target.Name, cap);
             int effective = _policies.EffectiveVoxelCap(target.Uid, _guides.PerGuideVoxelCap);
             if (target.Online != null) SendPlayerPolicy(target.Online);
+            SendAdminConfig(target.Online);   // their panel's override notice follows the change
             return TextCommandResult.Success(cap == 0
                 ? $"Removed {target.Name}'s custom voxel cap. Effective per-guide cap: {FormatCap(effective)}."
                 : $"Set {target.Name}'s per-guide voxel cap to {cap:n0}. Per-player cumulative, world, and absolute safety caps still apply.");
@@ -424,6 +444,7 @@ namespace Layout.Network
                 return TextCommandResult.Error("The cumulative voxel cap must be 0 or greater.");
 
             _policies.SetPlayerTotalVoxelCap(target.Uid, target.Name, cap);
+            SendAdminConfig(target.Online);   // their panel's override notice follows the change
             int effective = _guides.EffectivePerPlayerTotalVoxelCap(target.Uid);
             long current = _guides.VoxelCountBy(target.Uid);
             return TextCommandResult.Success(cap == 0
@@ -660,6 +681,7 @@ namespace Layout.Network
                     _allowClientOnlyMode),
                 player);
             SendPlayerPolicy(player);
+            SendAdminConfig(player);
 
             // 2) Current lock state of any locked guide, so the joiner sees what is being edited.
             foreach (var id in _guides.AllGuides.Keys)
@@ -904,26 +926,18 @@ namespace Layout.Network
                     // (v0.1.26 fix: previously this rejection was effectively silent). Leave the draft so
                     // the player can shrink it or dispel some guides and retry.
                     if (result.CapLimit >= GuideManager.HardVoxelCeiling)
-                        fromPlayer.SendIngameError("layout-toolarge",
-                            "That guide is too large to render ({0:n0} voxels). Make it smaller or use a coarser scale.",
-                            result.VoxelCount);
+                        fromPlayer.SendIngameError("layout-toolarge", TooLargeText(result));
                     else if (_policies.EffectiveVoxelCap(fromPlayer.PlayerUID, _guides.PerGuideVoxelCap) > 0
                         && result.CapLimit == _policies.EffectiveVoxelCap(
                             fromPlayer.PlayerUID, _guides.PerGuideVoxelCap))
-                        fromPlayer.SendIngameError("layout-overcap",
-                            "That guide exceeds your per-guide limit of {0:n0} voxels. Make it smaller or use a coarser scale.",
-                            result.CapLimit);
+                        fromPlayer.SendIngameError("layout-overcap", PerGuideCapText(result));
                     else if (_guides.EffectivePerPlayerTotalVoxelCap(
                         fromPlayer.PlayerUID) > 0
                         && result.CapLimit == _guides.EffectivePerPlayerTotalVoxelCap(
                             fromPlayer.PlayerUID))
-                        fromPlayer.SendIngameError("layout-playerovercap",
-                            "Your guides would exceed the cumulative limit of {0:n0} voxels. Dispel or shrink one of your guides before adding more.",
-                            result.CapLimit);
+                        fromPlayer.SendIngameError("layout-playerovercap", PlayerCapText(result));
                     else
-                        fromPlayer.SendIngameError("layout-overcap",
-                            "World voxel budget reached: {0:n0} more would pass the {1:n0} limit. Dispel some guides ('/layout dispel'), coarsen the scale, or raise totalVoxelCap.",
-                            result.VoxelCount, result.CapLimit);
+                        fromPlayer.SendIngameError("layout-overcap", WorldCapText(result));
                     _channel.SendPacket(
                         new VoxelCapWarningPacket(result.Guide.Id, result.VoxelCount, result.CapLimit),
                         fromPlayer);
@@ -932,9 +946,7 @@ namespace Layout.Network
                 case GuideOpStatus.RejectedOverGuideCount:
                     // Per-player or world-wide guide-count cap (server config). Nothing was built; leave the
                     // draft so the player can dispel an old guide and complete this one afterwards.
-                    fromPlayer.SendIngameError("layout-guidecountcap",
-                        "Guide limit reached ({0} of {1}). Dispel a guide before placing another.",
-                        result.VoxelCount, result.CapLimit);
+                    fromPlayer.SendIngameError("layout-guidecountcap", GuideCountCapText(result));
                     break;
 
                 case GuideOpStatus.RejectedClaimAccess:
@@ -1223,36 +1235,26 @@ namespace Layout.Network
             {
                 case GuideOpStatus.RejectedOverCap:
                     if (result.CapLimit >= GuideManager.HardVoxelCeiling)
-                        player.SendIngameError("layout-toolarge",
-                            "That guide is too large to render ({0:n0} voxels). Make it smaller or use a coarser scale.",
-                            result.VoxelCount);
+                        player.SendIngameError("layout-toolarge", TooLargeText(result));
                     else if (_policies.EffectiveVoxelCap(
                         player.PlayerUID, _guides.PerGuideVoxelCap) > 0
                         && result.CapLimit == _policies.EffectiveVoxelCap(
                             player.PlayerUID, _guides.PerGuideVoxelCap))
-                        player.SendIngameError("layout-overcap",
-                            "That guide exceeds your per-guide limit of {0:n0} voxels. Make it smaller or use a coarser scale.",
-                            result.CapLimit);
+                        player.SendIngameError("layout-overcap", PerGuideCapText(result));
                     else if (_guides.EffectivePerPlayerTotalVoxelCap(
                         player.PlayerUID) > 0
                         && result.CapLimit == _guides.EffectivePerPlayerTotalVoxelCap(
                             player.PlayerUID))
-                        player.SendIngameError("layout-playerovercap",
-                            "Your guides would exceed the cumulative limit of {0:n0} voxels. Dispel or shrink one of your guides before adding more.",
-                            result.CapLimit);
+                        player.SendIngameError("layout-playerovercap", PlayerCapText(result));
                     else
-                        player.SendIngameError("layout-overcap",
-                            "World voxel budget reached: {0:n0} more would pass the {1:n0} limit. Dispel some guides ('/layout dispel'), coarsen the scale, or raise totalVoxelCap.",
-                            result.VoxelCount, result.CapLimit);
+                        player.SendIngameError("layout-overcap", WorldCapText(result));
                     if (result.Guide != null)
                         _channel.SendPacket(new VoxelCapWarningPacket(
                             result.Guide.Id, result.VoxelCount, result.CapLimit), player);
                     break;
 
                 case GuideOpStatus.RejectedOverGuideCount:
-                    player.SendIngameError("layout-guidecountcap",
-                        "Guide limit reached ({0} of {1}). Dispel a guide before placing another.",
-                        result.VoxelCount, result.CapLimit);
+                    player.SendIngameError("layout-guidecountcap", GuideCountCapText(result));
                     break;
 
                 case GuideOpStatus.RejectedClaimAccess:
@@ -2272,6 +2274,55 @@ namespace Layout.Network
             else HandleNonSuccessToggle(fromPlayer, id, result, g);
         }
 
+        /// <summary>
+        /// "Reveal All" (v0.4.19): un-hides every guide this player created. Runs server-side because the
+        /// client has no way to know who made a guide — see <see cref="GuideRevealMinePacket"/>.
+        /// </summary>
+        /// <remarks>
+        /// Each guide still goes through <see cref="GuideManager.SetHidden"/> with its own undo entry and
+        /// broadcast, exactly as a single un-hide does, so nothing here can drift from the one-guide path.
+        ///
+        /// A guide someone else is holding open for editing is SKIPPED SILENTLY rather than refused
+        /// loudly: BlockedByEditLock sends a chat error per call, which on a bulk action would be a wall
+        /// of identical messages about guides the player never singled out. Their own locks are fine.
+        /// </remarks>
+        private void OnRevealMine(IServerPlayer fromPlayer, GuideRevealMinePacket packet)
+        {
+            if (DeniedByPrivilege(fromPlayer)) return;
+            string uid = fromPlayer.PlayerUID;
+            if (string.IsNullOrEmpty(uid)) return;
+
+            // Collected first: SetHidden mutates the dictionary this walks.
+            var targets = new List<Guid>();
+            foreach (GuideData g in _guides.AllGuides.Values)
+            {
+                if (g == null || !g.IsHidden) continue;
+                if (g.CreatorUid != uid) continue;
+                string holder = _locks.GetHolder(g.Id);
+                if (holder != null && holder != uid) continue;
+                targets.Add(g.Id);
+            }
+
+            int revealed = 0;
+            for (int i = 0; i < targets.Count; i++)
+            {
+                Guid id = targets[i];
+                if (!_guides.TryGetGuide(id, out GuideData live) || !live.IsHidden) continue;
+                GuideOperationResult result = _guides.SetHidden(id, false);
+                if (result.Status != GuideOpStatus.Success) continue;
+                _undo.Record(uid, new HideGuideCommand(id, true, false));
+                StampLastSculptor(fromPlayer, result.Guide);
+                _channel.BroadcastPacket(new GuideHidePacket(id, false));
+                revealed++;
+            }
+
+            // Only the empty case needs words. When guides are revealed they visibly appear, which says it
+            // better than a count would.
+            if (revealed == 0)
+                fromPlayer.SendIngameError("layout-nothingtoreveal",
+                    "You have no hidden guides on this server.");
+        }
+
         private void OnLockPoint(IServerPlayer fromPlayer, GuideLockPointPacket p)
         {
             if (DeniedByPrivilege(fromPlayer)) return;
@@ -2479,6 +2530,130 @@ namespace Layout.Network
             else HandleNonSuccessToggle(fromPlayer, id, result, g);
         }
 
+        // F6 Move (0.3.86): slide a whole guide. Geometry is rewritten wholesale, so — exactly like
+        // spring-back — the broadcast is the generic full-state upsert and the full-exclusivity edit lock
+        // applies. No chalk is charged: chalk is a PLACEMENT cost (F5) and repositioning an existing guide
+        // is not a placement. No cap check either — a rigid translation cannot change the voxel count.
+        private void OnTranslate(IServerPlayer fromPlayer, GuideTranslatePacket p)
+        {
+            if (DeniedByPrivilege(fromPlayer)) return;
+            Guid id = p.GuideId();
+            if (!_guides.TryGetGuide(id, out GuideData g)) { _channel.SendPacket(new GuideDeletePacket(id), fromPlayer); return; }
+            if (BlockedByEditLock(fromPlayer, id)) return;
+
+            Vec3d delta = p.ResolveDelta();
+            GuideOperationResult result = _guides.TranslateGuide(id, delta);
+            if (result.Status == GuideOpStatus.Success)
+            {
+                if (p.DeltaX != 0 || p.DeltaY != 0 || p.DeltaZ != 0)
+                {
+                    _undo.Record(fromPlayer.PlayerUID, new TranslateGuideCommand(id, delta));
+                    StampLastSculptor(fromPlayer, result.Guide, broadcastIncremental: false);
+                }
+                _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
+            }
+            else HandleNonSuccessToggle(fromPlayer, id, result, g);
+        }
+
+        // F12 Rotate (0.3.90): quarter-turn a whole guide. Same shape as OnTranslate — geometry rewritten
+        // wholesale, so a full-state broadcast, and the full-exclusivity edit lock applies. Unlike a move
+        // this CAN change the voxel count (see GuideManager.RotateGuide), so the cap path is live.
+        private void OnRotate(IServerPlayer fromPlayer, GuideRotatePacket p)
+        {
+            if (DeniedByPrivilege(fromPlayer)) return;
+            Guid id = p.GuideId();
+            if (!_guides.TryGetGuide(id, out GuideData g)) { _channel.SendPacket(new GuideDeletePacket(id), fromPlayer); return; }
+            if (BlockedByEditLock(fromPlayer, id)) return;
+
+            // Null pivot: the authority derives it and hands it back, so the undo command turns the guide
+            // back about the same point rather than about wherever its new bounding centre landed.
+            Vec3d pivot = null;
+            GuideOperationResult result = _guides.RotateGuide(id, p.ResolveAxis(), p.QuarterTurns, ref pivot);
+            if (result.Status == GuideOpStatus.Success)
+            {
+                if (p.QuarterTurns % 4 != 0)
+                {
+                    _undo.Record(fromPlayer.PlayerUID,
+                        new RotateGuideCommand(id, p.ResolveAxis(), p.QuarterTurns, pivot));
+                    StampLastSculptor(fromPlayer, result.Guide, broadcastIncremental: false);
+                }
+                _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
+            }
+            else HandleNonSuccessToggle(fromPlayer, id, result, g);
+        }
+
+        // F7/F8 Transform pad (0.3.93): one compound action — mirror and/or rotate and/or move, applied in
+        // place or to a fresh copy. A COPY is the only transform action that is a placement: it charges
+        // chalk, counts against the creator's cumulative budget, and can be refused on those grounds. The
+        // in-place actions are free and can only be refused by a land claim.
+        private void OnTransform(IServerPlayer fromPlayer, GuideTransformPacket p)
+        {
+            if (DeniedByPrivilege(fromPlayer)) return;
+            Guid id = p.GuideId();
+            if (!_guides.TryGetGuide(id, out GuideData g)) { _channel.SendPacket(new GuideDeletePacket(id), fromPlayer); return; }
+            if (BlockedByEditLock(fromPlayer, id)) return;
+
+            Vec3d delta = p.ResolveDelta();
+
+            if (p.AsCopy)
+            {
+                // The same NO-LOCKOUT gate a fresh placement gets: an empty kit blocks a new guide, and
+                // nothing else. Checked before the copy is built so a refusal costs no voxel generation.
+                if (ChalkApplies(fromPlayer, out ItemSlot kitSlot)
+                    && Items.ItemGuideTool.GetChalk(kitSlot.Itemstack) <= 0)
+                {
+                    fromPlayer.SendIngameError("layout-outofchalk",
+                        "Out of chalk. Refill the Chalking Kit with Chalking Powder (hold it and right-click).");
+                    return;
+                }
+
+                GuideOperationResult copy = _guides.CopyGuide(
+                    id, delta, p.MirrorAxis, p.ResolveRotateAxis(), p.QuarterTurns,
+                    fromPlayer.PlayerUID, fromPlayer.PlayerName);
+                if (copy.Status != GuideOpStatus.Success) { HandleNonSuccessToggle(fromPlayer, id, copy, g); return; }
+
+                _undo.Record(fromPlayer.PlayerUID, new CreateGuideCommand(copy.Guide));
+                ChalkEffects.PlacementEffects(_sapi.World, copy.Guide);
+                // Charged exactly as a placement is, and deliberately outside the undo system for the same
+                // reason: undoing a copy does not refund its chalk, and redo re-creates through the command
+                // path so it cannot double-charge.
+                if (ChalkApplies(fromPlayer, out ItemSlot chargeSlot))
+                    Items.ItemGuideTool.ConsumeChalk(chargeSlot,
+                        GuideShapeTypes.IsVolume(copy.Guide.ShapeType)
+                            ? Items.ItemGuideTool.ChalkCostVolume
+                            : Items.ItemGuideTool.ChalkCostFlat);
+                _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(copy.Guide)));
+                return;
+            }
+
+            // In place. A rotation is its own authority call, so a compound "rotate and move" is applied as
+            // the rotation first and then the mirror/translate — each validating and each undoable.
+            if (p.QuarterTurns % 4 != 0)
+            {
+                Vec3d rotatePivot = null;
+                GuideOperationResult turned = _guides.RotateGuide(
+                    id, p.ResolveRotateAxis(), p.QuarterTurns, ref rotatePivot);
+                if (turned.Status != GuideOpStatus.Success) { HandleNonSuccessToggle(fromPlayer, id, turned, g); return; }
+                _undo.Record(fromPlayer.PlayerUID,
+                    new RotateGuideCommand(id, p.ResolveRotateAxis(), p.QuarterTurns, rotatePivot));
+            }
+
+            Vec3d pivot = null;
+            GuideOperationResult result = _guides.TransformGuide(id, delta, p.MirrorAxis, ref pivot);
+            if (result.Status == GuideOpStatus.Success)
+            {
+                bool changed = p.MirrorAxis >= 0 || p.DeltaX != 0 || p.DeltaY != 0 || p.DeltaZ != 0;
+                if (changed)
+                {
+                    _undo.Record(fromPlayer.PlayerUID,
+                        new TransformGuideCommand(id, delta, p.MirrorAxis, pivot));
+                    StampLastSculptor(fromPlayer, result.Guide, broadcastIncremental: false);
+                }
+                _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));
+            }
+            else HandleNonSuccessToggle(fromPlayer, id, result, g);
+        }
+
         // ==========================================================================================
         //  Undo / redo (generic full-state broadcast)
         // ==========================================================================================
@@ -2523,8 +2698,9 @@ namespace Layout.Network
 
                         case GuideOpStatus.RejectedOverGuideCount:
                             fromPlayer.SendIngameError("layout-guidecountcap",
-                                "Can't restore that guide — the guide limit ({0} of {1}) is reached.",
-                                blockedResult.VoxelCount, blockedResult.CapLimit);
+                                "Can't restore that guide - the guide limit ("
+                                + blockedResult.VoxelCount.ToString("N0") + " of "
+                                + blockedResult.CapLimit.ToString("N0") + ") is reached.");
                             break;
 
                         case GuideOpStatus.RejectedClaimAccess:
@@ -2568,6 +2744,467 @@ namespace Layout.Network
             _channel.SendPacket(new PlayerGuidePolicyPacket(
                 _policies.EffectiveVoxelCap(player.PlayerUID, _guides.PerGuideVoxelCap),
                 _policies.IsJailed(player.PlayerUID)), player);
+        }
+
+        // ==========================================================================================
+        //  Admin settings from the settings page (v0.4.16, protocol 20)
+        // ==========================================================================================
+        //
+        // The same values the /layout admin commands and layout.json already govern, reachable from the
+        // panel. The commands are NOT replaced: they cover the per-PLAYER overrides (jail, free, limit,
+        // voxelcap, totalvoxelcap), which need a player name and belong on a command line. This section
+        // covers the server-WIDE settings, which are a fixed short list and read far better as a form.
+
+        /// <summary>Sends one player the live server settings, with their own permission to change them.</summary>
+        private void SendAdminConfig(IServerPlayer player)
+        {
+            if (player == null) return;
+            _channel.SendPacket(BuildAdminConfig(player), player);
+        }
+
+        /// <summary>Re-sends the settings to everyone — each player gets their own CanEdit.</summary>
+        private void BroadcastAdminConfig()
+        {
+            foreach (IServerPlayer p in _sapi.World.AllOnlinePlayers.OfType<IServerPlayer>())
+                SendAdminConfig(p);
+        }
+
+        private LayoutAdminConfigPacket BuildAdminConfig(IServerPlayer player) =>
+            new LayoutAdminConfigPacket
+            {
+                PerGuideVoxelCap = _guides.PerGuideVoxelCap,
+                PerPlayerTotalVoxelCap = _guides.PerPlayerTotalVoxelCap,
+                TotalVoxelCap = _guides.TotalVoxelCap,
+                MaxGuidesPerPlayer = _guides.MaxGuidesPerPlayer,
+                MaxGuidesWorldWide = _guides.MaxGuidesWorldWide,
+                AllowClientOnlyMode = _allowClientOnlyMode,
+                EnableChalkDurability = _chalkDurabilityEnabled,
+                AdminCanOverrideLocks = _adminCanOverrideLocks,
+                CanEdit = player != null && player.HasPrivilege(Privilege.controlserver),
+                // Per-recipient: this packet is sent to each player individually, so their own overrides
+                // ride along with it and the panel can say when the caps above do not apply to them.
+                YourVoxelCapOverride = _policies.VoxelCapOverride(player?.PlayerUID),
+                YourTotalVoxelCapOverride = _policies.PlayerTotalVoxelCapOverride(player?.PlayerUID),
+                YourGuideLimitOverride = _policies.GuideLimitOverride(player?.PlayerUID)
+            };
+
+        /// <summary>
+        /// Applies one admin setting. The privilege is re-checked HERE and not taken from the packet: the
+        /// CanEdit flag the client holds is a drawing hint it could trivially forge.
+        /// </summary>
+        private void OnAdminConfigRequest(IServerPlayer fromPlayer, LayoutAdminConfigRequestPacket packet)
+        {
+            if (fromPlayer == null || packet == null) return;
+            // Logged on ARRIVAL, before any validation can reject it: paired with the client's own "sending"
+            // line this is what separates "the packet never got here" from "it got here and was refused".
+            _sapi.Logger.Notification("[Layout] Admin config request from {0}: setting {1} = {2}.",
+                PlayerDisplayName(fromPlayer), packet.Setting, packet.Value);
+            if (!fromPlayer.HasPrivilege(Privilege.controlserver))
+            {
+                _sapi.Logger.Notification(
+                    "[Layout] {0} tried to change admin setting {1} without controlserver; refused.",
+                    PlayerDisplayName(fromPlayer), packet.Setting);
+                // Re-send the truth so a stale or forged panel snaps back to what the server actually has.
+                SendAdminConfig(fromPlayer);
+                return;
+            }
+
+            if (!Enum.IsDefined(typeof(LayoutAdminSetting), packet.Setting))
+            {
+                SendAdminConfig(fromPlayer);
+                return;
+            }
+
+            var setting = (LayoutAdminSetting)packet.Setting;
+            int value = packet.Value;
+            bool flag = value != 0;
+
+            switch (setting)
+            {
+                case LayoutAdminSetting.PerGuideVoxelCap:       _config.PerGuideVoxelCap = value; break;
+                case LayoutAdminSetting.PerPlayerTotalVoxelCap: _config.PerPlayerTotalVoxelCap = value; break;
+                case LayoutAdminSetting.TotalVoxelCap:          _config.TotalVoxelCap = value; break;
+                case LayoutAdminSetting.MaxGuidesPerPlayer:     _config.MaxGuidesPerPlayer = value; break;
+                case LayoutAdminSetting.MaxGuidesWorldWide:     _config.MaxGuidesWorldWide = value; break;
+                case LayoutAdminSetting.AllowClientOnlyMode:    _config.AllowClientOnlyMode = flag; break;
+                // EnableChalkDurability (v0.4.20) and AdminCanOverrideLocks (v0.4.17) are retired from the
+                // panel and deliberately have no case: both are edited in layout.json only. A request
+                // naming one changes nothing and falls through to the re-broadcast below, which puts the
+                // sender back in step with what the server actually holds.
+                default: break;
+            }
+
+            // Normalize owns "unlimited": it folds negatives to 0 so a typed -5 means the same thing on the
+            // wire, in memory, and in the file rather than three different things.
+            _config.Normalize();
+
+            _guides.ApplyCaps(
+                _config.PerGuideVoxelCap, _config.TotalVoxelCap, _config.PerPlayerTotalVoxelCap,
+                _config.MaxGuidesPerPlayer, _config.MaxGuidesWorldWide);
+            _allowClientOnlyMode = _config.AllowClientOnlyMode;
+
+            try { _persistConfig?.Invoke(_config); }
+            catch (Exception e)
+            {
+                _sapi.Logger.Warning(
+                    "[Layout] Admin setting applied but layout.json could not be written ({0}); "
+                    + "it will revert on restart.", e.Message);
+            }
+
+            _sapi.Logger.Notification("[Layout] {0} set {1} to {2}.",
+                PlayerDisplayName(fromPlayer), setting, value);
+
+            // Tell the admin what actually landed, reading the value back out of the live manager rather
+            // than echoing what they sent. That difference matters: it is the one thing on screen that
+            // distinguishes "the server applied this" from "the panel shows what I typed", and a value
+            // the server normalised (a negative folded to unlimited) shows up here as the number it
+            // really became.
+            fromPlayer.SendMessage(Vintagestory.API.Config.GlobalConstants.GeneralChatGroup,
+                "[Layout] " + AdminSettingLabel(setting) + " is now "
+                + DescribeAdminValue(setting, AdminSettingValue(setting)) + ".",
+                EnumChatType.Notification);
+
+            // Everyone is told, not just the admin: a per-guide cap change has to reach every client's
+            // placement pre-check, or their ghost would keep clamping to the old number and a placement
+            // that the server now accepts would look refused before it was even sent.
+            BroadcastAdminConfig();
+            foreach (IServerPlayer p in _sapi.World.AllOnlinePlayers.OfType<IServerPlayer>())
+                SendPlayerPolicy(p);
+
+            // Revoking private guides mid-session leaves players holding them. They keep their guides —
+            // nothing is deleted — but their placement mode is forced back to public so no NEW private
+            // guide is made under a policy that no longer allows it.
+            if (setting == LayoutAdminSetting.AllowClientOnlyMode && !_allowClientOnlyMode)
+                ForceEveryoneOffClientOnly();
+        }
+
+        // ==========================================================================================
+        //  Admin player roster (v0.4.26, protocol 23) — behind the settings page's Players button
+        // ==========================================================================================
+        //
+        // WHO COUNTS AS A PLAYER Layout knows about? Three sources, unioned: everyone online, everyone
+        // carrying a policy (a jail or an override), and everyone who has a guide standing. None alone is
+        // enough — an offline builder has no session, a builder with default limits has no policy, and a
+        // jailed player who never built has no guides. Missing any of the three would leave an admin
+        // hunting for someone the panel had quietly decided did not exist.
+
+        /// <summary>How many of a player's guides the detail pane lists before summarising the rest.</summary>
+        private const int MaxListedPlayerGuides = 60;
+
+        private void OnPlayerRosterRequest(IServerPlayer fromPlayer, PlayerRosterRequestPacket packet)
+        {
+            if (!AdminRequestAllowed(fromPlayer, "roster")) return;
+            SendRosterTo(fromPlayer);
+        }
+
+        /// <summary>
+        /// Sends one admin the whole roster plus the world totals. Every editing path ends here rather than
+        /// answering with just the row it changed: the server is the authority on what was actually stored,
+        /// so an edit that was clamped, or that shifted an effective cap somewhere else, shows up honestly
+        /// instead of leaving the dialog displaying the number the admin typed.
+        /// </summary>
+        private void SendRosterTo(IServerPlayer fromPlayer)
+        {
+            if (fromPlayer == null) return;
+            _channel.SendPacket(new PlayerRosterPacket
+            {
+                Players = BuildRoster(),
+                WorldVoxelTotal = _guides.TotalVoxelCount,
+                WorldGuideCount = _guides.GuideCount
+            }, fromPlayer);
+        }
+
+        // ==========================================================================================
+        //  Editing a player's limits from the Players dialog (v0.4.31, protocol 24)
+        // ==========================================================================================
+        //
+        // The same state /layout voxelcap, totalvoxelcap and limit set, reached from a form instead of
+        // three command lines. The COMMANDS ARE NOT DEPRECATED and both routes land on the same setters.
+        //
+        // WHAT THESE HANDLERS MUST NOT DO IS ONLY CALL THE SETTER. Each command does follow-up work that
+        // the panel needs just as much: the target's own client caches its effective per-guide cap to clamp
+        // its draft preview, and its settings page shows its limits. A GUI edit that skipped those would
+        // leave the server correct and the affected player's client quietly stale until they reconnected.
+
+        private void OnPlayerPolicyEdit(IServerPlayer fromPlayer, PlayerPolicyEditPacket packet)
+        {
+            if (!AdminRequestAllowed(fromPlayer, "player limits")) return;
+            string uid = packet?.Uid;
+            if (string.IsNullOrEmpty(uid)) return;
+
+            string name = RosterName(uid);
+            IServerPlayer target = OnlinePlayerByUid(uid);
+
+            // CLAMPED, NOT REFUSED. The commands error out on a bad number because a person typed it and
+            // can read the reply; here the reply is the roster, so a value that cannot be stored is pulled
+            // into range and the panel redraws showing what the server really holds. Zero means "clear the
+            // override", exactly as on the command line.
+            int perGuide = Math.Min(Math.Max(0, packet.VoxelCapOverride), GuideManager.HardVoxelCeiling);
+            int total = Math.Max(0, packet.TotalVoxelCapOverride);
+            int limit = Math.Max(0, packet.GuideLimitOverride);
+
+            bool changed = _policies.SetVoxelCap(uid, name, perGuide);
+            changed |= _policies.SetPlayerTotalVoxelCap(uid, name, total);
+            changed |= _policies.SetGuideLimit(uid, name, limit);
+
+            if (target != null)
+            {
+                SendPlayerPolicy(target);   // their draft clamp follows the new per-guide cap
+                SendAdminConfig(target);    // and their own settings page follows their overrides
+            }
+
+            if (changed)
+                _sapi.Logger.Notification(
+                    "[Layout] {0} set {1}'s limits: per-guide {2}, cumulative {3}, guides {4}.",
+                    PlayerDisplayName(fromPlayer), name, perGuide, total, limit);
+
+            SendRosterTo(fromPlayer);
+        }
+
+        // Mirrors OnJailCommand exactly, including the offline branch — see the remarks on PlayerJailPacket
+        // for why this is not a field on the cap edit.
+        private void OnPlayerJail(IServerPlayer fromPlayer, PlayerJailPacket packet)
+        {
+            if (!AdminRequestAllowed(fromPlayer, "jail")) return;
+            string uid = packet?.Uid;
+            if (string.IsNullOrEmpty(uid)) return;
+
+            string name = RosterName(uid);
+            IServerPlayer target = OnlinePlayerByUid(uid);
+            bool jail = packet.Jailed;
+
+            _policies.SetJailed(uid, name, jail);
+
+            if (jail)
+            {
+                if (target != null)
+                {
+                    WithPlayerVoxelCap(target, () => CancelPlayerPublicActivity(target));
+                    SendPlayerPolicy(target);
+                    target.SendIngameError("layout-jailed",
+                        "An administrator suspended your access to public Layout guides.");
+                }
+                else
+                {
+                    _undo.ClearPlayer(uid);
+                    ClearPlayerSessionState(uid);
+                }
+            }
+            else if (target != null) SendPlayerPolicy(target);
+
+            _sapi.Logger.Notification("[Layout] {0} {1} {2}.",
+                PlayerDisplayName(fromPlayer), jail ? "jailed" : "freed", name);
+
+            SendRosterTo(fromPlayer);
+        }
+
+        private IServerPlayer OnlinePlayerByUid(string uid) =>
+            string.IsNullOrEmpty(uid)
+                ? null
+                : _sapi.World.AllOnlinePlayers.OfType<IServerPlayer>()
+                    .FirstOrDefault(p => p.PlayerUID == uid);
+
+        /// <summary>
+        /// The best display name known for a uid, in the same precedence <see cref="BuildRoster"/> uses.
+        /// The setters take a name as well as a uid because they REMEMBER it — a policy on an offline player
+        /// is only readable later because LastKnownName was stored with it, so passing "Unknown" here would
+        /// gradually erase the roster's own labels.
+        /// </summary>
+        private string RosterName(string uid)
+        {
+            IServerPlayer online = OnlinePlayerByUid(uid);
+            if (online != null) return PlayerDisplayName(online);
+
+            PlayerPolicy policy = _policies.Get(uid);
+            if (!string.IsNullOrWhiteSpace(policy?.LastKnownName)) return policy.LastKnownName;
+
+            foreach (GuideData g in _guides.AllGuides.Values)
+                if (g?.CreatorUid == uid && !string.IsNullOrWhiteSpace(g.CreatorName)) return g.CreatorName;
+
+            return "Unknown";
+        }
+
+        private void OnPlayerGuidesRequest(IServerPlayer fromPlayer, PlayerGuidesRequestPacket packet)
+        {
+            if (!AdminRequestAllowed(fromPlayer, "player guides")) return;
+            string uid = packet?.Uid;
+            if (string.IsNullOrEmpty(uid)) return;
+
+            List<GuideData> owned = _guides.AllGuides.Values
+                .Where(g => g != null && g.CreatorUid == uid)
+                .OrderByDescending(g => g.CachedVoxelCount)
+                .ToList();
+
+            var listed = new List<PlayerGuideDto>(Math.Min(owned.Count, MaxListedPlayerGuides));
+            for (int i = 0; i < owned.Count && i < MaxListedPlayerGuides; i++)
+            {
+                GuideData g = owned[i];
+                Vec3d anchor = FirstAnchorPos(g);
+                listed.Add(new PlayerGuideDto
+                {
+                    ShapeName = g.ShapeType.ToString(),
+                    VoxelCount = g.CachedVoxelCount,
+                    X = anchor == null ? 0 : (int)Math.Floor(anchor.X),
+                    Y = anchor == null ? 0 : (int)Math.Floor(anchor.Y),
+                    Z = anchor == null ? 0 : (int)Math.Floor(anchor.Z),
+                    Hidden = g.IsHidden
+                });
+            }
+
+            _channel.SendPacket(new PlayerGuidesPacket
+            {
+                Uid = uid,
+                Guides = listed.ToArray(),
+                TotalCount = owned.Count
+            }, fromPlayer);
+        }
+
+        // Both roster requests are read-only, but they expose every player's name and usage, so they are
+        // gated exactly like the commands that report the same thing.
+        private bool AdminRequestAllowed(IServerPlayer fromPlayer, string what)
+        {
+            if (fromPlayer == null) return false;
+            if (fromPlayer.HasPrivilege(Privilege.controlserver)) return true;
+            _sapi.Logger.Notification(
+                "[Layout] {0} requested the admin {1} without controlserver; refused.",
+                PlayerDisplayName(fromPlayer), what);
+            return false;
+        }
+
+        private PlayerRosterEntryDto[] BuildRoster()
+        {
+            // uid -> best known display name. Later sources only fill gaps, so an online player's current
+            // name wins over the name a stale policy or an old guide record remembers.
+            var names = new Dictionary<string, string>();
+            void Remember(string uid, string name)
+            {
+                if (string.IsNullOrEmpty(uid)) return;
+                if (!names.TryGetValue(uid, out string existing) || string.IsNullOrWhiteSpace(existing))
+                    names[uid] = string.IsNullOrWhiteSpace(name) ? "Unknown" : name;
+            }
+
+            var online = new HashSet<string>();
+            foreach (IServerPlayer p in _sapi.World.AllOnlinePlayers.OfType<IServerPlayer>())
+            {
+                online.Add(p.PlayerUID);
+                Remember(p.PlayerUID, PlayerDisplayName(p));
+            }
+            foreach (PlayerPolicy policy in _policies.Policies)
+                Remember(policy.PlayerUid, policy.LastKnownName);
+            foreach (GuideData g in _guides.AllGuides.Values)
+                Remember(g?.CreatorUid, g?.CreatorName);
+
+            var rows = new List<PlayerRosterEntryDto>(names.Count);
+            foreach (var pair in names)
+            {
+                string uid = pair.Key;
+                rows.Add(new PlayerRosterEntryDto
+                {
+                    Uid = uid,
+                    Name = pair.Value,
+                    Online = online.Contains(uid),
+                    Jailed = _policies.IsJailed(uid),
+                    GuideCount = _guides.CountGuidesBy(uid),
+                    VoxelTotal = _guides.VoxelCountBy(uid),
+                    VoxelCapOverride = _policies.VoxelCapOverride(uid),
+                    TotalVoxelCapOverride = _policies.PlayerTotalVoxelCapOverride(uid),
+                    GuideLimitOverride = _policies.GuideLimitOverride(uid),
+                    EffectiveVoxelCap = _policies.EffectiveVoxelCap(uid, _guides.PerGuideVoxelCap),
+                    EffectiveTotalVoxelCap = _guides.EffectivePerPlayerTotalVoxelCap(uid),
+                    EffectiveGuideLimit = _policies.EffectiveGuideLimit(uid, _guides.MaxGuidesPerPlayer)
+                });
+            }
+
+            // Online first, then by name: the people an admin can act on right now are the ones they are
+            // usually looking for, and alphabetical within that keeps the list stable between refreshes.
+            return rows
+                .OrderByDescending(r => r.Online)
+                .ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
+        // ==========================================================================================
+        //  Cap-rejection wording
+        // ==========================================================================================
+        //
+        // SUBSTITUTE THE NUMBERS OURSELVES. SendIngameError's message parameter is a LANG KEY, and its
+        // trailing arguments are only applied when that key resolves to a translated string. Ours never
+        // do — they are English sentences, not keys — so the key is handed back verbatim and every
+        // placeholder reached the player as literal text: "your per-guide limit of {0:n0} voxels".
+        //
+        // Every message here is therefore fully formed before it is sent, and none of these calls passes
+        // arguments. If you add another, do the same: an unsubstituted placeholder is not a compile error
+        // and looks perfectly fine in the source.
+        //
+        // Built in one place rather than inline because the immediate and the immense placement paths
+        // report the same four refusals, and they had already drifted into two near-identical copies.
+
+        private static string TooLargeText(GuideOperationResult result) =>
+            "That guide is too large to render (" + result.VoxelCount.ToString("N0")
+            + " voxels). Make it smaller or use a coarser scale.";
+
+        private static string PerGuideCapText(GuideOperationResult result) =>
+            "That guide exceeds your per-guide limit of " + result.CapLimit.ToString("N0")
+            + " voxels. Make it smaller or use a coarser scale.";
+
+        private static string PlayerCapText(GuideOperationResult result) =>
+            "Your guides would exceed the cumulative limit of " + result.CapLimit.ToString("N0")
+            + " voxels. Dispel or shrink one of your guides before adding more.";
+
+        private static string WorldCapText(GuideOperationResult result) =>
+            "World voxel budget reached: " + result.VoxelCount.ToString("N0") + " more would pass the "
+            + result.CapLimit.ToString("N0")
+            + " limit. Dispel some guides ('/layout dispel'), coarsen the scale, or raise totalVoxelCap.";
+
+        private static string GuideCountCapText(GuideOperationResult result) =>
+            "Guide limit reached (" + result.VoxelCount.ToString("N0") + " of "
+            + result.CapLimit.ToString("N0") + "). Dispel a guide before placing another.";
+
+        // The live value of one admin setting, read from the managers rather than from _config, so the
+        // confirmation message reports what is actually in force.
+        private int AdminSettingValue(LayoutAdminSetting setting) => setting switch
+        {
+            LayoutAdminSetting.PerGuideVoxelCap => _guides.PerGuideVoxelCap,
+            LayoutAdminSetting.PerPlayerTotalVoxelCap => _guides.PerPlayerTotalVoxelCap,
+            LayoutAdminSetting.TotalVoxelCap => _guides.TotalVoxelCap,
+            LayoutAdminSetting.MaxGuidesPerPlayer => _guides.MaxGuidesPerPlayer,
+            LayoutAdminSetting.MaxGuidesWorldWide => _guides.MaxGuidesWorldWide,
+            LayoutAdminSetting.AllowClientOnlyMode => _allowClientOnlyMode ? 1 : 0,
+            _ => 0
+        };
+
+        private static string AdminSettingLabel(LayoutAdminSetting setting) => setting switch
+        {
+            LayoutAdminSetting.PerGuideVoxelCap => "Voxels per guide",
+            LayoutAdminSetting.PerPlayerTotalVoxelCap => "Voxels per player",
+            LayoutAdminSetting.TotalVoxelCap => "Voxels in the world",
+            LayoutAdminSetting.MaxGuidesPerPlayer => "Guides per player",
+            LayoutAdminSetting.MaxGuidesWorldWide => "Guides in the world",
+            LayoutAdminSetting.AllowClientOnlyMode => "Private guides",
+            _ => setting.ToString()
+        };
+
+        private static string DescribeAdminValue(LayoutAdminSetting setting, int value)
+        {
+            if (setting == LayoutAdminSetting.AllowClientOnlyMode) return value != 0 ? "allowed" : "disallowed";
+            return value <= 0 ? "unlimited" : value.ToString("N0");
+        }
+
+        // Puts every player currently in client-only mode back to public and tells them so. Their existing
+        // private guides are untouched; /layout client push all remains the way to hand them over.
+        private void ForceEveryoneOffClientOnly()
+        {
+            foreach (IServerPlayer p in _sapi.World.AllOnlinePlayers.OfType<IServerPlayer>())
+            {
+                if (!_clientOnlyPlayers.Remove(p.PlayerUID)) continue;
+                // allowed: TRUE — the thing being allowed is the switch to PUBLIC, which is going through.
+                // Sending false here left the client's saved preference on Private (it only updates the
+                // preference when the answer is "allowed"), so the slider stayed on Private and the player
+                // would have flipped straight back to it next session.
+                SendPlacementMode(p, clientOnly: false, allowed: true, updatePreference: true,
+                    message: "Private guides have been disabled on this server. New guides will be public; "
+                    + "the private guides you already have are still yours.");
+            }
         }
 
         private void CancelPlayerPublicActivity(IServerPlayer player)
@@ -2826,8 +3463,9 @@ namespace Layout.Network
                 return;
             }
 
+            // Substituted here, not passed as arguments — see the cap-rejection wording remarks above.
             player.SendIngameError("layout-claimdenied",
-                message + " at {0}, {1}, {2}.", position.X, position.Y, position.Z);
+                message + " at " + position.X + ", " + position.Y + ", " + position.Z + ".");
         }
 
         // Full-exclusivity gate (Module 7): true = reject, because the guide is edit-locked by someone else.

@@ -1,6 +1,7 @@
 using System;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
 using Layout.Client;
 using Layout.Config;
@@ -62,6 +63,9 @@ namespace Layout
         public ClientNetworkHandler ClientNet { get; private set; }
         public GuideRenderer Renderer { get; private set; }
         public GuideToolGui ToolGui { get; private set; }
+
+        /// <summary>The admin Players dialog (v0.4.26), opened from the settings page's Admin section.</summary>
+        public GuidePlayersDialog PlayersGui { get; private set; }
         public GuideHud Hud { get; private set; }
         public GuideToolController Controller { get; private set; }
 
@@ -96,9 +100,16 @@ namespace Layout
         //  Common (both sides)
         // ==========================================================================================
 
+        /// <summary>
+        /// The running build's version string, for the startup log and the settings page's footer.
+        /// Static so the GUI can read it without threading the mod handle through four constructors.
+        /// </summary>
+        public static string ModVersion { get; private set; } = "?";
+
         public override void Start(ICoreAPI api)
         {
             base.Start(api);
+            ModVersion = Mod?.Info?.Version ?? "?";
 
             // The custom item classes behind assets/layout/itemtypes/*.json. Must exist on BOTH sides —
             // the server instantiates the items too (and the powder's refill consumption runs server-side).
@@ -142,13 +153,19 @@ namespace Layout
             Locks = new GuideLockManager();
             Undo = new UndoManager(Guides, ServerConfig.UndoHistoryDepth, Locks);
 
+            // The handler takes the config OBJECT, not a copy of four values: since v0.4.16 the settings
+            // page's Admin section changes these in play, and the change has to reach both the live
+            // managers and layout.json or it would silently revert on the next restart.
             ServerNet = new ServerNetworkHandler(
                 sapi, Guides, Locks, Undo, AdminPolicies,
-                ServerConfig.RequiredPrivilege,
-                ServerConfig.AdminCanOverrideLocks,
-                ServerConfig.AllowClientOnlyMode,
-                ServerConfig.EnableChalkDurability);
+                ServerConfig,
+                cfg => StoreServerConfig(sapi, cfg));
 
+            // The VERSION is logged first and deliberately (v0.4.23). Vintage Story loads exactly ONE mod
+            // per modid, so leaving several Layout zips in the Mods folder means the build that runs is not
+            // necessarily the newest one there — and nothing in game says which won. That cost several
+            // rounds of chasing fixes that were never running. This line is the answer, in one place.
+            sapi.Logger.Notification("[Layout] Version {0} loaded (server).", ModVersion);
             sapi.Logger.Notification(
                 "[Layout] Server started. Caps: {0} voxels/guide, {1} per-player total, {2} world total, {3} guides/player, {4} world-wide (0 = unlimited); undo depth {5}; privilege '{6}'; admin lock-override {7}; client-only mode {8}.",
                 ServerConfig.PerGuideVoxelCap, ServerConfig.PerPlayerTotalVoxelCap,
@@ -175,7 +192,15 @@ namespace Layout
 
             if (cfg == null) cfg = new LayoutServerConfig();
             cfg.Normalize();
+            StoreServerConfig(sapi, cfg);
+            return cfg;
+        }
 
+        // Writes layout.json. Used at startup (so the file gains any new keys) and again after every change
+        // made from the settings page's Admin section. A write failure is logged, never thrown: an admin
+        // changing a cap in play should not be able to take the server down with a read-only config file.
+        private static void StoreServerConfig(ICoreServerAPI sapi, LayoutServerConfig cfg)
+        {
             try
             {
                 sapi.StoreModConfig(cfg, ServerConfigFile);
@@ -184,8 +209,6 @@ namespace Layout
             {
                 sapi.Logger.Warning("[Layout] Could not write {0} ({1}); continuing with in-memory config.", ServerConfigFile, e.Message);
             }
-
-            return cfg;
         }
 
         // ==========================================================================================
@@ -195,6 +218,7 @@ namespace Layout
         public override void StartClientSide(ICoreClientAPI capi)
         {
             _capi = capi;
+            capi.Logger.Notification("[Layout] Version {0} loaded (client).", ModVersion);
 
             // Register the tool GUI's custom shape/toggle/plane glyphs before any dialog composes (UI pass).
             LayoutToolIcons.EnsureRegistered(capi);
@@ -202,9 +226,7 @@ namespace Layout
             ClientConfig = LoadClientConfig(capi);
 
             // Apply the configured guide opacities before anything builds a mesh (Session-8, item 2).
-            GuideMeshBuilder.ConfigureOpacities(
-                ClientConfig.OpacityBody, ClientConfig.OpacityLocked, ClientConfig.OpacityApex,
-                ClientConfig.OpacityAnchor, ClientConfig.OpacityGrabbed, ClientConfig.OpacityHiddenAnchor);
+            PushOpacitiesToMeshBuilder();
             GuideMeshBuilder.ConfigureBlockPlaneInset(ClientConfig.ZFightInset);
 
             // The one DraftManager (client tool state), seeded with the remembered defaults. The cap seed is
@@ -243,6 +265,11 @@ namespace Layout
             Renderer.SetShaderBrightness(
                 ClientConfig.ShaderGuideBrightness, ClientConfig.ShaderAmbientResponse);
             Renderer.SetVoxelFrameStrength(ClientConfig.VoxelFrameStrength);
+
+            // Restore the saved built-voxel colouring. Set before any guide mesh exists, so the rebuild
+            // inside it finds nothing to rebuild and this costs nothing at startup.
+            if (ClientConfig.OccupancyRecolour) Renderer.SetOccupancyEnabled(true);
+
             ClientNet.GuideRenderingChanged += OnGuideRenderingChanged;
 
             // The two dialogs share the same DraftManager + ClientNetworkHandler (the Module-6 contract).
@@ -250,13 +277,25 @@ namespace Layout
             // the GUI on F.
             // config carries the pinned favorites; the save action lets the GUI persist a pin change
             // immediately (B-24-2 fix — not relying on Dispose firing on exit-to-title).
-            ToolGui = new GuideToolGui(capi, Draft, ClientNet, ClientConfig, SaveClientConfig);
+            PlayersGui = new GuidePlayersDialog(capi, ClientNet);
+            ToolGui = new GuideToolGui(capi, Draft, ClientNet, ClientConfig, SaveClientConfig,
+                ApplyOpacitiesAndRebuild, ApplyOccupancyRecolour,
+                id => Renderer?.HoldMoveMaterialization(id),
+                ApplyGuideRendering,
+                OpenPlayersDialog);
             Hud = new GuideHud(capi, Draft, ClientNet);
+
+            // Subscribed after the GUI exists (v0.4.16): the server's admin settings arrive on join and
+            // again after any admin's change, and the settings page has to redraw to show them.
+            ClientNet.AdminConfigChanged += OnAdminConfigChanged;
 
             // The aim-controller: per-tick raycast + click routing while the tool is held. It (not the
             // ModSystem, not the item) owns all interaction state, including comatose grab sessions.
             Controller = new GuideToolController(capi, Draft, ClientNet, Renderer, ToolGui, Hud);
             Controller.OnRenderingChanged(Renderer.RenderingEnabled);
+            // The send-to-ground tile's contact rule (v0.4.28). Handed over rather than passed in, because
+            // the controller takes the GUI and so cannot be constructed before it.
+            ToolGui.SetGroundDropResolver(Controller.GroundDropSixteenths);
             if (ClientNet.PublicGuideAccessJailed) Controller.OnPublicGuidePolicyChanged(true);
 
             // Hotkeys — all rebindable in the vanilla controls screen, all gated to the held tool by the
@@ -283,8 +322,8 @@ namespace Layout
 
             if (Renderer?.RenderingEnabled == false)
                 _capi.ShowChatMessage(
-                    "[Layout] Guide rendering is currently off. Use /layout on to turn it back on "
-                    + "(or .layout on in client-only mode).");
+                    "[Layout] Guides are currently hidden. Turn them back on with \"Show guides\" on the "
+                    + "tool panel's settings page (F, then the gear), or /layout on.");
 
             if (ClientNet.AuthorityMode != ClientAuthorityMode.Detecting) return;
 
@@ -322,7 +361,7 @@ namespace Layout
         private void RegisterClientCommands(ICoreClientAPI capi)
         {
             var parsers = capi.ChatCommands.Parsers;
-            capi.ChatCommands
+            IChatCommand root = capi.ChatCommands
                 .Create("layout")
                 .WithDescription("Client-side Layout commands.")
                 .BeginSubCommand("dispel")
@@ -334,22 +373,18 @@ namespace Layout
                     .WithDescription("Show the creator and last sculptor of your selected or targeted guide.")
                     .HandleWith(OnClientWhoCommand)
                 .EndSubCommand()
-                .BeginSubCommand("renderstats")
-                    .WithDescription("Show local Layout guide rendering statistics for the last frame.")
-                    .HandleWith(OnClientRenderStatsCommand)
-                .EndSubCommand()
                 .BeginSubCommand("inset")
                     .WithDescription(
                         "Set the anti-z-fight inset in blocks (0-0.05, default 0.003). Raise it if guides "
                         + "resting on the ground shimmer. No argument reports the current value.")
-                    .WithArgs(parsers.OptionalFloat("blocks"))
+                    .WithArgs(parsers.OptionalFloat("blocks", float.NaN))   // NaN = "not supplied"; see Supplied()
                     .HandleWith(OnClientInsetCommand)
                 .EndSubCommand()
                 .BeginSubCommand("voxelframe")
                     .WithDescription(
                         "Set how strongly each voxel's boundary is outlined (0 = off, 1 = strongest). "
                         + "No argument reports the current value.")
-                    .WithArgs(parsers.OptionalFloat("strength"))
+                    .WithArgs(parsers.OptionalFloat("strength", float.NaN))
                     .HandleWith(OnClientVoxelFrameCommand)
                 .EndSubCommand()
                 .BeginSubCommand("shaderbrightness")
@@ -357,8 +392,8 @@ namespace Layout
                         "Set custom-shader guide brightness (0.2-1.5) and ambient response (0-1). "
                         + "No arguments reports the current values.")
                     .WithArgs(
-                        parsers.OptionalFloat("brightness"),
-                        parsers.OptionalFloat("ambient-response"))
+                        parsers.OptionalFloat("brightness", float.NaN),
+                        parsers.OptionalFloat("ambient-response", float.NaN))
                     .HandleWith(OnClientShaderBrightnessCommand)
                 .EndSubCommand()
                 .BeginSubCommand("shader")
@@ -367,11 +402,12 @@ namespace Layout
                     .WithArgs(parsers.Word("on-or-off"))
                     .HandleWith(OnClientShaderCommand)
                 .EndSubCommand()
-                .BeginSubCommand("weld")
+                .BeginSubCommand("built")
                     .WithDescription(
-                        "Diagnostic: toggle guide vertex welding to compare the meshes side by side.")
-                    .WithArgs(parsers.Word("on-or-off"))
-                    .HandleWith(OnClientWeldCommand)
+                        "Color guide voxels that already hold material (on / off / refresh). Rebuilds "
+                        + "your guides; affects nobody else.")
+                    .WithArgs(parsers.Word("on-off-or-refresh"))
+                    .HandleWith(OnClientBuiltCommand)
                 .EndSubCommand()
                 .BeginSubCommand("off")
                     .WithDescription("Turn off all Layout guide rendering for yourself.")
@@ -380,6 +416,48 @@ namespace Layout
                 .BeginSubCommand("on")
                     .WithDescription("Turn on all Layout guide rendering for yourself.")
                     .HandleWith(OnClientRenderingOnCommand)
+                .EndSubCommand();
+
+            // DEVELOPMENT DIAGNOSTICS — not registered unless `diagnosticCommands` is set true in
+            // layout-client.json. These were built to investigate specific problems while developing the
+            // renderer and the occupancy feature; they report internals, they are not things a player is
+            // meant to operate, and a couple of them are actively unhelpful to stumble into (blockevents
+            // spams chat). Kept behind the flag rather than deleted because they are still the only way to
+            // run the verification work SESSION_29 §7 leaves open.
+            if (ClientConfig?.DiagnosticCommands != true) return;
+
+            root.BeginSubCommand("renderstats")
+                    .WithDescription("Diagnostic: last-frame Layout guide rendering statistics.")
+                    .HandleWith(OnClientRenderStatsCommand)
+                .EndSubCommand()
+                .BeginSubCommand("weld")
+                    .WithDescription(
+                        "Diagnostic: toggle guide vertex welding to compare the meshes side by side.")
+                    .WithArgs(parsers.Word("on-or-off"))
+                    .HandleWith(OnClientWeldCommand)
+                .EndSubCommand()
+                // Two subcommands rather than one with an optional radius: parsers.OptionalInt yields 0
+                // when the argument is absent, not null, so an `args[0] is int` test can never tell
+                // "no radius given" from "radius 0" and the inspect path was unreachable (v0.3.76 bug).
+                .BeginSubCommand("occupancy")
+                    .WithDescription(
+                        "Diagnostic: read sub-block material occupancy of the block you are looking at, "
+                        + "and print the 1/16 slice at your aim point.")
+                    .HandleWith(OnClientOccupancyCommand)
+                .EndSubCommand()
+                .BeginSubCommand("occupancyscan")
+                    .WithDescription(
+                        "Diagnostic: read sub-block occupancy for a cube of the given radius (1-32) around "
+                        + "you and report the solid/empty/partial split, timing, and resident size.")
+                    .WithArgs(parsers.Int("radius"))
+                    .HandleWith(OnClientOccupancyScanCommand)
+                .EndSubCommand()
+                .BeginSubCommand("blockevents")
+                    .WithDescription(
+                        "Diagnostic: log every client block-change event. Use it somewhere QUIET — the "
+                        + "event also fires for nearby chests, furnaces and other ticking blocks.")
+                    .WithArgs(parsers.Word("on-or-off"))
+                    .HandleWith(OnClientBlockEventsCommand)
                 .EndSubCommand();
         }
 
@@ -398,7 +476,7 @@ namespace Layout
             if (Renderer == null) return TextCommandResult.Error("Layout renderer is not active.");
 
             bool changed = false;
-            if (args[0] is float inset)
+            if (Supplied(args[0], out float inset))
             {
                 ClientConfig.ZFightInset = inset;
                 ClientConfig.Normalize();
@@ -413,7 +491,8 @@ namespace Layout
                 ClientConfig.ZFightInset,
                 changed
                     ? " Saved, guides rebuilt."
-                    : " (Pass a value 0-0.05 to change; raise it if ground voxels shimmer.)"));
+                    : " (Pass a value 0-0.05 to change; raise it if voxels shimmer against material,"
+                      + " lower it if guides look inflated.)"));
         }
 
         /// <summary>
@@ -424,7 +503,7 @@ namespace Layout
             if (Renderer == null) return TextCommandResult.Error("Layout renderer is not active.");
 
             bool changed = false;
-            if (args[0] is float strength)
+            if (Supplied(args[0], out float strength))
             {
                 ClientConfig.VoxelFrameStrength = strength;
                 ClientConfig.Normalize();
@@ -451,12 +530,12 @@ namespace Layout
             if (Renderer == null) return TextCommandResult.Error("Layout renderer is not active.");
 
             bool changed = false;
-            if (args[0] is float brightness)
+            if (Supplied(args[0], out float brightness))
             {
                 ClientConfig.ShaderGuideBrightness = brightness;
                 changed = true;
             }
-            if (args[1] is float response)
+            if (Supplied(args[1], out float response))
             {
                 ClientConfig.ShaderAmbientResponse = response;
                 changed = true;
@@ -552,16 +631,18 @@ namespace Layout
             if (Renderer == null)
                 return TextCommandResult.Error("Enter a world before changing Layout rendering.");
 
-            Renderer.SetRenderingEnabled(enabled);
-            Controller?.OnRenderingChanged(enabled);
-            ClientConfig.GuideRenderingEnabled = enabled;
-            SaveClientConfig();
+            ApplyGuideRendering(enabled);
             return TextCommandResult.Success(enabled
                 ? "Layout guide rendering is on for you."
                 : "Layout guide rendering is off for you.");
         }
 
-        private void OnGuideRenderingChanged(bool enabled)
+        /// <summary>
+        /// Turns this client's guide rendering on or off and remembers it. The shared back end for
+        /// <c>/layout on|off</c>, the server's rendering packet, and the settings page's "Show guides"
+        /// switch (v0.4.2) — three front ends onto one setter, so they cannot drift.
+        /// </summary>
+        internal void ApplyGuideRendering(bool enabled)
         {
             Renderer?.SetRenderingEnabled(enabled);
             Controller?.OnRenderingChanged(enabled);
@@ -569,6 +650,8 @@ namespace Layout
             ClientConfig.GuideRenderingEnabled = enabled;
             SaveClientConfig();
         }
+
+        private void OnGuideRenderingChanged(bool enabled) => ApplyGuideRendering(enabled);
 
         private TextCommandResult OnClientWhoCommand(TextCommandCallingArgs args)
         {
@@ -636,6 +719,16 @@ namespace Layout
             Controller?.OnPublicGuidePolicyChanged(jailed);
         }
 
+        private void OnAdminConfigChanged() => ToolGui?.OnAdminConfigChanged();
+
+        // The tool panel stays open behind it: the Players dialog is a reference view an admin reads WHILE
+        // setting caps, and closing the panel to look at it would lose any staged edits.
+        private void OpenPlayersDialog()
+        {
+            if (PlayersGui == null) return;
+            if (!PlayersGui.IsOpened()) PlayersGui.TryOpen();
+        }
+
         private static LayoutClientConfig LoadClientConfig(ICoreClientAPI capi)
         {
             LayoutClientConfig cfg = null;
@@ -661,6 +754,267 @@ namespace Layout
                 capi.Logger.Warning("[Layout] Could not update {0}: {1}", ClientConfigFile, e.Message);
             }
             return cfg;
+        }
+
+        /// <summary>
+        /// The block-occupancy recolour toggle (v0.3.79). Also reachable from the GUI settings page; both
+        /// routes go through <see cref="ApplyOccupancyRecolour"/> so the config, the renderer and the saved
+        /// file cannot drift apart.
+        /// </summary>
+        private TextCommandResult OnClientBuiltCommand(TextCommandCallingArgs args)
+        {
+            if (Renderer == null) return TextCommandResult.Error("Layout renderer is not active.");
+
+            switch ((args[0] as string ?? "").Trim().ToLowerInvariant())
+            {
+                case "on": case "true": case "1":
+                    return TextCommandResult.Success(
+                        ApplyOccupancyRecolour(true)
+                            ? "Built-voxel coloring ON. Guides rebuilt; voxels holding material are cyan."
+                            : "Built-voxel coloring is already on.");
+
+                case "off": case "false": case "0":
+                    return TextCommandResult.Success(
+                        ApplyOccupancyRecolour(false)
+                            ? "Built-voxel coloring OFF. Guides rebuilt."
+                            : "Built-voxel coloring is already off.");
+
+                case "refresh":
+                    if (!ClientConfig.OccupancyRecolour)
+                        return TextCommandResult.Error("Turn it on first: /layout built on.");
+                    int stale = Renderer.OccupancyStaleGuides;
+                    Renderer.RefreshOccupancy();
+                    return TextCommandResult.Success(stale > 0
+                        ? $"Re-read the world and rebuilt, including {stale} guide(s) too large to update live."
+                        : "Re-read the world and rebuilt. (Ordinary guides update by themselves as you "
+                          + "build — refresh is only needed for very large ones.)");
+
+                default:
+                    return TextCommandResult.Error("Use /layout built on, off, or refresh.");
+            }
+        }
+
+        /// <summary>
+        /// Sets the recolour state, persists it, and rebuilds. Returns false when nothing changed.
+        /// </summary>
+        internal bool ApplyOccupancyRecolour(bool enabled)
+        {
+            if (Renderer == null || ClientConfig == null) return false;
+            if (!Renderer.SetOccupancyEnabled(enabled)) return false;   // rebuilds only on a real change
+            ClientConfig.OccupancyRecolour = enabled;
+            SaveClientConfig();
+            return true;
+        }
+
+        // ---- Diagnostic: sub-block occupancy readback (v0.3.76) ----
+        //
+        // STAGE 1 verification for PLAN_BLOCK_OCCUPANCY. The feature stands or falls on whether the client
+        // can answer "is there material in this 1/16 cell" correctly — everything downstream is plumbing.
+        // The honest way to check that is to chisel a recognisable shape, aim at it, and see whether the
+        // printed slice is the shape you cut.
+        private BlockOccupancy _occupancy;
+
+        private TextCommandResult OnClientOccupancyCommand(TextCommandCallingArgs args)
+        {
+            IBlockAccessor accessor = _capi?.World?.BlockAccessor;
+            if (accessor == null) return TextCommandResult.Error("No world.");
+
+            _occupancy ??= new BlockOccupancy();
+
+            BlockSelection sel = _capi.World.Player?.CurrentBlockSelection;
+            if (sel?.Position == null)
+                return TextCommandResult.Error(
+                    "Look at a block first. (/layout occupancyscan <radius> scans around you instead.)");
+
+            _occupancy.Invalidate(sel.Position);   // always read fresh; this is a diagnostic
+            BlockFill fill = _occupancy.FillAt(accessor, sel.Position);
+            int filled = _occupancy.FilledCellCount(accessor, sel.Position);
+            bool micro = BlockOccupancy.HasMicroBlockEntity(accessor, sel.Position);
+            Block block = accessor.GetBlock(sel.Position);
+
+            _capi.ShowChatMessage(string.Format(
+                "[Layout] {0} @ {1},{2},{3} — {4}, {5}/4096 cells, microblock={6}",
+                block?.Code?.ToShortString() ?? "?",
+                sel.Position.X, sel.Position.Y, sel.Position.Z,
+                fill, filled, micro ? "YES" : "no"));
+
+            if (fill == BlockFill.Partial) PrintOccupancySlice(accessor, sel);
+            return TextCommandResult.Success("");
+        }
+
+        // One horizontal 16x16 slice at the height you are aiming at. '#' is material, '.' is air. Printed
+        // north-to-south so it reads the way the block looks from above.
+        private void PrintOccupancySlice(IBlockAccessor accessor, BlockSelection sel)
+        {
+            double hitY = sel.HitPosition?.Y ?? 0.5;
+            int layer = Math.Min(15, Math.Max(0, (int)(hitY * BlockOccupancy.CellsPerBlock)));
+
+            int baseX = sel.Position.X * BlockOccupancy.CellsPerBlock;
+            int baseY = sel.Position.Y * BlockOccupancy.CellsPerBlock + layer;
+            int baseZ = sel.Position.Z * BlockOccupancy.CellsPerBlock;
+
+            _capi.ShowChatMessage($"[Layout] horizontal slice at cell y={layer} (aim height):");
+            var row = new char[BlockOccupancy.CellsPerBlock];
+            for (int cz = 0; cz < BlockOccupancy.CellsPerBlock; cz++)
+            {
+                for (int cx = 0; cx < BlockOccupancy.CellsPerBlock; cx++)
+                    row[cx] = _occupancy.IsMaterialAt(accessor, baseX + cx, baseY, baseZ + cz) ? '#' : '.';
+                _capi.ShowChatMessage(new string(row));
+            }
+        }
+
+        /// <summary>
+        /// Whether an optional float argument was actually supplied. The optional parsers return their
+        /// DEFAULT when the argument is absent, not null, so "no value given" is indistinguishable from
+        /// "the default was typed" unless the default is a value nobody can type. Every optional float in
+        /// this file therefore defaults to NaN, which no input parses to.
+        /// </summary>
+        /// <remarks>
+        /// This cost three shipped commands their documented no-argument behaviour (v0.3.65–v0.3.69):
+        /// <c>/layout inset</c>, <c>voxelframe</c> and <c>shaderbrightness</c> each claimed "no argument
+        /// reports the current value" but their <c>args[0] is float</c> test always passed, so a bare
+        /// <c>/layout inset</c> silently SET the inset to 0 and saved it. Fixed in v0.3.78; the same trap
+        /// took out <c>/layout occupancy</c> one version earlier, which is how it was noticed.
+        /// </remarks>
+        private static bool Supplied(object arg, out float value)
+        {
+            value = 0f;
+            if (arg is not float f || float.IsNaN(f)) return false;
+            value = f;
+            return true;
+        }
+
+        private TextCommandResult OnClientOccupancyScanCommand(TextCommandCallingArgs args)
+        {
+            IBlockAccessor accessor = _capi?.World?.BlockAccessor;
+            if (accessor == null) return TextCommandResult.Error("No world.");
+            if (args[0] is not int requested || requested < 1 || requested > 32)
+                return TextCommandResult.Error("Give a radius from 1 to 32.");
+
+            _occupancy ??= new BlockOccupancy();
+            return ScanOccupancy(accessor, requested);
+        }
+
+        private TextCommandResult ScanOccupancy(IBlockAccessor accessor, int radius)
+        {
+            var p = _capi.World.Player?.Entity?.Pos;
+            if (p == null) return TextCommandResult.Error("No player position.");
+
+            _occupancy.Clear();
+            int cx = (int)Math.Floor(p.X), cy = (int)Math.Floor(p.Y), cz = (int)Math.Floor(p.Z);
+
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            BlockPos pos = p.AsBlockPos;   // carries the player's dimension; Set() below preserves it
+            for (int x = cx - radius; x <= cx + radius; x++)
+                for (int y = cy - radius; y <= cy + radius; y++)
+                    for (int z = cz - radius; z <= cz + radius; z++)
+                    {
+                        pos.Set(x, y, z);
+                        _occupancy.FillAt(accessor, pos);
+                    }
+            timer.Stop();
+
+            int side = radius * 2 + 1;
+            return TextCommandResult.Success(string.Format(
+                "Layout occupancy: {0} blocks ({1} cubed) in {2} ms — {3} solid, {4} empty, {5} partial. "
+                + "~{6} KB resident. Bricks are built only for the {5} partial ones.",
+                side * side * side, side, timer.ElapsedMilliseconds,
+                _occupancy.SolidBlocks, _occupancy.EmptyBlocks, _occupancy.PartialBlocks,
+                _occupancy.ApproximateBytes / 1024));
+        }
+
+        // ---- Diagnostic: block-change event tracing (v0.3.75) ----
+        //
+        // PLAN_BLOCK_OCCUPANCY §3.2 concludes, from tracing call sites in the shipped assemblies, that a
+        // chisel stroke reaches IClientEventAPI.BlockChanged through the block-entity sync path
+        // (BlockEntityChisel.UpdateVoxel -> MarkDirty -> GeneralPacketHandler.HandleBlockEntities ->
+        // TriggerBlockChanged). That is static evidence: the call exists, but whether it is reached under a
+        // guard cannot be seen from token scanning. This command turns it into an observation — switch it
+        // on, chisel a block, and see whether events actually arrive.
+        //
+        // It measures the second half of that finding too. The event fires on ANY block-entity sync, so a
+        // chest or a running furnace nearby will trigger it as well; the running count shows how noisy the
+        // event really is, which decides how hard the real handler has to work to reject what it does not
+        // care about.
+        private bool _blockEventLogging;
+        private int _blockEventCount;
+        private int _blockEventMicroCount;
+
+        private void OnDiagnosticBlockChanged(BlockPos pos, Block oldBlock)
+        {
+            _blockEventCount++;
+            if (_capi?.World?.BlockAccessor == null || pos == null) return;
+
+            Block now = _capi.World.BlockAccessor.GetBlock(pos);
+
+            // A chiselled block carries a BlockEntityMicroBlock (BlockEntityChisel derives from it), so this
+            // flag is what distinguishes "someone edited sub-block detail here" from a whole-block change.
+            bool micro = _capi.World.BlockAccessor
+                .GetBlockEntity<Vintagestory.GameContent.BlockEntityMicroBlock>(pos) != null;
+            if (micro) _blockEventMicroCount++;
+
+            _capi.ShowChatMessage(string.Format(
+                "[Layout] #{0} @ {1},{2},{3}  was={4}  now={5}  microblock={6}",
+                _blockEventCount, pos.X, pos.Y, pos.Z,
+                oldBlock?.Code?.ToShortString() ?? "null",
+                now?.Code?.ToShortString() ?? "null",
+                micro ? "YES" : "no"));
+        }
+
+        private TextCommandResult OnClientBlockEventsCommand(TextCommandCallingArgs args)
+        {
+            bool enable;
+            switch ((args[0] as string ?? "").Trim().ToLowerInvariant())
+            {
+                case "on": case "true": case "1": enable = true; break;
+                case "off": case "false": case "0": enable = false; break;
+                default: return TextCommandResult.Error(
+                    "Use /layout blockevents on or /layout blockevents off.");
+            }
+
+            if (enable == _blockEventLogging)
+                return TextCommandResult.Success(
+                    $"Layout block-event logging is already {(enable ? "on" : "off")}.");
+
+            if (enable)
+            {
+                _blockEventCount = 0;
+                _blockEventMicroCount = 0;
+                _capi.Event.BlockChanged += OnDiagnosticBlockChanged;
+                _blockEventLogging = true;
+                return TextCommandResult.Success(
+                    "Layout block-event logging ON. Place a block, break one, then CHISEL one and watch "
+                    + "for microblock=YES lines. Somewhere quiet — chests and furnaces fire this too.");
+            }
+
+            _capi.Event.BlockChanged -= OnDiagnosticBlockChanged;
+            _blockEventLogging = false;
+            return TextCommandResult.Success(string.Format(
+                "Layout block-event logging OFF. {0} event(s), {1} of them on a microblock.",
+                _blockEventCount, _blockEventMicroCount));
+        }
+
+        // Pushes the configured colour scheme and guide alphas into the mesh builder's palette.
+        private void PushOpacitiesToMeshBuilder()
+        {
+            GuideMeshBuilder.ConfigurePalette(
+                GuidePalette.Normalize(ClientConfig.ColorScheme),
+                ClientConfig.OpacityBody, ClientConfig.OpacityLocked, ClientConfig.OpacityApex,
+                ClientConfig.OpacityAnchor, ClientConfig.OpacityGrabbed, ClientConfig.OpacityHiddenAnchor,
+                GuidePalette.ParseRoleColors(ClientConfig.CustomColors));
+        }
+
+        /// <summary>
+        /// Re-applies the client palette (colour scheme + opacities) and rebuilds every guide mesh. Both are
+        /// baked into vertex COLOURS at build time, so changing the config alone changes nothing on screen —
+        /// the meshes have to be rebuilt for it to show. Wired to the GUI's Settings tab; the caller is
+        /// responsible for coalescing rapid changes (a slider drag) so this runs once, not once per step.
+        /// </summary>
+        internal void ApplyOpacitiesAndRebuild()
+        {
+            if (ClientConfig == null) return;
+            PushOpacitiesToMeshBuilder();
+            Renderer?.RebuildAllForDiagnostics();
         }
 
         // Write the player's current tool settings back as the new defaults — "come up the way I left it".
@@ -704,6 +1058,11 @@ namespace Layout
                 StopModeDetection();
                 _capi.Event.LevelFinalize -= OnLevelFinalize;
                 _capi.Event.LeftWorld -= OnLeftWorld;
+                if (_blockEventLogging)
+                {
+                    _capi.Event.BlockChanged -= OnDiagnosticBlockChanged;
+                    _blockEventLogging = false;
+                }
 
                 if (ClientNet != null)
                 {
@@ -712,6 +1071,7 @@ namespace Layout
                     ClientNet.AuthorityModeChanged -= OnAuthorityModeChanged;
                     ClientNet.ForceClientOnlyPreferenceChanged -= OnForceClientOnlyPreferenceChanged;
                     ClientNet.GuideRenderingChanged -= OnGuideRenderingChanged;
+                    ClientNet.AdminConfigChanged -= OnAdminConfigChanged;
                 }
 
                 try { Controller?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] Controller dispose: {0}", e.Message); }
@@ -719,6 +1079,7 @@ namespace Layout
 
                 try { Renderer?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] Renderer dispose: {0}", e.Message); }
                 try { ToolGui?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] ToolGui dispose: {0}", e.Message); }
+                try { PlayersGui?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] PlayersGui dispose: {0}", e.Message); }
                 try { Hud?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] Hud dispose: {0}", e.Message); }
 
                 Renderer = null;

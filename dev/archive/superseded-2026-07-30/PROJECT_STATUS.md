@@ -1,4 +1,16 @@
+> 🗄️ **ARCHIVED 2026-07-30 at v0.4.33 — SUPERSEDED, DO NOT USE AS CURRENT.**
+> Frozen exactly as it stood before the documentation overhaul. Its successor is `STATUS.md`.
+> Kept so nothing is ever lost. Never edit this file; never cite it as current.
+
 # Layout — Project Status & Handoff
+
+> ⚠️ **THIS FILE TRAILS BY FOUR SESSIONS (last refreshed at v0.3.53; current build is v0.4.0).** What it
+> describes is still accurate, but it does not know about **Session 28** (vertex welding, settled-shell
+> streaming, the custom guide shader, voxel outlines), **Session 29** (block-occupancy recolour, the face
+> outset, the GUI settings page) or **Sessions 30–31** (the Transform tool mode — move, rotate, copy,
+> mirror — protocol 19, 81 source files).
+> For current state read `HANDOFF.md` and `SESSION_28/29/30/31.md`; for the player-facing log read
+> `CHANGELOG.md`. Prefer source for exact identifiers.
 
 **Checkpoint: Layout v0.3.53 final release built, packaged, and documented** (the `ClientOnlyFallback` branch merged via
 PR #1). **F4** is

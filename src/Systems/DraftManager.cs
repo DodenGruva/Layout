@@ -8,18 +8,22 @@ namespace Layout.Systems
 {
     /// <summary>
     /// What the Layout tool's clicks mean. Client-side only; never crosses the wire (safe to reorder).
-    /// THREE modes (Session 10): in <b>Create</b>, the two mouse buttons build guides contextually —
+    /// FOUR modes: in <b>Create</b>, the two mouse buttons build guides contextually —
     /// left-click drafts anchors / grabs points / grabs the body (implicit insert) / releases; right-click
     /// cancels or toggles a point's lock. <b>Edit</b> is the same guide-manipulation minus placement (empty
     /// clicks just deselect) — while in it, the GUI's setting rows act on the SELECTED guide instead of the
-    /// tool defaults, so per-guide editing no longer needs a separate expanding panel section. <b>Delete</b>
-    /// is the deliberately separated destructive mode. Order is Create · Edit · Delete (matches the mode-row
-    /// tiles via <c>(int)Mode</c>).
+    /// tool defaults, so per-guide editing no longer needs a separate expanding panel section.
+    /// <b>Transform</b> (F6/F12, 0.3.86/0.3.90) selects a guide the same way and then acts on it as a WHOLE
+    /// OBJECT without changing its shape — move it, rotate it, and in future copy and mirror it. Named for
+    /// the category rather than one action, so the panel's buttons can keep the plain verbs.
+    /// <b>Delete</b> is the deliberately separated destructive mode, kept last. Order matches the mode-row
+    /// tiles via <c>(int)Mode</c>.
     /// </summary>
     public enum ToolMode
     {
         Create,
         Edit,
+        Transform,
         Delete
     }
 
@@ -258,7 +262,7 @@ namespace Layout.Systems
                 _draftSecond = null;
                 _draftFlatSideAligned = false;
             }
-            if (!NeedsRimClick(_shape)) _draftThird = null;
+            if (!NeedsFourthClick(_shape)) _draftThird = null;
             // Switching away from the Free-Shape mid-draft drops any chained corners beyond the first
             // (the draft steps back to "one anchor placed", same as the 3-click base rule above).
             if (_shape != GuideShapeType.FreeShape && _draftChain.Count > 1)
@@ -275,13 +279,14 @@ namespace Layout.Systems
             || (shape == GuideShapeType.Rectangle && constraint == ShapeConstraint.Square);
 
         /// <summary>
-        /// True when this shape+constraint places with THREE clicks (base · base · height/apex): the free,
-        /// Right, and Isosceles triangles (apex click), and the Cylinder / Cone / Box volumes (0.1.21 —
-        /// two base clicks then a height click). Equilateral stays two-click (its apex is fully derived);
-        /// the Sphere and Dome are two-click volumes.
+        /// True when this shape+constraint places with a THIRD click: the free, Right, and Isosceles
+        /// triangles (apex), the Cylinder / Cone / Box volumes (0.1.21 — height), and the free Rectangle
+        /// (v0.4.15 — width). Equilateral stays two-click (its apex is fully derived) and so does Square
+        /// (one clicked edge already determines it); the Sphere and Dome are two-click volumes.
         /// </summary>
         public static bool NeedsApexClick(GuideShapeType shape, ShapeConstraint constraint) =>
             (shape == GuideShapeType.Triangle && constraint != ShapeConstraint.Equilateral)
+            || (shape == GuideShapeType.Rectangle && constraint != ShapeConstraint.Square)
             || shape == GuideShapeType.Cylinder
             || shape == GuideShapeType.TaperedCylinder
             || shape == GuideShapeType.PolygonalPrism
@@ -290,11 +295,20 @@ namespace Layout.Systems
             || shape == GuideShapeType.Box;
 
         /// <summary>
-        /// True when this shape places with a FOURTH click after the height one (0.2.24): only the
-        /// Tapered Cylinder, whose last click sets the lid's radius by its distance from the axis.
+        /// True when this shape places with a FOURTH click: the tapered volumes (0.2.24 — the rim point,
+        /// whose distance from the axis sets the lid's radius) and, since v0.4.15, the Box, whose width
+        /// click pushed its height click out to fourth.
         /// </summary>
-        public static bool NeedsRimClick(GuideShapeType shape) => shape == GuideShapeType.TaperedCylinder
-            || shape == GuideShapeType.TaperedPolygonalPrism;
+        public static bool NeedsFourthClick(GuideShapeType shape) => IsTaperedRimStage(shape)
+            || shape == GuideShapeType.Box;
+
+        /// <summary>
+        /// True when a shape's FOURTH click is a tapered RIM rather than a plain height — the stage that
+        /// owns the flare clamp, the one-way capture gate, and the CTRL-close / SHIFT-flare modifiers.
+        /// The Box's fourth click is an ordinary height click and must not inherit any of that.
+        /// </summary>
+        public static bool IsTaperedRimStage(GuideShapeType shape) =>
+            shape == GuideShapeType.TaperedCylinder || shape == GuideShapeType.TaperedPolygonalPrism;
 
         /// <summary>True for the chained-click Free-Shape (Session 11, 0.1.15).</summary>
         public static bool IsChainShape(GuideShapeType shape) => shape == GuideShapeType.FreeShape;
@@ -314,8 +328,154 @@ namespace Layout.Systems
         // --- Tool state: Edit-mode selection ----------------------------------------------------
 
         public Guid? SelectedGuideId => _selectedGuideId;
-        public void SelectGuide(Guid guideId) => _selectedGuideId = guideId;
-        public void ClearSelection() => _selectedGuideId = null;
+        public void SelectGuide(Guid guideId) { _selectedGuideId = guideId; ResetCopyRun(); }
+        public void ClearSelection() { _selectedGuideId = null; ResetCopyRun(); }
+
+        // --- Tool state: Move mode (F6) ---------------------------------------------------------
+
+        /// <summary>The step multipliers offered by the Move pad. A step is always a whole number of the
+        /// MOVED GUIDE's own voxels — never finer — so these multiply that guide's scale, not a fixed unit.</summary>
+        public static readonly int[] MoveStepMultipliers = { 1, 2, 4, 8, 16 };
+
+        private int _moveStep = 1;
+        private bool _freeMove;
+
+        /// <summary>How many of the guide's own voxels one arrow click travels.</summary>
+        public int MoveStep => _moveStep;
+
+        /// <summary>Sets the arrow-pad step multiplier. Ignores values outside the offered set.</summary>
+        public bool SetMoveStep(int multiplier)
+        {
+            for (int i = 0; i < MoveStepMultipliers.Length; i++)
+            {
+                if (MoveStepMultipliers[i] != multiplier) continue;
+                _moveStep = multiplier;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>Armed by the GUI toggle: the selected guide follows the crosshair once the panel closes.</summary>
+        public bool FreeMove => _freeMove;
+        public void SetFreeMove(bool enabled) => _freeMove = enabled;
+
+        /// <summary>What the Transform pad does with the result: nothing (mirror in place), move it, or
+        /// leave the original alone and produce a copy there.</summary>
+        public enum TransformPlacement { None = 0, Move = 1, Copy = 2 }
+
+        private TransformPlacement _placement = TransformPlacement.Move;
+        private bool _transformMirror;
+        private bool _transformSpanStep;
+        private bool _spanEligible;      // eligibility as of the last action change, for the re-default
+
+        public TransformPlacement Placement => _placement;
+        public bool TransformMirror => _transformMirror;
+
+        /// <summary>
+        /// Whether stepping by the guide's OWN WIDTH can be reached at all — true wherever anything
+        /// actually travels, plain Move included. Only a Mirror driving the pad by itself has no distance.
+        /// </summary>
+        public bool SpanStepAvailable => _placement != TransformPlacement.None;
+
+        /// <summary>
+        /// Whether span is what an action STARTS on. True where landing flush is the point: a copy, a
+        /// mirrored copy, or a mirrored move (the "flip it over its own edge" gesture). False for a plain
+        /// Move, whose purpose is the one-voxel nudge — starting that at a whole guide-width would break
+        /// the case the mode was built for. Move can still reach span by re-clicking its lit step tile.
+        /// </summary>
+        public bool SpanStepDefault =>
+            _placement == TransformPlacement.Copy
+            || (_placement == TransformPlacement.Move && _transformMirror);
+
+        /// <summary>Step by the guide's own extent along the pressed axis, rather than by <see cref="MoveStep"/>.</summary>
+        public bool TransformSpanStep => _transformSpanStep && SpanStepAvailable;
+
+        /// <summary>
+        /// A step tile was clicked. <paramref name="selecting"/> is false when the player clicked the tile
+        /// that was ALREADY lit, which means "give me the span back" — so the row is a plain exclusive
+        /// picker on the way in and an escape hatch on the way out, with no separate span button.
+        /// </summary>
+        public void SelectMoveStep(int multiplier, bool selecting)
+        {
+            ResetCopyRun();          // a new distance starts a fresh line
+            if (!selecting)
+            {
+                if (SpanStepAvailable) _transformSpanStep = true;
+                return;
+            }
+            _transformSpanStep = false;
+            SetMoveStep(multiplier);
+        }
+
+        /// <summary>
+        /// Move and Copy are MUTUALLY EXCLUSIVE — "copy it and also move it" is just Copy, since the copy
+        /// is what lands at the offset. Clicking the lit one turns it off, leaving Mirror to drive the pad
+        /// on its own; that is refused when Mirror is off, because a pad that does nothing is not a state
+        /// worth being able to reach.
+        /// </summary>
+        public void ToggleTransformPlacement(TransformPlacement which)
+        {
+            if (which != TransformPlacement.Move && which != TransformPlacement.Copy) return;
+            if (_placement == which)
+            {
+                if (_transformMirror) _placement = TransformPlacement.None;
+            }
+            else _placement = which;
+            SyncSpanDefault();
+        }
+
+        /// <summary>Toggles the mirror flag, refusing to leave the pad with nothing at all to do.</summary>
+        public void ToggleTransformMirror()
+        {
+            if (_transformMirror && _placement == TransformPlacement.None) return;
+            _transformMirror = !_transformMirror;
+            SyncSpanDefault();
+        }
+
+        // Span follows the default only when CROSSING between actions that want it and actions that do not
+        // — so switching Copy → Move drops back to the nudge, Move → Copy picks span up, and a deliberate
+        // override survives any toggling that stays on one side of that line.
+        private void SyncSpanDefault()
+        {
+            bool defaultsOn = SpanStepDefault;
+            if (defaultsOn != _spanEligible) _transformSpanStep = defaultsOn;
+            if (!SpanStepAvailable) _transformSpanStep = false;
+            _spanEligible = defaultsOn;
+            ResetCopyRun();          // any change of action starts a fresh run
+        }
+
+        // --- Copy runs -------------------------------------------------------------------------
+        //
+        // Hitting the same copy direction repeatedly should lay guides out in a LINE — 1 span out, then 2,
+        // then 3 — rather than stacking every copy in the same place. The count is kept here rather than by
+        // re-selecting each new copy, so the original stays selected and stays the thing being measured
+        // from; that also keeps the whole gesture client-side, with no waiting on the new guide's id.
+        private Guid? _copyRunGuide;
+        private string _copyRunDirection;
+        private int _copyRunCount;
+
+        /// <summary>
+        /// How many steps out the NEXT copy in this direction belongs: 1 the first time, then 2, 3, …
+        /// Any change of guide or direction starts the run over.
+        /// </summary>
+        public int NextCopyRunFactor(Guid guideId, string directionCode)
+        {
+            if (_copyRunGuide == guideId && _copyRunDirection == directionCode) _copyRunCount++;
+            else
+            {
+                _copyRunGuide = guideId;
+                _copyRunDirection = directionCode;
+                _copyRunCount = 1;
+            }
+            return _copyRunCount;
+        }
+
+        public void ResetCopyRun()
+        {
+            _copyRunGuide = null;
+            _copyRunDirection = null;
+            _copyRunCount = 0;
+        }
 
         /// <summary>
         /// Assembles a render-settings bundle from the current (live) tool state plus a resolved projection plane.
@@ -447,8 +607,9 @@ namespace Layout.Systems
         }
 
         /// <summary>
-        /// Stores the third click of a FOUR-click draft (the height point); the draft then awaits its rim
-        /// click. Only meaningful when <see cref="NeedsRimClick"/> is true for the current shape (0.2.24).
+        /// Stores the third click of a FOUR-click draft (a tapered volume's height, a box's width); the
+        /// draft then awaits its fourth. Only meaningful when <see cref="NeedsFourthClick"/> is true for
+        /// the current shape (0.2.24; the Box joined in v0.4.15).
         /// </summary>
         public void PlaceThirdPoint(Vec3d thirdPoint)
         {
@@ -538,10 +699,11 @@ namespace Layout.Systems
         }
 
         /// <summary>
-        /// Applies the later placement clicks onto a freshly built shape: the third click (apex/height) at
-        /// control point 2, and — for the four-click Tapered Cylinder — the fourth (rim/top radius) at
-        /// control point 3. The one place that mapping lives; the ghost preview, the HUD measure, the cap
-        /// pre-check, and the server's create path all route through it so they cannot drift apart.
+        /// Applies the later placement clicks onto a freshly built shape: the third click at control point
+        /// 2 (a triangle's apex, a volume's height, a rectangle's width) and the fourth at control point 3
+        /// (a tapered volume's rim, a box's height). The one place that mapping lives; the ghost preview,
+        /// the HUD measure, the cap pre-check, and the server's create path all route through it so they
+        /// cannot drift apart.
         /// </summary>
         public static void ApplyPlacementPoints(IGuideShape shape, GuideShapeType type,
             ShapeConstraint constraint, Vec3d apex, Vec3d rim)
@@ -549,7 +711,7 @@ namespace Layout.Systems
             if (shape == null) return;
             if (apex != null && NeedsApexClick(type, constraint) && shape.ControlPoints.Count > 2)
                 shape.MoveControlPoint(2, apex);
-            if (rim != null && NeedsRimClick(type) && shape.ControlPoints.Count > 3)
+            if (rim != null && NeedsFourthClick(type) && shape.ControlPoints.Count > 3)
                 shape.MoveControlPoint(3, rim);
         }
 

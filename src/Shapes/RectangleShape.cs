@@ -6,23 +6,39 @@ using Layout.Guide;
 namespace Layout.Shapes
 {
     /// <summary>
-    /// The rectangle primitive (Session 9): the two draft clicks are its DIAGONAL corners A and C — the
-    /// only stored control points (both anchors). The other two corners derive in the intrinsic
-    /// axis-aligned plane (normal = <see cref="GuideData.ShapePlaneAxis"/>, from the first click's face)
-    /// and render as Primary/green markers. A SQUARE is this shape under
-    /// <see cref="ShapeConstraint.Square"/>: the derived corners use the DOMINANT diagonal component for
-    /// both sides, so dragging a corner absorbs by resizing the square.
+    /// The rectangle primitive (Session 9; re-gestured in v0.4.15). THREE clicks: corner A, the far end of
+    /// one EDGE, then a third click that pulls the width out sideways. A SQUARE is this shape under
+    /// <see cref="ShapeConstraint.Square"/> and stays a TWO-click gesture — one edge already determines it,
+    /// so a width click would have nothing left to say; SHIFT at placement puts it on the other side of
+    /// that edge instead.
     /// </summary>
     /// <remarks>
-    /// GEOMETRY. The rectangle lies in A's plane layer: C's in-plane components define the sides; C is
-    /// snapped onto A's plane by <see cref="MoveControlPoint"/> (moving A re-snaps C onto A's NEW layer,
-    /// keeping its in-plane offsets — the whole rectangle rides with A). Corners in curve order:
-    /// A → B(=A+du·u1) → C → D(=A+dv·u2) → A.
+    /// WHY THE GESTURE CHANGED (v0.4.15, human-requested). The old gesture was two DIAGONAL corners, and a
+    /// diagonal carries no rotation — so the sides had to be read off the plane's world axes
+    /// (<see cref="ShapeGeometry.InPlaneAxes"/>) and a rectangle or square could only ever come out lined
+    /// up north/south/east/west. Rectangle and Box were the only two shapes in the catalog doing that;
+    /// every other shape derives its frame from the clicks themselves. Clicking one EDGE supplies the
+    /// missing rotation, and the width then needs a click of its own. Precedent: the triangle went 2 → 3
+    /// clicks for exactly this reason, and equilateral stayed at 2 exactly as Square does here.
     ///
-    /// [Flagged decisions:] the derived corners are markers, not grabbable points (body clicks map to the
-    /// nearest STORED anchor); Square has no break gesture in v1 (corner drags absorb by design, so
-    /// square → rectangle demotion never triggers — the two live as separate catalog tiles like
-    /// circle/ellipse); Square's side = max(|du|,|dv|) with signs preserved (the dominant drag dimension).
+    /// GEOMETRY. The frame is <see cref="ShapeGeometry.TryGetFrame"/> on A→B: û along the edge, m̂ the
+    /// in-plane perpendicular. du = |A→B| is the edge length; dv = (W − A)·m̂ is the SIGNED width, so the
+    /// third click also chooses which side of the edge the rectangle lies on. Corners in curve order:
+    /// A → B(= A + û·du) → C(= B + m̂·dv) → D(= A + m̂·dv) → A. Square forces dv = ±du.
+    ///
+    /// STORED POINTS are three of the four corners: A and B as anchors, C as the width handle (Primary).
+    /// D is derived and renders as a Primary marker. Dragging C therefore changes only the width — the
+    /// edge length belongs to B — which is the same absorb-don't-break behaviour the family always had.
+    ///
+    /// LEGACY ENCODING. Guides placed before v0.4.15 stored only A and the diagonal corner. Those are read
+    /// in place, in the old world-axis frame, and reproduce exactly: a rectangle already standing in
+    /// someone's world must not silently rotate under them. They keep their old two-handle behaviour —
+    /// free rotation is a property of the new gesture, not a retro-fit. The stored list is never rewritten
+    /// to the new form, because shapes are adopted on renderer WORKER THREADS and mutating the shared
+    /// control-point list from here would be a data race.
+    ///
+    /// [Flagged decisions:] Square has no break gesture in v1 (corner drags absorb by design, so square →
+    /// rectangle demotion never triggers — the two live as separate catalog tiles like circle/ellipse).
     ///
     /// Fill = in-plane scanlines (chord marching at ≤ half-cell steps — exact box). No phantoms.
     /// </remarks>
@@ -38,17 +54,23 @@ namespace Layout.Shapes
 
         public ShapeConstraint Constraint => _constraint;
 
-        /// <summary>Creates a fresh rectangle from the two draft clicks (the diagonal).</summary>
-        public RectangleShape(Vec3d a, Vec3d c, PlaneAxis planeAxis, ShapeConstraint constraint)
+        /// <summary>
+        /// Creates a fresh rectangle from the first two clicks: corner A and the far end of one edge. The
+        /// born width is a square until the third click sets it — a Square keeps that width for good and
+        /// uses <paramref name="inverted"/> (SHIFT at placement) to pick its side of the edge.
+        /// </summary>
+        public RectangleShape(Vec3d a, Vec3d b, PlaneAxis planeAxis, ShapeConstraint constraint,
+            bool inverted = false)
         {
             _planeAxis = planeAxis;
             _constraint = constraint == ShapeConstraint.Square ? ShapeConstraint.Square : ShapeConstraint.None;
             _controlPoints = new List<ControlPoint>
             {
                 new ControlPoint(new Vec3d(a.X, a.Y, a.Z), isAnchor: true),
-                new ControlPoint(new Vec3d(c.X, c.Y, c.Z), isAnchor: true)
+                new ControlPoint(new Vec3d(b.X, b.Y, b.Z), isAnchor: true),
+                new ControlPoint(new Vec3d(b.X, b.Y, b.Z), isPrimary: true)
             };
-            SnapFarCorner();
+            SeatBornWidth(inverted);
         }
 
         /// <summary>Adopts an existing list (load/wire path). Shared by reference, never copied.</summary>
@@ -61,39 +83,80 @@ namespace Layout.Shapes
 
         // --- geometry ------------------------------------------------------------------------------
 
-        // The four corners in curve order A → B → C' → D (C' = the derived far corner, where the stored C
-        // is kept snapped). du/dv are C's signed in-plane offsets from A (Square: dominant for both).
-        private bool TryCorners(out Vec3d a, out Vec3d b, out Vec3d c, out Vec3d d)
+        /// <summary>
+        /// The base frame, resolved from whichever encoding this guide carries (see the class remarks):
+        /// corner A, the in-plane axes û/m̂, and the signed extents du along û and dv along m̂.
+        /// False when either side is too short to be a rectangle.
+        /// </summary>
+        private bool TryFrame(out Vec3d a, out Vec3d u, out Vec3d m, out double du, out double dv)
         {
-            a = b = c = d = null;
+            a = u = m = null; du = dv = 0;
             if (_controlPoints.Count < 2) return false;
             a = _controlPoints[0].WorldPosition;
-            Vec3d cStored = _controlPoints[1].WorldPosition;
 
-            ShapeGeometry.InPlaneAxes(_planeAxis, out Vec3d u1, out Vec3d u2);
-            var diag = new Vec3d(cStored.X - a.X, cStored.Y - a.Y, cStored.Z - a.Z);
-            double du = ShapeGeometry.Dot(diag, u1);
-            double dv = ShapeGeometry.Dot(diag, u2);
-            if (Math.Abs(du) < MinSide || Math.Abs(dv) < MinSide) return false;
-
-            if (_constraint == ShapeConstraint.Square)
+            if (_controlPoints.Count >= 3)
             {
-                double side = Math.Max(Math.Abs(du), Math.Abs(dv));
-                du = Math.Sign(du) * side;
-                dv = Math.Sign(dv) * side;
+                Vec3d b = _controlPoints[1].WorldPosition, w = _controlPoints[2].WorldPosition;
+                if (!ShapeGeometry.TryGetFrame(a, b, _planeAxis, out u, out m, out du)) { a = null; return false; }
+                dv = ShapeGeometry.Dot(new Vec3d(w.X - a.X, w.Y - a.Y, w.Z - a.Z), m);
+                // One clicked edge IS a square's side, so the width handle only picks the side it lies on.
+                if (_constraint == ShapeConstraint.Square) dv = (dv < 0 ? -du : du);
+            }
+            else
+            {
+                // LEGACY (pre-v0.4.15): corner A plus the DIAGONAL corner, sides along the plane's world
+                // axes. Square's old rule was the DOMINANT diagonal component, kept verbatim so an
+                // existing square reproduces to the voxel.
+                ShapeGeometry.InPlaneAxes(_planeAxis, out u, out m);
+                Vec3d c = _controlPoints[1].WorldPosition;
+                var diag = new Vec3d(c.X - a.X, c.Y - a.Y, c.Z - a.Z);
+                du = ShapeGeometry.Dot(diag, u);
+                dv = ShapeGeometry.Dot(diag, m);
+                if (_constraint == ShapeConstraint.Square)
+                {
+                    double side = Math.Max(Math.Abs(du), Math.Abs(dv));
+                    du = Math.Sign(du) * side;
+                    dv = Math.Sign(dv) * side;
+                }
             }
 
-            b = new Vec3d(a.X + u1.X * du, a.Y + u1.Y * du, a.Z + u1.Z * du);
-            d = new Vec3d(a.X + u2.X * dv, a.Y + u2.Y * dv, a.Z + u2.Z * dv);
-            c = new Vec3d(b.X + u2.X * dv, b.Y + u2.Y * dv, b.Z + u2.Z * dv);
+            if (Math.Abs(du) >= MinSide && Math.Abs(dv) >= MinSide) return true;
+            a = u = m = null; du = dv = 0;
+            return false;
+        }
+
+        // The four corners in curve order A → B → C → D.
+        private bool TryCorners(out Vec3d a, out Vec3d b, out Vec3d c, out Vec3d d)
+        {
+            b = c = d = null;
+            if (!TryFrame(out a, out Vec3d u, out Vec3d m, out double du, out double dv)) return false;
+            b = new Vec3d(a.X + u.X * du, a.Y + u.Y * du, a.Z + u.Z * du);
+            d = new Vec3d(a.X + m.X * dv, a.Y + m.Y * dv, a.Z + m.Z * dv);
+            c = new Vec3d(b.X + m.X * dv, b.Y + m.Y * dv, b.Z + m.Z * dv);
             return true;
         }
 
-        /// <summary>Keeps the stored far anchor exactly ON the derived far corner (plane snap + Square).</summary>
-        private void SnapFarCorner()
+        // Seats the freshly born width handle one edge-length to either side, so the shape is a square
+        // until the third click widens it (and, for a Square, for good).
+        private void SeatBornWidth(bool inverted)
         {
-            if (TryCorners(out _, out _, out Vec3d c, out _))
-                _controlPoints[1].SetPosition(c.X, c.Y, c.Z);
+            Vec3d a = _controlPoints[0].WorldPosition, b = _controlPoints[1].WorldPosition;
+            if (!ShapeGeometry.TryGetFrame(a, b, _planeAxis, out Vec3d u, out Vec3d m, out double du)) return;
+            double dv = inverted ? -du : du;
+            _controlPoints[2].SetPosition(a.X + u.X * du + m.X * dv,
+                                          a.Y + u.Y * du + m.Y * dv,
+                                          a.Z + u.Z * du + m.Z * dv);
+        }
+
+        /// <summary>
+        /// Keeps the stored width handle exactly ON the corner it represents. This is what discards a
+        /// drag's along-edge drift (the edge length belongs to B) and what applies the Square constraint.
+        /// </summary>
+        private void SnapWidthHandle()
+        {
+            if (!TryCorners(out _, out _, out Vec3d c, out _)) return;
+            // Legacy guides store the diagonal corner in slot 1; the new form stores it in slot 2.
+            _controlPoints[_controlPoints.Count >= 3 ? 2 : 1].SetPosition(c.X, c.Y, c.Z);
         }
 
         private bool TryPerimeter(out Vec3d[] corners, out double[] cum)
@@ -149,15 +212,19 @@ namespace Layout.Shapes
                 }
             }
 
-            // Stored anchors A and C', then the derived corners as Primary markers (visual references).
-            for (int i = 0; i < 2 && i < _controlPoints.Count; i++)
+            // The DERIVED corners as Primary references, then the stored handles by their own role. A
+            // corner that is stored must not be claimed as Primary here: Primary outranks Anchor in
+            // ClaimMarker's precedence, so doing so would quietly repaint B green.
+            if (_controlPoints.Count < 3) ShapeGeometry.ClaimMarker(result, scale, b, VoxelRenderType.Primary);
+            ShapeGeometry.ClaimMarker(result, scale, d, VoxelRenderType.Primary);
+            for (int i = 0; i < _controlPoints.Count; i++)
             {
                 ControlPoint cp = _controlPoints[i];
                 ShapeGeometry.ClaimMarker(result, scale, cp.WorldPosition,
-                    cp.IsLocked ? VoxelRenderType.Locked : VoxelRenderType.Anchor);
+                    cp.IsLocked ? VoxelRenderType.Locked
+                    : cp.IsAnchor ? VoxelRenderType.Anchor
+                    : VoxelRenderType.Primary);
             }
-            ShapeGeometry.ClaimMarker(result, scale, b, VoxelRenderType.Primary);
-            ShapeGeometry.ClaimMarker(result, scale, d, VoxelRenderType.Primary);
             return result;
         }
 
@@ -217,7 +284,7 @@ namespace Layout.Shapes
         {
             if (index < 0 || index >= _controlPoints.Count) return;
             _controlPoints[index].SetPosition(newPosition.X, newPosition.Y, newPosition.Z);
-            SnapFarCorner();     // keeps C on A's plane layer (and on the square, under the constraint)
+            SnapWidthHandle();   // re-seats the width corner (and applies the square constraint)
         }
 
         public void RecalculatePhantomPoints() { /* no phantoms in this family */ }

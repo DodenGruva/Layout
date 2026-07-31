@@ -219,11 +219,13 @@ namespace Layout.Systems
         private readonly IGuidePersistence _persistence;
         private readonly IGuideBlockProbe _blockProbe;
         private readonly ILogger _logger;
-        private readonly int _perGuideVoxelCap;
-        private readonly int _totalVoxelCap;
-        private readonly int _perPlayerTotalVoxelCap;
-        private readonly int _maxGuidesPerPlayer;
-        private readonly int _maxGuidesWorldWide;
+        // NOT readonly since v0.4.16: the settings page's Admin section changes these in play, through
+        // ApplyCaps below. Still write-once-per-change on the server main thread — see that method.
+        private int _perGuideVoxelCap;
+        private int _totalVoxelCap;
+        private int _perPlayerTotalVoxelCap;
+        private int _maxGuidesPerPlayer;
+        private int _maxGuidesWorldWide;
         private readonly System.Func<string, int> _playerGuideLimitResolver;
         private readonly System.Func<string, int> _playerTotalVoxelCapResolver;
         // Server-main-thread operation scope. The network authority sets this around one player's mutation
@@ -284,6 +286,31 @@ namespace Layout.Systems
 
         /// <summary>Number of guides currently loaded (the figure the world-wide count cap checks against).</summary>
         public int GuideCount => _guides.Count;
+
+        /// <summary>
+        /// Replaces the five cap values in play (v0.4.16, the settings page's Admin section). Non-positive
+        /// means unlimited, matching the config's own semantics.
+        /// </summary>
+        /// <remarks>
+        /// LOWERING A CAP NEVER DELETES ANYTHING. The caps are entry conditions checked when a guide is
+        /// created or grown, so guides already over a newly-lowered cap keep existing and keep rendering;
+        /// they simply cannot grow, exactly like the existing over-cap guides the cumulative budget already
+        /// tolerates. Dropping a cap and expecting the world to tidy itself would be a destructive surprise
+        /// from a settings panel, and <c>/layout dispel</c> is the deliberate tool for that.
+        ///
+        /// Server main thread only, which is where every network handler and command already runs. The
+        /// immense create/sculpt workers read their limit BEFORE going off-thread, so a change landing
+        /// mid-operation cannot alter the rules an in-flight placement is being judged against.
+        /// </remarks>
+        public void ApplyCaps(int perGuideVoxelCap, int totalVoxelCap, int perPlayerTotalVoxelCap,
+            int maxGuidesPerPlayer, int maxGuidesWorldWide)
+        {
+            _perGuideVoxelCap = perGuideVoxelCap > 0 ? perGuideVoxelCap : 0;
+            _totalVoxelCap = totalVoxelCap > 0 ? totalVoxelCap : 0;
+            _perPlayerTotalVoxelCap = perPlayerTotalVoxelCap > 0 ? perPlayerTotalVoxelCap : 0;
+            _maxGuidesPerPlayer = maxGuidesPerPlayer > 0 ? maxGuidesPerPlayer : 0;
+            _maxGuidesWorldWide = maxGuidesWorldWide > 0 ? maxGuidesWorldWide : 0;
+        }
 
         /// <summary>
         /// Wires up persistence (load on save-game load, write on world-save) and stores the caps, which
@@ -1083,6 +1110,464 @@ namespace Layout.Systems
             StoreCount(id, count);
             Persist();
             return GuideOperationResult.Success(g, count);
+        }
+
+        /// <summary>
+        /// F6 Move: slides the WHOLE guide by <paramref name="delta"/> world units, shape untouched. Every
+        /// control point moves — locked ones included, because a lock constrains the guide's own geometry
+        /// against reshaping and carries no relationship to anything outside the guide (the Session-20
+        /// "adjacent lock" trouble was click targeting, not stored data). The as-placed spring-back snapshot
+        /// moves with it, or a later spring-back would teleport the guide back to where it used to stand.
+        /// </summary>
+        /// <remarks>
+        /// THE DELTA MUST BE A WHOLE NUMBER OF THE GUIDE'S OWN VOXELS, and this is enforced here rather than
+        /// merely assumed at the call site. That restriction is what makes the operation cheap AND exact:
+        /// cells quantise to <c>Floor(world*16/scale)*scale</c>, so shifting by an exact multiple of the
+        /// scale remaps every cell one-for-one and the voxel count provably cannot change — the cached count
+        /// is reused instead of rescanning a behemoth. A sub-voxel delta would instead move cells by a whole
+        /// cell wherever it happened to cross a quantise boundary and by nothing elsewhere, deforming the
+        /// rendered shell; it is refused, not rounded.
+        ///
+        /// A Surface guide's plane offset travels too. The points are flattened onto that plane when drawn,
+        /// so moving them along the flattened axis without the plane would look like nothing happened.
+        /// </remarks>
+        public GuideOperationResult TranslateGuide(Guid id, Vec3d delta)
+        {
+            if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
+            if (delta == null) return GuideOperationResult.Invalid(g);
+
+            int cached = _voxelCounts.TryGetValue(id, out int existing) ? existing : 0;
+            if (!TryQuantiseTranslation(delta, g.VoxelScale, out int sx, out int sy, out int sz))
+                return GuideOperationResult.Invalid(g);
+            if (sx == 0 && sy == 0 && sz == 0) return GuideOperationResult.Success(g, cached);
+
+            IGuideShape shape = _shapes[id];
+            GuideData accessBefore = AccessSnapshot(g);
+            ProjectionPlane planeBefore = g.Plane;
+
+            OffsetPoints(g.ControlPoints, delta);
+            OffsetPoints(g.OriginalControlPoints, delta);
+            g.Plane = OffsetPlane(g.Plane, sx, sy, sz);
+            shape.RecalculatePhantomPoints();
+
+            // No cap check: the count is unchanged by construction (see remarks), so a move can never push a
+            // guide over a budget it was already inside. The CLAIM check is the real gate — the destination
+            // is new ground and a move is a placement.
+            if (AccessDenied(accessBefore, g, shape, out BlockPos deniedPosition))
+            {
+                // Undo by translating BACK rather than restoring a snapshot: the snapshot path recounts, and
+                // rescanning a behemoth to reject a move it never made would be the expensive half of nothing.
+                var back = new Vec3d(-delta.X, -delta.Y, -delta.Z);
+                OffsetPoints(g.ControlPoints, back);
+                OffsetPoints(g.OriginalControlPoints, back);
+                g.Plane = planeBefore;
+                shape.RecalculatePhantomPoints();
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
+            }
+
+            StoreCount(id, cached);
+            Persist();
+            return GuideOperationResult.Success(g, cached);
+        }
+
+        // Expresses a translation in whole 1/16 units and verifies each axis is a whole number of the guide's
+        // own voxels. Returns false for anything finer, so a malformed or stale packet cannot deform a shell.
+        private static bool TryQuantiseTranslation(Vec3d delta, int scale, out int sx, out int sy, out int sz)
+        {
+            sx = sy = sz = 0;
+            if (scale <= 0) return false;
+            return TryAxis(delta.X, scale, out sx)
+                && TryAxis(delta.Y, scale, out sy)
+                && TryAxis(delta.Z, scale, out sz);
+
+            static bool TryAxis(double world, int scale, out int sixteenths)
+            {
+                double exact = world * 16.0;
+                sixteenths = (int)Math.Round(exact);
+                return Math.Abs(exact - sixteenths) <= 1e-6 && sixteenths % scale == 0;
+            }
+        }
+
+        private static void OffsetPoints(List<ControlPoint> points, Vec3d delta)
+        {
+            if (points == null) return;
+            foreach (ControlPoint cp in points)
+            {
+                if (cp?.WorldPosition == null) continue;
+                Vec3d w = cp.WorldPosition;
+                cp.SetPosition(w.X + delta.X, w.Y + delta.Y, w.Z + delta.Z);
+            }
+        }
+
+        private static ProjectionPlane OffsetPlane(ProjectionPlane plane, int sx, int sy, int sz)
+        {
+            int along = plane.FlattenedAxis switch
+            {
+                PlaneAxis.X => sx,
+                PlaneAxis.Z => sz,
+                _ => sy
+            };
+            return along == 0 ? plane : new ProjectionPlane(plane.FlattenedAxis, plane.PlaneOffset + along);
+        }
+
+        /// <summary>
+        /// F12 Rotate: turns the WHOLE guide a quarter turn at a time about a world axis, shape untouched.
+        /// Returns the pivot actually used through <paramref name="pivot"/> so the undo command can rotate
+        /// back about the SAME point — recomputing it would drift, because a rotated shape's bounding centre
+        /// is not generally where the original's was.
+        /// </summary>
+        /// <remarks>
+        /// QUARTER TURNS ONLY, and about a world axis. At 90 degrees the voxel lattice maps onto itself, so
+        /// the rendered cells of the turned guide are a clean remap of the originals — the same property
+        /// that makes <see cref="TranslateGuide"/> exact. An arbitrary angle would leave control points off
+        /// the lattice and the shell would resample rather than turn. The pivot is snapped to the guide's
+        /// own voxel scale for the same reason.
+        ///
+        /// ORIENTATION STATE. Rotating the points alone is not enough — several fields encode facing and
+        /// must be carried round with them, or the turned guide keeps describing its old orientation:
+        ///   • <see cref="GuideData.ShapePlaneAxis"/>, the intrinsic plane of planar shapes and the axis a
+        ///     volume's rise direction is derived from. A quarter turn maps the axis set onto itself.
+        ///   • <see cref="GuideData.Plane"/> for Surface guides — both the flattened axis and the offset,
+        ///     which is a world coordinate and has to be re-derived at the new orientation.
+        /// The volumes need nothing further: a dome's rise is <c>BaseNormal(û, ShapePlaneAxis)</c> with its
+        /// SIGN taken from which side the apex control point sits on, so rotating the apex carries the
+        /// facing automatically and the canonical sign flip is absorbed.
+        ///
+        /// UNLIKE A TRANSLATION, THE VOXEL COUNT IS NOT GUARANTEED. The lattice maps onto itself, but the
+        /// shape is regenerated from control points rather than from moved cells, and the in-plane frame
+        /// (<c>ShapeGeometry.TryGetFrame</c>) sign-normalises m̂ toward world up. A polygon-family guide can
+        /// therefore come back with its vertices in a different phase and a slightly different count. So
+        /// this recounts and re-checks caps in full, exactly as <see cref="Rescale"/> does.
+        /// </remarks>
+        public GuideOperationResult RotateGuide(
+            Guid id, PlaneAxis axis, int quarterTurns, ref Vec3d pivot)
+        {
+            if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
+
+            int turns = ((quarterTurns % 4) + 4) % 4;
+            if (turns == 0)
+                return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out int same) ? same : 0);
+
+            IGuideShape shape = _shapes[id];
+            GuideData accessBefore = AccessSnapshot(g);
+            List<ControlPoint> before = SnapshotPoints(g);
+            List<ControlPoint> originalBefore = SnapshotOriginalPoints(g);
+            PlaneAxis shapeAxisBefore = g.ShapePlaneAxis;
+            ProjectionPlane planeBefore = g.Plane;
+
+            pivot ??= RotationPivot(g);
+            RotatePoints(g.ControlPoints, axis, turns, pivot);
+            RotatePoints(g.OriginalControlPoints, axis, turns, pivot);
+            g.ShapePlaneAxis = RotateAxis(g.ShapePlaneAxis, axis, turns);
+
+            // Re-adopt: the shape captured its preferred axis at construction, so a changed ShapePlaneAxis
+            // only takes effect through a fresh adoption.
+            shape = ShapeFactory.Adopt(g);
+            _shapes[id] = shape;
+            shape.RecalculatePhantomPoints();
+
+            if (g.Projection == ProjectionMode.Surface)
+                g.Plane = RotateProjectionPlane(g, planeBefore, axis, turns);
+
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled, g.IsWireframe);
+            if (WouldExceedCaps(id, count, out int cap))
+            {
+                RestoreRotation(id, g, before, originalBefore, shapeAxisBefore, planeBefore);
+                return GuideOperationResult.OverCap(g, count, cap);
+            }
+            if (AccessDenied(accessBefore, g, _shapes[id], out BlockPos deniedPosition))
+            {
+                RestoreRotation(id, g, before, originalBefore, shapeAxisBefore, planeBefore);
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
+            }
+
+            StoreCount(id, count);
+            Persist();
+            return GuideOperationResult.Success(g, count);
+        }
+
+        private void RestoreRotation(
+            Guid id, GuideData g, List<ControlPoint> points, List<ControlPoint> originalPoints,
+            PlaneAxis shapeAxis, ProjectionPlane plane)
+        {
+            g.ShapePlaneAxis = shapeAxis;
+            g.Plane = plane;
+            g.ControlPoints.Clear();
+            foreach (ControlPoint cp in points) g.ControlPoints.Add(cp.Clone());
+            g.OriginalControlPoints = originalPoints;
+            _shapes[id] = ShapeFactory.Adopt(g);
+            _shapes[id].RecalculatePhantomPoints();
+        }
+
+        private static List<ControlPoint> SnapshotOriginalPoints(GuideData g)
+        {
+            if (g.OriginalControlPoints == null) return null;
+            var copy = new List<ControlPoint>(g.OriginalControlPoints.Count);
+            foreach (ControlPoint cp in g.OriginalControlPoints)
+                copy.Add(cp == null ? new ControlPoint() : cp.Clone());
+            return copy;
+        }
+
+        // The centre of the guide's real control points, snapped to its own voxel lattice so a quarter turn
+        // maps cells onto cells rather than between them.
+        private static Vec3d RotationPivot(GuideData g)
+        {
+            double minX = double.MaxValue, minY = double.MaxValue, minZ = double.MaxValue;
+            double maxX = double.MinValue, maxY = double.MinValue, maxZ = double.MinValue;
+            int seen = 0;
+            foreach (ControlPoint cp in g.ControlPoints)
+            {
+                Vec3d w = cp?.WorldPosition;
+                if (w == null || cp.IsPhantom) continue;
+                if (w.X < minX) minX = w.X; if (w.X > maxX) maxX = w.X;
+                if (w.Y < minY) minY = w.Y; if (w.Y > maxY) maxY = w.Y;
+                if (w.Z < minZ) minZ = w.Z; if (w.Z > maxZ) maxZ = w.Z;
+                seen++;
+            }
+            if (seen == 0) return new Vec3d();
+
+            double cell = Math.Max(1, g.VoxelScale) / 16.0;
+            return new Vec3d(
+                Math.Round((minX + maxX) * 0.5 / cell) * cell,
+                Math.Round((minY + maxY) * 0.5 / cell) * cell,
+                Math.Round((minZ + maxZ) * 0.5 / cell) * cell);
+        }
+
+        // Right-handed quarter turns about a world axis, applied about `pivot`. Vintage Story is Y-up with
+        // +X east and +Z south.
+        private static void RotatePoints(
+            List<ControlPoint> points, PlaneAxis axis, int turns, Vec3d pivot)
+        {
+            if (points == null) return;
+            foreach (ControlPoint cp in points)
+            {
+                Vec3d w = cp?.WorldPosition;
+                if (w == null) continue;
+                double dx = w.X - pivot.X, dy = w.Y - pivot.Y, dz = w.Z - pivot.Z;
+                for (int t = 0; t < turns; t++)
+                {
+                    double nx = dx, ny = dy, nz = dz;
+                    switch (axis)
+                    {
+                        case PlaneAxis.X: ny = -dz; nz = dy; break;
+                        case PlaneAxis.Z: nx = -dy; ny = dx; break;
+                        default:          nx = dz;  nz = -dx; break;   // about Y
+                    }
+                    dx = nx; dy = ny; dz = nz;
+                }
+                cp.SetPosition(pivot.X + dx, pivot.Y + dy, pivot.Z + dz);
+            }
+        }
+
+        // Where a world axis ends up after the same quarter turns. Sign is irrelevant: PlaneAxis names an
+        // axis, not a direction, and every consumer re-derives its own sign.
+        private static PlaneAxis RotateAxis(PlaneAxis subject, PlaneAxis axis, int turns)
+        {
+            if (turns % 2 == 0 || subject == axis) return subject;   // 180 degrees maps every axis to itself
+            switch (axis)
+            {
+                case PlaneAxis.X: return subject == PlaneAxis.Y ? PlaneAxis.Z : PlaneAxis.Y;
+                case PlaneAxis.Z: return subject == PlaneAxis.X ? PlaneAxis.Y : PlaneAxis.X;
+                default:          return subject == PlaneAxis.X ? PlaneAxis.Z : PlaneAxis.X;
+            }
+        }
+
+        // A Surface guide's plane after the turn: the flattened axis maps like any other, and the offset is
+        // re-derived from where the points now actually sit rather than transformed, which keeps it correct
+        // regardless of how the sign fell out.
+        private static ProjectionPlane RotateProjectionPlane(
+            GuideData g, ProjectionPlane before, PlaneAxis axis, int turns)
+        {
+            PlaneAxis flattened = RotateAxis(before.FlattenedAxis, axis, turns);
+            foreach (ControlPoint cp in g.ControlPoints)
+            {
+                Vec3d w = cp?.WorldPosition;
+                if (w == null || cp.IsPhantom) continue;
+                double coordinate = flattened switch
+                {
+                    PlaneAxis.X => w.X,
+                    PlaneAxis.Z => w.Z,
+                    _ => w.Y
+                };
+                return new ProjectionPlane(flattened, (int)Math.Floor(coordinate * 16.0));
+            }
+            return new ProjectionPlane(flattened, before.PlaneOffset);
+        }
+
+        /// <summary>
+        /// F7/F8 Transform: applies an optional MIRROR and an optional TRANSLATION to a guide in one
+        /// atomic step, so a compound pad action ("move left and flip") validates once and undoes once.
+        /// <paramref name="mirrorAxis"/> is -1 for no mirror, else a <see cref="PlaneAxis"/> value.
+        /// The pivot used for the mirror plane is returned so the undo command can reflect about the same
+        /// plane rather than about the transformed guide's new centre.
+        /// </summary>
+        /// <remarks>
+        /// MIRROR IS SIMPLER THAN ROTATE, and for a reason worth recording: an axis-aligned reflection maps
+        /// every world axis onto ITSELF, so <see cref="GuideData.ShapePlaneAxis"/> and a Surface plane's
+        /// flattened axis are both unchanged — only the plane's OFFSET can move, and only when the guide is
+        /// flattened along the very axis being mirrored. Constraints survive too: a right triangle reflects
+        /// to a right triangle, an equilateral to an equilateral. Rotate needed an axis remap; this does not.
+        ///
+        /// Order is MIRROR FIRST, then translate. The inverse is therefore translate back, then mirror about
+        /// the same stored plane — a reflection is its own inverse only while the plane stays put.
+        /// </remarks>
+        public GuideOperationResult TransformGuide(
+            Guid id, Vec3d delta, int mirrorAxis, ref Vec3d pivot)
+        {
+            if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
+            bool mirroring = mirrorAxis >= 0;
+            bool translating = delta != null && (delta.X != 0 || delta.Y != 0 || delta.Z != 0);
+            if (!mirroring && !translating)
+                return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out int same) ? same : 0);
+            if (translating && !TryQuantiseTranslation(delta, g.VoxelScale, out _, out _, out _))
+                return GuideOperationResult.Invalid(g);
+
+            GuideData accessBefore = AccessSnapshot(g);
+            List<ControlPoint> before = SnapshotPoints(g);
+            List<ControlPoint> originalBefore = SnapshotOriginalPoints(g);
+            ProjectionPlane planeBefore = g.Plane;
+
+            pivot ??= RotationPivot(g);
+            if (mirroring)
+            {
+                MirrorPoints(g.ControlPoints, (PlaneAxis)mirrorAxis, pivot);
+                MirrorPoints(g.OriginalControlPoints, (PlaneAxis)mirrorAxis, pivot);
+            }
+            if (translating)
+            {
+                OffsetPoints(g.ControlPoints, delta);
+                OffsetPoints(g.OriginalControlPoints, delta);
+            }
+
+            IGuideShape shape = ShapeFactory.Adopt(g);
+            _shapes[id] = shape;
+            shape.RecalculatePhantomPoints();
+            if (g.Projection == ProjectionMode.Surface)
+                g.Plane = RederiveSurfacePlane(g, planeBefore.FlattenedAxis, planeBefore);
+
+            // A mirror can re-phase a polygon exactly as a rotation can (the in-plane frame sign-normalises
+            // toward world up), so this recounts rather than reusing the cached figure the way a pure
+            // translation may.
+            int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled, g.IsWireframe);
+            if (WouldExceedCaps(id, count, out int cap))
+            {
+                RestoreRotation(id, g, before, originalBefore, g.ShapePlaneAxis, planeBefore);
+                return GuideOperationResult.OverCap(g, count, cap);
+            }
+            if (AccessDenied(accessBefore, g, _shapes[id], out BlockPos deniedPosition))
+            {
+                RestoreRotation(id, g, before, originalBefore, g.ShapePlaneAxis, planeBefore);
+                return GuideOperationResult.ClaimDenied(g, deniedPosition);
+            }
+
+            StoreCount(id, count);
+            Persist();
+            return GuideOperationResult.Success(g, count);
+        }
+
+        /// <summary>
+        /// F8 Copy: inserts a NEW guide that is <paramref name="id"/> optionally mirrored, optionally
+        /// rotated, and offset by <paramref name="delta"/>. Validation is <see cref="RestoreGuide"/>'s —
+        /// guide-count caps, the hard ceiling, per-guide and creator-total voxel caps, and land claims — so
+        /// a copy is refused on exactly the terms a placement is, which the other transform actions are not.
+        /// </summary>
+        public GuideOperationResult CopyGuide(
+            Guid id, Vec3d delta, int mirrorAxis, PlaneAxis rotateAxis, int quarterTurns,
+            string creatorUid, string creatorName)
+        {
+            if (!_guides.TryGetValue(id, out var source)) return GuideOperationResult.NotFound();
+
+            GuideData clone = source.DeepClone();
+            clone.Id = Guid.NewGuid();
+            clone.CreatorUid = creatorUid;
+            clone.CreatorName = CleanPlayerName(creatorName);
+            clone.LastSculptorUid = creatorUid;
+            clone.LastSculptorName = clone.CreatorName;
+
+            Vec3d pivot = RotationPivot(clone);
+            if (mirrorAxis >= 0)
+            {
+                MirrorPoints(clone.ControlPoints, (PlaneAxis)mirrorAxis, pivot);
+                MirrorPoints(clone.OriginalControlPoints, (PlaneAxis)mirrorAxis, pivot);
+            }
+            int turns = ((quarterTurns % 4) + 4) % 4;
+            if (turns != 0)
+            {
+                RotatePoints(clone.ControlPoints, rotateAxis, turns, pivot);
+                RotatePoints(clone.OriginalControlPoints, rotateAxis, turns, pivot);
+                clone.ShapePlaneAxis = RotateAxis(clone.ShapePlaneAxis, rotateAxis, turns);
+            }
+            if (delta != null)
+            {
+                OffsetPoints(clone.ControlPoints, delta);
+                OffsetPoints(clone.OriginalControlPoints, delta);
+            }
+            if (clone.Projection == ProjectionMode.Surface)
+                clone.Plane = RederiveSurfacePlane(
+                    clone, RotateAxis(clone.Plane.FlattenedAxis, rotateAxis, turns), clone.Plane);
+
+            return RestoreGuide(clone);
+        }
+
+        // Reflects each point's `axis` coordinate about the pivot's. An axis-aligned reflection needs no
+        // axis remap, unlike a rotation — see TransformGuide's remarks.
+        private static void MirrorPoints(List<ControlPoint> points, PlaneAxis axis, Vec3d pivot)
+        {
+            if (points == null) return;
+            foreach (ControlPoint cp in points)
+            {
+                Vec3d w = cp?.WorldPosition;
+                if (w == null) continue;
+                switch (axis)
+                {
+                    case PlaneAxis.X: cp.SetPosition(2 * pivot.X - w.X, w.Y, w.Z); break;
+                    case PlaneAxis.Z: cp.SetPosition(w.X, w.Y, 2 * pivot.Z - w.Z); break;
+                    default:          cp.SetPosition(w.X, 2 * pivot.Y - w.Y, w.Z); break;
+                }
+            }
+        }
+
+        // Re-derives a Surface guide's plane offset from where its points now actually sit, rather than
+        // transforming the old offset — correct however the sign fell out of the transform.
+        private static ProjectionPlane RederiveSurfacePlane(
+            GuideData g, PlaneAxis flattened, ProjectionPlane fallback)
+        {
+            foreach (ControlPoint cp in g.ControlPoints)
+            {
+                Vec3d w = cp?.WorldPosition;
+                if (w == null || cp.IsPhantom) continue;
+                double coordinate = flattened switch
+                {
+                    PlaneAxis.X => w.X,
+                    PlaneAxis.Z => w.Z,
+                    _ => w.Y
+                };
+                return new ProjectionPlane(flattened, (int)Math.Floor(coordinate * 16.0));
+            }
+            return new ProjectionPlane(flattened, fallback.PlaneOffset);
+        }
+
+        /// <summary>The guide's extent along one world axis in 1/16 units — the "span" step distance.</summary>
+        public int SpanAlong(Guid id, PlaneAxis axis) =>
+            _guides.TryGetValue(id, out GuideData g) ? SpanAlong(g, axis) : 0;
+
+        internal static int SpanAlong(GuideData g, PlaneAxis axis)
+        {
+            double min = double.MaxValue, max = double.MinValue;
+            foreach (ControlPoint cp in g.ControlPoints)
+            {
+                Vec3d w = cp?.WorldPosition;
+                if (w == null || cp.IsPhantom) continue;
+                double v = axis switch { PlaneAxis.X => w.X, PlaneAxis.Z => w.Z, _ => w.Y };
+                if (v < min) min = v;
+                if (v > max) max = v;
+            }
+            if (min > max) return 0;
+            int scale = Math.Max(1, g.VoxelScale);
+            // Rounded UP to a whole number of the guide's own voxels, so a copy lands flush rather than
+            // overlapping by the fraction of a cell the control points happen to span.
+            int span = (int)Math.Ceiling((max - min) * 16.0 / scale) * scale;
+            return Math.Max(scale, span);
         }
 
         /// <summary>Sets a guide's filled flag (hollow vs filled). Cap re-checked for forward-safety, as in <see cref="SetProjection"/>.</summary>

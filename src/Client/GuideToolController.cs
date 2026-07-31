@@ -138,6 +138,27 @@ namespace Layout.Client
         }
         private GrabSession _grab;
 
+        // --- Free-move session (F6, v0.3.86) -------------------------------------------------------
+        //
+        // Armed from the Move panel's crosshair toggle and engaged the moment the panel closes. Unlike a
+        // grab it takes NO edit lock and sends NOTHING until it is committed: the whole gesture is a local
+        // render offset (see GuideRenderer.SetMoveOffset), so dragging an immense guide around costs one
+        // matrix translation per frame. The committed move is a single translate packet, one undo step.
+        private sealed class MoveSession
+        {
+            public Guid GuideId;
+            public double Depth;          // held distance along the view ray, as an interior grab does
+            public Vec3d Anchor;          // where the ray-at-depth sat when the drag began
+            public int OffsetX, OffsetY, OffsetZ;   // current snapped offset, in 1/16-block units
+        }
+        private MoveSession _move;
+
+        // A committed move whose authority answer has not landed yet; its render offset is held until it
+        // does (or until PendingMoveCommitTimeoutMs, so a lost packet cannot strand a guide off-position).
+        private Guid _pendingMoveCommit = Guid.Empty;
+        private long _pendingMoveCommitMs;
+        private const long PendingMoveCommitTimeoutMs = 5000;
+
         /// <summary>
         /// True when the tool is at rest — no draft in progress and no grabbed point. Gates the
         /// ground-storage set-down gesture (SHIFT+right-click) so it can never fire mid-edit.
@@ -163,7 +184,9 @@ namespace Layout.Client
                         return ShapeModifierHelp.CtrlCardinal | ShapeModifierHelp.ShiftVertical
                             | ShapeModifierHelp.CtrlShiftDiagonal;
                     if (_draft.AwaitingRim)
-                        return ShapeModifierHelp.CtrlCloseRim | ShapeModifierHelp.ShiftAllowFlare;
+                        return DraftManager.IsTaperedRimStage(_draft.Shape)
+                            ? ShapeModifierHelp.CtrlCloseRim | ShapeModifierHelp.ShiftAllowFlare
+                            : ShapeModifierHelp.None;   // the Box's fourth click is a plain height click
                     if (_draft.AwaitingApex)
                         return _draft.Shape == GuideShapeType.Triangle
                             ? ShapeModifierHelp.ShiftCenterApex : ShapeModifierHelp.None;
@@ -174,7 +197,12 @@ namespace Layout.Client
                     if (GuideShapeTypes.UsesSides(_draft.Shape)) help |= ShapeModifierHelp.ShiftFlatSide;
                     if (_draft.Shape == GuideShapeType.Arch || _draft.Shape == GuideShapeType.Dome
                         || (_draft.Shape == GuideShapeType.Triangle
-                            && _draft.Constraint == ShapeConstraint.Equilateral))
+                            && _draft.Constraint == ShapeConstraint.Equilateral)
+                        // v0.4.15: a Square is settled by one clicked edge, so SHIFT is what picks which
+                        // side of that edge it lies on — the two-click counterpart of the free rectangle's
+                        // width click.
+                        || (_draft.Shape == GuideShapeType.Rectangle
+                            && _draft.Constraint == ShapeConstraint.Square))
                         help |= ShapeModifierHelp.ShiftInvert;
                     return help;
                 }
@@ -293,8 +321,8 @@ namespace Layout.Client
         {
             if (_renderer.RenderingEnabled) return false;
             Error("layout-renderingoff",
-                "Layout guide rendering is off. Use /layout on to turn it back on "
-                + "(or .layout on in client-only mode).");
+                "Layout guides are hidden. Turn them back on with \"Show guides\" on the tool panel's "
+                + "settings page (F, then the gear), or /layout on.");
             return true;
         }
 
@@ -321,8 +349,14 @@ namespace Layout.Client
             if (_draft.Mode != _lastMode)
             {
                 if (_grab != null && !_grab.Suspended) FinishRelease();
+                CancelFreeMove();          // leaving Move mode abandons an un-committed drag
                 _lastMode = _draft.Mode;
             }
+
+            UpdateFreeMove();
+            if (_pendingMoveCommit != Guid.Empty
+                && _capi.World.ElapsedMilliseconds - _pendingMoveCommitMs > PendingMoveCommitTimeoutMs)
+                ClearPendingMoveCommit();
 
             // Stale pending insert (packet lost / rejected) simply expires.
             if (_hasPendingInsert && _capi.World.ElapsedMilliseconds - _pendingInsertMs > PendingInsertTimeoutMs)
@@ -492,6 +526,9 @@ namespace Layout.Client
             {
                 // Suspend, don't end: the draft keeps its anchor, the grab keeps its lock (comatose).
                 if (_grab != null) _grab.Suspended = true;
+                // A free-move has no lock and nothing pending, so it simply ends — putting the guide
+                // straight back rather than leaving a phantom offset behind while the tool is away.
+                CancelFreeMove();
 
                 _hud.SetExaminedGuide(null);
                 _currentTargetGuide = null;
@@ -541,9 +578,383 @@ namespace Layout.Client
             }
         }
 
+        // ==========================================================================================
+        //  Free-move (F6): the selected guide rides the crosshair until a click settles it
+        // ==========================================================================================
+
+        /// <summary>True while a guide is riding the crosshair, so clicks mean settle/put-back.</summary>
+        private bool FreeMoving => _move != null;
+
+        // Engages when the Move panel armed it and then closed; updates the render offset every tick.
+        private void UpdateFreeMove()
+        {
+            // A commit still in flight blocks a new drag: its anchor would be measured against the guide's
+            // old data position while the screen already shows the new one, so the second move would be
+            // wrong by exactly the first one.
+            bool wanted = _draft.Mode == ToolMode.Transform
+                && _draft.FreeMove
+                && _draft.SelectedGuideId != null
+                && _pendingMoveCommit == Guid.Empty
+                && !_gui.IsOpened();
+
+            if (!wanted) { CancelFreeMove(); return; }
+
+            Guid guideId = _draft.SelectedGuideId.Value;
+            if (!_net.Guides.TryGetValue(guideId, out GuideData g)) { CancelFreeMove(); return; }
+
+            if (_move == null || _move.GuideId != guideId)
+            {
+                CancelFreeMove();
+                Vec3d centre = GuideAnchorCentre(g);
+                double depth = Math.Max(1.0, Dist(EyePos(), centre));
+                Vec3d eye = EyePos(), dir = ViewDir();
+                _move = new MoveSession
+                {
+                    GuideId = guideId,
+                    Depth = depth,
+                    // Deep-copied by construction — the ray point is a fresh Vec3d, never a guide's own.
+                    Anchor = new Vec3d(
+                        eye.X + dir.X * depth, eye.Y + dir.Y * depth, eye.Z + dir.Z * depth)
+                };
+            }
+
+            // T1 (v0.4.15): CTRL sets the guide DOWN on the surface under the crosshair instead of riding
+            // the held view-ray depth — the same idea as CTRL's level/cardinal snap while drafting. The aim
+            // point becomes the real face hit, and the vertical offset is then solved so the guide's LOWEST
+            // VOXEL PLANE meets that face (see TryGuideFloorSixteenths). With no block under the crosshair
+            // there is no surface to meet, so the ordinary held-depth drag simply continues.
+            BlockSelection surface = CtrlHeld() ? _capi.World.Player.CurrentBlockSelection : null;
+
+            double px, py, pz;
+            if (surface != null)
+            {
+                px = surface.Position.X + surface.HitPosition.X;
+                py = surface.Position.Y + surface.HitPosition.Y;
+                pz = surface.Position.Z + surface.HitPosition.Z;
+            }
+            else
+            {
+                Vec3d e = EyePos(), d = ViewDir();
+                px = e.X + d.X * _move.Depth;
+                py = e.Y + d.Y * _move.Depth;
+                pz = e.Z + d.Z * _move.Depth;
+            }
+
+            // Snap to whole voxels of THIS guide — the authority refuses anything finer, and a sub-voxel
+            // offset would move cells by a whole cell wherever it happened to cross a quantise boundary.
+            int step = Math.Max(1, g.VoxelScale);
+            int ox = SnapSixteenths(px - _move.Anchor.X, step);
+            int oz = SnapSixteenths(pz - _move.Anchor.Z, step);
+
+            // Solve the contact FIRST and snap the result, never the other way round: rounding the hit
+            // height to the voxel grid before subtracting the guide's underside would leave the guide a
+            // voxel proud of — or sunk into — the very face it is supposed to be resting on.
+            int oy = surface != null && TryGuideFloorSixteenths(g, out int floor16)
+                ? SnapSixteenths(py - floor16 / 16.0, step)
+                : SnapSixteenths(py - _move.Anchor.Y, step);
+
+            if (ox == _move.OffsetX && oy == _move.OffsetY && oz == _move.OffsetZ) return;
+
+            _move.OffsetX = ox;
+            _move.OffsetY = oy;
+            _move.OffsetZ = oz;
+            _renderer.SetMoveOffset(guideId, ox / 16.0, oy / 16.0, oz / 16.0);
+        }
+
+        private static int SnapSixteenths(double worldDelta, int step) =>
+            (int)Math.Round(worldDelta * 16.0 / step) * step;
+
+        /// <summary>
+        /// The bottom of the guide's LOWEST voxel plane, in 1/16 units — the plane T1's CTRL surface-snap
+        /// brings down onto the targeted face. False when the guide has no usable geometry yet.
+        /// </summary>
+        /// <remarks>
+        /// WHY THE LOWEST PLANE (decided 2026-07-27). It is unambiguous on every shape and matches the
+        /// common case of setting a build down on the ground. Aiming at a wall or ceiling therefore still
+        /// pushes the guide's BOTTOM to that face, which can read oddly — predictable was preferred over
+        /// clever. Nearest-face has no sane meaning on a sphere; base anchors would sink a dome halfway
+        /// into the floor, since its anchors are its base ring rather than its lowest point.
+        ///
+        /// Measured from the shape's own sampled outline (the cached targeting polyline) plus its real
+        /// control points, and never from the voxel set: this runs every tick of a drag, and voxelising a
+        /// behemoth merely to find its underside is exactly the cost free-move exists to avoid. Cells
+        /// quantise to Floor(world*16/scale)*scale, so flooring the outline's lowest point onto that grid
+        /// IS the cell the shell's underside occupies.
+        ///
+        /// Phantom points are excluded. They steer end tangents and are never emitted as voxels, and an
+        /// arch's phantoms sit BELOW its feet — including them would hang the whole guide in the air.
+        ///
+        /// A Surface guide is drawn FLATTENED onto its plane, so when that plane is the horizontal one its
+        /// stored points say nothing about where the decal actually lies; the plane offset is the answer.
+        /// </remarks>
+        private bool TryGuideFloorSixteenths(GuideData g, out int floor16)
+        {
+            floor16 = 0;
+            int scale = Math.Max(1, g.VoxelScale);
+
+            if (g.Projection == ProjectionMode.Surface && g.Plane.FlattenedAxis == PlaneAxis.Y)
+            {
+                floor16 = FloorToStep(g.Plane.PlaneOffset, scale);
+                return true;
+            }
+
+            double minY = double.MaxValue;
+            List<Vec3d> curve = GetCurvePolyline(g);
+            if (curve != null)
+                for (int i = 0; i < curve.Count; i++)
+                    if (curve[i] != null && curve[i].Y < minY) minY = curve[i].Y;
+
+            List<ControlPoint> points = g.ControlPoints;
+            if (points != null)
+                for (int i = 0; i < points.Count; i++)
+                {
+                    ControlPoint cp = points[i];
+                    if (cp == null || cp.IsPhantom || cp.WorldPosition == null) continue;
+                    if (cp.WorldPosition.Y < minY) minY = cp.WorldPosition.Y;
+                }
+
+            if (minY == double.MaxValue) return false;
+            floor16 = (int)Math.Floor(minY * 16.0 / scale) * scale;
+            return true;
+        }
+
+        // Floors a 1/16-unit coordinate onto the guide's own voxel grid. Negative-safe by construction:
+        // integer division truncates toward zero, which would lift a below-sea-level plane by a voxel.
+        private static int FloorToStep(int sixteenths, int step) =>
+            (int)Math.Floor((double)sixteenths / step) * step;
+
+        // ---------------------------------------------------------------------------------
+        //  Send to ground (v0.4.28)
+        // ---------------------------------------------------------------------------------
+
+        /// <summary>How far below a guide's underside the search gives up, in whole blocks.</summary>
+        private const int GroundSearchBlocks = 160;
+
+        /// <summary>Sample points along each horizontal axis of the guide's footprint.</summary>
+        private const int GroundSamplesPerAxis = 32;
+
+        /// <summary>
+        /// How far DOWN, in 1/16 units, the selected guide must travel for its underside to come to rest on
+        /// the ground beneath it. Always zero or negative; zero means it is already resting, is buried, or
+        /// has nothing under it within <see cref="GroundSearchBlocks"/>.
+        /// </summary>
+        /// <remarks>
+        /// THE SAME CONTACT RULE AS T1, APPLIED DOWNWARD. The guide's LOWEST VOXEL PLANE meets the surface,
+        /// and it is <see cref="TryGuideFloorSixteenths"/> that says where that plane is — deliberately the
+        /// same method rather than a second derivation of the same idea, so the CTRL free-move snap and this
+        /// button can never come to disagree about where the bottom of a guide is.
+        ///
+        /// THE HIGHEST GROUND UNDER THE FOOTPRINT WINS, not the ground under the centre. On a slope that is
+        /// the difference between setting a house plan down on the hillside and burying half of it: the
+        /// guide comes to rest on the first thing it would touch, which is what dropping an object does.
+        ///
+        /// SAMPLED, NOT SWEPT. A large guide's footprint is thousands of block columns and this runs on a
+        /// button press, so the footprint is sampled on a grid of at most 32x32 points. A spike of terrain
+        /// thinner than the sample spacing can be missed, which lets a corner of the guide intersect it;
+        /// the alternative is a click that stalls the client on a hundred-block plan. Guides up to 32 blocks
+        /// across — nearly all of them — are sampled at every single block and cannot miss anything.
+        ///
+        /// MATERIAL IS READ FROM COLLISION BOXES via <see cref="BlockOccupancy"/>, so the guide lands flush
+        /// on a slab, a stair or a chiselled block instead of a whole block above it. The instance is local
+        /// and thrown away with the call: this fires once per click, and keeping a cache alive between
+        /// clicks would hold a stale picture of a world the player is actively building in.
+        /// </remarks>
+        public int GroundDropSixteenths(GuideData g)
+        {
+            IBlockAccessor accessor = _capi?.World?.BlockAccessor;
+            if (g == null || accessor == null) return 0;
+            if (!TryGuideFloorSixteenths(g, out int floor16)) return 0;
+            if (!TryGuideFootprint(g, out double minX, out double maxX, out double minZ, out double maxZ))
+                return 0;
+
+            var occupancy = new BlockOccupancy();
+            int best = int.MinValue;
+
+            int nx = SampleCount(minX, maxX), nz = SampleCount(minZ, maxZ);
+            for (int ix = 0; ix < nx; ix++)
+            {
+                int x16 = SampleSixteenths(minX, maxX, ix, nx);
+                for (int iz = 0; iz < nz; iz++)
+                {
+                    int z16 = SampleSixteenths(minZ, maxZ, iz, nz);
+                    int top16 = ColumnSurfaceSixteenths(occupancy, accessor, x16, z16, floor16);
+                    if (top16 > best) best = top16;
+
+                    // Nothing can beat contact — the guide is already touching down somewhere.
+                    if (best == floor16) return 0;
+                }
+            }
+
+            if (best == int.MinValue) return 0;      // open air all the way down, within reach
+
+            // The surface sits on the WORLD's 1/16 grid; the guide may only move in whole voxels of its own
+            // scale. Rounding toward zero rather than away leaves the guide resting on, or up to one voxel
+            // proud of, the surface — never sunk into it. Only bites on scale-2 and coarser guides, whose
+            // cells cannot land flush on a half-block face in the first place.
+            int scale = Math.Max(1, g.VoxelScale);
+            int drop = best - floor16;
+            return -((-drop) / scale) * scale;
+        }
+
+        // The guide's horizontal extent, from the same two sources TryGuideFloorSixteenths measures its
+        // underside from: the sampled outline and the real (non-phantom) control points.
+        private bool TryGuideFootprint(
+            GuideData g, out double minX, out double maxX, out double minZ, out double maxZ)
+        {
+            minX = minZ = double.MaxValue;
+            maxX = maxZ = double.MinValue;
+
+            List<Vec3d> curve = GetCurvePolyline(g);
+            if (curve != null)
+                for (int i = 0; i < curve.Count; i++)
+                {
+                    Vec3d p = curve[i];
+                    if (p == null) continue;
+                    if (p.X < minX) minX = p.X;
+                    if (p.X > maxX) maxX = p.X;
+                    if (p.Z < minZ) minZ = p.Z;
+                    if (p.Z > maxZ) maxZ = p.Z;
+                }
+
+            List<ControlPoint> points = g.ControlPoints;
+            if (points != null)
+                for (int i = 0; i < points.Count; i++)
+                {
+                    ControlPoint cp = points[i];
+                    if (cp == null || cp.IsPhantom || cp.WorldPosition == null) continue;
+                    Vec3d p = cp.WorldPosition;
+                    if (p.X < minX) minX = p.X;
+                    if (p.X > maxX) maxX = p.X;
+                    if (p.Z < minZ) minZ = p.Z;
+                    if (p.Z > maxZ) maxZ = p.Z;
+                }
+
+            return minX <= maxX && minZ <= maxZ;
+        }
+
+        // One sample per block of extent, capped. A one-block-wide guide still gets its single column.
+        private static int SampleCount(double min, double max) =>
+            Math.Max(1, Math.Min(GroundSamplesPerAxis, (int)Math.Ceiling(max - min) + 1));
+
+        // Sample i of n, spread across [min, max] with the ends included, in absolute 1/16 units.
+        private static int SampleSixteenths(double min, double max, int i, int n)
+        {
+            double t = n <= 1 ? 0.5 : (double)i / (n - 1);
+            return (int)Math.Floor((min + (max - min) * t) * 16.0);
+        }
+
+        /// <summary>
+        /// The top of the first material found straight down from <paramref name="floor16"/> in this one
+        /// 1/16 column, or <see cref="int.MinValue"/> if there is none within reach.
+        /// </summary>
+        /// <remarks>
+        /// TWO RESOLUTIONS, and that is what keeps this cheap. Falling a cell at a time through open sky
+        /// would be 2,560 queries per sample point; the block classification skips a whole block per query
+        /// and only the one block that actually stops the fall is examined cell by cell. A partial block
+        /// that happens to be hollow at this column — the gap between two fence posts — correctly does not
+        /// stop it, and the walk continues below.
+        /// </remarks>
+        private static int ColumnSurfaceSixteenths(
+            BlockOccupancy occupancy, IBlockAccessor accessor, int x16, int z16, int floor16)
+        {
+            int bx = x16 >> 4, bz = z16 >> 4;
+            int startBlockY = (floor16 - 1) >> 4;      // the first block strictly below the underside
+            var pos = new BlockPos(bx, 0, bz);
+
+            for (int i = 0; i < GroundSearchBlocks; i++)
+            {
+                int by = startBlockY - i;
+                pos.Y = by;
+                BlockFill fill = occupancy.FillAt(accessor, pos);
+                if (fill == BlockFill.Empty) continue;
+
+                // The topmost cell of this block that is both material and below the guide, +1 for its top
+                // face. Capped at floor16 so the block the underside sits inside cannot report a surface
+                // above the guide itself.
+                int highest = Math.Min(by * 16 + 15, floor16 - 1);
+                for (int y16 = highest; y16 >= by * 16; y16--)
+                    if (occupancy.IsMaterialAt(accessor, x16, y16, z16)) return y16 + 1;
+            }
+
+            return int.MinValue;
+        }
+
+        // Commits the drag as ONE translate — one undo step — and disarms. Disarming matters: leaving it
+        // armed would re-engage on the very next tick and the guide would start following the crosshair
+        // again the instant it was put down.
+        private void CommitFreeMove()
+        {
+            if (_move == null) return;
+            MoveSession session = _move;
+            _move = null;
+            _draft.SetFreeMove(false);
+
+            if (session.OffsetX == 0 && session.OffsetY == 0 && session.OffsetZ == 0)
+            {
+                _renderer.ClearMoveOffset();
+                return;
+            }
+
+            // Deliberately NOT clearing the render offset here: it stays until the authority answers, so a
+            // remote server's round trip cannot make the guide snap back and then jump forward again. The
+            // timeout is only a safety net for an answer that never arrives.
+            _pendingMoveCommit = session.GuideId;
+            _pendingMoveCommitMs = _capi.World.ElapsedMilliseconds;
+            _renderer.HoldMoveMaterialization(session.GuideId);
+            _net.SendTranslate(
+                session.GuideId, session.OffsetX, session.OffsetY, session.OffsetZ);
+        }
+
+        private void ClearPendingMoveCommit()
+        {
+            if (_pendingMoveCommit == Guid.Empty) return;
+            _pendingMoveCommit = Guid.Empty;
+            _renderer.ClearMoveOffset();
+        }
+
+        // Abandons the drag with nothing sent — the guide simply draws where its data always said it was.
+        private void CancelFreeMove()
+        {
+            if (_move == null) return;
+            _move = null;
+            _draft.SetFreeMove(false);
+            _renderer.ClearMoveOffset();
+        }
+
+        // The middle of a guide's real anchors — good enough to pick a held distance from, and cheap
+        // (control points only, never voxels: this must not touch a behemoth's shell).
+        private static Vec3d GuideAnchorCentre(GuideData g)
+        {
+            double sx = 0, sy = 0, sz = 0;
+            int n = 0;
+            List<ControlPoint> points = g.ControlPoints;
+            if (points != null)
+            {
+                for (int i = 0; i < points.Count; i++)
+                {
+                    ControlPoint cp = points[i];
+                    if (cp == null || cp.IsPhantom || cp.WorldPosition == null) continue;
+                    sx += cp.WorldPosition.X; sy += cp.WorldPosition.Y; sz += cp.WorldPosition.Z;
+                    n++;
+                }
+            }
+            return n == 0 ? new Vec3d() : new Vec3d(sx / n, sy / n, sz / n);
+        }
+
         private void UpdateAim()
         {
             BlockSelection blockSel = _capi.World.Player.CurrentBlockSelection;
+
+            // A guide riding the crosshair is DRAWN offset but its data has not moved, so a raycast would
+            // still hit where it used to be — reporting a guide the player can no longer see there. Nothing
+            // is targetable mid-drag anyway (the click means "put it down"), so skip the cast entirely.
+            if (FreeMoving)
+            {
+                _currentTargetGuide = null;
+                _springBackAvailable = false;
+                _hud.SetExaminedGuide(null);
+                return;
+            }
 
             // 1) Guide under the crosshair → HUD examine seam (id, lock status, count, cap bar).
             TargetHit hit = FindTarget(includeLockedPoints: true);
@@ -578,12 +989,17 @@ namespace Layout.Client
                     }
                     else if (_draft.AwaitingRim)
                     {
-                        // Tapered volume's LAST stage: the base and height are down and the
-                        // crosshair now sets the lid's radius — the ghost's taper opens and closes live.
-                        // The one-way capture gate prevents the just-clicked, usually distant HEIGHT block
-                        // from becoming a giant rim before the player has aimed back toward the lid.
-                        aim = StabilizeDraftRimAim(aim);
-                        aim = ConstrainDraftRim(aim);
+                        // A four-click shape's LAST stage. For a tapered volume the base and height are
+                        // down and the crosshair now sets the lid's radius — the ghost's taper opens and
+                        // closes live, and the one-way capture gate prevents the just-clicked, usually
+                        // distant HEIGHT block from becoming a giant rim before the player has aimed back
+                        // toward the lid. The Box's fourth click (v0.4.15) is a plain HEIGHT click and
+                        // takes none of that: it has no lid radius to hold, flare, or close.
+                        if (DraftManager.IsTaperedRimStage(_draft.Shape))
+                        {
+                            aim = StabilizeDraftRimAim(aim);
+                            aim = ConstrainDraftRim(aim);
+                        }
                         ObserveDraftMotion(aim, _draft.DraftFlatSideAligned);
                         aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
                         PresentDraft(new DraftPreviewSpec(0, BuildSettings(blockSel, aim),
@@ -1229,6 +1645,18 @@ namespace Layout.Client
                 return;
             }
 
+            // MOVE mode: a live free-move settles here; otherwise a click SELECTS the guide to move (and an
+            // empty click deselects), exactly as Edit does. Geometry is never touched in this mode.
+            if (_draft.Mode == ToolMode.Transform)
+            {
+                if (FreeMoving) { CommitFreeMove(); return; }
+                TargetHit moveHit = FindTarget(includeLockedPoints: true);
+                if (moveHit.Found) _draft.SelectGuide(moveHit.GuideId);
+                else _draft.ClearSelection();
+                _gui.RefreshSelection();
+                return;
+            }
+
             // 1. Grabbing → release.
             if (_grab != null && !_grab.Suspended)
             {
@@ -1314,6 +1742,19 @@ namespace Layout.Client
             // without mutating the guide, matching the cancel/backtrack gesture used in Create.
             if (_draft.Mode == ToolMode.Edit)
             {
+                if (_draft.SelectedGuideId != null)
+                {
+                    _draft.ClearSelection();
+                    _gui.RefreshSelection();
+                }
+                return;
+            }
+
+            // MOVE mode: right-click is the same backtrack gesture as everywhere else — first it puts an
+            // in-progress free-move back where it started, and only then does it drop the selection.
+            if (_draft.Mode == ToolMode.Transform)
+            {
+                if (FreeMoving) { CancelFreeMove(); return; }
                 if (_draft.SelectedGuideId != null)
                 {
                     _draft.ClearSelection();
@@ -1538,14 +1979,17 @@ namespace Layout.Client
                 return;
             }
 
-            // FOUR-CLICK TAPERED CYLINDER (0.2.24): the third click stores the HEIGHT and the draft moves
-            // on to its rim stage, where the crosshair sets how wide the lid is. Every other 3-click shape
-            // finishes here instead.
-            if (_draft.AwaitingApex && !_draft.AwaitingRim && DraftManager.NeedsRimClick(_draft.Shape))
+            // FOUR-CLICK SHAPES: the third click is stored and the draft moves on to its fourth stage —
+            // the tapered volumes' rim, where the crosshair sets how wide the lid is (0.2.24), or the
+            // Box's HEIGHT after its width (v0.4.15). Every other 3-click shape finishes here instead.
+            if (_draft.AwaitingApex && !_draft.AwaitingRim && DraftManager.NeedsFourthClick(_draft.Shape))
             {
                 _draft.PlaceThirdPoint(ClampDraftAimToPerGuideCap(anchor));
-                _rimAimArmed = false;
-                _rimAwaitingRelease = true;
+                // The one-way capture gate belongs to the tapered rim alone. A box's height click is an
+                // ordinary height click: nothing to hold at 60%, so nothing to wait for a release over.
+                bool taperedRim = DraftManager.IsTaperedRimStage(_draft.Shape);
+                _rimAimArmed = !taperedRim;
+                _rimAwaitingRelease = taperedRim;
                 _draftClamp.Reset();
                 return;
             }
@@ -1555,9 +1999,16 @@ namespace Layout.Client
             Vec3d end = anchor;
             if (_draft.AwaitingRim)
             {
-                rim = StabilizeDraftRimAim(anchor);  // held at 60% until the lid area captures the aim
-                rim = ConstrainDraftRim(rim);        // CTRL closes; SHIFT deliberately permits a flare
-                apex = _draft.DraftThird;            // the height was fixed by the third click
+                if (DraftManager.IsTaperedRimStage(_draft.Shape))
+                {
+                    rim = StabilizeDraftRimAim(anchor);  // held at 60% until the lid area captures the aim
+                    rim = ConstrainDraftRim(rim);        // CTRL closes; SHIFT deliberately permits a flare
+                }
+                else
+                {
+                    rim = anchor;                        // the Box's fourth click is a plain height click
+                }
+                apex = _draft.DraftThird;            // the third click was fixed already
                 end = _draft.DraftSecond;            // the base by the second
             }
             else if (_draft.AwaitingApex)
@@ -1976,6 +2427,10 @@ namespace Layout.Client
         public void OnRenderingChanged(bool enabled)
         {
             _hud.SetRenderingEnabled(enabled);
+            // The GUI is told either way, and is NOT closed when guides go off (v0.4.2). Its settings page
+            // now carries the switch that turns them back on, so closing the dialog stranded the player on
+            // the chat command. It composes its tool page fully inert instead.
+            _gui.SetRenderingEnabled(enabled);
             if (enabled) return;
 
             if (_grab != null) CancelGrab();
@@ -1997,13 +2452,14 @@ namespace Layout.Client
             _currentTargetGuide = null;
             _renderer.ClearDraftPreview();
             _hud.SetComatoseDraft(false);
-            if (_gui.IsOpened()) _gui.TryClose();
             if (!_toolHeld) _hud.TryClose();
         }
 
         private void OnGuideRemoved(Guid guideId)
         {
             if (_grab != null && _grab.GuideId == guideId) DropGrabLocally();
+            if (_move != null && _move.GuideId == guideId) CancelFreeMove();
+            if (_pendingMoveCommit == guideId) ClearPendingMoveCommit();
             if (_draft.SelectedGuideId == guideId) _draft.ClearSelection();
             if (_currentTargetGuide == guideId) _currentTargetGuide = null;
             if (_hasPendingInsert && _pendingInsertGuide == guideId)
@@ -2019,11 +2475,12 @@ namespace Layout.Client
             _capi.ShowChatMessage("[Layout] " + description);
         }
 
-        /// <summary>Describes the selected Edit guide first, then a grabbed or crosshair-targeted guide.</summary>
+        /// <summary>Describes the selected Edit/Move guide first, then a grabbed or crosshair-targeted one.</summary>
         public string DescribeCurrentGuide(out bool found)
         {
             Guid? guideId = null;
-            if (_draft.Mode == ToolMode.Edit && _draft.SelectedGuideId != null
+            if ((_draft.Mode == ToolMode.Edit || _draft.Mode == ToolMode.Transform)
+                && _draft.SelectedGuideId != null
                 && _net.Guides.ContainsKey(_draft.SelectedGuideId.Value))
                 guideId = _draft.SelectedGuideId;
             else if (_grab != null && _net.Guides.ContainsKey(_grab.GuideId))
@@ -2051,6 +2508,12 @@ namespace Layout.Client
         // IS the inserted point (the shape contract) — grab it without a further SendGrab.
         private void OnGuideAddedOrUpdated(GuideData g)
         {
+            // A committed free-move keeps its render offset until the authority's answer lands, so the
+            // guide does not flash back to its old position for the round trip. This fires for the accepted
+            // move AND for the corrective resync of a refused one, which is exactly when the offset stops
+            // being the truth either way.
+            if (_pendingMoveCommit != Guid.Empty && g.Id == _pendingMoveCommit) ClearPendingMoveCommit();
+
             if (!_hasPendingInsert || g.Id != _pendingInsertGuide) return;
             if (!_net.LockHolders.TryGetValue(g.Id, out string holder) || holder != MyUid)
             {
@@ -2110,7 +2573,9 @@ namespace Layout.Client
         public bool OnToolGuiHotkey()
         {
             if (!IsToolActive()) return false;
-            if (WarnIfRenderingDisabled()) return true;
+            // Deliberately NOT gated on rendering (v0.4.2). Opening the panel is the one thing that must
+            // still work while guides are hidden, because the switch to unhide them is on its settings page.
+            // Everything the panel can DO is inert in that state; only the gear responds.
             if (_gui.IsOpened()) _gui.TryClose(); else _gui.TryOpen();
             return true;
         }
@@ -2523,13 +2988,25 @@ namespace Layout.Client
         }
 
         // True when the active draft is on a free-air-capable stage of a 3D volume: the HEIGHT stage
-        // (cylinder/cone/box, base placed) or — 0.2.24 — the Tapered Cylinder's RIM stage after it.
-        private bool AwaitingVolumeHeight =>
-            _draft.AwaitingApex && GuideShapeTypes.IsVolume(_draft.Shape);
+        // (cylinder/cone, base placed) or — 0.2.24 — the Tapered Cylinder's RIM stage after it.
+        private bool AwaitingVolumeHeight
+        {
+            get
+            {
+                if (!GuideShapeTypes.IsVolume(_draft.Shape) || !_draft.AwaitingApex) return false;
+                // v0.4.15: the Box's third click is its base WIDTH — an in-plane click like the two base
+                // clicks, so it needs a real block just as they do. Its height moved to the fourth click,
+                // and that one is free-air capable like every other volume height.
+                if (_draft.Shape == GuideShapeType.Box) return _draft.AwaitingRim;
+                return true;
+            }
+        }
 
-        // The free-air aim for whichever stage the draft is on: the rim stage reads the lid plane, every
-        // other free-air-capable stage reads the height ray.
-        private Vec3d FreeAirAim() => _draft.AwaitingRim ? FreeAirRimAim() : FreeAirHeightAim();
+        // The free-air aim for whichever stage the draft is on: a TAPERED rim stage reads the lid plane,
+        // every other free-air-capable stage (the Box's fourth click included) reads the height ray.
+        private Vec3d FreeAirAim() =>
+            _draft.AwaitingRim && DraftManager.IsTaperedRimStage(_draft.Shape)
+                ? FreeAirRimAim() : FreeAirHeightAim();
 
         // The free-air height aim (0.1.23): with no block under the crosshair, the volume's height handle
         // follows the view ray at the base's distance — looking up/down grows/shrinks the height (the

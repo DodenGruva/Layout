@@ -34,7 +34,9 @@ namespace Layout.Shapes
                 case GuideShapeType.Triangle:
                     return new TriangleShape(start, end, shapePlaneAxis, constraint, inverted);
                 case GuideShapeType.Rectangle:
-                    return new RectangleShape(start, end, shapePlaneAxis, constraint);
+                    // v0.4.15: `inverted` (SHIFT) picks which side of the clicked edge a SQUARE sits on.
+                    // A free rectangle ignores it — its width click already chooses the side.
+                    return new RectangleShape(start, end, shapePlaneAxis, constraint, inverted);
                 case GuideShapeType.Polygon:
                     return new PolygonShape(start, end, shapePlaneAxis, sides, flatSideAligned);
                 case GuideShapeType.FreeShape:

@@ -1,175 +1,118 @@
 # CLAUDE.md — Layout (Vintage Story mod)
 
-> This file is read automatically by Claude Code at the start of every session. Keep it short and factual —
-> it is a briefing, not documentation. The longer docs are referenced below; Claude Code reads them on demand.
+> Read automatically at the start of every session. **This is a briefing, not documentation** — only what is
+> needed to *start work*. It holds pointers, not content, and it stays short because it is paid for every
+> single session. Everything else is read on demand.
 
 ## What this project is
-Layout is a mod for **Vintage Story 1.22.x** (C# / **.NET 10**). It's a CAD-like, voxel-resolution
-construction-planning tool: players place translucent geometric guide overlays in the world and build against
-them by hand. The mod is visual-only — it never places, removes, or modifies blocks. Normal guides are
-server-authoritative/world-shared; the F4 client-only mode also supports private client-authoritative guides
-on servers without Layout and, when permitted, alongside public guides. The tool is the **Chalking Kit**
-(custom deflating 5-state model) with **finite, powder-refillable chalk durability** (F5). Large guides use
-**adaptive motion wireframes, background selected-scale refinement, and bounded materialization**
-(SESSION_21), on top of exposed-face meshing (SESSION_16, Stage A). 3D volumes can persist as either a
-hollow **Shell** or a structural **Wireframe**.
-The catalog is **15 shape types / 21 picker tiles** (SESSION_20 added straight/tapered Polygonal Prisms).
-Status: **v0.3.58 on the `beta` branch** (v0.3.53 was the last `main` release; the mod is public).
 
-> **Renderer note — read before any rendering work.** Guides are **order-dependent translucent geometry**
-> (Opaque stage, manual alpha blending, depth-tested, double-sided). On a hollow shell the guide overlaps
-> itself at nearly every pixel, so whichever mesh batch draws first wins and writes depth. The accepted
-> appearance is therefore partly a by-product of voxel emission order, and **any change that regroups
-> primitives changes the picture** — this is why the Session 25–26 experiments failed. v0.3.57 vertex
-> welding was safe precisely because it regroups nothing. See `SESSION_28.md` and
-> `PLAN_RENDER_PERFORMANCE.md`; note that `SESSION_26.md` carries a correction banner.
+Layout is a mod for **Vintage Story 1.22.x** (C# / **.NET 10**): a CAD-like, voxel-resolution construction
+planning tool. Players place translucent geometric guide overlays and build against them by hand.
+**The mod is visual-only — it never places, removes, or modifies blocks.** Guides are normally
+server-authoritative and world-shared; an F4 client-only mode supports private guides. The drawing tool is
+the **Chalking Kit**, with finite, powder-refillable chalk.
+
+**For current version, wire state, module map, limits and open work → `STATUS.md`.** Do not duplicate any
+of that here; it goes stale the moment it is copied.
+
+## If you are…
+
+| …doing this | …read this FIRST |
+|---|---|
+| touching the renderer | `dev/GOTCHAS.md` **G2** (order-dependent geometry) + **R2/R4/R5/R8**, then `dev/plans/PLAN_RENDER_PERFORMANCE.md` |
+| adding or changing a packet | `dev/GOTCHAS.md` **G1** (append-only, never renumber), `dev/WIRE_HISTORY.md` |
+| adding any player-facing text | `dev/GOTCHAS.md` **G11** — `SendIngameError`'s parameter is a LANG KEY |
+| adding text to a dialog | `dev/GOTCHAS.md` **G13** — a static text wraps, but its bounds never grow |
+| adding a custom GUI element | `dev/GOTCHAS.md` **G6** — allocate the `LoadedTexture` first, or the client dies |
+| adding a setting that can gate itself | `dev/GOTCHAS.md` **G9** — disable, never block |
+| changing caps or limits | `dev/GOTCHAS.md` **R1** — private guides are deliberately NOT capped |
+| touching colours or the palette | `dev/GOTCHAS.md` **G8** — read the palette once per mesh build |
+| adding an optional command argument | `dev/GOTCHAS.md` **G3** — optional parsers return their DEFAULT, not null |
+| debugging "X doesn't work" | `dev/GOTCHAS.md` **G12** — run the existing diagnostic before writing a fix |
+| drawing or editing an icon glyph | `dev/GOTCHAS.md` **G10**, and render it with `.\dev\RenderIcon.ps1` |
+| editing any file from a PowerShell script | `dev/GOTCHAS.md` **G26** — a `Get-Content`/`Set-Content` round-trip destroys every em-dash |
+| packaging a release | `dev/GOTCHAS.md` **G21** and **G25**, plus the versioning rule below |
+| a design question that feels settled | `dev/ARCHITECTURE.md` → **Settled Decisions Register** |
+
+**`dev/GOTCHAS.md` is the register of things that already cost us time.** Every entry leads with its
+trigger. Read the trigger list before starting anything in the table above — it is cheaper than
+re-discovering the trap.
 
 ## Build & run
+
 - **Build:** `dotnet build` from the repo root (the folder with `Layout.csproj`).
-- **Target:** .NET 10, Vintage Story 1.22.x (modinfo declares a 1.22.0 minimum).
+- **Target:** .NET 10, Vintage Story 1.22.x. `modinfo.json` declares the minimum game version — read it
+  there rather than restating it here.
 - **Dependencies** (all ship with the game): `VintagestoryAPI.dll`, `Newtonsoft.Json.dll`, `protobuf-net.dll`,
-  `cairo-sharp.dll` (GUI icon glyphs), and `VSSurvivalMod.dll` (in the game's `Mods/`; `IContainedMeshSource`
-  for ground-storage fill meshes, since Session 15). **`Layout.csproj` finds the install itself** —
-  `-p:VintagestoryDir=…` → the `VINTAGE_STORY` env var → the platform default — so no path needs editing;
-  a bad path fails with one clear message naming the folder tried. **Never hard-code a path there: the repo
-  is published.**
-- **Runtime note:** `Entity.SidedPos` is obsolete in this API version — use `Pos`.
-- **Package a runnable mod:** build **Release**, then zip `modinfo.json` + `modicon.png` + `assets/` +
-  `Layout.dll` at the **zip root** (forward-slash entry paths), drop into `VintagestoryData/Mods`. Config
-  files (`layout.json`, `layout-client.json`) appear in `ModConfig` after first run.
-- **Versioning rule (standing, human-set):** EVERY revision bumps `modinfo.json` and ships as a NEW
-  `Layout<version>.zip` in **`..\LayoutZips\`** (the sibling folder of this repo — human-directed location;
-  holds 0.1.10–0.1.27 + the 0.2.x line; the 0.1.28–0.1.53 zips live in `Documents\ChatGPT\LayoutZips\`) —
-  never overwrite an older release zip. Versions increment monotonically per revision. **Current: v0.3.53.**
-- **Git:** `main` is the mainline, published at **github.com/DodenGruva/Layout** (the
-  `ClientOnlyFallback` branch was merged via PR #1). **The repo is published at release** — no personal
-  paths, no personal usernames in tracked files. Commit/push ONLY when the human instructs.
+  `cairo-sharp.dll` (GUI icon glyphs), `VSSurvivalMod.dll` (from the game's `Mods/`).
+- **`Layout.csproj` finds the install itself** — `-p:VintagestoryDir=…` → the `VINTAGE_STORY` env var → the
+  platform default. A bad path fails with one clear message naming the folder it tried.
+  ⚠️ **Never hard-code a path there: the repo is published** (`GOTCHAS` G22). If a game DLL is not found,
+  see `GOTCHAS` G23.
+- **API note:** `Entity.SidedPos` is obsolete in this API version — use `Pos`.
 
-## The documents (read these before large work)
-- **`HANDOFF.md`** (repo root) — the consolidated current-state brief (scope · status · direction ·
-  performance characteristics), written for external analysis; the fastest way to get oriented.
-- **`ARCHITECTURE.md`** (in `dev/`, v3.14) — the authoritative plan. Its **Settled Decisions Register** lists
-  locked-in design choices; **do not reopen those without the human explicitly asking.** Its per-revision
-  deltas live in **`CHANGELOG_ARCHITECTURE.md`** (an archive — rarely needed).
-- **`TODO.md`** — the live punch-list: open bug, deferred requests, flagged decisions, future features.
-- **`PLAN_RENDER_PERFORMANCE.md`** — the Session-28 rendering plan, with every measurement taken. Read
-  before any renderer work; it also records why the Session 25–26 conclusions were wrong.
-- **`PLAN_BLOCK_OCCUPANCY.md`** — **the next feature, not yet started.** Guide voxels that have been filled
-  with material turn a "built" colour and outset slightly, so a player over-filling and chiselling back down
-  can see exactly where to stop. Feasibility is verified against the shipped assemblies.
-- **`PROJECT_STATUS.md`** — where things stand and what each module does.
-- **`PLAN_CLIENT_ONLY.md`** — F4's finalized implementation record and behavior matrix (candidate for 0.2.0).
-- **`PLAN_CHALKING_KIT.md`** — the F5 chalking-kit design rationale, now marked ✅ implemented with its
-  plan-vs-shipped deltas up top.
-- **`SESSION_9.md` … `SESSION_27.md`** — standalone per-session records; SESSION_12 covers **v0.1.28–v0.1.45
-  ClientOnlyFallback**, SESSION_13 the **v0.1.46–v0.1.52 optimization and interaction pass**, SESSION_14 the
-  **v0.1.53 hollow-shell + mesh optimization handoff** (read before continuing performance work), SESSION_15
-  the **v0.2.0–v0.2.9 Chalking Kit arc**, SESSION_16 the **v0.2.10–v0.2.21 mesh + polish arc** (Stage-A
-  exposed-face meshing, z-fight insets, filled-volume retirement, High fill state — read before continuing
-  performance work), and SESSION_17 the **v0.2.22–v0.2.23 seven-item backlog** (refill config → client
-  preference at protocol 6, the hard 32-chalk ceiling, publication readiness), and SESSION_18 the
-  **v0.2.24–v0.2.28 Tapered Cylinder arc** (the 4-click frustum at protocol 7; the scan-guard and
-  cap-clamp performance fixes it exposed), SESSION_19 the **v0.2.29–v0.2.35 stabilization/effects arc**
-  (unlimited-cap semantics, safe rim capture, adaptive draft throttling, and whole-shape dust), and
-  SESSION_20 the **v0.2.36–v0.2.47 polygonal-volume/modifier arc** (precise adjacent locks, polygonal prisms,
-  stage-aware help, flat-side/diagonal/rim modifiers, and GUI cleanup), SESSION_21 the **v0.3.0–v0.3.8
-  adaptive large-guide arc** (motion wireframes, background refinement/materialization, cached hover metadata,
-  safe giant-grab cancellation, persistent Shell/Wireframe mode, and surface-only oversized fallbacks), and
-  SESSION_22 the **v0.3.9–v0.3.21 action-aware HUD, attribution, sculpting-parity, and projection-transition
-  arc**, SESSION_23 the **v0.3.22–v0.3.34 moderation, claims, and streamed immense-guide arc**, and
-  SESSION_24 the **v0.3.35–v0.3.40 materialization-completion, shell-transition, and HUD-dimension arc**, and
-  SESSION_25 the **v0.3.41–v0.3.43 measured frustum/spatial-culling experiment**, and SESSION_26 the
-  **v0.3.44–v0.3.52 meshing experiments, renderer rollback, persistent visibility, cumulative creator cap,
-  and off-state Chalking Kit lockout**, and SESSION_27 the **v0.3.53 per-player cumulative-cap override and
-  final release**.
+### Packaging and versioning (standing, human-set)
 
-## ✅ Docs updated to v0.3.58 (2026-07-24)
-Consistent with **v0.3.58, DataVersion 12, protocol 16, 77 source files, 15 shape types / 21 tiles**.
-`SESSION_28.md` is the latest record (mesh: `SESSION_16.md` + `SESSION_28.md`, F5: `SESSION_15.md`).
-`ARCHITECTURE.md` is **v3.14** and `PROJECT_STATUS.md` predate the Session-28 renderer work — they are not
-wrong about anything they describe, but they do not yet mention vertex welding or settled-shell streaming;
-`SESSION_28.md` and `PLAN_RENDER_PERFORMANCE.md` are authoritative for those. Prefer source for exact
-identifiers.
+**EVERY revision bumps `modinfo.json` and ships as a NEW `Layout<version>.zip`** into **`..\Layout Zips\`**
+— the sibling folder of this repo (note the space in the real folder name). **Never overwrite an older
+release zip.** Versions increment monotonically, one per revision. That per-revision zip is what the human
+playtests, so it is not optional bookkeeping — it is the delivery.
 
-⚠️ **`SESSION_26.md` carries a correction banner** — three of its claims were disproved in Session 28,
-including the 140→80 FPS regression that closed the rendering arc. Do not plan renderer work from it alone.
+**Zip layout matters:** `modinfo.json` + `modicon.png` + `assets/` + `Layout.dll` at the **zip root**, entry
+paths with **forward slashes**, no directory entries, root files first. Build it with
+`System.IO.Compression.ZipFile` and explicit entry names — `Compress-Archive` is wrong here (`GOTCHAS` G21).
+
+**Git:** `main` is the mainline, published at **github.com/DodenGruva/Layout**. **The repo is public** — no
+personal paths, no personal usernames, in any tracked file. **Commit and push ONLY when the human says so.**
 
 ## How to work on this project (the human's established workflow)
-- **The human is not a programmer** and does not read code. They validate by *playing the mod* and describing
-  what feels wrong in plain English. Explain changes in plain language, not code walkthroughs.
-- **Decide-and-flag:** when a design choice is ambiguous, make a reasonable call, implement it, and clearly
-  note it for the human's review rather than blocking. Favor what feels natural in-game.
-- **Correctness over performance** unless the human says otherwise.
-- **Playtest beats compile-checks:** the important bugs here are runtime/feel issues a compiler can't catch.
-  After changes, still run `dotnet build` to catch compile errors before the human playtests.
-- Give a **short summary of the request before doing significant work**, and ask if anything is unclear.
-- **DOCS ONLY ON REQUEST (standing, human-set, Session 11 — token discipline):** per code iteration do
-  code → build → version bump → new zip, and NOTHING else. Do **not** update TODO/ARCHITECTURE/
-  PROJECT_STATUS/SESSION files or memory until the human explicitly says to (e.g. "update the documents" /
-  "finalize the session"). The playtest loop iterates fast; per-iteration doc churn wastes tokens.
-  **Exception:** if the conversation is close to a context trim while docs are stale, WARN the human first
-  so nothing is lost to the trim un-recorded.
-- **Commit only when the human instructs.** `main` is the mainline; never push without direction.
 
-## Tool modes (Session 10): Create · Edit · Delete
-**Create** owns all geometry (place, grab/reshape, insert, lock; right-click = cancel/lock). **Edit** is
-settings-only: left-click **selects** a guide and the GUI's setting rows then act on THAT guide (no
-reshaping — geometry stays in Create); this replaced the old panel-expanding "selected-guide section".
-**Delete** dispels. `ToolMode` is client-only (never wired), so it's safe to reorder.
+- **The human is not a programmer and does not read code.** They validate by *playing the mod* and describing
+  what feels wrong in plain English. **Explain changes in plain language, never as a code walkthrough.**
+- **Decide-and-flag:** when a design choice is ambiguous, make a reasonable call, implement it, and note it
+  clearly for review rather than blocking. Favour what feels natural in-game.
+- **Correctness over performance**, unless the human says otherwise.
+- **Playtest beats compile-checks.** The bugs that matter here are runtime and feel issues a compiler cannot
+  catch. Still run `dotnet build` before handing over, to catch compile errors first.
+- **The human playtests EVERY revision as it ships.** Treat each shipped version as tested unless they say
+  otherwise, and **never write "not playtested" into the docs on an assumption** — that error had to be
+  corrected across four files once already (`GOTCHAS` R7).
+- **Give a short summary of the request before doing significant work**, and ask if anything is unclear.
+- **DOCS ONLY ON REQUEST** (standing, human-set, token discipline): per code iteration do
+  **code → build → version bump → new zip, and nothing else.** Do not touch the documents until the human
+  says "update the documents" or "finalize the session".
+  **Exception:** if the conversation is nearing a context trim while docs are stale, **warn the human first**
+  so nothing is lost unrecorded.
 
-## Session-28 additions (v0.3.55–v0.3.69)
-**v0.3.55–v0.3.58 are on `beta`; v0.3.59–v0.3.69 are on `beta-shader`, not yet merged.**
-- **Custom guide shader** (`assets/layout/shaders/guide.vsh`/`.fsh`, v0.3.60): guides no longer use
-  `PreparedStandardShader`. **8M-voxel guide: 8.2 ms → 1.8 ms across the session, 78% removed.** Guides are
-  now self-lit — no shadow darkening, no ambient tint — approximated back by `shaderGuideBrightness` /
-  `shaderAmbientResponse`. `/layout shader off` restores the old look and cost.
-  **Shader sources must be pure ASCII**; packaging refuses anything else.
-- **Voxel outlines** (v0.3.62–v0.3.63): per-cell boundaries drawn procedurally in the fragment shader, no
-  extra geometry. `/layout voxelframe`. The mesh's voxel scale is recorded at upload so every path gets it.
-- **Sphere/dome wireframes**: 4 sectors → 8 (v0.3.64).
-- **Fixes** (v0.3.65–v0.3.69): inset now reaches partial blocks, not just whole-block planes; outlines no
-  longer vanish on inset layers; the cap clamp no longer builds an invisible wall from one aim direction;
-  volumetric guides re-probe after terrain loads. `/layout inset` tunes the anti-z-fight gap.
+### When the human says "update the documents"
 
-## Earlier Session-28 additions (v0.3.55–v0.3.58, `beta`)
-- **Vertex welding** (`GuideMeshOptions.WeldVertices`, v0.3.57): guide meshes share vertices between faces
-  meeting at one position with one colour. **Deduplication, not merging** — the triangle stream is provably
-  identical (10/10 harness comparing both index buffers in submission order). −72.9% vertices, −58.4% mesh
-  data, −41.5% frame cost on an 8M-voxel guide; human A/B found it indistinguishable. Running at ~1.0
-  vertices per quad, the theoretical floor, so **this lever is spent**.
-- **Settled-shell streaming** (`SettledStreamingVoxelThreshold`, v0.3.58): guides over 100,000 voxels
-  scaffold and stream instead of building synchronously. Fixes a multi-second client hang on world load and
-  makes large guides materialize for *other* players, not just the placer. **Not yet playtested.**
-- **Commands:** `.layout renderstats` now reports vertices/indices/bytes; `/layout weld on|off` is a
-  diagnostic A/B switch.
+Run this in order. `CHANGELOG.md` was missed once and had to be backfilled a session later; the checklist is
+the cheap fix.
 
-## Current priorities (detail in TODO.md; final-release record in SESSION_27.md)
-F4 (client-only/private guides) and F5 (Chalking Kit durability) are both feature-complete. Public/private
-multiplayer was release-tested successfully at **v0.2.35**, the fired-jug/raw-jug recipe behavior is
-playtest-confirmed, and B-S9-1 adjacent-lock targeting was closed and playtest-approved in **v0.2.36**.
-Mesh **Stage A** shipped and filled 3D volumes were retired. Normal public multiplayer behavior remains.
-1. **Two verification debts from the backlog** — (a) the hard 32-chalk ceiling is verified offline but
-   **never tested against xskills itself**; craft a quality-bonus kit and confirm it comes out 32/32.
-   (b) **1.22.x support is declared, not tested** — the code was built against 1.22.3; smoke-test a
-   1.22.0/1.22.1 install. See `SESSION_17.md` §8.
-2. **Protect the v0.3.42 renderer baseline restored in v0.3.49.** Whole-guide distance/frustum culling and
-   render statistics remain; spatial final meshes and greedy merging were rejected after real-play seams,
-   fidelity defects, and an approximately 140→80 FPS regression. See `SESSION_26.md`.
-3. **Field-soak the v0.3.53 final release.** Verify saved `/layout off|on` state across reconnects,
-   cumulative creator budgets and `/layout totalvoxelcap` during multiplayer editing/undo, and the off-state
-   Chalking Kit lockout.
-4. **Performance follow-up only from a new measured bottleneck and a fidelity-preserving design.** Immense
-   placement/sculpt work still uses one below-normal worker plus bounded claim ticks; do not assume spatial
-   subdivision or greedy merging is the next step.
-5. If asked: **Roof / Tunnel** volumes; concave-safe Free-Shape fill; F3 re-constrain op. Remaining
-   flagged decisions are cosmetic.
+```
+1. dev/sessions/SESSION_<n>.md   — new record, from TEMPLATE.md
+2. dev/sessions/INDEX.md         — one row
+3. CHANGELOG.md                  — EVERY version since the last entry
+4. dev/GOTCHAS.md                — any new trap or reversal
+5. dev/WIRE_HISTORY.md           — only if protocol/DataVersion moved
+6. dev/TODO.md                   — open items only; delivered → dev/history/DONE.md
+7. STATUS.md                     — REGENERATE, do not edit
+8. CLAUDE.md                     — only if a working rule or a pointer changed
+9. dev/DocCheck.ps1              — run it; it must pass
+```
 
-## Project layout (namespaces match folders)
-`src/` contains: `Guide/` (data types), `Shapes/` (pure geometry math), `Systems/` (managers + undo),
-`Network/` (packets + handlers), `UI/` (GUI + HUD + `LayoutToolIcons.cs`, the Cairo icon glyphs), `Config/`,
-`Items/`, `Client/` (the tool controller), `Undo/Commands/`. Adding a new shape starts in
-`Shapes/ShapeFactory.cs`. Soft-point flow behavior lives in `Shapes/SoftPointFlow.cs`. Chalk durability
-lives in `Items/ItemGuideTool.cs` (helpers + fill-state rendering) + `Items/ItemChalkingPowder.cs` (refill)
-+ `Systems/ChalkEffects.cs` (puffs/snap). Large-guide work is centred in `Systems/GuideRenderer.cs`,
-`Systems/DraftPreviewSpec.cs`, `Shapes/ShapeWireframe.cs`, and `Shapes/LargeVolumeShellFallback.cs`.
-(Filenames verified against the tree on 2026-07-23 — 77 source files.)
+## Tool modes: Create · Edit · Transform · Delete
+
+**Create** owns all geometry (place, grab/reshape, insert, lock; right-click = cancel/lock).
+**Edit** is settings-only: left-click **selects** a guide and the GUI's setting rows then act on that guide —
+no reshaping. **Transform** selects the same way and acts on the guide as a WHOLE OBJECT: move, rotate, copy,
+mirror. **Delete** dispels. `ToolMode` is client-only and never wired, so it is safe to reorder.
+
+## The document set
+
+**Tier 0** `CLAUDE.md` (this file) · **Tier 1** `dev/ARCHITECTURE.md`, `dev/GOTCHAS.md` ·
+**Tier 2** `STATUS.md` · **Tier 3** `CHANGELOG.md`, `dev/sessions/`, `dev/plans/`, `dev/history/` ·
+**Tier 4** `dev/archive/` — frozen and superseded, **never cite it as current**.
+
+Organised by **rate of change**, not by subject: durable facts and time-stamped narrative are kept apart so
+that neither drags the other out of date. `STATUS.md` §9 lists every document and what it is for.

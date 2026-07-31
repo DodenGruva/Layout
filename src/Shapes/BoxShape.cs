@@ -7,14 +7,31 @@ using Layout.Guide;
 namespace Layout.Shapes
 {
     /// <summary>
-    /// The box (0.1.21): THREE clicks — two DIAGONAL corners of the base rectangle (the rectangle
-    /// gesture) then a height click. A true box, not a cube: the three edge lengths are independent.
-    /// Stores corner A (anchor), the diagonal corner C (anchor, snapped onto A's plane layer like
-    /// <see cref="RectangleShape"/>), and a lid handle (Primary) over the base centre at the clicked
-    /// height. Axis-aligned to the clicked plane, so the base lies flat and the height runs along the
-    /// plane normal. Hollow = all six faces as a one-voxel shell; Filled = the solid box.
+    /// The box (0.1.21; re-gestured in v0.4.15): FOUR clicks — corner A, the far end of one base EDGE,
+    /// a width click, then a height click. A true box, not a cube: the three edge lengths are independent.
+    /// Stores corner A (anchor), the edge corner B (anchor), the far base corner as a width handle
+    /// (Primary), and a lid handle (Primary) over the base centre at the clicked height. Hollow = all six
+    /// faces as a one-voxel shell; Filled = the solid box.
     /// </summary>
     /// <remarks>
+    /// WHY THE GESTURE CHANGED (v0.4.15, human-requested). The base used to be the two-DIAGONAL-corner
+    /// rectangle gesture, and a diagonal carries no rotation — so the base axes came from
+    /// <see cref="ShapeGeometry.InPlaneAxes"/> and a box could only ever come out lined up
+    /// north/south/east/west. Box and <see cref="RectangleShape"/> were the only two shapes in the catalog
+    /// doing that. Clicking one base EDGE supplies the missing rotation; the width then needs a click of
+    /// its own, which pushes the height click out to fourth. Read RectangleShape's remarks first — the
+    /// base frame and the legacy encoding are the same design, and the Tapered Cylinder was already a
+    /// four-click shape, so the stage machine did not have to grow a new concept.
+    ///
+    /// FRAME. û along A→B and the in-plane perpendicular m̂ come from <see cref="ShapeGeometry.TryGetFrame"/>;
+    /// the base normal n comes from <see cref="ShapeGeometry.BaseNormal"/>, which is sign-fixed to the
+    /// positive axis so anchor order cannot invert the box (the same rule the cylinder and cone use).
+    /// du = |A→B|, dv = (W − A)·m̂ signed, h = (lid − base centre)·n signed.
+    ///
+    /// LEGACY ENCODING. Boxes placed before v0.4.15 stored A, the diagonal corner, and the lid — three
+    /// points. They are read in place, in the old world-axis frame, and reproduce exactly; the stored list
+    /// is never rewritten, because shapes are adopted on renderer WORKER THREADS.
+    ///
     /// Voxelisation is the sphere's shell recipe in box-local coordinates: a cell centre is SOLID when it
     /// lies inside the box, and SHELL when it is solid but not inside the box eroded by one cell on every
     /// side — a watertight, ~1-cell shell (a box thinner than two cells on some axis is all shell there,
@@ -34,18 +51,22 @@ namespace Layout.Shapes
 
         public ShapeConstraint Constraint => ShapeConstraint.None;
 
-        /// <summary>Creates a fresh box from the two diagonal base corners; the born height is the base's
-        /// shorter side until the third click sets it.</summary>
-        public BoxShape(Vec3d a, Vec3d c, PlaneAxis planeAxis, bool inverted = false)
+        /// <summary>
+        /// Creates a fresh box from the first two clicks: corner A and the far end of one base edge. The
+        /// born base is square and the born height is its side, until the width and height clicks set
+        /// them; <paramref name="inverted"/> (SHIFT at placement) grows it downward instead.
+        /// </summary>
+        public BoxShape(Vec3d a, Vec3d b, PlaneAxis planeAxis, bool inverted = false)
         {
             _planeAxis = planeAxis;
             _controlPoints = new List<ControlPoint>
             {
                 new ControlPoint(new Vec3d(a.X, a.Y, a.Z), isAnchor: true),
-                new ControlPoint(new Vec3d(c.X, c.Y, c.Z), isAnchor: true),
-                new ControlPoint(new Vec3d(a.X, a.Y, a.Z), isPrimary: true)
+                new ControlPoint(new Vec3d(b.X, b.Y, b.Z), isAnchor: true),
+                new ControlPoint(new Vec3d(b.X, b.Y, b.Z), isPrimary: true),
+                new ControlPoint(new Vec3d(b.X, b.Y, b.Z), isPrimary: true)
             };
-            SnapBaseCorner();
+            SeatBornWidth();
             if (TryGetBase(out Vec3d bc, out _, out _, out double du, out double dv, out Vec3d n0))
             {
                 double h = Math.Max(MinHeight, Math.Min(Math.Abs(du), Math.Abs(dv))) * (inverted ? -1.0 : 1.0);
@@ -62,20 +83,41 @@ namespace Layout.Shapes
 
         // --- frame ------------------------------------------------------------------------------
 
-        // Base centre, the two in-plane axes u1/u2, the signed side extents du/dv from A, and the plane
-        // normal n. C is kept snapped onto A's plane, so du/dv are read off the stored diagonal.
+        /// <summary>Index of the lid handle: last slot in either encoding (see the class remarks).</summary>
+        private int LidIndex => _controlPoints.Count >= 4 ? 3 : 2;
+
+        /// <summary>Index of the stored far base corner — the width handle, or the legacy diagonal.</summary>
+        private int WidthIndex => _controlPoints.Count >= 4 ? 2 : 1;
+
+        // Base centre, the two in-plane axes u1/u2, the signed side extents du/dv from A, and the base
+        // normal n — resolved from whichever encoding this guide carries.
         private bool TryGetBase(out Vec3d baseCentre, out Vec3d u1, out Vec3d u2,
             out double du, out double dv, out Vec3d n)
         {
             baseCentre = u1 = u2 = n = null; du = dv = 0;
             if (_controlPoints.Count < 2) return false;
-            Vec3d a = _controlPoints[0].WorldPosition, c = _controlPoints[1].WorldPosition;
-            ShapeGeometry.InPlaneAxes(_planeAxis, out u1, out u2);
-            n = ShapeGeometry.AxisVec(_planeAxis);
-            var diag = new Vec3d(c.X - a.X, c.Y - a.Y, c.Z - a.Z);
-            du = ShapeGeometry.Dot(diag, u1);
-            dv = ShapeGeometry.Dot(diag, u2);
-            if (Math.Abs(du) < MinSide || Math.Abs(dv) < MinSide) return false;
+            Vec3d a = _controlPoints[0].WorldPosition;
+
+            if (_controlPoints.Count >= 4)
+            {
+                Vec3d b = _controlPoints[1].WorldPosition, w = _controlPoints[2].WorldPosition;
+                if (!ShapeGeometry.TryGetFrame(a, b, _planeAxis, out u1, out u2, out du))
+                { u1 = u2 = null; return false; }
+                n = ShapeGeometry.BaseNormal(u1, _planeAxis);
+                dv = ShapeGeometry.Dot(new Vec3d(w.X - a.X, w.Y - a.Y, w.Z - a.Z), u2);
+            }
+            else
+            {
+                // LEGACY (pre-v0.4.15): A plus the DIAGONAL corner, base axes along the plane's world axes.
+                ShapeGeometry.InPlaneAxes(_planeAxis, out u1, out u2);
+                n = ShapeGeometry.AxisVec(_planeAxis);
+                Vec3d c = _controlPoints[1].WorldPosition;
+                var diag = new Vec3d(c.X - a.X, c.Y - a.Y, c.Z - a.Z);
+                du = ShapeGeometry.Dot(diag, u1);
+                dv = ShapeGeometry.Dot(diag, u2);
+            }
+
+            if (Math.Abs(du) < MinSide || Math.Abs(dv) < MinSide) { u1 = u2 = n = null; return false; }
             baseCentre = new Vec3d(a.X + (u1.X * du + u2.X * dv) * 0.5,
                                    a.Y + (u1.Y * du + u2.Y * dv) * 0.5,
                                    a.Z + (u1.Z * du + u2.Z * dv) * 0.5);
@@ -86,30 +128,41 @@ namespace Layout.Shapes
             out double du, out double dv, out double h)
         {
             a = null; h = 0;
-            if (!TryGetBase(out Vec3d bc, out u1, out u2, out du, out dv, out n) || _controlPoints.Count < 3)
+            if (!TryGetBase(out Vec3d bc, out u1, out u2, out du, out dv, out n)
+                || _controlPoints.Count <= LidIndex)
             { u1 = u2 = n = null; return false; }
             a = _controlPoints[0].WorldPosition;
-            Vec3d p = _controlPoints[2].WorldPosition;
+            Vec3d p = _controlPoints[LidIndex].WorldPosition;
             h = (p.X - bc.X) * n.X + (p.Y - bc.Y) * n.Y + (p.Z - bc.Z) * n.Z;
             if (Math.Abs(h) < MinHeight) h = h < 0 ? -MinHeight : MinHeight;
             return true;
         }
 
-        // Keeps the stored diagonal corner ON A's plane layer (drops any drift along the normal).
-        private void SnapBaseCorner()
+        // Seats the freshly born width handle one edge-length across, so the base starts square until the
+        // third click widens it.
+        private void SeatBornWidth()
         {
-            if (_controlPoints.Count < 2) return;
-            Vec3d a = _controlPoints[0].WorldPosition, c = _controlPoints[1].WorldPosition;
-            ShapeGeometry.InPlaneAxes(_planeAxis, out Vec3d u1, out Vec3d u2);
-            var diag = new Vec3d(c.X - a.X, c.Y - a.Y, c.Z - a.Z);
-            double du = ShapeGeometry.Dot(diag, u1), dv = ShapeGeometry.Dot(diag, u2);
-            _controlPoints[1].SetPosition(a.X + u1.X * du + u2.X * dv,
-                                          a.Y + u1.Y * du + u2.Y * dv,
-                                          a.Z + u1.Z * du + u2.Z * dv);
+            Vec3d a = _controlPoints[0].WorldPosition, b = _controlPoints[1].WorldPosition;
+            if (!ShapeGeometry.TryGetFrame(a, b, _planeAxis, out Vec3d u1, out Vec3d u2, out double du)) return;
+            _controlPoints[2].SetPosition(a.X + u1.X * du + u2.X * du,
+                                          a.Y + u1.Y * du + u2.Y * du,
+                                          a.Z + u1.Z * du + u2.Z * du);
+        }
+
+        // Keeps the stored far base corner exactly ON the corner it represents: drops any drift off the
+        // base plane, and (in the new encoding) any drift along the edge, which belongs to B.
+        private void SnapWidthHandle()
+        {
+            if (!TryGetBase(out _, out Vec3d u1, out Vec3d u2, out double du, out double dv, out _)) return;
+            Vec3d a = _controlPoints[0].WorldPosition;
+            _controlPoints[WidthIndex].SetPosition(a.X + u1.X * du + u2.X * dv,
+                                                   a.Y + u1.Y * du + u2.Y * dv,
+                                                   a.Z + u1.Z * du + u2.Z * dv);
         }
 
         private void SeatHandle(Vec3d baseCentre, Vec3d n, double h) =>
-            _controlPoints[2].SetPosition(baseCentre.X + n.X * h, baseCentre.Y + n.Y * h, baseCentre.Z + n.Z * h);
+            _controlPoints[LidIndex].SetPosition(
+                baseCentre.X + n.X * h, baseCentre.Y + n.Y * h, baseCentre.Z + n.Z * h);
 
         // --- IGuideShape: voxels ---------------------------------------------------------------------
 
@@ -326,7 +379,7 @@ namespace Layout.Shapes
 
         private void ClaimMarkers(List<VoxelPosition> result, int scale)
         {
-            for (int i = 0; i < 3 && i < _controlPoints.Count; i++)
+            for (int i = 0; i < _controlPoints.Count; i++)
             {
                 ControlPoint cp = _controlPoints[i];
                 VoxelRenderType type = cp.IsLocked ? VoxelRenderType.Locked
@@ -403,7 +456,7 @@ namespace Layout.Shapes
         {
             if (index < 0 || index >= _controlPoints.Count) return;
 
-            if (index == 2)
+            if (index == LidIndex)
             {
                 // The lid handle slides along the height axis (signed — through the base flips the box).
                 if (!TryGetBase(out Vec3d bc, out _, out _, out _, out _, out Vec3d n)) return;
@@ -413,11 +466,12 @@ namespace Layout.Shapes
                 return;
             }
 
-            // A base-corner move absorbs (resize); keep C snapped and the lid at its signed height.
+            // A base-corner move absorbs (resize); keep the far corner snapped and the lid at its signed
+            // height. The height is read BEFORE the move so a resize cannot drag the lid with it.
             double hOld = 0;
             bool hadFull = TryGetFull(out _, out _, out _, out _, out _, out _, out hOld);
             _controlPoints[index].SetPosition(newPosition.X, newPosition.Y, newPosition.Z);
-            SnapBaseCorner();
+            SnapWidthHandle();
             if (hadFull && TryGetBase(out Vec3d bc2, out _, out _, out _, out _, out Vec3d n2))
                 SeatHandle(bc2, n2, hOld);
         }

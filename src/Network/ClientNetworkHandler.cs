@@ -39,6 +39,9 @@ namespace Layout.Network
         private LocalGuideAuthority _local;
         private bool _receivedServerBulkSync;
         private bool _preferClientOnly;
+
+        // A "Publish Private Guides" waiting on the server to confirm the switch to public mode.
+        private bool _pendingPublish;
         private bool _serverLayoutAvailable;
         private bool _serverAllowsClientOnlyMode;
         // Placement mode answers where NEW guides go. In a mixed world the player can still edit either
@@ -85,13 +88,126 @@ namespace Layout.Network
         /// <summary>Player UID → their in-progress draft start anchor, for rendering remote anchor dots.</summary>
         public IReadOnlyDictionary<string, Vec3d> RemoteDraftAnchors => _remoteDraftAnchors;
 
-        /// <summary>The server's active per-guide voxel cap (synced on join). Use for the placement pre-check.</summary>
+        /// <summary>The active per-guide voxel cap. Use for the placement pre-check.</summary>
+        /// <remarks>
+        /// PRIVATE GUIDES ARE DELIBERATELY NOT CAPPED. This looks like a bypass and is not one — it is a
+        /// settled decision (human, v0.4.27), and it was briefly "fixed" in v0.4.22 before being reverted.
+        /// Do not re-apply server caps to local authority without the human asking for it.
+        ///
+        /// WHY. Voxel caps exist to protect SHARED resources: server storage, and every other client's
+        /// render budget. A private guide is stored on the placer's own machine and is invisible to
+        /// everyone else, so it consumes neither. The only thing a per-guide cap would protect there is the
+        /// placer from their own framerate, which is their business.
+        ///
+        /// The v0.4.22 argument was an analogy to chalk — "private is private, not free" — and the analogy
+        /// is wrong. Chalk is an ITEM in the player's inventory, genuine server-owned state that a private
+        /// placement really does spend. Caps are a budget on storage and rendering that private guides
+        /// never touch. Same words, different kind of thing.
+        ///
+        /// NOT unlimited, either: <see cref="GuideManager.HardVoxelCeiling"/> is checked unconditionally
+        /// inside CreateGuide, so a private guide still cannot exceed what can actually be rendered. That
+        /// ceiling is a physical limit, not a policy, which is exactly why it applies where policy does not.
+        /// </remarks>
         public int PerGuideVoxelCap => AuthorityMode == ClientAuthorityMode.Local
             ? GuideManager.HardVoxelCeiling
             : _perGuideVoxelCap;
 
-        /// <summary>The server's active total voxel cap (synced on join).</summary>
+        /// <summary>The active total voxel cap. Unlimited under local authority; see above.</summary>
         public int TotalVoxelCap => AuthorityMode == ClientAuthorityMode.Local ? 0 : _totalVoxelCap;
+
+        /// <summary>
+        /// The live server settings behind the settings page's Admin section (v0.4.16, protocol 20), or
+        /// null on a server that has not sent them — a pre-0.4.16 server, or no Layout server at all.
+        /// A null here is what hides the section; there is nothing to administer in those worlds.
+        /// </summary>
+        public LayoutAdminConfigPacket AdminConfig { get; private set; }
+
+        /// <summary>True when the server has told THIS player they may change the settings above.</summary>
+        public bool CanEditAdminConfig => AdminConfig != null && AdminConfig.CanEdit;
+
+        /// <summary>Asks the server to change one admin setting. The server re-checks the privilege.</summary>
+        /// <remarks>
+        /// Gated on whether a Layout SERVER exists, not on the authority mode. Those are different
+        /// questions: an admin who has their own placement set to Private is in Local authority while
+        /// still connected to a Layout server they can perfectly well administer. Testing the authority
+        /// mode here silently swallowed every change such an admin made (the v0.4.16-v0.4.18 bug).
+        /// </remarks>
+        public void SendAdminConfig(LayoutAdminSetting setting, int value)
+        {
+            if (!_serverLayoutAvailable) return;   // nobody to ask
+            _channel?.SendPacket(new LayoutAdminConfigRequestPacket(setting, value));
+        }
+
+        /// <summary>Asks the server to un-hide every guide this player created ("Reveal All").</summary>
+        public void SendRevealMine()
+        {
+            if (!_serverLayoutAvailable) return;
+            _channel?.SendPacket(new GuideRevealMinePacket());
+        }
+
+        // -- Admin player roster (v0.4.26) ---------------------------------------------------------
+
+        /// <summary>The last roster the server sent, or empty before the first request answers.</summary>
+        public PlayerRosterEntryDto[] PlayerRoster { get; private set; } = Array.Empty<PlayerRosterEntryDto>();
+
+        /// <summary>Which player <see cref="PlayerGuides"/> currently describes.</summary>
+        public string PlayerGuidesUid { get; private set; }
+
+        /// <summary>The selected player's guides, largest first and capped by the server.</summary>
+        public PlayerGuideDto[] PlayerGuides { get; private set; } = Array.Empty<PlayerGuideDto>();
+
+        /// <summary>How many guides that player has in total, which may exceed the listed ones.</summary>
+        public int PlayerGuidesTotal { get; private set; }
+
+        /// <summary>Every guide on the server, summed — what the world-wide caps are measured against.</summary>
+        public long WorldVoxelTotal { get; private set; }
+
+        /// <summary>How many guides exist on the server in total.</summary>
+        public int WorldGuideCount { get; private set; }
+
+        /// <summary>The roster arrived; redraw the Players dialog.</summary>
+        public event Action PlayerRosterChanged;
+
+        /// <summary>A player's guide list arrived; redraw the Players dialog's detail pane.</summary>
+        public event Action PlayerGuidesChanged;
+
+        /// <summary>Asks for the admin player roster. Refused server-side without controlserver.</summary>
+        public void RequestPlayerRoster()
+        {
+            if (!_serverLayoutAvailable) return;
+            _channel?.SendPacket(new PlayerRosterRequestPacket());
+        }
+
+        /// <summary>Asks for one player's guide list.</summary>
+        public void RequestPlayerGuides(string uid)
+        {
+            if (!_serverLayoutAvailable || string.IsNullOrEmpty(uid)) return;
+            _channel?.SendPacket(new PlayerGuidesRequestPacket(uid));
+        }
+
+        /// <summary>
+        /// Sets one player's three cap overrides. 0 in a field clears that override. The server validates,
+        /// applies, and sends the whole roster back, so the dialog ends up showing what was really stored.
+        /// </summary>
+        public void SendPlayerPolicyEdit(
+            string uid, int voxelCap, int totalVoxelCap, int guideLimit)
+        {
+            if (!_serverLayoutAvailable || string.IsNullOrEmpty(uid)) return;
+            _channel?.SendPacket(new PlayerPolicyEditPacket
+            {
+                Uid = uid,
+                VoxelCapOverride = Math.Max(0, voxelCap),
+                TotalVoxelCapOverride = Math.Max(0, totalVoxelCap),
+                GuideLimitOverride = Math.Max(0, guideLimit)
+            });
+        }
+
+        /// <summary>Jails or frees one player. Separate from the cap edits by design — see PlayerJailPacket.</summary>
+        public void SendPlayerJail(string uid, bool jailed)
+        {
+            if (!_serverLayoutAvailable || string.IsNullOrEmpty(uid)) return;
+            _channel?.SendPacket(new PlayerJailPacket { Uid = uid, Jailed = jailed });
+        }
 
         // v0.2.22: the chalk refill channels moved from server policy to a CLIENT preference, so the two
         // synced flags that used to be mirrored here are gone. Read
@@ -122,6 +238,9 @@ namespace Layout.Network
 
         /// <summary>A remote player's draft anchor was removed: (player UID).</summary>
         public event Action<string> RemoteDraftAnchorRemoved;
+
+        /// <summary>The server's admin settings arrived or changed; redraw the settings page if it is open.</summary>
+        public event Action AdminConfigChanged;
 
         /// <summary>A mutation was refused for exceeding a cap: (guide id, attempted count, cap).</summary>
         public event Action<Guid, int, int> VoxelCapWarningReceived;
@@ -179,7 +298,37 @@ namespace Layout.Network
                 .SetMessageHandler<PlayerGuidePolicyPacket>(OnPlayerGuidePolicy)
                 .SetMessageHandler<GuidePlacementRejectedPacket>(_ => PlacementRejected?.Invoke())
                 .SetMessageHandler<GuideRenderingPacket>(
-                    packet => GuideRenderingChanged?.Invoke(packet?.Enabled ?? true));
+                    packet => GuideRenderingChanged?.Invoke(packet?.Enabled ?? true))
+                .SetMessageHandler<LayoutAdminConfigPacket>(OnAdminConfig)
+                .SetMessageHandler<PlayerRosterPacket>(OnPlayerRoster)
+                .SetMessageHandler<PlayerGuidesPacket>(OnPlayerGuides);
+        }
+
+        private void OnPlayerRoster(PlayerRosterPacket packet)
+        {
+            PlayerRoster = packet?.Players ?? Array.Empty<PlayerRosterEntryDto>();
+            WorldVoxelTotal = packet?.WorldVoxelTotal ?? 0;
+            WorldGuideCount = packet?.WorldGuideCount ?? 0;
+            PlayerRosterChanged?.Invoke();
+        }
+
+        private void OnPlayerGuides(PlayerGuidesPacket packet)
+        {
+            if (packet == null) return;
+            PlayerGuidesUid = packet.Uid;
+            PlayerGuides = packet.Guides ?? Array.Empty<PlayerGuideDto>();
+            PlayerGuidesTotal = packet.TotalCount;
+            PlayerGuidesChanged?.Invoke();
+        }
+
+        private void OnAdminConfig(LayoutAdminConfigPacket packet)
+        {
+            if (packet == null) return;
+            AdminConfig = packet;
+            // The server's private-guide policy also arrives here, so an admin flipping it mid-session
+            // reaches every client's panel rather than only the players who reconnect afterwards.
+            _serverAllowsClientOnlyMode = packet.AllowClientOnlyMode;
+            AdminConfigChanged?.Invoke();
         }
 
         private void OnPlayerGuidePolicy(PlayerGuidePolicyPacket packet)
@@ -242,6 +391,31 @@ namespace Layout.Network
             return true;
         }
 
+        /// <summary>The client PREFERS private, client-stored guides. This is the saved preference, not the
+        /// mode currently in force — a server may refuse it (see <see cref="AuthorityMode"/>).</summary>
+        public bool PrefersClientOnly => _preferClientOnly;
+
+        /// <summary>
+        /// Changes the private-guide preference IN PLAY (v0.4.2, the settings page). Until now this was
+        /// file-only: <see cref="ResetAuthorityMode"/> read it once at client start and nothing could move
+        /// it afterwards.
+        /// </summary>
+        /// <remarks>
+        /// The preference is saved unconditionally because it is a CROSS-SERVER preference. If this
+        /// particular server refuses private guides, its reply switches the active mode back and prints the
+        /// refusal, but the preference must survive — reverting it here would clobber the setting for every
+        /// other server the player visits. Off a Layout server there is nothing to ask: the session is
+        /// already local and stays local, and the preference simply applies the next time it can.
+        /// </remarks>
+        public void SetClientOnlyPreference(bool clientOnly)
+        {
+            if (_preferClientOnly == clientOnly) return;
+            _preferClientOnly = clientOnly;
+            ForceClientOnlyPreferenceChanged?.Invoke(clientOnly);
+            if (_serverLayoutAvailable)
+                _channel.SendPacket(new ClientPlacementModeRequestPacket(clientOnly));
+        }
+
         /// <summary>Returns authority selection to neutral without touching a network bulk sync already received.</summary>
         public void ResetAuthorityMode(bool forceClientOnly = false)
         {
@@ -257,6 +431,10 @@ namespace Layout.Network
             _receivedServerBulkSync = false;
             _serverLayoutAvailable = false;
             _serverAllowsClientOnlyMode = false;
+            // Dropped with the session: carrying one server's settings into the next world would show the
+            // Admin section on a server that never sent one, with somebody else's caps in it.
+            AdminConfig = null;
+            _pendingPublish = false;
             _lastMutationWasLocal = null;
             _local = null;
             _guides.Clear();
@@ -420,6 +598,16 @@ namespace Layout.Network
 
             if (!string.IsNullOrWhiteSpace(packet.Message))
                 _capi.ShowChatMessage("[Layout] " + packet.Message);
+
+            // A publish parked by PublishPrivateGuides is released here, once the server has confirmed the
+            // player is public — earlier than this it would be rejected. Cleared on ANY answer, so a refused
+            // switch cannot leave it armed to fire on some unrelated mode change later.
+            if (_pendingPublish)
+            {
+                _pendingPublish = false;
+                if (!packet.ClientOnly && packet.Allowed) SendPrivateGuidePush();
+                else _capi.ShowChatMessage("[Layout] Could not switch to public mode, so nothing was published.");
+            }
         }
 
         private void OnGuidePushRequest(ClientGuidePushRequestPacket packet)
@@ -431,6 +619,69 @@ namespace Layout.Network
             }
 
             ClientGuidePushDto[] guides = _local?.CreatePushDtos() ?? Array.Empty<ClientGuidePushDto>();
+            _channel.SendPacket(new ClientGuidePushPacket(guides));
+        }
+
+        /// <summary>How many private guides this client is holding — what "Publish Private Guides" would send.</summary>
+        public int PrivateGuideCount => _localGuideIds.Count;
+
+        /// <summary>
+        /// Publishes every private guide to the server, going public first if necessary (v0.4.6, the settings
+        /// page's "Publish Private Guides" button).
+        /// </summary>
+        /// <remarks>
+        /// The chat route is server-PULLED: <c>/layout client push all</c> refuses unless the player is
+        /// already public, then asks the client to upload. This is the same upload with the mode switch
+        /// folded in, so the player is not made to run two commands in the right order to get one outcome.
+        ///
+        /// It needs no new packet and no protocol bump. <c>ClientGuidePushPacket</c> may be sent unprompted —
+        /// the server's handler re-validates client-only mode and privilege on receipt regardless of how the
+        /// push was started, so the request packet was only ever the server's way of asking, never a
+        /// permission token.
+        ///
+        /// GOING PUBLIC IS A ROUND TRIP, and until the server answers it still has the player in its
+        /// client-only set and would reject the upload. So the push is PARKED and sent from
+        /// <see cref="OnPlacementMode"/> when the switch is confirmed, never fired optimistically.
+        /// </remarks>
+        public void PublishPrivateGuides()
+        {
+            if (!_serverLayoutAvailable)
+            {
+                _capi.ShowChatMessage("[Layout] There is no Layout server here to publish guides to.");
+                return;
+            }
+            if (PrivateGuideCount == 0)
+            {
+                _capi.ShowChatMessage("[Layout] You have no private guides to publish.");
+                return;
+            }
+
+            if (AuthorityMode == ClientAuthorityMode.Networked && !_preferClientOnly)
+            {
+                SendPrivateGuidePush();
+                return;
+            }
+
+            // Deliberately NOT routed through SetClientOnlyPreference: that early-returns when the
+            // preference already reads public, which would leave the parked push waiting for a reply that
+            // was never requested.
+            _pendingPublish = true;
+            if (_preferClientOnly)
+            {
+                _preferClientOnly = false;
+                ForceClientOnlyPreferenceChanged?.Invoke(false);
+            }
+            _channel.SendPacket(new ClientPlacementModeRequestPacket(false));
+        }
+
+        private void SendPrivateGuidePush()
+        {
+            ClientGuidePushDto[] guides = _local?.CreatePushDtos() ?? Array.Empty<ClientGuidePushDto>();
+            if (guides.Length == 0)
+            {
+                _capi.ShowChatMessage("[Layout] You have no private guides to publish.");
+                return;
+            }
             _channel.SendPacket(new ClientGuidePushPacket(guides));
         }
 
@@ -920,6 +1171,70 @@ namespace Layout.Network
             _lastMutationWasLocal = localMutation;
             if (localMutation) { _local.SetSides(guideId, sides); return; }
             _channel.SendPacket(new GuideSetSidesPacket(guideId, sides));
+        }
+
+        /// <summary>
+        /// F6 Move: slide a whole guide by a delta given in 1/16-block units. The authority validates that
+        /// the delta is a whole number of the guide's own voxels and refuses anything finer, so callers must
+        /// step by the guide's scale — see <c>GuideManager.TranslateGuide</c>. Nothing is applied optimistically:
+        /// both authorities answer with a full-state upsert, and a move can be refused by a land claim.
+        /// </summary>
+        public void SendTranslate(Guid guideId, int deltaX, int deltaY, int deltaZ)
+        {
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation)
+            {
+                _local.Translate(guideId, new Vec3d(deltaX / 16.0, deltaY / 16.0, deltaZ / 16.0));
+                return;
+            }
+            _channel.SendPacket(new GuideTranslatePacket(guideId, deltaX, deltaY, deltaZ));
+        }
+
+        /// <summary>
+        /// F12 Rotate: turn a whole guide by quarter turns about a world axis. The authority derives the
+        /// pivot from the guide itself, so nothing about it crosses the wire. Unlike a move this can change
+        /// the voxel count and so can be refused by a cap as well as by a land claim.
+        /// </summary>
+        public void SendRotate(Guid guideId, PlaneAxis axis, int quarterTurns)
+        {
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation) { _local.Rotate(guideId, axis, quarterTurns); return; }
+            _channel.SendPacket(new GuideRotatePacket(guideId, axis, quarterTurns));
+        }
+
+        /// <summary>
+        /// F7/F8 Transform pad: one compound action — optional mirror, optional rotation, optional move —
+        /// applied in place or to a fresh copy. A copy is a placement and can be refused for chalk or caps;
+        /// the in-place actions can only be refused by a land claim.
+        /// </summary>
+        public void SendTransform(
+            Guid guideId, int deltaX, int deltaY, int deltaZ,
+            int mirrorAxis, PlaneAxis rotateAxis, int quarterTurns, bool asCopy)
+        {
+            bool localMutation = IsLocalMutation(guideId);
+            _lastMutationWasLocal = localMutation;
+            if (localMutation)
+            {
+                GuideData copied = _local.Transform(
+                    guideId, new Vec3d(deltaX / 16.0, deltaY / 16.0, deltaZ / 16.0),
+                    mirrorAxis, rotateAxis, quarterTurns, asCopy);
+                // A private COPY is still a placement, so it charges chalk the same way a fresh private
+                // placement does: the server owns the inventory but cannot see private guides, so the
+                // honest client reports it and the server validates and applies the charge.
+                if (copied != null && ServerLayoutAvailable)
+                {
+                    _channel.SendPacket(new ChalkChargePacket(
+                        Guide.GuideShapeTypes.IsVolume(copied.ShapeType)
+                            ? Items.ItemGuideTool.ChalkCostVolume
+                            : Items.ItemGuideTool.ChalkCostFlat));
+                }
+                if (copied != null) Systems.ChalkEffects.PlacementEffects(_capi.World, copied);
+                return;
+            }
+            _channel.SendPacket(new GuideTransformPacket(
+                guideId, deltaX, deltaY, deltaZ, mirrorAxis, rotateAxis, quarterTurns, asCopy));
         }
 
         /// <summary>Session 11: spring a guide back to its as-placed form (SHIFT+click).</summary>

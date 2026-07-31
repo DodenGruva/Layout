@@ -93,6 +93,9 @@ namespace Layout.UI
             Edit,
             EditTarget,
             Editing,
+            Transform,
+            TransformTarget,
+            Transforming,
             Delete,
             Deleting
         }
@@ -393,8 +396,10 @@ namespace Layout.UI
             }
 
             SetText("status", (_comatoseDraft ? "Creating - Paused" : StatusText(_composedState))
+                + TransformActionSuffix()
                 + (_showClientOnlyIndicator ? " · Private" : ""));
-            GuideData settingsGuide = _tool.Mode == ToolMode.Edit ? ResolveSelectedGuide() : null;
+            GuideData settingsGuide =
+                _tool.Mode == ToolMode.Edit || _tool.Mode == ToolMode.Transform ? ResolveSelectedGuide() : null;
             int scale = settingsGuide?.VoxelScale ?? _tool.Scale;
             GuideShapeType shapeType = settingsGuide?.ShapeType ?? _tool.Shape;
             bool wireframe = settingsGuide?.IsWireframe ?? _tool.Wireframe;
@@ -476,6 +481,11 @@ namespace Layout.UI
                 if (ResolveSelectedGuide() != null) return HudVisualState.Editing;
                 return ResolveExaminedGuide() != null ? HudVisualState.EditTarget : HudVisualState.Edit;
             }
+            if (_tool.Mode == ToolMode.Transform)
+            {
+                if (ResolveSelectedGuide() != null) return HudVisualState.Transforming;
+                return ResolveExaminedGuide() != null ? HudVisualState.TransformTarget : HudVisualState.Transform;
+            }
             return ResolveExaminedGuide() != null ? HudVisualState.Deleting : HudVisualState.Delete;
         }
 
@@ -487,6 +497,8 @@ namespace Layout.UI
                 HudVisualState.Sculpting => ResolveGrabbedGuide(),
                 HudVisualState.EditTarget => ResolveExaminedGuide(),
                 HudVisualState.Editing => ResolveSelectedGuide(),
+                HudVisualState.TransformTarget => ResolveExaminedGuide(),
+                HudVisualState.Transforming => ResolveSelectedGuide(),
                 HudVisualState.Deleting => ResolveExaminedGuide(),
                 _ => null
             };
@@ -502,7 +514,11 @@ namespace Layout.UI
                 HudVisualState.EditTarget or HudVisualState.Editing =>
                     (GuideToolGui.CurrentShapeIconName(context.ShapeType, context.Constraint),
                      GuideToolGui.ShapeDisplayName(context.ShapeType, context.Constraint)),
+                HudVisualState.TransformTarget or HudVisualState.Transforming =>
+                    (GuideToolGui.CurrentShapeIconName(context.ShapeType, context.Constraint),
+                     GuideToolGui.ShapeDisplayName(context.ShapeType, context.Constraint)),
                 HudVisualState.Edit => (LayoutToolIcons.ModeEdit, "Edit"),
+                HudVisualState.Transform => (LayoutToolIcons.ModeTransform, "Transform"),
                 HudVisualState.Deleting =>
                     (GuideToolGui.CurrentShapeIconName(context.ShapeType, context.Constraint),
                      GuideToolGui.ShapeDisplayName(context.ShapeType, context.Constraint)),
@@ -513,7 +529,8 @@ namespace Layout.UI
         private GuideData ResolveContextGuide()
         {
             if (_composedState == HudVisualState.Sculpting) return ResolveGrabbedGuide();
-            if (_tool.Mode == ToolMode.Edit) return ResolveSelectedGuide() ?? ResolveExaminedGuide();
+            if (_tool.Mode == ToolMode.Edit || _tool.Mode == ToolMode.Transform)
+                return ResolveSelectedGuide() ?? ResolveExaminedGuide();
             return ResolveExaminedGuide();
         }
 
@@ -540,15 +557,35 @@ namespace Layout.UI
             HudVisualState.Sculpting => "Sculpting",
             HudVisualState.Edit or HudVisualState.EditTarget => "Edit",
             HudVisualState.Editing => "Editing",
+            HudVisualState.Transform or HudVisualState.TransformTarget => "Transform",
+            HudVisualState.Transforming => "Transforming",
             HudVisualState.Delete => "Delete",
             HudVisualState.Deleting => "Deleting",
             _ => ""
         };
 
+        // The Transform pad is state-dependent: the same arrow moves, copies or mirrors depending on the
+        // action toggles. Naming the compound here is what stops an arrow click being a surprise — a copy
+        // costs chalk and can be refused, unlike everything else on that pad.
+        private string TransformActionSuffix()
+        {
+            if (_tool.Mode != ToolMode.Transform) return "";
+            string action = _tool.Placement switch
+            {
+                DraftManager.TransformPlacement.Copy => "Copy",
+                DraftManager.TransformPlacement.Move => "Move",
+                _ => null
+            };
+            if (_tool.TransformMirror) action = action == null ? "Mirror" : action + " + Mirror";
+            if (action == null) return "";
+            if (_tool.TransformSpanStep) action += " (span)";
+            return " · " + action;
+        }
+
         private static double[] AccentColor(HudVisualState state) => state switch
         {
             HudVisualState.Creating => CreatingColor,
-            HudVisualState.Sculpting or HudVisualState.Editing => ModifyingColor,
+            HudVisualState.Sculpting or HudVisualState.Editing or HudVisualState.Transforming => ModifyingColor,
             HudVisualState.Deleting => DeletingColor,
             _ => null
         };
