@@ -241,7 +241,7 @@ namespace Layout.Systems
         // THE SWAP IS WHY THIS IS A REFERENCE AND NOT MUTABLE ARRAYS. Meshes build on background workers, so
         // the old in-place mutation could be seen by some batches of a large guide and not others, leaving
         // one guide wearing two palettes until the rebuild settled. A build reads this field ONCE (see
-        // BuildGuideMesh) and uses that instance throughout, so it is always internally consistent.
+        // Build) and uses that instance throughout, so it is always internally consistent.
         // The seed matches LayoutClientConfig's defaults (body/locked/apex 0.5; anchor 0.8; grabbed 0.95).
         private static GuidePalette _palette = GuidePalette.Build(
             GuidePaletteScheme.Default, 0.50f, 0.50f, 0.50f, 0.80f, 0.95f, 0.35f);

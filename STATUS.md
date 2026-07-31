@@ -60,8 +60,13 @@ threads**, so rewriting the shared control-point list from a shape would be a da
 
 ## 3. What shipped recently
 
-Full detail in the session records; `dev/sessions/INDEX.md` indexes all 26.
+Full detail in the session records; `dev/sessions/INDEX.md` indexes all 27.
 
+- **Session 35 (no version shipped)** — audit of the documentation overhaul against source. Five stale
+  current-state claims corrected in `dev/ARCHITECTURE.md`, the chalk-refill flags moved to the right config
+  in this file, and `dev/plans/PLAN_RENDER_PERFORMANCE.md` no longer reads "not started" for work delivered
+  in Session 28. New: `GOTCHAS` **R9** and **G26**; `dev/DocCheck.ps1` 10 → **13 checks**;
+  `dev/plans/PLAN_CODE_REVIEW.md`. **`main` was levelled with `beta` at v0.4.33.**
 - **Session 34 (v0.4.28–v0.4.33)** — the Session-33 polish queue in full; **send to ground** as a third tile
   in the Transform pad; momentary tiles that visibly press; **the Players dialog became editable** at
   protocol 24 (`PlayerPolicyEditPacket` with staged caps and one Save, `PlayerJailPacket` separate and
@@ -82,9 +87,12 @@ Full detail in the session records; `dev/sessions/INDEX.md` indexes all 26.
 
 - **No open bugs.** B-S9-1 and B-S10-2 are both resolved and playtest-confirmed.
 - **Nothing is queued.** The F-queue has been empty since Session 33.
-- What remains is the **review backlog**: an adversarial code review, and a performance review of the
-  non-render code. The third item, the documentation consolidation, was **delivered on 2026-07-30** —
-  `dev/plans/PLAN_DOC_OVERHAUL.md` carries the phase log.
+- What remains is the **review backlog**: an adversarial code review — now briefed in
+  `dev/plans/PLAN_CODE_REVIEW.md`, and **to be run in a fresh session** for the reasons in its §1 — and a
+  performance review of the non-render code. The third item, the documentation consolidation, was
+  **delivered on 2026-07-30**; `dev/plans/PLAN_DOC_OVERHAUL.md` carries the phase log and the audit note.
+- **`TODO` A13** is new: sweep the XML doc comments on the pinned enums and config classes. Two were found
+  wrong on 2026-07-31, and the overhaul made source the authority those documents defer to.
 - Flagged decisions awaiting review are indexed in `dev/TODO.md`; all are cosmetic and none block play.
 
 ---

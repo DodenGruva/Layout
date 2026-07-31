@@ -118,7 +118,9 @@ namespace Layout.Config
 
         /// <summary>
         /// Which guide colour scheme to draw with, as the pinned <c>GuidePaletteScheme</c> value so a
-        /// hand-edited file stays stable across versions: 0 = Default, 1 = Red-Green Safe, 2 = High Contrast.
+        /// hand-edited file stays stable across versions: 0 = Default, 1 = Red-Green Safe, 3 = Custom.
+        /// <b>2 is RETIRED</b> (it was High Contrast, dropped in v0.4.10) and is not reusable — the number
+        /// stays burnt because a file written by 0.4.8/0.4.9 can still say 2. See <c>GuidePaletteScheme</c>.
         /// </summary>
         /// <remarks>
         /// Accessibility, not taste (F11). In the default scheme locked points are red and apex points are
