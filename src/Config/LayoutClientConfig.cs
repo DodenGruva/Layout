@@ -75,7 +75,12 @@ namespace Layout.Config
         [JsonProperty("defaultWireframe")]
         public bool DefaultWireframe { get; set; } = false;
 
-        /// <summary>The shape the tool starts on: 0 = Arch, 1 = Ellipse (pinned GuideShapeType values).</summary>
+        /// <summary>
+        /// The shape the tool starts on, as the pinned <see cref="GuideShapeType"/> value so a hand-edited
+        /// file stays stable across versions. See that enum for the full list — it is the authority, and
+        /// re-listing the values here is how this comment came to claim the only shapes were 0 = Arch and
+        /// 1 = Ellipse long after thirteen more had been added.
+        /// </summary>
         public int DefaultShape { get; set; } = (int)GuideShapeType.Arch;
 
         /// <summary>
@@ -111,9 +116,15 @@ namespace Layout.Config
 
         // ------------------------------------------------------------------------------------------
         //  Guide opacities (Session-8, item 2): every voxel-type alpha is a client visual preference,
-        //  hand-tunable here without a rebuild. 0 = invisible, 1 = solid. Applied once at client start
-        //  (edit the file, restart the client). Defaults per the Session-8 decision: body and the point
-        //  markers down to 0.5; anchors and the White grabbed highlight left where they were.
+        //  hand-tunable here without a rebuild. 0 = invisible, 1 = solid. Defaults per the Session-8
+        //  decision: body and the point markers down to 0.5; anchors and the White grabbed highlight left
+        //  where they were.
+        //
+        //  ONLY THE BODY ALPHA HAS A CONTROL. The settings page's Guide opacity slider drives OpacityBody
+        //  live (it rebuilds every mesh behind a debounce, since alpha is baked into vertex colours). The
+        //  other five are file-only and are read at client start, so those still want an edit-and-restart.
+        //  This block said "applied once at client start" for all of them until the 2026-08-01 sweep; the
+        //  slider arrived in v0.3.72 and the note never followed it.
         // ------------------------------------------------------------------------------------------
 
         /// <summary>
@@ -226,9 +237,16 @@ namespace Layout.Config
         /// </summary>
         /// <remarks>
         /// The colour is baked into the guide mesh, so switching this rebuilds every guide — instant on
-        /// ordinary guides, a few seconds of re-streaming on very large ones. At this stage the colours are
-        /// STATIC: they read the world when the guide is built and do not follow blocks placed afterwards.
-        /// <c>/layout occupancy refresh</c> re-reads. Live updating is the next stage of that plan.
+        /// ordinary guides, a few seconds of re-streaming on very large ones.
+        ///
+        /// THE COLOURS FOLLOW THE WORLD. Chisel or place a block inside a guide and its colours update a
+        /// beat later (the per-batch rebuild in <c>GuideRenderer</c>). Two cases still need
+        /// <c>/layout built refresh</c>: a guide too large to update live, which the command names when it
+        /// runs, and terrain that had not streamed in when the guide was first meshed — that one now
+        /// re-probes itself as the chunks arrive (v0.4.42).
+        ///
+        /// This remark described the colours as STATIC, with live updates "the next stage", until the
+        /// 2026-08-01 sweep. That stage shipped in v0.3.81–v0.3.82.
         /// </remarks>
         [JsonProperty("occupancyRecolour")]
         public bool OccupancyRecolour { get; set; } = false;
@@ -258,7 +276,13 @@ namespace Layout.Config
                 DefaultProjection != (int)ProjectionMode.Surface)
                 DefaultProjection = (int)ProjectionMode.Volumetric;
 
-            if (DefaultShape < (int)GuideShapeType.Arch || DefaultShape > (int)GuideShapeType.Sphere)
+            // ⚠️ NOT A HAND-WRITTEN UPPER BOUND. This read `> GuideShapeType.Sphere` from 0.1.20, when
+            // Sphere was the newest shape — and stayed that way as the whole volume family was added after
+            // it. Sphere is 7; the enum now runs to 14, so SEVEN shapes (Dome, Cylinder, Cone, Box,
+            // Tapered Cylinder, Polygonal Prism, Tapered Polygonal Prism) failed this test and were reset
+            // to Arch on every load. Closing the game with a Box selected reopened it on an Arch.
+            // Found by the 2026-08-01 doc-comment sweep; fixed v0.4.43.
+            if (!System.Enum.IsDefined(typeof(GuideShapeType), DefaultShape))
                 DefaultShape = (int)GuideShapeType.Arch;
             if (!Systems.DraftManager.IsValidPair((GuideShapeType)DefaultShape, (ShapeConstraint)DefaultConstraint))
                 DefaultConstraint = (int)ShapeConstraint.None;

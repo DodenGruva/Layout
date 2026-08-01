@@ -107,7 +107,9 @@ namespace Layout.Systems
         /// </summary>
         /// <remarks>
         /// Called once per body voxel during the build, including on background materialization threads, so
-        /// whatever backs it must tolerate concurrent calls. <see cref="BlockOccupancy"/> locks for this.
+        /// whatever backs it must tolerate concurrent calls. <see cref="BlockOccupancy"/> is safe for this
+        /// and takes NO lock — its cache has been a <c>ConcurrentDictionary</c> since v0.3.84. This remark
+        /// claimed a lock for three sessions after it was gone; see `GOTCHAS` G30 for what that cost.
         ///
         /// This is NOT a return of the retired z-fight probe. That one asked about a voxel's NEIGHBOUR and
         /// fed geometry, which is exactly why it had to go (v0.3.70): a rebuild after the player filled the

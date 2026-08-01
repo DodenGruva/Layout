@@ -240,6 +240,10 @@ namespace Layout.Systems
         // reload" bug with no wire/persistence change. A guide sits here only while its chunk is unloaded.
         private readonly HashSet<Guid> _deferredSurface = new HashSet<Guid>();
 
+        // Guides whose OCCUPANCY colours were probed against unloaded chunks — the same world-load race as
+        // _deferredSurface above, and drained by the same tick. Populated only while the recolour is on.
+        private readonly HashSet<Guid> _deferredOccupancy = new HashSet<Guid>();
+
         // RETIRED v0.3.70 — `_deferredSolidity`. Volumetric guides used to queue here when their z-fight
         // probe ran against unloaded chunks, so provisional insets could be rebuilt once terrain arrived.
         // The face offset no longer consults the world at all (see GuideMeshBuilder), so an unloaded chunk
@@ -564,16 +568,25 @@ namespace Layout.Systems
             }
         }
 
-        // ---- Block-occupancy recolour (v0.3.79, PLAN_BLOCK_OCCUPANCY stage 2) ----
+        // ---- Block-occupancy recolour (v0.3.79, PLAN_BLOCK_OCCUPANCY stages 2 AND 3) ----
         //
         // Off by default and, when off, completely inert: OccupancyProbe stays null, so a guide built with
         // the toggle off is byte-identical to one built before the feature existed, and no world reads
         // happen at all. Turning it on rebuilds every guide, because the colour is baked into vertex data.
         //
-        // STATIC BY DESIGN AT THIS STAGE. The colours reflect the world as of the last build; they do not
-        // follow blocks being placed. Live updating is stage 3 and needs either per-batch rebuilds or the
-        // shader-lookup route — the plan keeps both open, and this stage exists to establish whether the
-        // colour is worth either of them.
+        // THE COLOURS FOLLOW THE WORLD (stage 3, v0.3.81-v0.3.82; the per-batch rebuild that made it cheap
+        // enough not to stutter followed in v0.3.83-v0.3.85). A block change inside a guide marks it
+        // dirty; once the player stops changing blocks, only the BATCHES holding those blocks are re-meshed
+        // — see OnWorldBlockChanged, OnOccupancyTick and TryUpdateOccupancyBatches. The plan's other route,
+        // a shader lookup, was rejected: updates happen about twice a second and fragments tens of millions
+        // of times a second, so it would have made updates free by taxing every frame forever.
+        //
+        // Two things still are not live, both reported rather than hidden: a guide over
+        // OccupancyBatchVoxelCeiling can never be serviced (OccupancyStaleGuides), and a guide first meshed
+        // against unloaded terrain re-probes itself as the chunks arrive (_deferredOccupancy, v0.4.42).
+        //
+        // This header read "STATIC BY DESIGN AT THIS STAGE ... live updating is stage 3" until the
+        // 2026-08-01 sweep, three sessions after stage 3 shipped in the same file.
         private BlockOccupancy _occupancy;
         private bool _occupancyEnabled;
 
@@ -605,14 +618,20 @@ namespace Layout.Systems
         }
 
         /// <summary>
-        /// Discards cached occupancy and rebuilds, so the colours re-read the world as it is now. The
-        /// stage-2 stand-in for the live updates stage 3 will bring.
+        /// Discards ALL cached occupancy and rebuilds every guide, so the colours re-read the world as it
+        /// is now. What <c>/layout built refresh</c> runs.
         /// </summary>
+        /// <remarks>
+        /// The blunt instrument, not the normal path — ordinary guides follow block changes by themselves.
+        /// This is for the two cases that cannot: a guide too large to service live, and anything still
+        /// showing colours from before its terrain loaded.
+        /// </remarks>
         public void RefreshOccupancy()
         {
             if (!_occupancyEnabled) return;
             _occupancy?.Clear();
             _occupancyDirty.Clear();          // a full rebuild subsumes every pending one
+            _occupancyPermanentlyStale.Clear();
             _occupancyChangedBlocks.Clear();
             _occBatches = null;               // rebuilt meshes invalidate the recorded batch ranges
             RebuildAllForDiagnostics();
@@ -622,7 +641,14 @@ namespace Layout.Systems
         /// Guides known to be showing stale colours — changed while too large to rebuild live. Lets the UI
         /// say "these need a refresh" instead of leaving the player to wonder.
         /// </summary>
-        public int OccupancyStaleGuides => _occupancyDirty.Count;
+        public int OccupancyStaleGuides => _occupancyDirty.Count + _occupancyPermanentlyStale.Count;
+
+        /// <summary>
+        /// Guides whose colours are waiting on their terrain to load, and will re-probe themselves once it
+        /// does (v0.4.42). Distinct from <see cref="OccupancyStaleGuides"/>: those are guides too large to
+        /// update live, these are guides the world had not streamed in yet.
+        /// </summary>
+        public int OccupancyAwaitingChunks => _deferredOccupancy.Count;
 
         // ---- Stage 3: live occupancy updates ----
         //
@@ -630,6 +656,17 @@ namespace Layout.Systems
         // player stops changing blocks, not per change: a chisel burst is many events a second and each
         // one would otherwise re-mesh the guide.
         private readonly HashSet<Guid> _occupancyDirty = new HashSet<Guid>();
+
+        // Guides that are stale and can NEVER be serviced live, because they are over
+        // OccupancyBatchVoxelCeiling and BeginOccupancyBatchBuild refuses to build them a context.
+        //
+        // ⚠️ THEY ARE HELD SEPARATELY FOR A REASON (A14.5, fixed v0.4.38). They used to sit in
+        // _occupancyDirty, which they could never leave — and _occupancyChangedBlocks is cleared only when
+        // that set EMPTIES. So one >3M-voxel guide near the player meant the changed-block list grew by
+        // every qualifying block change for the rest of the session, and every 50 ms tick re-scanned the
+        // whole accumulated list on behalf of the other dirty guides. The permanent staleness is intended
+        // and still reported; the unbounded list was not.
+        private readonly HashSet<Guid> _occupancyPermanentlyStale = new HashSet<Guid>();
 
         // The blocks behind the pending dirty guides — a per-batch rebuild needs to know WHERE, not just
         // which guide. Copied on arrival: BlockPos is mutable and the caller reuses it.
@@ -716,7 +753,12 @@ namespace Layout.Systems
             foreach (Guid id in _occupancyDirty)
             {
                 _network.Guides.TryGetValue(id, out GuideData g);
-                if (g == null) { (done ??= new List<Guid>()).Add(id); continue; }
+                if (g == null)
+                {
+                    (done ??= new List<Guid>()).Add(id);
+                    _occupancyPermanentlyStale.Remove(id);   // gone entirely — not stale, just absent
+                    continue;
+                }
 
                 // EVERY guide goes through the batch path (v0.3.84), not just large ones. The old
                 // small-guide shortcut re-meshed the whole guide on the render thread, and "sub-frame" was
@@ -726,6 +768,21 @@ namespace Layout.Systems
                 if (TryUpdateOccupancyBatches(id, g, _occupancyChangedBlocks))
                 {
                     (done ??= new List<Guid>()).Add(id);
+                    // It was serviced after all — a guide that has since shrunk under the ceiling, or one
+                    // whose context already existed. It is no longer permanently stale.
+                    _occupancyPermanentlyStale.Remove(id);
+                    continue;
+                }
+
+                // OVER THE BATCH CEILING = no context will ever be built for it (see
+                // BeginOccupancyBatchBuild), so leaving it in the dirty set would pin _occupancyChangedBlocks
+                // open forever. Retire it to the permanently-stale set: still counted and still reported by
+                // OccupancyStaleGuides, but no longer holding the changed-block list hostage. A later block
+                // change near it puts it back in the dirty set, so a shrink still gets picked up.
+                if (g.CachedVoxelCount > OccupancyBatchVoxelCeiling)
+                {
+                    (done ??= new List<Guid>()).Add(id);
+                    _occupancyPermanentlyStale.Add(id);
                     continue;
                 }
 
@@ -1129,7 +1186,9 @@ namespace Layout.Systems
                 if (_occupancyListenerId != 0) _capi.Event.UnregisterGameTickListener(_occupancyListenerId);
                 _occupancyListenerId = 0;
                 _occupancyDirty.Clear();
+                _occupancyPermanentlyStale.Clear();
                 _occupancyChangedBlocks.Clear();
+                _deferredOccupancy.Clear();   // nothing to re-probe for: the colours are going away
                 _occBatches = null;   // the guide's meshes are about to be rebuilt without occupancy
 
                 // Stop any build in flight. Without this the worker parks forever in its back-pressure
@@ -1688,6 +1747,12 @@ namespace Layout.Systems
 
         private void OnGuideRemoved(Guid id)
         {
+            // A dispelled guide is not "stale", it is gone. Without this its id stayed in the
+            // permanently-stale set for the rest of the session and OccupancyStaleGuides kept counting it,
+            // because the tick's own cleanup only ever looks at ids still in the DIRTY set.
+            _occupancyPermanentlyStale.Remove(id);
+            _occupancyDirty.Remove(id);
+
             CancelSettledMaterialization(id);
             if (_pendingPlacementVisual != null
                 && _pendingPlacementVisual.AdoptedGuideId == id)
@@ -3561,7 +3626,8 @@ namespace Layout.Systems
         // rebuild churn — and self-correct the moment you walk into range.
         private void OnReprobeTick(float dt)
         {
-            if (_disposed || _deferredSurface.Count == 0) return;
+            if (_disposed) return;
+            if (_deferredSurface.Count == 0 && _deferredOccupancy.Count == 0) return;
             IBlockAccessor accessor = _capi.World?.BlockAccessor;
             if (accessor == null) return;
 
@@ -3582,12 +3648,45 @@ namespace Layout.Systems
                 if (rebuild) (ready ??= new List<Guid>()).Add(id);
             }
 
+            // The occupancy half (v0.4.42) — same race, same test, same tick. A guide sitting in BOTH sets
+            // is queued once; the rebuild below serves both, since it re-probes everything.
+            foreach (Guid id in _deferredOccupancy)
+            {
+                if (_deferredSurface.Contains(id)) continue;
+                bool rebuild = !_network.Guides.TryGetValue(id, out GuideData g) || g == null
+                    || OccupancyProbeReliable(g);
+                if (rebuild) (ready ??= new List<Guid>()).Add(id);
+            }
+
             if (ready == null) return;
             foreach (Guid id in ready)
             {
                 _deferredSurface.Remove(id);
+                _deferredOccupancy.Remove(id);
                 RebuildGuideById(id);   // re-probes; re-defers itself only if still unreliable
             }
+        }
+
+        /// <summary>
+        /// Whether the occupancy probe can currently see the world where <paramref name="guide"/> stands.
+        /// </summary>
+        /// <remarks>
+        /// ONE CHUNK LOOKUP AT THE FIRST REAL ANCHOR — the same shape of test the Surface decal side uses,
+        /// and deliberately the same one <see cref="OnReprobeTick"/> re-runs, so a guide deferred by this
+        /// is released by the very condition that deferred it. A guide with no anchor to probe reports
+        /// reliable rather than deferring forever: there is nothing here a later rebuild would read
+        /// differently.
+        /// </remarks>
+        private bool OccupancyProbeReliable(GuideData guide)
+        {
+            IBlockAccessor accessor = _capi.World?.BlockAccessor;
+            if (accessor == null) return false;
+
+            Vec3d a = FirstRealAnchor(guide?.ControlPoints);
+            if (a == null) return true;
+
+            return accessor.GetChunkAtBlockPos(new BlockPos(
+                (int)Math.Floor(a.X), (int)Math.Floor(a.Y), (int)Math.Floor(a.Z))) != null;
         }
 
         private static Vec3d FirstRealAnchor(List<ControlPoint> points)
@@ -3651,7 +3750,8 @@ namespace Layout.Systems
             bool privateAnchors = _network.ServerLayoutAvailable
                 && _network.IsLocalGuide(guide.Id);
             // Captured on the main thread, used on the worker: the closure holds the accessor and the
-            // occupancy cache, both of which tolerate that (BlockOccupancy locks).
+            // occupancy cache, both of which tolerate that (BlockOccupancy is lock-free — a
+            // ConcurrentDictionary since v0.3.84, GOTCHAS G30).
             System.Func<int, int, int, bool> occupancyProbe = OccupancyProbe();
 
             Task.Factory.StartNew(
@@ -4028,6 +4128,21 @@ namespace Layout.Systems
             // side is provisional — defer so the re-probe tick rebuilds it correctly once the area loads.
             if (isSurface && !probeReliable) _deferredSurface.Add(guide.Id);
             else _deferredSurface.Remove(guide.Id);
+
+            // THE SAME RACE, for the occupancy colours (v0.4.42, human-reported). A guide meshed while its
+            // terrain was still streaming in probes nothing but unloaded chunks, so every body voxel reads
+            // as unbuilt and the chiselling highlight stays dark for the rest of the session. Deferring it
+            // here hands it to the same re-probe tick the Surface decal side already uses — one cheap chunk
+            // lookup every 500 ms, one rebuild when the area arrives, and no rebuild at all for a guide
+            // whose chunks never load.
+            //
+            // Tested at the ANCHOR — cheap, and attributable to THIS guide, which is what a signal from
+            // BlockOccupancy itself could never be (the probe runs on materialization workers too). The
+            // other half of the fix is upstream and does the real work: a read against an unloaded chunk
+            // is no longer CACHED, so when this rebuild comes it reads the world rather than the answer
+            // the first blind pass wrote down. See BlockOccupancy.GetOrBuild.
+            if (_occupancyEnabled && !OccupancyProbeReliable(guide)) _deferredOccupancy.Add(guide.Id);
+            else _deferredOccupancy.Remove(guide.Id);
 
             Vec3d origin = ComputeOrigin(points);
 
@@ -5094,6 +5209,7 @@ namespace Layout.Systems
         private void RemoveGuideMesh(Guid id)
         {
             _deferredSurface.Remove(id);
+            _deferredOccupancy.Remove(id);
             if (_settledMaterializations.TryGetValue(id, out SettledMaterializationBuild build))
             {
                 build.Cancellation?.Cancel();
@@ -5285,6 +5401,7 @@ namespace Layout.Systems
             _guideShader?.Dispose();
             _guideShader = null;
             _deferredSurface.Clear();
+            _deferredOccupancy.Clear();
 
             if (!_whiteTexBorrowed) _whiteTex?.Dispose();   // engine-cached fallback textures stay alive
             _whiteTex = null;

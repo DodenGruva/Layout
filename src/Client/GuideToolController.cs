@@ -2640,6 +2640,9 @@ namespace Layout.Client
                 double pointRadius = Math.Max(0.10, voxel) * pointRadiusScale;
                 double bodyRadius = Math.Max(0.18, voxel);
 
+                // BROAD PHASE, before any per-point or per-segment work (v0.4.40).
+                if (!WithinTargetingReach(g, origin, dir, Math.Max(pointRadius, bodyRadius))) continue;
+
                 for (int i = 0; i < g.ControlPoints.Count; i++)
                 {
                 ControlPoint cp = g.ControlPoints[i];
@@ -2682,6 +2685,55 @@ namespace Layout.Client
             }
 
             return bestHit;
+        }
+
+        /// <summary>
+        /// Cheap rejection for a guide the view ray cannot possibly hit within <see cref="MaxReach"/>.
+        /// </summary>
+        /// <remarks>
+        /// THE MIRROR HOLDS EVERY GUIDE IN THE WORLD, and on a settled server that is most of them —
+        /// but nothing past twelve blocks is targetable at all. Without this, <see cref="FindTarget"/>
+        /// paid the full price for every one of them, 33 times a second: a fingerprint hash over each
+        /// guide's control points, a resample on any miss, and a ray test against up to 512 curve
+        /// segments. That cost grew with the WORLD rather than with what is in front of the player, which
+        /// is the shape of thing that is fine on the machine it was written on and miserable on a server
+        /// two months old.
+        ///
+        /// The box is built from the control points — phantoms INCLUDED, since they steer the curve's
+        /// ends and an arch's sit below its feet — and then grown generously before it is trusted to
+        /// reject anything. A Catmull-Rom spline bows outside the hull of its own control points, so the
+        /// padding carries a quarter of the guide's largest dimension on top of the pick radius. That is
+        /// far looser than the real overshoot; it still rejects everything that is merely far away, and
+        /// this must never make a guide the player can SEE unclickable. Rejecting nothing costs one pass
+        /// over the points, which is cheaper than the fingerprint hash it saves.
+        /// </remarks>
+        private bool WithinTargetingReach(GuideData g, Vec3d origin, Vec3d dir, double margin)
+        {
+            List<ControlPoint> points = g.ControlPoints;
+            if (points == null || points.Count == 0) return false;
+
+            double minX = double.MaxValue, minY = double.MaxValue, minZ = double.MaxValue;
+            double maxX = double.MinValue, maxY = double.MinValue, maxZ = double.MinValue;
+            for (int i = 0; i < points.Count; i++)
+            {
+                Vec3d p = points[i]?.WorldPosition;
+                if (p == null) continue;
+                if (p.X < minX) minX = p.X;
+                if (p.X > maxX) maxX = p.X;
+                if (p.Y < minY) minY = p.Y;
+                if (p.Y > maxY) maxY = p.Y;
+                if (p.Z < minZ) minZ = p.Z;
+                if (p.Z > maxZ) maxZ = p.Z;
+            }
+            if (minX > maxX) return false;      // no usable points at all
+
+            double span = Math.Max(maxX - minX, Math.Max(maxY - minY, maxZ - minZ));
+            double pad = margin + Math.Max(1.0, span * 0.25);
+
+            return RayAabbEntry(origin, dir,
+                       minX - pad, minY - pad, minZ - pad,
+                       maxX + pad, maxY + pad, maxZ + pad, out double entry)
+                   && entry <= MaxReach;
         }
 
         // Exact lock-in-place picker for B-S9-1. It intentionally samples the outline even when the guide

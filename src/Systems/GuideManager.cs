@@ -42,7 +42,23 @@ namespace Layout.Systems
         /// Rejected because the resulting public guide would occupy a block where the acting player does
         /// not have build permission. The attempted mutation has already been rolled back.
         /// </summary>
-        RejectedClaimAccess
+        RejectedClaimAccess,
+        /// <summary>
+        /// Rejected because the guide voxelises to NOTHING — no voxels at all, so there would be nothing to
+        /// see and nothing to build against.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ APPENDED LAST ON PURPOSE (<c>GOTCHAS</c> G1). This enum's integer value crosses the wire in
+        /// <c>GuidePlacementRejectedPacket</c>; inserting a member anywhere else would renumber every
+        /// status after it for older clients. (Today's client ignores the field, but that is not a licence
+        /// to renumber — it is only the reason this is safe to add at all.)
+        ///
+        /// Added v0.4.37 after a playtest found the hole: a shape whose frame check fails returns a count
+        /// of zero and an empty voxel set, and zero passes EVERY cap — so the guide was created, persisted,
+        /// listed at 0 voxels, and drawn as nothing, with no message. It is also the vector A14.8 names,
+        /// where a degenerate pushed guide costs zero voxels and evades the whole budget.
+        /// </remarks>
+        RejectedEmpty
     }
 
     /// <summary>
@@ -117,6 +133,10 @@ namespace Layout.Systems
         public static GuideOperationResult ClaimDenied(GuideData guide, BlockPos position) =>
             new GuideOperationResult(GuideOpStatus.RejectedClaimAccess, guide, 0, 0, -1,
                 position);
+
+        /// <summary>The guide contains no voxels at all — nothing to draw, nothing to build against.</summary>
+        public static GuideOperationResult Empty(GuideData guide) =>
+            new GuideOperationResult(GuideOpStatus.RejectedEmpty, guide, 0, 0, -1);
 
         public override string ToString() =>
             $"GuideOperationResult({Status}, guide={(Guide != null ? Guide.Id.ToString() : "none")}, " +
@@ -232,6 +252,9 @@ namespace Layout.Systems
         // so a personal per-guide cap can replace the server default without contaminating client authority.
         private int? _operationPerGuideVoxelCap;
         private GuideMutationAccessValidator _operationAccessValidator;
+        // Persist-coalescing scope — see BatchPersist. Server main thread only, like every field above.
+        private bool _persistSuspended;
+        private bool _persistPending;
 
         private readonly Dictionary<Guid, GuideData> _guides = new Dictionary<Guid, GuideData>();
         private readonly Dictionary<Guid, IGuideShape> _shapes = new Dictionary<Guid, IGuideShape>();
@@ -367,6 +390,31 @@ namespace Layout.Systems
             return new ActionOnDispose(() => _operationAccessValidator = previous);
         }
 
+        /// <summary>
+        /// Coalesces every <see cref="Persist"/> inside the scope into ONE save when it closes — and only
+        /// if something actually asked to persist.
+        /// </summary>
+        /// <remarks>
+        /// Persist re-serialises the WHOLE guide registry. That is fine for a single edit and badly wrong
+        /// for a bulk operation: the client-only push accepts up to 100 guides per packet and called it
+        /// once per guide, so publishing a folder of private guides re-wrote the entire world's guide data
+        /// a hundred times over (A14.8). Main-thread only, like everything else here; nesting is safe and
+        /// only the outermost scope writes.
+        /// </remarks>
+        public IDisposable BatchPersist()
+        {
+            bool outermost = !_persistSuspended;
+            _persistSuspended = true;
+            return new ActionOnDispose(() =>
+            {
+                if (!outermost) return;
+                _persistSuspended = false;
+                if (!_persistPending) return;
+                _persistPending = false;
+                Persist();
+            });
+        }
+
         private int EffectivePerGuideVoxelCap => _operationPerGuideVoxelCap ?? _perGuideVoxelCap;
 
         /// <summary>
@@ -489,6 +537,12 @@ namespace Layout.Systems
 
             int count = CountForCaps(
                 data.Id, shape, data.VoxelScale, data.IsFilled, data.IsWireframe, creatorUid);
+            // A GUIDE MADE OF NOTHING IS NOT A GUIDE. Every shape's counter returns 0 when its frame check
+            // fails (BoxShape's MinSide, and the same idiom in its siblings), and its voxel set comes back
+            // empty to match — so zero sailed through every cap, including a per-guide cap of 5,000, and
+            // the player got an invisible guide listed at 0 voxels with no message at all. Refuse it here,
+            // where the count is first known, rather than storing it and puzzling everyone later.
+            if (count <= 0) return GuideOperationResult.Empty(data);
             if (count > HardVoxelCeiling)                        // scan-guard sentinel — too big to render
                 return GuideOperationResult.OverCap(data, count, HardVoxelCeiling);
             int perGuideCap = EffectivePerGuideVoxelCap;
@@ -599,6 +653,8 @@ namespace Layout.Systems
             GuideOperationResult countLimit = CheckCreateGuideCountLimits(data.CreatorUid);
             if (countLimit.Status == GuideOpStatus.RejectedOverGuideCount) return countLimit;
 
+            // Nothing to draw — same rule as CreateGuide, applied to the immense path's committed count.
+            if (exactCount <= 0) return GuideOperationResult.Empty(data);
             if (exactCount > HardVoxelCeiling)
                 return GuideOperationResult.OverCap(data, exactCount, HardVoxelCeiling);
             int perGuideCap = EffectivePerGuideVoxelCap;
@@ -676,6 +732,12 @@ namespace Layout.Systems
             // arithmetic with it. Normal guides and every internal undo snapshot already use these values.
             if (!GuideData.IsValidVoxelScale(live.VoxelScale))
                 return GuideOperationResult.Invalid(live);
+            // Range check BEFORE the shape is adopted and counted (GOTCHAS G31). This is the seam the
+            // client-only "push" import comes through, and CountForCaps below is exactly the scan that
+            // never terminates on an out-of-world coordinate.
+            if (!GuideBounds.AllUsable(live.ControlPoints)
+                || !GuideBounds.AllUsable(live.OriginalControlPoints))
+                return GuideOperationResult.Invalid(live);
             IGuideShape shape = ShapeFactory.Adopt(live);
             shape.RecalculatePhantomPoints();
 
@@ -690,6 +752,10 @@ namespace Layout.Systems
             int count = CountForCaps(
                 live.Id, shape, live.VoxelScale, live.IsFilled, live.IsWireframe,
                 live.CreatorUid);
+            // Zero voxels — nothing to render. This is also the import seam for the client-only "push", and
+            // a degenerate pushed guide costs zero voxels, so without this it evades every voxel budget
+            // outright (A14.8's stated vector) while still consuming a registry slot and a save entry.
+            if (count <= 0) return GuideOperationResult.Empty(live);
             // Restore is also the import seam used by client-only "push". Keep the absolute rendering
             // safeguard identical to normal creation even when an administrator disables configurable
             // per-guide, creator-total, and world caps; otherwise a client-supplied snapshot could bypass
@@ -898,6 +964,11 @@ namespace Layout.Systems
         public GuideOperationResult SetHidden(Guid id, bool hidden)
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
+            // NO-OP GUARD. Persist() re-serialises the WHOLE registry, so setting hidden to the value it
+            // already has was a full save per packet — and nothing rate-limits packets. Success either way;
+            // the caller decides whether anything is worth broadcasting.
+            if (g.IsHidden == hidden)
+                return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var same) ? same : 0);
             g.IsHidden = hidden;
             Persist();
             return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var c) ? c : 0);
@@ -1677,6 +1748,10 @@ namespace Layout.Systems
             if (GuideShapeTypes.IsVolume(g.ShapeType)) return GuideOperationResult.Invalid(g);
             int clamped = divisions < 0 ? 0 : divisions > Shapes.DivisionMarks.MaxDivisions
                 ? Shapes.DivisionMarks.MaxDivisions : divisions;
+            // NO-OP GUARD — see SetHidden. Note the comparison is against the CLAMPED value, so spamming
+            // any out-of-range number repeats as a no-op too, not just the exact current one.
+            if (g.Divisions == clamped)
+                return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var same) ? same : 0);
             g.Divisions = clamped;
             Persist();
             return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var c0) ? c0 : 0);
@@ -1836,7 +1911,11 @@ namespace Layout.Systems
                 }
             }
 
-            if (_totalVoxelCap > 0)
+            // Same shrink escape as the creator-total branch above, and for the same reason: if the world
+            // is ALREADY over a newly-lowered totalVoxelCap, clamping here would stop the scan at zero and
+            // hand back the Exceeded(0) sentinel — 1 — instead of a real count, so the shrink that would
+            // bring the world back under budget could never even be measured. Count exactly in that case.
+            if (_totalVoxelCap > 0 && _totalVoxels <= _totalVoxelCap)
             {
                 int currentForId = _voxelCounts.TryGetValue(id, out int current) ? current : 0;
                 long totalWithoutGuide = _totalVoxels - currentForId;
@@ -1879,8 +1958,16 @@ namespace Layout.Systems
                 cap = playerTotalCap;
                 return true;
             }
+            // GROWTH ONLY, like both siblings above (G28). Without the second clause, setting
+            // totalVoxelCap below current world usage refused EVERY edit on EVERY guide — including the
+            // shrinks and dispels that would bring the world back under the new budget — which directly
+            // contradicts ApplyCaps' promise that lowering a cap only stops guides from growing.
             long projectedTotal = _totalVoxels - currentForId + newCount;
-            if (_totalVoxelCap > 0 && projectedTotal > _totalVoxelCap) { cap = _totalVoxelCap; return true; }
+            if (_totalVoxelCap > 0 && projectedTotal > _totalVoxelCap && projectedTotal > _totalVoxels)
+            {
+                cap = _totalVoxelCap;
+                return true;
+            }
             cap = 0;
             return false;
         }
@@ -1994,6 +2081,8 @@ namespace Layout.Systems
         // save. Never throws out of here — a serialization fault must not crash the server.
         public void Persist()
         {
+            // Inside a BatchPersist scope, remember that a save is owed and let the scope do it once.
+            if (_persistSuspended) { _persistPending = true; return; }
             try
             {
                 var root = new PersistedRoot
@@ -2077,6 +2166,22 @@ namespace Layout.Systems
                 if (g == null) continue;
                 if (g.ControlPoints == null) g.ControlPoints = new List<ControlPoint>();
                 RemoveInactiveLockMarkers(g.ControlPoints);
+
+                // A guide whose coordinates are outside the world is DROPPED, not loaded (GOTCHAS G31).
+                // ExactVoxelCount below is the scan that hangs on one, and this method is reached both
+                // from the world save (a corrupted blob would hang the server at start) and from
+                // Layout/ClientOnlyGuides/*.json (a hand-edited private file would hang the player's own
+                // client on world load). Neither needs an attacker. Logged per guide because silently
+                // losing someone's work would be the worse surprise.
+                if (!GuideBounds.AllUsable(g.ControlPoints)
+                    || !GuideBounds.AllUsable(g.OriginalControlPoints))
+                {
+                    _logger?.Warning(
+                        "[Layout] Skipped guide {0}: control points lie outside the world. The record is "
+                        + "corrupt or hand-edited; it would have hung the voxel scan.", g.Id);
+                    continue;
+                }
+
                 g.DataVersion = GuideData.CurrentDataVersion; // normalize after default-driven migration
 
                 IGuideShape shape = ShapeFactory.Adopt(g);

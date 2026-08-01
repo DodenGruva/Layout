@@ -14,6 +14,9 @@
 
 | # | Versions | Wire | Summary |
 |---|---|---|---|
+| 38 | 0.4.40–0.4.43 | — | **`TODO` A10.1 and A13 both closed** — the GUI layer read end to end (~8,000 lines; the six known traps all intact), and the doc-comment sweep finished. Four GUI defects fixed, led by the Players list going blank when a filter narrowed a long roster, and an aim loop that tested every guide in the world 33 times a second. **A regression shipped and was reverted the same session** (§3): a rewritten redraw guard could return early without clearing its own pending flag, latching the Players dialog dead after one click — `GOTCHAS` **R11**, and the trap as **G36**. The comment sweep turned up a live bug (§5): a hand-written `> Sphere` bound meant **seven of fifteen shapes were never remembered**, and the preference was overwritten on disk each load — **G38**. Chiselling highlights now light after a world load: a blind read is no longer cached — **G37**. |
+| 37 | 0.4.34–0.4.39 | — | **`TODO` A14 emptied — all twelve review defects fixed**, in the agreed order, one shippable revision each. Cap refusals now name their cap; coordinates validated at all three untrusted sources (`GuideBounds`); the two immense races; one lock per player; rate limiting. **Two defects the reviews missed matter most:** the human found in play that a guide which voxelises to NOTHING passes every cap and is created invisible and silent (§7 — also A14.8's attack vector, reached by accident), and a self-review found the HUD cap row read REFUSED permanently in five shipped zips (§9). **A14.7 finally reproduced** (§4.1) — seven of eight shapes hang at 2^27, and it corrects three things G31 asserted, including that `BoxShape` does not hang. `GOTCHAS` G33–G35, R10. |
+| 36 | — *(none shipped)* | — | **The adversarial code review (`TODO` A10.1), run against v0.4.33 — plus a second review by another model, evaluated and adopted in full.** **Twelve open defects**, led by a **P0: crafted coordinates hang the server** (scan guards bound a shape's size, never its position), and a client cap-warning event **no code has ever subscribed to**, so every edit refused for a cap fails silently. `GOTCHAS` G27–G32; findings in `TODO` A14. The two reviews overlap on nothing — correctness vs hostile-client. §6.1 records where this session's own analysis was wrong. **The GUI layer was not read.** |
 | 35 | — *(none shipped)* | — | **Audit of the doc overhaul against source.** Five stale current-state claims in `ARCHITECTURE.md`, the chalk flags in the wrong config, a plan reading "not started" for delivered work; `GOTCHAS` R9 + G26; `DocCheck` 10 → 13 checks; **`main` levelled at v0.4.33**; the code-review brief |
 | 34 | 0.4.28–0.4.33 | proto 23 → 24 | Session-33 polish queue in full, send-to-ground, momentary tile press feedback, the Players dialog made editable |
 | 33 | 0.4.15–0.4.27 | **DV 12 → 13**, proto 19 → 23 | Admin server-settings section + Save flow, Players dialog, T1 surface snap, free-angle Rectangle/Box re-gesture, Reveal Near/All, private guides confirmed uncapped |
@@ -50,9 +53,13 @@ If you are picking this project up, these five carry the most that is still load
 
 1. **`SESSION_28.md`** — the rendering arc, and the corrections to Sessions 25–27. Read before any renderer
    work, together with `dev/GOTCHAS.md` G2.
-2. **`SESSION_33.md`** — the admin arc, and §9's reasoning on why private guides are not capped.
-3. **`SESSION_34.md`** — the most recent state, and §7's measured-text-height trap.
+2. **`SESSION_37.md`** — the most recent state. What the two reviews found, what fixing all of it actually
+   took, and §4.1's reproduction, which corrects three claims made from source-tracing alone.
+3. **`SESSION_33.md`** — the admin arc, and §9's reasoning on why private guides are not capped.
 4. **`SESSION_16.md`** — Stage-A meshing, still the basis of how guides are built.
 5. **`SESSION_15.md`** — the Chalking Kit, the mod's one resource system.
+
+`SESSION_36.md` is the review that produced the backlog `SESSION_37.md` closes — read it only for the
+*reasoning* behind a finding, never for current state.
 
 Do **not** read `SESSION_26.md` alone to plan renderer work — see its banner, and `GOTCHAS` R5.

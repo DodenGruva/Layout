@@ -259,6 +259,254 @@ check 6 and personal paths.
 code span is exempt — `SESSION_34.md` quotes the bug it fixed, and a quoted defect is data, not damage.
 **Found:** Session 34 (as `modinfo.json` only); generalised 2026-07-30 after it recurred.
 
+### G27 — A packet the server sends is not feedback the player sees. Check for a subscriber.
+**Trigger:** before relying on any S→C packet to tell a player *why* something was refused — and before
+assuming an existing one already does.
+**Trap:** `ClientNetworkHandler` raises `VoxelCapWarningReceived` for every `VoxelCapWarningPacket`, and
+**nothing in the tree has ever subscribed to it.** The whole codebase holds three occurrences: the
+declaration, the invoke, and a comment saying it is "deliberately left to the HUD/tool". The server sends
+that packet from **nine** call sites; two of them also send chat text, so placements explain themselves —
+the other seven do not, and one of those seven is `HandleNonSuccessToggle`, which alone serves a dozen
+operations. The player's guide silently springs back and they are told nothing.
+**It hid because a neighbouring path works.** `LockStateChanged` is declared eleven lines above, named in
+the same comment, and has three real subscribers. And `DraftManager.TryComplete` pre-checks the per-guide
+cap CLIENT-side, so the common case — drafting something too big — is refused locally and never needs the
+event. What has no pre-check is the cumulative-player cap, the world-total cap, and **every edit**.
+**Do:** when you add a rejection packet, grep for a subscriber before believing the loop is closed. An
+event with no listener does not throw, does not log, and does not fail a build.
+**Found:** Session 36, by verifying a symptom claim rather than the code path. Detail:
+`dev/sessions/SESSION_36.md` §3.
+**FIXED v0.4.34.** All nine sites go through one `SendCapRefusal`, which names the cap server-side (the
+packet cannot — it carries a count and a limit and never says *which*), and the event now drives a HUD
+flash. ⚠️ **The throttle it needed was itself a trap:** applied to placement as well as dragging, it
+silenced the second of two deliberate placements inside four seconds. Corrected v0.4.37 — throttle the
+continuous paths, never the one-shot ones. `SESSION_37.md` §2.
+
+### G28 — The three voxel caps are NOT symmetrical. Only two allow a shrink.
+**Trigger:** before touching cap arithmetic in `GuideManager` — `WouldExceedCaps`, `CountForCaps`,
+`WouldExceedPlayerTotal`.
+**Trap:** the per-guide check is growth-only (`&& newCount > currentForId`) and `WouldExceedPlayerTotal` is
+growth-only (`&& projected > currentTotal`). **The world-total check is neither.** So when
+`_totalVoxels` already exceeds `totalVoxelCap`, every mutation of every guide is refused — including the
+ones that would reduce the total. `CountForCaps` compounds it: it lacks the `if (playerTotal <=
+playerTotalCap)` guard its per-player sibling has, so the counting limit collapses to 0 and `CountUpTo`
+returns the `Exceeded(0)` sentinel — **1** — which is the number the rejection then reports.
+This contradicts `ApplyCaps`'s own documented promise that over-cap guides "keep existing and keep
+rendering; they simply cannot grow".
+**Why it has never been hit:** `perGuideVoxelCap` (500,000) and `perPlayerTotalVoxelCap` (1,000,000) are on
+by default and are the two correct ones. `totalVoxelCap` defaults to **0 = unlimited**, so the check is
+skipped entirely until an admin sets it — one row in the settings panel.
+**Do:** keep the three symmetrical. A cap is a budget, and a budget that forbids shrinking is not one.
+**Found:** Session 36.
+**FIXED v0.4.34 — and it took BOTH clauses, not the one the finding named.** ⚠️ Fixing only
+`WouldExceedCaps` would have been actively worse: with `CountForCaps` still clamping the scan limit to zero,
+the check would then have *accepted* the `Exceeded(0)` sentinel — 1 — as the guide's real voxel count and
+written it into the running totals. **When two functions share a cap rule, they share its exceptions.**
+`SESSION_37.md` §3.
+
+### G29 — Removing a per-player pending entry BY KEY after async work can delete someone else's newer entry.
+**Trigger:** before completing or cancelling any queued per-player job that outlives the request that made
+it — the immense create and sculpt lanes, and anything added beside them.
+**Trap:** `CompleteActiveImmenseSculpt` does `_pendingImmenseSculpts.Remove(completed.PlayerUid)` with no
+identity check. Cancel a sculpt (an ordinary right-click) and the entry is dropped while the worker is still
+running; grab and reshape again and a NEW entry is created; the old worker then finishes and removes the new
+one. The second sculpt still runs and commits, but with no entry it is invisible to `OnRelease` and
+`OnCancelGrab`, so the release path frees the lock and its tick throws the work away. The reshape snaps back
+with no message. `CompleteActiveImmenseCreate` has the identical omission against
+`_playersWithPendingImmenseCreate`.
+**Do:** check identity before removing — `if (map.TryGetValue(uid, out var cur) && ReferenceEquals(cur,
+completed))`. **The correct pattern is already in this repo:**
+`GuideRenderer.FinishSettledShellMaterialization` does exactly that, and is the thing to copy.
+**Found:** Session 36.
+**FIXED v0.4.36.** The sculpt lane checks reference identity. The create lane could not — its key lives in a
+`HashSet<string>`, which has no identity to check — so it asks instead whether the queue still holds a live
+entry for that player. **A set keyed by player alone cannot answer "is this still mine"; something else has
+to.** The same revision made cancellation actually reach the worker (`volatile`, checked at each seam);
+before it, cancelling stopped nothing. `SESSION_37.md` §5.
+
+### G30 — `BlockOccupancy` is LOCK-FREE. Three comments still say it locks.
+**Trigger:** before calling `BlockOccupancy` from a new thread, or reasoning about whether a call site is
+safe.
+**Trap:** the class remarks say "THREAD SAFE, by one lock around the cache" and describe the cost of
+"millions of acquisitions"; `GuideMeshBuilder.cs` says "`BlockOccupancy` locks for this";
+`GuideRenderer.cs` says "(BlockOccupancy locks)". **The lock was removed in v0.3.84** and replaced by a
+`ConcurrentDictionary` — only the field comment records it. The overhaul made source the authority those
+documents defer to, so a wrong comment is now the thing a reader is told to trust (`TODO` A13).
+**And it is not fully safe.** `GetOrBuild`'s `TryAdd` loser reads `_blocks[key]`, assuming the winner's entry
+is still present — but `Invalidate` can have removed it from the main thread between the two, so the
+indexer throws `KeyNotFoundException` on a mesh worker. `GetOrAdd` closes it.
+**Do:** fix the comments with the code, not separately. Both halves are one trap: the comment is why the
+next reader will not look.
+**Found:** Session 36.
+**FIXED v0.4.36 — but not with `GetOrAdd`.** The loser now returns the entry it just built itself: same
+answer, and no second dictionary read to race against at all. If a newer world state has since replaced it,
+one mesh build in slightly stale colours is nothing beside an abandoned materialization and a visible
+rebuild hitch. **The cheapest fix for a read-after-write race is often not to read.**
+⚠️ The class remarks were corrected with it; the two *other* wrong comments (`GuideMeshBuilder.cs`,
+`GuideRenderer.cs`) are part of `TODO` A13's sweep and are still open. `SESSION_37.md` §5.
+
+### G31 — A scan guard bounds the shape's SIZE. Nothing bounds its POSITION.
+**Trigger:** before touching any volume voxel counter, its scan guard, or anything that turns a world
+coordinate into an `int` cell index — and before adding a new shape.
+**Trap:** every volume scanner checks that the shape is not too *big* to scan, then walks
+`for (int i = AlignDown(lo, scale); i <= AlignDown(hi, scale); i += scale)` over **absolute** cell indices.
+`AlignDown` is `(int)Math.Floor(world * 16.0 / scale) * scale` — an unchecked double→int conversion and an
+unchecked multiply. **No packet boundary validates that a coordinate is finite or inside the world**, so a
+one-block shape at a crafted coordinate passes every size guard and enters a loop whose upper bound sits
+next to `int.MaxValue`; `i += scale` wraps negative, the condition stays true, and it never terminates. The
+`count > stopAfter` escape never fires either, because the wrapped cells fail the range test before
+anything is counted. This runs **synchronously on the server tick thread** —
+`TryQueueImmenseCreate` → `CountUpTo` — from one create request by any connected client.
+**`CylinderShape` has the BETTER guard and it does not help.** It measures the real scan box in `long`,
+after an earlier over-counting bug, and still misses this: the overflow is in the absolute value, not the
+span. **A better guard of the wrong quantity is still the wrong guard.**
+**Do:** validate finite and world-bounded coordinates **at the packet boundary** — that is the cheap fix and
+it closes every shape at once — and separately move the scans to `long` or count-based iteration.
+**Added after the entry was first written:** the wire is **not the only untrusted coordinate source**, and
+the other two are not adversarial at all. `GuideManager.Load()` → `LoadPayload` → `ExactVoxelCount` reaches
+the same loops from **the private-guide file** (`Layout/ClientOnlyGuides/*.json`, hand-editable — hangs the
+player's own client on world load) and from **the world save blob** (hangs the server at start). So the
+validation belongs in **`RestoreGuide` and `LoadPayload` as well as at the packet boundary**, and this trap
+has a corruption-robustness half that stands whatever a project decides about hostile clients.
+**World size does not close it.** The mod's own code assumes ±33.5M blocks is "far beyond any world"
+(`BlockOccupancy.Key`) and the dangerous coordinate is ~134M — but the number arrives in a packet or a file,
+never from the world, and nothing compares it to the map. Ask the engine for the real bounds; the mod never
+has (`WorldManager` is used only for save-game data).
+**Found:** Session 36, by an independent review, re-verified there over three passes after that session
+first dismissed it. Detail: `dev/sessions/SESSION_36.md` §6 and §6.1.
+
+**VALIDATION FIXED v0.4.35.** `src/Guide/GuideBounds.cs` — finite, and inside the map plus 4,096 blocks of
+slack, with a hard ±33,554,432 backstop that applies before the engine has reported anything. Called at the
+packet boundary **and** `RestoreGuide` **and** `LoadPayload`, so all three untrusted sources are closed. A
+guide that fails on load is dropped with a logged warning.
+
+**REPRODUCED 2026-08-01** (Session 37 §4.1), which corrects three things this entry asserted:
+
+| | |
+|---|---|
+| The hang | **Real. Seven of eight volume shapes never return** at 2^27 = 134,217,728 — exactly where `world * 16` reaches `int.MaxValue + 1`. Correct one step below, dead on the boundary |
+| ⚠️ `BoxShape` | **Does NOT hang.** It returns 32 — a nonsense count for a four-block box, but it terminates. It was recorded above as traced end to end and confirmed. **A trace that predicts a behaviour is not an observation of it** |
+| ⚠️ Sphere / Dome | **Hang. They do not throw.** The `checked`-multiply prediction was wrong |
+| Cone, TaperedCylinder, both prisms | Inferred; now **confirmed** hanging |
+| `HardExtent` | **Verified safe with a 4× margin** — every shape answers correctly there |
+
+**Still open:** the `long`/count-based loop rewrite, now deferred on *evidence* rather than inference. It is
+unreachable through any validated entry point, so it is defence in depth. The harness is a throwaway kept
+outside the repo; §4.1 records how to rebuild it.
+
+### G32 — "The client only ever does X" is not an invariant.
+**Trigger:** before relying on client behaviour to bound anything the server allocates, holds or enforces.
+**Trap:** `GuideLockManager` enforces one holder **per guide** and leaves the per-**player** limit to a
+parenthetical in its own remarks — *"A single player holding locks on two guides at once is not prevented
+here (the client only ever grabs one at a time)"*. `OnGrab` never releases the previous lock, so a modified
+client can lock every guide in the world and hold them until it disconnects. Meanwhile `DragFor` replaces
+the player's single drag session, so the two halves already disagree about how many guides one player can be
+editing. The admin lock-override covers dispel and the toggles but **explicitly not geometry edits**, so the
+remedy is partial.
+**The same shape appears elsewhere:** unbounded edit arrays and no request rate anywhere
+(`TODO` A14.9), and an import endpoint that trusts a request it never verifies was sent (A14.8).
+**Do:** when a comment says the client only does X, treat that as the thing to enforce server-side, not as
+a reason not to. Related: **G27**, where one side of the wire relies on a listener the other never had.
+**Found:** Session 36, by an independent review.
+**FIXED v0.4.36.** `ReleaseOtherLocksForPlayer` enforces one guide per player, called on every grab.
+⚠️ **One exemption, and it is not a loophole:** a player's in-flight immense reshape keeps its lock. That
+lock is held by work already running and ends by itself; yanking it would abandon a reshape the player
+legitimately started and already released. The unbounded arrays and missing rate limits named below were
+fixed across v0.4.36 and v0.4.38. `SESSION_37.md` §6.
+
+### G33 — `long.MinValue` is not a safe "never" sentinel for a timestamp. It overflows the subtraction.
+**Trigger:** before seeding any "when did this last happen" field with a value meaning *never*, and before
+writing `now - lastX < window`.
+**Trap:** `long.MinValue` reads as the obvious "infinitely long ago", so *"has this happened in the last
+2.5 seconds"* looks trivially false. It is the opposite. `ElapsedMilliseconds - long.MinValue` **overflows
+`long` and wraps to a large NEGATIVE number**, which is less than any window, so the test reads **true** —
+forever, until the field is first written for real.
+**What it cost:** `GuideHud`'s cap row read `REFUSED — over cap` from the moment the HUD opened, in
+**v0.4.34 through v0.4.38** — five shipped versions. It builds clean, it is one line, and it is invisible to
+anything but running it.
+**Do:** use **0** and test for it explicitly (`_lastX > 0 && now - _lastX < window`). `ElapsedMilliseconds`
+only ever counts up from zero, so zero is unambiguous and cannot overflow anything.
+**Found:** Session 37, by reviewing its own diff — not by any compiler, and not by five rounds of shipping.
+`dev/sessions/SESSION_37.md` §9.
+
+### G34 — A shape that fails its own frame check reports ZERO voxels, and zero passes every cap.
+**Trigger:** before adding a cap, a budget or a voxel-count check — and before assuming the count reaching
+one is a real measurement.
+**Trap:** every shape's counter returns **0** when its frame check fails — `BoxShape`'s `MinSide`, and the
+same idiom in its siblings — with an empty voxel set to match. Cap checks are all *upper* bounds, so **zero
+satisfies all of them**: the per-guide cap, the creator total, the world total, and `HardVoxelCeiling`. The
+guide is therefore accepted, persisted, listed at 0 voxels, drawn as nothing, and **no message is sent**,
+because from the server's point of view nothing was refused.
+⚠️ **This is not an exotic input.** Place a guide with the two clicks too close together. The human hit it
+in ordinary play inside a minute, having set a 5,000 per-guide cap and expecting the cap to be what failed.
+⚠️ **It is also A14.8's stated hostile-client vector, reached by accident** — the second review filed
+"degenerate geometry costs zero voxels, so it evades the voxel budget entirely" as something an attacker
+would craft.
+**Do:** treat zero as its own rejection, not as a small number. `GuideOpStatus.RejectedEmpty`, enforced at
+all three creation entry points. A guide made of nothing is not a guide.
+**Found:** Session 37, in play, by the human. Neither code review found it. `SESSION_37.md` §7.
+
+### G35 — Never rate-limit the packet that RELEASES a resource.
+**Trigger:** before adding any throttle, budget or drop rule to a message handler.
+**Trap:** a rate limiter drops packets. Applied indiscriminately it drops the ones that *free* things —
+`GuideReleasePacket`, `GuideCancelGrabPacket` — and a dropped release leaves the player holding an edit lock
+nobody else can take until they disconnect. **The limiter then manufactures the exact defect it shares a
+revision with:** v0.4.36 fixed lock hoarding (G32) and v0.4.38's first draft of the rate limit re-created it.
+**Do:** split handlers by what they do to resources, not by how expensive they look. Acquire, mutate and
+broadcast pay; **release and cancel are exempt.** They are also self-limiting — releasing a guide you do not
+hold is a dictionary lookup and nothing else.
+**Do also:** make a limiter **loud**. A silently dropped edit reads to a player as "the mod ignored me" and
+is miserable to diagnose, so ours logs when it trips. If that line ever appears in ordinary play, the number
+is wrong, not the player.
+**Found:** Session 37, by reviewing its own diff before shipping. `SESSION_37.md` §9.
+
+### G36 — A "work is already queued" flag must never outlive its callback.
+**Trigger:** before touching any debounce, coalescing guard or deferred-recompose scheduler — anywhere a
+boolean means "something is already scheduled, so do nothing".
+**Trap:** the guard's whole job is to make later callers cheap no-ops. If its callback can ever return
+early — a moved deadline, a changed generation, a stale-check — **without either clearing the flag or
+scheduling another callback**, the flag latches true with nothing in flight, and from that instant every
+caller takes the do-nothing path. Nothing throws and nothing logs.
+**On a GUI it is invisible until a human clicks.** `GuidePlayersDialog` went dead after its first click in
+v0.4.40: tabs stayed pressed in because the redraw that repaints them never ran, and selecting a player
+changed state and not pixels.
+**Do:** make the clear unconditional — the shipped guard sets the flag, registers one callback, and that
+callback *always* clears it, with an `IsOpened()` check to neutralise a late fire. If a deadline genuinely
+has to move, the early-return branch must schedule the remainder; it may never simply return.
+**Do also:** weigh what the optimisation buys. This one was chasing a third of a second on one uncommon
+interleaving, inside a panel that already worked. See **R11**.
+**Found:** Session 38, in play by the human. `SESSION_38.md` §3.
+
+### G37 — "I cannot see it" cached as "there is nothing there" freezes forever.
+**Trigger:** before caching the result of any world read that can fail because data is not resident —
+unloaded chunks above all.
+**Trap:** an unloaded chunk reads as air. Answering "empty" for the build in hand is correct; **writing it
+into a cache is not**, because it is a fact about what was loaded, not about the world. It only stays safe
+if something invalidates the entry when the data arrives — and block-change invalidation does not, because
+**a chunk load is not a block change**. `BlockOccupancy` did exactly this from v0.3.79 to v0.4.41: a guide
+meshed while terrain streamed in recorded "no material anywhere" and kept it for the session, so the
+chiselling highlight never lit after a world load and only a full cache clear brought it back.
+**Do:** keep "cannot see" and "empty" as different values — `TryRead` returns false rather than an empty
+entry — and use the answer without storing it.
+**Do also:** something must ask again. The renderer already had `_deferredSurface` + `OnReprobeTick` for the
+identical race on Surface decal sides; occupancy joined it (`_deferredOccupancy`) rather than growing a
+second mechanism.
+**Found:** Session 38, in play by the human. `SESSION_38.md` §4.
+
+### G38 — Never bound a pinned enum with a hand-written member name.
+**Trigger:** before writing any validity check of the form `value > (int)SomeEnum.LastOne`, in config
+normalisation, wire validation or a parser.
+**Trap:** it is correct the day it is written and silently wrong the day the enum grows.
+`LayoutClientConfig.Normalize` used `> GuideShapeType.Sphere` from 0.1.20, when Sphere was the newest
+shape; the whole 3D volume family was appended after it. Sphere is 7 and the enum reaches 14, so **seven of
+fifteen shapes failed the check** and were reset to Arch. **Worse than ignored — overwritten:** the
+normalised config is written straight back to disk on load, so the player's choice was destroyed every
+launch, in silence.
+**Do:** `Enum.IsDefined`, or a predicate that derives its own range. A little reflection on a once-per-load
+path is worth a check that cannot go stale. A repo-wide sweep after the fix found no other instance.
+**Found:** Session 38, by `TODO` A13's comment sweep — the bug was under a comment that listed the same
+enum's values incompletely, which is the same drift wearing a different hat. `SESSION_38.md` §5.
+
 ---
 
 ## Reversals and disproved claims
@@ -348,6 +596,47 @@ failure mode above cannot occur. The distinction is the whole reason it was allo
 
 **The Surface-mode air-side probe is a different thing again, and is still live.** It picks which side of a
 wall a flat decal hugs. Only the volumetric one was retired.
+
+### R10 — "Gate the private-guide push on an outstanding server request." Proposed and rejected, v0.4.38.
+**Do not require `ClientGuidePushRequestPacket` before accepting `ClientGuidePushPacket`.**
+
+Session 36's second review filed it as a defect that *"nothing tracks whether the server ever sent
+`ClientGuidePushRequestPacket`"*, and the obvious fix is to demand one. **It would break the shipped GUI.**
+The settings page's **Publish Private Guides** button calls `SendPrivateGuidePush` directly, with no request
+from the server, by design — and `ClientNetworkHandler` says so in as many words: the request packet is
+*"the server's way of asking, never a permission token"*, because the handler re-validates client-only mode
+and privilege on receipt regardless of how the push started.
+
+The finding underneath it is real — **100 guides per packet and unlimited packets** — so it was answered with
+a **per-player cooldown** instead, which bounds the same thing without inventing a permission the protocol
+never had.
+
+⚠️ **The wider lesson, and the reason this is here rather than in a session file:** the second review's
+findings were re-verified against this tree before acting precisely because its line anchors were known to be
+off. This one was correct about the *symptom* and wrong about the *remedy* — a category the re-verification
+step had not been looking for. Check a proposed fix against the code it would change, not only the finding
+against the code it describes.
+
+### R11 — "Earliest request wins" in the Players dialog's redraw guard. Applied v0.4.40, reverted v0.4.41.
+**Do not replace `GuidePlayersDialog.DeferRecompose`'s first-wins guard with a deadline scheme.** It has
+been tried; it shipped a dead panel to the human.
+
+The reasoning that was **right**: the panel batches redraws at 30 ms and the filter debounces at 350 ms, so
+a row click made shortly after a keystroke was folded into the filter's later redraw — it waited out the
+debounce *and* arrived carrying the filter's focus request, which is the one thing `_restoreFilterFocus`
+exists to prevent. That really happens.
+
+The reasoning that was **wrong**: that the fix needed a moving deadline. Pulling a deadline in requires a
+second callback, because the one in flight is scheduled for the later time — and the new callback's
+stand-down branch returned without clearing the pending flag, latching the dialog dead after one click
+(**G36**).
+
+**The focus half never needed any of it.** Clearing `_restoreFilterFocus` in each click path fixes the
+behaviour that mattered and cannot latch anything; that is what shipped. What remains unfixed is up to a
+third of a second of latency on one uncommon interleaving — **an acceptable price, and not worth a second
+attempt at this.** If it is ever revisited, the scheme must reschedule the remainder rather than return.
+
+**Detail:** `SESSION_38.md` §3.
 
 ---
 

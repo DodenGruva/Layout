@@ -112,7 +112,15 @@ namespace Layout.Systems
         /// create validation can therefore run this part on its isolated worker and time-slice only the
         /// resulting authoritative claim lookups on the server thread.
         /// </summary>
-        internal static List<BlockPos> BuildFootprint(GuideData guide, IGuideShape shape)
+        /// <param name="cancelled">
+        /// Optional abandon probe for the off-thread immense callers. When it returns true this method
+        /// returns <c>null</c> — NOT an empty list. An empty footprint reads as "no blocks to check", which
+        /// would skip claim validation entirely; a null is impossible to mistake for a completed one and
+        /// forces the caller to discard the whole result. The synchronous caller passes nothing and is
+        /// therefore unaffected.
+        /// </param>
+        internal static List<BlockPos> BuildFootprint(
+            GuideData guide, IGuideShape shape, Func<bool> cancelled = null)
         {
             var result = new List<BlockPos>();
             if (guide == null || shape == null) return result;
@@ -129,6 +137,10 @@ namespace Layout.Systems
 
             for (int i = 0; i < voxels.Count; i++)
             {
+                // Every 2048 cells — often enough to drop a cancelled immense guide promptly, rare enough
+                // that the delegate call is nothing beside the collapse itself.
+                if ((i & 2047) == 0 && cancelled != null && cancelled()) return null;
+
                 VoxelPosition voxel = voxels[i];
                 int bx = BlockCoordinate(voxel.X);
                 int by = BlockCoordinate(voxel.Y);

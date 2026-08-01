@@ -49,8 +49,10 @@ namespace Layout.Network
         public const string Name = "layout";
 
         /// <summary>
-        /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
-        /// future client can detect a mismatch; informational for now (there is only one version).
+        /// Bumped when the packet set or a field's meaning changes. Carried in the bulk sync so a client
+        /// can detect a mismatch; still INFORMATIONAL — nothing refuses to talk on a version difference,
+        /// because every change so far has been append-only and therefore back-compatible by construction.
+        /// <c>dev/WIRE_HISTORY.md</c> records what each number added.
         /// </summary>
         public const int ProtocolVersion = 24;
     }

@@ -102,6 +102,39 @@ namespace Layout.Network
         private readonly HashSet<string> _hotbarRefillOptIn = new HashSet<string>();
         private const int MaxGuidesPerPush = 100;
 
+        /// <summary>Defensive ceiling on a PUSHED guide's point lists. A Free-Shape's own limit is 64.</summary>
+        private const int MaxPushedControlPoints = 1024;
+
+        // Minimum gap between one player's private-guide pushes. Generous — this is a deliberate,
+        // occasional action (a chat command or a settings-page button), never something held down.
+        private const long PushCooldownMilliseconds = 3000;
+        private readonly Dictionary<string, long> _lastPushAt = new Dictionary<string, long>();
+
+        // ---- Per-player mutation rate limit (A14.9) --------------------------------------------------
+        //
+        // There was NO rate limit on any handler. One update packet can run geometry work, voxel counting,
+        // claim validation, a full-registry save and a broadcast to everyone — and a client could send
+        // them as fast as it liked.
+        //
+        // DELIBERATELY FAR ABOVE ANYTHING A PLAYER CAN DO. A drag sends roughly ten updates a second; the
+        // sustained allowance here is 120 a second, and the bucket holds a further two seconds' worth for
+        // bursts. Normal play — including fast dragging, rapid toggling, and holding undo down — should
+        // never come near it, so if this ever fires during ordinary play the number is wrong, not the
+        // player. That is why it logs when it trips: a silently-ignored edit is a miserable thing to
+        // diagnose, so it leaves a trail.
+        private const double RateBucketCapacity = 240.0;
+        private const double RateBucketRefillPerSecond = 120.0;
+
+        private sealed class RateBucket
+        {
+            public double Tokens = RateBucketCapacity;
+            public long LastMs;
+            public long LastWarnMs;
+        }
+
+        private readonly Dictionary<string, RateBucket> _rateBuckets =
+            new Dictionary<string, RateBucket>();
+
         // Immense public placements take a second path. The tick thread only performs a small threshold
         // probe and bounded claim lookups; one low-priority worker at a time owns the expensive pure geometry.
         private const int StreamedCreateVoxelThreshold = 8000;
@@ -125,7 +158,13 @@ namespace Layout.Network
             public Task<ImmenseCreateGeometry> GeometryTask;
             public ImmenseCreateGeometry Geometry;
             public int ClaimIndex;
-            public bool Cancelled;
+            public int ClaimRevision = -1;
+            public int ClaimRestarts;
+
+            // VOLATILE since v0.4.36: set on the server tick thread, now READ BY THE WORKER. Before this it
+            // was tick-thread-only and cancelling did not stop anything — the geometry ran to completion
+            // with the single validator lane occupied, however long after the player gave up.
+            public volatile bool Cancelled;
         }
 
         private readonly Queue<PendingImmenseCreate> _immenseCreateQueue =
@@ -147,8 +186,12 @@ namespace Layout.Network
             public Task<ImmenseCreateGeometry> GeometryTask;
             public ImmenseCreateGeometry Geometry;
             public int ClaimIndex;
+            public int ClaimRevision = -1;
+            public int ClaimRestarts;
             public bool ReleaseRequested;
-            public bool Cancelled;
+
+            // VOLATILE — see PendingImmenseCreate.Cancelled above; same reason, same thread pairing.
+            public volatile bool Cancelled;
         }
 
         private readonly Queue<PendingImmenseSculpt> _immenseSculptQueue =
@@ -193,6 +236,15 @@ namespace Layout.Network
         // drafts and a disconnect can clean the anchor up.
         private readonly Dictionary<string, Vec3d> _draftAnchors = new Dictionary<string, Vec3d>();
 
+        // Last cap-refusal sentence sent to each player, and when. A refused DRAG re-fires the cap path
+        // roughly ten times a second, so the chat line has to be throttled or the fix is worse than the
+        // silence it replaces. Keyed on the sentence, not the player alone: hitting a different cap is
+        // new information and says so immediately. The WARNING PACKET is never throttled — it was already
+        // flowing at that rate and it is what the HUD gauge reads.
+        private const long CapRefusalRepeatMilliseconds = 4000;
+        private readonly Dictionary<string, (string Message, long At)> _lastCapRefusal =
+            new Dictionary<string, (string, long)>();
+
         public ServerNetworkHandler(
             ICoreServerAPI sapi,
             GuideManager guideManager,
@@ -218,41 +270,50 @@ namespace Layout.Network
             _channel = _sapi.Network.RegisterChannel(LayoutChannel.Name);
             LayoutPackets.RegisterMessageTypes(_channel);
 
+            // The cost weights: 1 for a per-drag edit or a toggle, 5 for a placement that can queue
+            // geometry work, 10 for anything that sweeps the whole registry. See RateBucketCapacity.
             _channel
-                .SetMessageHandler<GuideCreateRequestPacket>((p, x) => WithPlayerVoxelCap(p, () => OnCreateRequest(p, x)))
+                .SetMessageHandler<GuideCreateRequestPacket>((p, x) => Gated(p, 5, () => OnCreateRequest(p, x)))
                 .SetMessageHandler<ChalkChargePacket>(OnChalkCharge)
                 .SetMessageHandler<ChalkInventoryRefillPacket>(OnInventoryChalkRefill)
                 .SetMessageHandler<ChalkRefillPrefsPacket>(OnChalkRefillPrefs)
-                .SetMessageHandler<GuideGrabPacket>((p, x) => WithPlayerVoxelCap(p, () => OnGrab(p, x)))
+                .SetMessageHandler<GuideGrabPacket>((p, x) => Gated(p, 1, () => OnGrab(p, x)))
+                // ⚠️ RELEASE AND CANCEL ARE NOT RATE LIMITED, deliberately. They are the packets that GIVE
+                // BACK a lock and end a drag. Dropping one leaves the player holding a guide nobody else
+                // can edit until they disconnect — the rate limiter would be manufacturing exactly the
+                // lock-hoarding A14.10 just fixed. Both are also self-limiting: releasing a guide you do
+                // not hold does nothing, so a repeat costs a dictionary lookup.
                 .SetMessageHandler<GuideReleasePacket>((p, x) => WithPlayerVoxelCap(p, () => OnRelease(p, x)))
                 .SetMessageHandler<GuideCancelGrabPacket>((p, x) => WithPlayerVoxelCap(p, () => OnCancelGrab(p, x)))
-                .SetMessageHandler<GuideUpdatePacket>((p, x) => WithPlayerVoxelCap(p, () => OnUpdate(p, x)))
-                .SetMessageHandler<GuideInsertPointPacket>((p, x) => WithPlayerVoxelCap(p, () => OnInsert(p, x)))
-                .SetMessageHandler<GuideDeletePacket>((p, x) => WithPlayerVoxelCap(p, () => OnDelete(p, x)))
-                .SetMessageHandler<GuideHidePacket>((p, x) => WithPlayerVoxelCap(p, () => OnHide(p, x)))
-                .SetMessageHandler<GuideLockPointPacket>((p, x) => WithPlayerVoxelCap(p, () => OnLockPoint(p, x)))
-                .SetMessageHandler<GuideRescalePacket>((p, x) => WithPlayerVoxelCap(p, () => OnRescale(p, x)))
-                .SetMessageHandler<GuideSetProjectionPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetProjection(p, x)))
-                .SetMessageHandler<GuideSetFilledPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetFilled(p, x)))
-                .SetMessageHandler<GuideSetWireframePacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetWireframe(p, x)))
-                .SetMessageHandler<GuideSetDivisionsPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetDivisions(p, x)))
-                .SetMessageHandler<GuideSetSidesPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSetSides(p, x)))
-                .SetMessageHandler<GuideSpringBackPacket>((p, x) => WithPlayerVoxelCap(p, () => OnSpringBack(p, x)))
-                .SetMessageHandler<GuideTranslatePacket>((p, x) => WithPlayerVoxelCap(p, () => OnTranslate(p, x)))
-                .SetMessageHandler<GuideRotatePacket>((p, x) => WithPlayerVoxelCap(p, () => OnRotate(p, x)))
-                .SetMessageHandler<GuideTransformPacket>((p, x) => WithPlayerVoxelCap(p, () => OnTransform(p, x)))
-                .SetMessageHandler<DraftStartPacket>(OnDraftStart)
+                .SetMessageHandler<GuideUpdatePacket>((p, x) => Gated(p, 1, () => OnUpdate(p, x)))
+                .SetMessageHandler<GuideInsertPointPacket>((p, x) => Gated(p, 2, () => OnInsert(p, x)))
+                .SetMessageHandler<GuideDeletePacket>((p, x) => Gated(p, 2, () => OnDelete(p, x)))
+                .SetMessageHandler<GuideHidePacket>((p, x) => Gated(p, 1, () => OnHide(p, x)))
+                .SetMessageHandler<GuideLockPointPacket>((p, x) => Gated(p, 1, () => OnLockPoint(p, x)))
+                .SetMessageHandler<GuideRescalePacket>((p, x) => Gated(p, 2, () => OnRescale(p, x)))
+                .SetMessageHandler<GuideSetProjectionPacket>((p, x) => Gated(p, 1, () => OnSetProjection(p, x)))
+                .SetMessageHandler<GuideSetFilledPacket>((p, x) => Gated(p, 1, () => OnSetFilled(p, x)))
+                .SetMessageHandler<GuideSetWireframePacket>((p, x) => Gated(p, 1, () => OnSetWireframe(p, x)))
+                .SetMessageHandler<GuideSetDivisionsPacket>((p, x) => Gated(p, 1, () => OnSetDivisions(p, x)))
+                .SetMessageHandler<GuideSetSidesPacket>((p, x) => Gated(p, 1, () => OnSetSides(p, x)))
+                .SetMessageHandler<GuideSpringBackPacket>((p, x) => Gated(p, 2, () => OnSpringBack(p, x)))
+                .SetMessageHandler<GuideTranslatePacket>((p, x) => Gated(p, 1, () => OnTranslate(p, x)))
+                .SetMessageHandler<GuideRotatePacket>((p, x) => Gated(p, 1, () => OnRotate(p, x)))
+                .SetMessageHandler<GuideTransformPacket>((p, x) => Gated(p, 2, () => OnTransform(p, x)))
+                // Draft START runs a claim check and BROADCASTS the anchor to everyone, so it belongs in the
+                // budget. Draft CANCEL is cleanup and is left alone for the same reason as release.
+                .SetMessageHandler<DraftStartPacket>((p, x) => { if (!RateLimited(p, 1)) OnDraftStart(p, x); })
                 .SetMessageHandler<DraftCancelPacket>(OnDraftCancel)
-                .SetMessageHandler<UndoRequestPacket>((p, x) => WithPlayerVoxelCap(p, () => OnUndo(p, x)))
-                .SetMessageHandler<RedoRequestPacket>((p, x) => WithPlayerVoxelCap(p, () => OnRedo(p, x)))
+                .SetMessageHandler<UndoRequestPacket>((p, x) => Gated(p, 2, () => OnUndo(p, x)))
+                .SetMessageHandler<RedoRequestPacket>((p, x) => Gated(p, 2, () => OnRedo(p, x)))
                 .SetMessageHandler<LayoutAdminConfigRequestPacket>(OnAdminConfigRequest)
-                .SetMessageHandler<GuideRevealMinePacket>((p, x) => WithPlayerVoxelCap(p, () => OnRevealMine(p, x)))
+                .SetMessageHandler<GuideRevealMinePacket>((p, x) => Gated(p, 10, () => OnRevealMine(p, x)))
                 .SetMessageHandler<PlayerRosterRequestPacket>(OnPlayerRosterRequest)
                 .SetMessageHandler<PlayerGuidesRequestPacket>(OnPlayerGuidesRequest)
                 .SetMessageHandler<PlayerPolicyEditPacket>(OnPlayerPolicyEdit)
                 .SetMessageHandler<PlayerJailPacket>(OnPlayerJail)
                 .SetMessageHandler<ClientPlacementModeRequestPacket>(OnClientPlacementModeRequest)
-                .SetMessageHandler<ClientGuidePushPacket>((p, x) => WithPlayerVoxelCap(p, () => OnClientGuidePush(p, x)));
+                .SetMessageHandler<ClientGuidePushPacket>((p, x) => Gated(p, 10, () => OnClientGuidePush(p, x)));
 
             _sapi.Event.PlayerNowPlaying += OnPlayerNowPlaying;
             _sapi.Event.PlayerDisconnect += OnPlayerDisconnect;
@@ -708,6 +769,9 @@ namespace Layout.Network
             _drags.Remove(uid);
             _clientOnlyPlayers.Remove(uid);
             _hotbarRefillOptIn.Remove(uid);
+            _lastCapRefusal.Remove(uid);
+            _lastPushAt.Remove(uid);
+            _rateBuckets.Remove(uid);
             CancelPendingImmenseCreate(uid);
             CancelPendingImmenseSculpt(uid);
 
@@ -768,11 +832,43 @@ namespace Layout.Network
                 return;
             }
 
+            // A server that does not allow private guides at all has no business ACCEPTING a folder of
+            // them. The handler checked client-only mode and jail and never this (A14.8).
+            //
+            // NOT A CAP, so R1 is untouched: R1 settles that private guides are not subject to the voxel
+            // budgets, because private guides consume no shared resource. A guide being PUBLISHED consumes
+            // both — and this check is about authorisation, not budget, on a server whose admin turned the
+            // whole private-guide feature off.
+            if (!_allowClientOnlyMode)
+            {
+                _channel.SendPacket(new ClientGuidePushResultPacket(
+                    Array.Empty<byte[]>(), packet?.Guides?.Length ?? 0,
+                    "This server does not allow private Layout guides."), player);
+                return;
+            }
+
             if (DeniedByPrivilege(player))
             {
                 _channel.SendPacket(new ClientGuidePushResultPacket(
                     Array.Empty<byte[]>(), packet?.Guides?.Length ?? 0,
                     "Your access to public Layout guides is restricted."), player);
+                return;
+            }
+
+            // ONE PUSH AT A TIME. MaxGuidesPerPush bounds a single packet at 100 and nothing bounded the
+            // PACKETS, so an unbounded stream of them was accepted — each one running claim validation,
+            // voxel counting and (before BatchPersist below) a full registry save per guide.
+            //
+            // ⚠️ Deliberately a cooldown and NOT "require an outstanding server request", which is what the
+            // review proposed. `ClientGuidePushPacket` is legitimately sent unprompted by the settings
+            // page's "Publish Private Guides" button; ClientNetworkHandler documents the request packet as
+            // "the server's way of asking, never a permission token". Gating on it would break the shipped
+            // GUI button.
+            if (PushThrottled(player.PlayerUID))
+            {
+                _channel.SendPacket(new ClientGuidePushResultPacket(
+                    Array.Empty<byte[]>(), packet?.Guides?.Length ?? 0,
+                    "Still publishing your last batch. Try again in a moment."), player);
                 return;
             }
 
@@ -782,6 +878,10 @@ namespace Layout.Network
             int rejected = Math.Max(0, incoming.Length - MaxGuidesPerPush);
             int count = Math.Min(incoming.Length, MaxGuidesPerPush);
 
+            // ONE SAVE for the whole batch instead of one per accepted guide. Persist() re-serialises the
+            // entire world's guide registry; publishing 100 guides used to write it 100 times (A14.8).
+            using IDisposable batched = _guides.BatchPersist();
+
             for (int i = 0; i < count; i++)
             {
                 try
@@ -789,6 +889,16 @@ namespace Layout.Network
                     GuideData candidate = incoming[i]?.ToGuideData();
                     Guid localId = candidate?.Id ?? Guid.Empty;
                     if (candidate == null || localId == Guid.Empty)
+                    {
+                        rejected++;
+                        continue;
+                    }
+
+                    // Both point lists arrive from the client and were copied wholesale with no length
+                    // check. No real guide comes close to this ceiling — a Free-Shape tops out at 64
+                    // corners — so it only ever refuses a list built to be big.
+                    if (candidate.ControlPoints?.Count > MaxPushedControlPoints
+                        || candidate.OriginalControlPoints?.Count > MaxPushedControlPoints)
                     {
                         rejected++;
                         continue;
@@ -867,6 +977,19 @@ namespace Layout.Network
 
             Vec3d start = p.Start.ToVec3d();
             Vec3d end = p.End.ToVec3d();
+
+            // RANGE CHECK, before anything scans these (GOTCHAS G31). Every shape's scan guard bounds the
+            // shape's SIZE and never its POSITION, so a one-block box at a crafted coordinate passes the
+            // guard and enters a lattice loop that overflows int and never terminates — on the SERVER TICK
+            // THREAD. Vec3Dto is three raw doubles off the wire and was compared to nothing at all.
+            if (!GuideBounds.IsUsable(start) || !GuideBounds.IsUsable(end)
+                || !GuideBounds.IsUsable(p.Apex?.ToVec3d()) || !GuideBounds.IsUsable(p.Rim?.ToVec3d()))
+            {
+                RejectOutOfWorld(fromPlayer);
+                SendPlacementRejected(fromPlayer, GuideOpStatus.InvalidArgument);
+                return;
+            }
+
             GuideRenderSettings settings = p.Settings.ToRenderSettings();
 
             var shapeType = (GuideShapeType)p.ShapeType;
@@ -881,7 +1004,14 @@ namespace Layout.Network
                 foreach (Vec3Dto c in p.Chain)
                 {
                     if (c == null) { chain = null; break; }
-                    chain.Add(c.ToVec3d());
+                    Vec3d corner = c.ToVec3d();
+                    if (!GuideBounds.IsUsable(corner))
+                    {
+                        RejectOutOfWorld(fromPlayer);
+                        SendPlacementRejected(fromPlayer, GuideOpStatus.InvalidArgument);
+                        return;
+                    }
+                    chain.Add(corner);
                 }
             }
 
@@ -921,26 +1051,13 @@ namespace Layout.Network
 
                 case GuideOpStatus.RejectedOverCap:
                     // Small guides and already-refined drafts pre-check the per-guide cap. An immense public
-                    // shell may deliberately defer that expensive final count here. The HUD cap-flash is tied to a guide id
-                    // that doesn't exist yet, so it never showed — send a CLEAR ingame error instead
-                    // (v0.1.26 fix: previously this rejection was effectively silent). Leave the draft so
-                    // the player can shrink it or dispel some guides and retry.
-                    if (result.CapLimit >= GuideManager.HardVoxelCeiling)
-                        fromPlayer.SendIngameError("layout-toolarge", TooLargeText(result));
-                    else if (_policies.EffectiveVoxelCap(fromPlayer.PlayerUID, _guides.PerGuideVoxelCap) > 0
-                        && result.CapLimit == _policies.EffectiveVoxelCap(
-                            fromPlayer.PlayerUID, _guides.PerGuideVoxelCap))
-                        fromPlayer.SendIngameError("layout-overcap", PerGuideCapText(result));
-                    else if (_guides.EffectivePerPlayerTotalVoxelCap(
-                        fromPlayer.PlayerUID) > 0
-                        && result.CapLimit == _guides.EffectivePerPlayerTotalVoxelCap(
-                            fromPlayer.PlayerUID))
-                        fromPlayer.SendIngameError("layout-playerovercap", PlayerCapText(result));
-                    else
-                        fromPlayer.SendIngameError("layout-overcap", WorldCapText(result));
-                    _channel.SendPacket(
-                        new VoxelCapWarningPacket(result.Guide.Id, result.VoxelCount, result.CapLimit),
-                        fromPlayer);
+                    // shell may deliberately defer that expensive final count here. The HUD cap-flash was
+                    // tied to a guide id that doesn't exist yet, so it never showed — a CLEAR ingame error
+                    // is the primary feedback (v0.1.26 fix: previously this rejection was effectively
+                    // silent). Leave the draft so the player can shrink it or dispel some guides and retry.
+                    SendCapRefusal(
+                        fromPlayer, result.Guide?.Id ?? Guid.Empty, result.VoxelCount, result.CapLimit,
+                        throttle: false);
                     break;
 
                 case GuideOpStatus.RejectedOverGuideCount:
@@ -951,6 +1068,10 @@ namespace Layout.Network
 
                 case GuideOpStatus.RejectedClaimAccess:
                     SendClaimDenied(fromPlayer, result.DeniedPosition);
+                    break;
+
+                case GuideOpStatus.RejectedEmpty:
+                    fromPlayer.SendIngameError("layout-emptyguide", EmptyGuideText());
                     break;
 
                 // InvalidArgument: malformed input — ignore.
@@ -1083,7 +1204,13 @@ namespace Layout.Network
                 }
                 catch (Exception) { }
 
+                // A null return means ABANDONED. The tick thread checks Cancelled before it ever looks at
+                // the result, so nothing consumes a partial answer — this just gives up the lane sooner.
+                if (pending.Cancelled) return null;
+
                 int count = pending.Prepared.CountUpTo(pending.CountLimit);
+                if (pending.Cancelled) return null;
+
                 if (count > pending.CountLimit)
                     return new ImmenseCreateGeometry
                     {
@@ -1091,11 +1218,14 @@ namespace Layout.Network
                         ExceededCap = pending.CountLimitCap
                     };
 
+                List<BlockPos> footprint = GuideClaimAccessValidator.BuildFootprint(
+                    pending.Prepared.Guide, pending.Prepared.Shape, () => pending.Cancelled);
+                if (footprint == null) return null;      // cancelled mid-collapse
+
                 return new ImmenseCreateGeometry
                 {
                     VoxelCount = count,
-                    Footprint = GuideClaimAccessValidator.BuildFootprint(
-                        pending.Prepared.Guide, pending.Prepared.Shape)
+                    Footprint = footprint
                 };
             }
             finally
@@ -1142,6 +1272,15 @@ namespace Layout.Network
                     CompleteActiveImmenseCreate();
                     return;
                 }
+
+                // The worker returns null when it noticed the cancel and gave up. Cancelled is checked
+                // above, so this should be unreachable — but leaving Geometry null would re-enter this
+                // block every tick forever, and a stuck validator lane is the one failure worth a belt.
+                if (pending.Geometry == null)
+                {
+                    CompleteActiveImmenseCreate();
+                    return;
+                }
             }
 
             IServerPlayer player = FindOnlinePlayer(pending.PlayerUid);
@@ -1163,10 +1302,13 @@ namespace Layout.Network
             List<BlockPos> footprint = pending.Geometry.Footprint ?? new List<BlockPos>();
             if (player.HasPrivilege(Privilege.controlserver))
             {
+                // Admins bypass claims entirely, so there is nothing to keep consistent.
                 pending.ClaimIndex = footprint.Count;
             }
             else
             {
+                if (pending.ClaimRevision < 0) pending.ClaimRevision = ClaimRevision();
+
                 var budget = Stopwatch.StartNew();
                 int checks = 0;
                 while (pending.ClaimIndex < footprint.Count
@@ -1185,6 +1327,13 @@ namespace Layout.Network
                         return;
                     }
                 }
+
+                // Walk finished — but did the claims change while we were walking? If so, rewind and do it
+                // again against the world as it is now, rather than committing on a stale answer.
+                if (pending.ClaimIndex >= footprint.Count
+                    && ShouldRevalidateClaims(
+                        ref pending.ClaimRevision, ref pending.ClaimRestarts, ref pending.ClaimIndex))
+                    return;
             }
 
             if (pending.ClaimIndex < footprint.Count) return;
@@ -1234,23 +1383,9 @@ namespace Layout.Network
             switch (result.Status)
             {
                 case GuideOpStatus.RejectedOverCap:
-                    if (result.CapLimit >= GuideManager.HardVoxelCeiling)
-                        player.SendIngameError("layout-toolarge", TooLargeText(result));
-                    else if (_policies.EffectiveVoxelCap(
-                        player.PlayerUID, _guides.PerGuideVoxelCap) > 0
-                        && result.CapLimit == _policies.EffectiveVoxelCap(
-                            player.PlayerUID, _guides.PerGuideVoxelCap))
-                        player.SendIngameError("layout-overcap", PerGuideCapText(result));
-                    else if (_guides.EffectivePerPlayerTotalVoxelCap(
-                        player.PlayerUID) > 0
-                        && result.CapLimit == _guides.EffectivePerPlayerTotalVoxelCap(
-                            player.PlayerUID))
-                        player.SendIngameError("layout-playerovercap", PlayerCapText(result));
-                    else
-                        player.SendIngameError("layout-overcap", WorldCapText(result));
-                    if (result.Guide != null)
-                        _channel.SendPacket(new VoxelCapWarningPacket(
-                            result.Guide.Id, result.VoxelCount, result.CapLimit), player);
+                    SendCapRefusal(
+                        player, result.Guide?.Id ?? Guid.Empty, result.VoxelCount, result.CapLimit,
+                        throttle: false);
                     break;
 
                 case GuideOpStatus.RejectedOverGuideCount:
@@ -1259,6 +1394,10 @@ namespace Layout.Network
 
                 case GuideOpStatus.RejectedClaimAccess:
                     SendClaimDenied(player, result.DeniedPosition);
+                    break;
+
+                case GuideOpStatus.RejectedEmpty:
+                    player.SendIngameError("layout-emptyguide", EmptyGuideText());
                     break;
 
                 default:
@@ -1273,10 +1412,21 @@ namespace Layout.Network
         {
             PendingImmenseCreate completed = _activeImmenseCreate;
             _activeImmenseCreate = null;
-            if (completed != null)
+            // CHECK IDENTITY BEFORE REMOVING BY KEY (GOTCHAS G29). This set is the "one immense create per
+            // player" gate, keyed by uid alone — so a cancelled job finishing late would clear the marker
+            // belonging to that same player's NEWER job and let a third one in behind it. Only drop the
+            // marker when this player really has nothing else waiting.
+            if (completed != null && !HasQueuedImmenseCreate(completed.PlayerUid))
                 _playersWithPendingImmenseCreate.Remove(completed.PlayerUid);
             StartNextImmenseCreate();
             StartNextImmenseSculpt();
+        }
+
+        private bool HasQueuedImmenseCreate(string playerUid)
+        {
+            foreach (PendingImmenseCreate queued in _immenseCreateQueue)
+                if (!queued.Cancelled && queued.PlayerUid == playerUid) return true;
+            return false;
         }
 
         private void CancelPendingImmenseCreate(string playerUid)
@@ -1311,6 +1461,48 @@ namespace Layout.Network
         private IServerPlayer FindOnlinePlayer(string playerUid) =>
             _sapi.World.AllOnlinePlayers.OfType<IServerPlayer>()
                 .FirstOrDefault(player => player.PlayerUID == playerUid);
+
+        // ==========================================================================================
+        //  Claim-validation consistency (A14.11)
+        // ==========================================================================================
+        //
+        // An immense footprint is validated a slice at a time — ≤128 blocks or ~1 ms per 20 ms tick — so a
+        // big guide is checked over many ticks, and the commit that follows runs with claim validation
+        // turned OFF because the walk above already did it. A claim CREATED over a block that was checked
+        // early therefore never gets re-tested, and the guide settles across land that is now protected.
+        //
+        // The engine exposes no claim revision, so this synthesises one from the claim COUNT: enough to
+        // notice a claim being added or removed mid-walk, which is the case the finding describes.
+        // ⚠️ It does NOT notice an existing claim being RESIZED in place. That is a smaller window again
+        // and would need either a full re-walk at commit — the very cost the time-slicing exists to avoid —
+        // or an engine-side revision the API does not offer.
+        //
+        // Guides are visual only and never touch blocks, so the worst outcome here is an overlay drawn
+        // across protected land, not damage.
+        // Null-safe on purpose: this runs on the server tick, and a claims API that is not there yet must
+        // read as "unchanged" rather than throw. A constant 0 simply means no revalidation ever fires.
+        private int ClaimRevision()
+        {
+            var all = _sapi.World?.Claims?.All;
+            return all == null ? 0 : all.Count();
+        }
+
+        private const int MaxClaimRevalidations = 3;
+
+        // True = the claim set changed under us; validation has been rewound and should run again.
+        // Returns false once the restart budget is spent, so a world where claims keep changing cannot
+        // trap a placement in a permanent re-validation loop.
+        private bool ShouldRevalidateClaims(ref int revision, ref int restarts, ref int claimIndex)
+        {
+            int now = ClaimRevision();
+            if (revision < 0 || revision == now) return false;
+            if (restarts >= MaxClaimRevalidations) return false;
+
+            restarts++;
+            revision = now;
+            claimIndex = 0;          // walk the whole footprint again, against the claims as they are now
+            return true;
+        }
 
         private void SendPlacementRejected(IServerPlayer player, GuideOpStatus status)
         {
@@ -1414,6 +1606,9 @@ namespace Layout.Network
         {
             if (DeniedByPrivilege(fromPlayer)) return;
             if (p?.Start == null) return;
+            // The anchor is broadcast to every other player and fed to the claim validator; keep the same
+            // range check on it as on the geometry it will become.
+            if (!GuideBounds.IsUsable(p.Start.ToVec3d())) { RejectOutOfWorld(fromPlayer); return; }
             if (!fromPlayer.HasPrivilege(Privilege.controlserver))
             {
                 GuideMutationAccessResult access =
@@ -1456,6 +1651,7 @@ namespace Layout.Network
             LockAcquireOutcome outcome = _locks.TryAcquireLock(id, fromPlayer.PlayerUID);
             if (outcome.CanEdit && _guides.TryGetGuide(id, out GuideData grabbedGuide))
             {
+                ReleaseSupersededLocks(fromPlayer, id);
                 DragSession session = DragFor(fromPlayer.PlayerUID, id);
                 if (session.OriginPoints == null)
                 {
@@ -1670,6 +1866,13 @@ namespace Layout.Network
             }
             if (p.Edits == null || p.Edits.Length == 0) return;
 
+            // BOUND THE BATCH. A guide cannot have more control points than it has control points, so an
+            // edit array longer than the point list is nonsense by construction — but nothing checked, and
+            // every entry costs a WouldBreakOnMove probe plus a soft-flow reflow before anything is
+            // validated. The shipped client sends exactly one edit per drag update; this only ever fires on
+            // a malformed or crafted packet (GOTCHAS G32).
+            if (p.Edits.Length > g.ControlPoints.Count) return;
+
             DragSession session = DragFor(uid, id);
             IGuideShape shape = _guides.GetShape(id);
             bool immenseSculpt = g.CachedVoxelCount > StreamedCreateVoxelThreshold
@@ -1707,10 +1910,25 @@ namespace Layout.Network
             // unlocked point flows, so nothing but locks can pin geometry. The mapping is captured ONCE
             // per drag from pre-move positions and reused for every update.
             var composed = new List<ControlPointEdit>(p.Edits.Length);
+            var seenIndexes = new HashSet<int>();
             for (int i = 0; i < p.Edits.Length; i++)
             {
                 int idx = p.Edits[i].Index;
+
+                // ONE MOVE PER POINT PER PACKET. Repeating an index is contradictory — the later entry
+                // silently wins — and each repeat re-runs a full soft-flow reflow over the whole point
+                // list. Correct the sender rather than picking one of its two answers for it.
+                if (!seenIndexes.Add(idx)) { SendResync(fromPlayer, g); return; }
+
                 Vec3d pos = p.Edits[i].Position != null ? p.Edits[i].Position.ToVec3d() : new Vec3d();
+                if (!GuideBounds.IsUsable(pos))
+                {
+                    // Resync as well as refuse: the mover previews its own drag optimistically, so
+                    // returning in silence would leave a point sitting where the server never put it.
+                    RejectOutOfWorld(fromPlayer);
+                    SendResync(fromPlayer, g);
+                    return;
+                }
                 composed.Add(new ControlPointEdit(idx, pos));
 
                 // Session-9 revision: flow fires on EVERY drag of a free arch, not only structural drags —
@@ -1764,8 +1982,7 @@ namespace Layout.Network
                     break;
 
                 case GuideOpStatus.RejectedOverCap:
-                    _channel.SendPacket(
-                        new VoxelCapWarningPacket(id, result.VoxelCount, result.CapLimit), fromPlayer);
+                    SendCapRefusal(fromPlayer, id, result.VoxelCount, result.CapLimit);
                     SendResync(fromPlayer, g);
                     break;
 
@@ -1935,9 +2152,14 @@ namespace Layout.Network
                 }
                 catch (Exception) { }
 
+                // Null = abandoned; see CalculateImmenseCreateGeometry.
+                if (pending.Cancelled) return null;
+
                 int count = GuideShapeVoxelCounting.CountUpTo(
                     pending.CandidateShape, pending.Candidate.VoxelScale,
                     pending.Candidate.IsFilled, pending.CountLimit);
+                if (pending.Cancelled) return null;
+
                 if (count > pending.CountLimit)
                     return new ImmenseCreateGeometry
                     {
@@ -1945,11 +2167,14 @@ namespace Layout.Network
                         ExceededCap = pending.CountLimitCap
                     };
 
+                List<BlockPos> footprint = GuideClaimAccessValidator.BuildFootprint(
+                    pending.Candidate, pending.CandidateShape, () => pending.Cancelled);
+                if (footprint == null) return null;      // cancelled mid-collapse
+
                 return new ImmenseCreateGeometry
                 {
                     VoxelCount = count,
-                    Footprint = GuideClaimAccessValidator.BuildFootprint(
-                        pending.Candidate, pending.CandidateShape)
+                    Footprint = footprint
                 };
             }
             finally
@@ -1995,6 +2220,15 @@ namespace Layout.Network
                     CompleteActiveImmenseSculpt();
                     return;
                 }
+
+                // Abandoned by the worker — see the matching guard in OnImmenseCreateTick.
+                if (pending.Geometry == null)
+                {
+                    IServerPlayer abandoned = FindOnlinePlayer(pending.PlayerUid);
+                    if (abandoned != null) FinishRejectedImmenseSculpt(abandoned, pending);
+                    CompleteActiveImmenseSculpt();
+                    return;
+                }
             }
 
             IServerPlayer player = FindOnlinePlayer(pending.PlayerUid);
@@ -2006,9 +2240,8 @@ namespace Layout.Network
 
             if (pending.Geometry.ExceededCap > 0)
             {
-                _channel.SendPacket(new VoxelCapWarningPacket(
-                    pending.GuideId, pending.Geometry.VoxelCount,
-                    pending.Geometry.ExceededCap), player);
+                SendCapRefusal(player, pending.GuideId, pending.Geometry.VoxelCount,
+                    pending.Geometry.ExceededCap);
                 FinishRejectedImmenseSculpt(player, pending);
                 CompleteActiveImmenseSculpt();
                 return;
@@ -2017,10 +2250,13 @@ namespace Layout.Network
             List<BlockPos> footprint = pending.Geometry.Footprint ?? new List<BlockPos>();
             if (player.HasPrivilege(Privilege.controlserver))
             {
+                // Admins bypass claims entirely, so there is nothing to keep consistent.
                 pending.ClaimIndex = footprint.Count;
             }
             else
             {
+                if (pending.ClaimRevision < 0) pending.ClaimRevision = ClaimRevision();
+
                 var budget = Stopwatch.StartNew();
                 int checks = 0;
                 while (pending.ClaimIndex < footprint.Count
@@ -2039,6 +2275,12 @@ namespace Layout.Network
                         return;
                     }
                 }
+
+                // Claims changed mid-walk — rewind and re-check. See ShouldRevalidateClaims.
+                if (pending.ClaimIndex >= footprint.Count
+                    && ShouldRevalidateClaims(
+                        ref pending.ClaimRevision, ref pending.ClaimRestarts, ref pending.ClaimIndex))
+                    return;
             }
             if (pending.ClaimIndex < footprint.Count) return;
 
@@ -2060,8 +2302,7 @@ namespace Layout.Network
             else
             {
                 if (committed.Status == GuideOpStatus.RejectedOverCap)
-                    _channel.SendPacket(new VoxelCapWarningPacket(
-                        pending.GuideId, committed.VoxelCount, committed.CapLimit), player);
+                    SendCapRefusal(player, pending.GuideId, committed.VoxelCount, committed.CapLimit);
                 FinishRejectedImmenseSculpt(player, pending);
             }
             CompleteActiveImmenseSculpt();
@@ -2081,8 +2322,19 @@ namespace Layout.Network
         {
             PendingImmenseSculpt completed = _activeImmenseSculpt;
             _activeImmenseSculpt = null;
-            if (completed != null)
+
+            // CHECK IDENTITY BEFORE REMOVING BY KEY (GOTCHAS G29). This is A14.3's actual defect: cancelling
+            // an immense reshape (right-click) removes the player's entry but leaves the worker running, so
+            // grabbing and reshaping again installs a NEW entry under the same uid. When the cancelled
+            // worker finally finished, this line deleted the NEW one — after which nothing could find that
+            // reshape by uid, so releasing it never registered and cancelling it did nothing. The player
+            // saw their second reshape snap back with no message.
+            if (completed != null
+                && _pendingImmenseSculpts.TryGetValue(
+                    completed.PlayerUid, out PendingImmenseSculpt current)
+                && ReferenceEquals(current, completed))
                 _pendingImmenseSculpts.Remove(completed.PlayerUid);
+
             StartNextImmenseCreate();
             StartNextImmenseSculpt();
         }
@@ -2108,8 +2360,19 @@ namespace Layout.Network
                 _channel.SendPacket(new GuideLockStatePacket(id, lockOutcome.HolderUid), fromPlayer);
                 return;
             }
+            ReleaseSupersededLocks(fromPlayer, id);
 
             Vec3d pos = p.Position.ToVec3d();
+            if (!GuideBounds.IsUsable(pos))
+            {
+                // Release the lock this handler just took, or the guide is stranded (see the insert-failed
+                // tail below, which does the same thing for a cap rejection).
+                if (lockOutcome.Status == LockAcquireStatus.Acquired && _locks.ReleaseLock(id, uid))
+                    _channel.BroadcastPacket(new GuideLockStatePacket(id, null));
+                RejectOutOfWorld(fromPlayer);
+                return;
+            }
+
             ShapeConstraint insertOriginConstraint = ShapeConstraint.None;
             List<ControlPoint> insertOriginPoints = null;
             int insertOriginVoxelCount = -1;
@@ -2173,8 +2436,7 @@ namespace Layout.Network
                 else
                 {
                     if (ins.Status == GuideOpStatus.RejectedOverCap)
-                        _channel.SendPacket(
-                            new VoxelCapWarningPacket(id, ins.VoxelCount, ins.CapLimit), fromPlayer);
+                        SendCapRefusal(fromPlayer, id, ins.VoxelCount, ins.CapLimit);
                     else if (ins.Status == GuideOpStatus.RejectedClaimAccess)
                         SendClaimDenied(fromPlayer, ins.DeniedPosition);
                     if (_guides.TryGetGuide(id, out GuideData gNow)) SendResync(fromPlayer, gNow);
@@ -2216,8 +2478,7 @@ namespace Layout.Network
                     _channel.BroadcastPacket(new GuideLockStatePacket(id, null));
 
                 if (result.Status == GuideOpStatus.RejectedOverCap)
-                    _channel.SendPacket(
-                        new VoxelCapWarningPacket(id, result.VoxelCount, result.CapLimit), fromPlayer);
+                    SendCapRefusal(fromPlayer, id, result.VoxelCount, result.CapLimit);
                 else if (result.Status == GuideOpStatus.RejectedClaimAccess)
                     SendClaimDenied(fromPlayer, result.DeniedPosition);
 
@@ -2267,8 +2528,12 @@ namespace Layout.Network
             GuideOperationResult result = _guides.SetHidden(id, p.Hidden);
             if (result.Status == GuideOpStatus.Success)
             {
+                // Nothing changed — no undo entry (a no-op step in the history is worse than no step) and
+                // no broadcast. This handler used to do both unconditionally, so an unchanged value spammed
+                // at packet rate was an unbounded persist-and-broadcast loop across every connected player.
+                if (oldHidden == result.Guide.IsHidden) return;
                 _undo.Record(fromPlayer.PlayerUID, new HideGuideCommand(id, oldHidden, p.Hidden));
-                if (oldHidden != result.Guide.IsHidden) StampLastSculptor(fromPlayer, result.Guide);
+                StampLastSculptor(fromPlayer, result.Guide);
                 _channel.BroadcastPacket(new GuideHidePacket(id, p.Hidden));
             }
             else HandleNonSuccessToggle(fromPlayer, id, result, g);
@@ -2468,8 +2733,10 @@ namespace Layout.Network
             GuideOperationResult result = _guides.SetDivisions(id, p.Divisions);
             if (result.Status == GuideOpStatus.Success)
             {
+                // No-op guard — see OnHide.
+                if (oldDivisions == result.Guide.Divisions) return;
                 _undo.Record(fromPlayer.PlayerUID, new SetDivisionsCommand(id, oldDivisions, result.Guide.Divisions));
-                if (oldDivisions != result.Guide.Divisions) StampLastSculptor(fromPlayer, result.Guide);
+                StampLastSculptor(fromPlayer, result.Guide);
                 _channel.BroadcastPacket(new GuideSetDivisionsPacket(id, result.Guide.Divisions));
             }
             else HandleNonSuccessToggle(fromPlayer, id, result, g);
@@ -2708,12 +2975,19 @@ namespace Layout.Network
                                 "Can't undo/redo that guide because it would enter protected land");
                             break;
 
+                        case GuideOpStatus.RejectedEmpty:
+                            // Reachable only for a zero-voxel guide from a save written before v0.4.37,
+                            // when creating one was still possible. Without this it would fall into the
+                            // cap-warning default below and report a limit of zero, which means nothing.
+                            fromPlayer.SendIngameError("layout-emptyguide",
+                                "That guide has no voxels and can no longer be restored. "
+                                + "Dispel it with '/layout dispel' if it is still listed.");
+                            break;
+
                         default:   // over a voxel cap — the classic Blocked case
                             if (blockedResult.Guide != null)
-                                _channel.SendPacket(
-                                    new VoxelCapWarningPacket(
-                                        blockedResult.Guide.Id, blockedResult.VoxelCount, blockedResult.CapLimit),
-                                    fromPlayer);
+                                SendCapRefusal(fromPlayer, blockedResult.Guide.Id,
+                                    blockedResult.VoxelCount, blockedResult.CapLimit);
                             break;
                     }
                     break;
@@ -2725,6 +2999,53 @@ namespace Layout.Network
         // ==========================================================================================
         //  Helpers
         // ==========================================================================================
+
+        /// <summary>
+        /// The rate gate plus the per-player cap scope — the wrapper every mutating packet handler goes
+        /// through. <paramref name="cost"/> weights the work: a toggle is 1, a placement that queues
+        /// geometry is 5, a sweep over every guide is 10.
+        /// </summary>
+        private void Gated(IServerPlayer player, int cost, Action action)
+        {
+            if (RateLimited(player, cost)) return;
+            WithPlayerVoxelCap(player, action);
+        }
+
+        // True = over budget, drop this packet. Standard token bucket; see the constants above for why the
+        // allowance is set so far above real play.
+        private bool RateLimited(IServerPlayer player, int cost)
+        {
+            if (player == null) return false;
+            string uid = player.PlayerUID;
+            long now = _sapi.World.ElapsedMilliseconds;
+
+            if (!_rateBuckets.TryGetValue(uid, out RateBucket bucket))
+            {
+                bucket = new RateBucket { LastMs = now };
+                _rateBuckets[uid] = bucket;
+            }
+
+            double seconds = Math.Max(0, now - bucket.LastMs) / 1000.0;
+            bucket.LastMs = now;
+            bucket.Tokens = Math.Min(
+                RateBucketCapacity, bucket.Tokens + seconds * RateBucketRefillPerSecond);
+
+            if (bucket.Tokens < cost)
+            {
+                if (now - bucket.LastWarnMs >= 5000)
+                {
+                    bucket.LastWarnMs = now;
+                    _sapi.Logger.Notification(
+                        "[Layout] Rate limit reached for {0}; Layout packets are being dropped. This "
+                        + "should not happen in normal play — if it did, the limit is set too low.",
+                        PlayerDisplayName(player));
+                }
+                return true;
+            }
+
+            bucket.Tokens -= cost;
+            return false;
+        }
 
         private void WithPlayerVoxelCap(IServerPlayer player, Action action)
         {
@@ -2816,6 +3137,26 @@ namespace Layout.Network
             }
 
             var setting = (LayoutAdminSetting)packet.Setting;
+
+            // RETIRED SETTINGS STOP HERE. Slots 6 and 7 are still declared — pinned wire numbers are
+            // append-only and deleting them is exactly the reversal G1 exists to prevent — but the server
+            // has not accepted them since v0.4.17/v0.4.20. They used to fall through the switch's
+            // `default:` and then run the ENTIRE tail anyway: layout.json rewritten, the change logged, and
+            // the admin told "EnableChalkDurability is now unlimited" for a setting that had not changed
+            // and is not even a number. No state moved, so the wire ledger's "changes nothing" was true of
+            // state — but not of the reply, and the reply is the only part an admin sees.
+            //
+            // Answer the same way an undefined setting is answered: re-send the truth, say nothing false.
+            if (setting == LayoutAdminSetting.EnableChalkDurability
+                || setting == LayoutAdminSetting.AdminCanOverrideLocks)
+            {
+                _sapi.Logger.Notification(
+                    "[Layout] {0} requested retired admin setting {1}; ignored. It is edited in "
+                    + "layout.json only.", PlayerDisplayName(fromPlayer), setting);
+                SendAdminConfig(fromPlayer);
+                return;
+            }
+
             int value = packet.Value;
             bool flag = value != 0;
 
@@ -2827,10 +3168,7 @@ namespace Layout.Network
                 case LayoutAdminSetting.MaxGuidesPerPlayer:     _config.MaxGuidesPerPlayer = value; break;
                 case LayoutAdminSetting.MaxGuidesWorldWide:     _config.MaxGuidesWorldWide = value; break;
                 case LayoutAdminSetting.AllowClientOnlyMode:    _config.AllowClientOnlyMode = flag; break;
-                // EnableChalkDurability (v0.4.20) and AdminCanOverrideLocks (v0.4.17) are retired from the
-                // panel and deliberately have no case: both are edited in layout.json only. A request
-                // naming one changes nothing and falls through to the re-broadcast below, which puts the
-                // sender back in step with what the server actually holds.
+                // The retired slots 6 and 7 never reach here — they are answered and returned above.
                 default: break;
             }
 
@@ -2894,6 +3232,9 @@ namespace Layout.Network
         private void OnPlayerRosterRequest(IServerPlayer fromPlayer, PlayerRosterRequestPacket packet)
         {
             if (!AdminRequestAllowed(fromPlayer, "roster")) return;
+            // Admin-only, but it walks every guide in the world to build the totals, so it shares the same
+            // budget as the mutations rather than being free to spam.
+            if (RateLimited(fromPlayer, 10)) return;
             SendRosterTo(fromPlayer);
         }
 
@@ -3027,6 +3368,7 @@ namespace Layout.Network
         private void OnPlayerGuidesRequest(IServerPlayer fromPlayer, PlayerGuidesRequestPacket packet)
         {
             if (!AdminRequestAllowed(fromPlayer, "player guides")) return;
+            if (RateLimited(fromPlayer, 10)) return;   // walks and sorts the whole registry — see above
             string uid = packet?.Uid;
             if (string.IsNullOrEmpty(uid)) return;
 
@@ -3139,26 +3481,108 @@ namespace Layout.Network
         // Built in one place rather than inline because the immediate and the immense placement paths
         // report the same four refusals, and they had already drifted into two near-identical copies.
 
-        private static string TooLargeText(GuideOperationResult result) =>
-            "That guide is too large to render (" + result.VoxelCount.ToString("N0")
+        private static string TooLargeText(int voxelCount) =>
+            "That guide is too large to render (" + voxelCount.ToString("N0")
             + " voxels). Make it smaller or use a coarser scale.";
 
-        private static string PerGuideCapText(GuideOperationResult result) =>
-            "That guide exceeds your per-guide limit of " + result.CapLimit.ToString("N0")
+        private static string PerGuideCapText(int capLimit) =>
+            "That guide exceeds your per-guide limit of " + capLimit.ToString("N0")
             + " voxels. Make it smaller or use a coarser scale.";
 
-        private static string PlayerCapText(GuideOperationResult result) =>
-            "Your guides would exceed the cumulative limit of " + result.CapLimit.ToString("N0")
+        private static string PlayerCapText(int capLimit) =>
+            "Your guides would exceed the cumulative limit of " + capLimit.ToString("N0")
             + " voxels. Dispel or shrink one of your guides before adding more.";
 
-        private static string WorldCapText(GuideOperationResult result) =>
-            "World voxel budget reached: " + result.VoxelCount.ToString("N0") + " more would pass the "
-            + result.CapLimit.ToString("N0")
+        private static string WorldCapText(int voxelCount, int capLimit) =>
+            "World voxel budget reached: " + voxelCount.ToString("N0") + " more would pass the "
+            + capLimit.ToString("N0")
             + " limit. Dispel some guides ('/layout dispel'), coarsen the scale, or raise totalVoxelCap.";
+
+        private static string EmptyGuideText() =>
+            "That guide came out empty — the two points are too close together to make a shape. "
+            + "Place it again with more distance between the clicks.";
 
         private static string GuideCountCapText(GuideOperationResult result) =>
             "Guide limit reached (" + result.VoxelCount.ToString("N0") + " of "
             + result.CapLimit.ToString("N0") + "). Dispel a guide before placing another.";
+
+        // ==========================================================================================
+        //  The one cap refusal
+        // ==========================================================================================
+        //
+        // EVERY cap refusal goes through here — placement AND edit. Before v0.4.34 only the two
+        // placement paths said anything; the nine edit paths sent the warning packet alone, and that
+        // packet has NO SUBSCRIBER on the client, so a refused reshape, toggle or transform sprang back
+        // in complete silence with the HUD unchanged.
+        //
+        // IT HAS TO BE SERVER-SIDE. VoxelCapWarningPacket carries a count and a limit and never says
+        // WHICH cap fired, so the client cannot name it. The server can — this is that cascade, which
+        // previously existed twice in the placement paths and nowhere else.
+
+        /// <param name="throttle">
+        /// True for the CONTINUOUS paths — a refused drag re-fires roughly ten times a second and without
+        /// this the chat is unusable. False for a DELIBERATE one-shot act: pressing place and being told
+        /// nothing is the bug this whole mechanism exists to fix, and a player who adjusts and tries again
+        /// within a few seconds must not be met with silence the second time.
+        /// </param>
+        private void SendCapRefusal(
+            IServerPlayer player, Guid guideId, int voxelCount, int capLimit, bool throttle = true)
+        {
+            if (player == null) return;
+
+            (string key, string text) = CapRefusalMessage(player, voxelCount, capLimit);
+            if (!throttle || !CapRefusalThrottled(player.PlayerUID, text))
+                player.SendIngameError(key, text);
+
+            _channel.SendPacket(new VoxelCapWarningPacket(guideId, voxelCount, capLimit), player);
+        }
+
+        // Which of the four caps was it? Matched by VALUE against the caps in force for this player,
+        // because the result only reports the number it hit. Anything unmatched is the world total.
+        private (string key, string text) CapRefusalMessage(
+            IServerPlayer player, int voxelCount, int capLimit)
+        {
+            if (capLimit >= GuideManager.HardVoxelCeiling)
+                return ("layout-toolarge", TooLargeText(voxelCount));
+
+            int perGuide = _policies.EffectiveVoxelCap(player.PlayerUID, _guides.PerGuideVoxelCap);
+            if (perGuide > 0 && capLimit == perGuide)
+                return ("layout-overcap", PerGuideCapText(capLimit));
+
+            int perPlayer = _guides.EffectivePerPlayerTotalVoxelCap(player.PlayerUID);
+            if (perPlayer > 0 && capLimit == perPlayer)
+                return ("layout-playerovercap", PlayerCapText(capLimit));
+
+            return ("layout-overcap", WorldCapText(voxelCount, capLimit));
+        }
+
+        // True = refuse this push, the player's last one was moments ago. Records the attempt only when it
+        // is allowed, so a client hammering the endpoint cannot push the window out indefinitely.
+        private bool PushThrottled(string playerUid)
+        {
+            if (string.IsNullOrEmpty(playerUid)) return false;
+            long now = _sapi.World.ElapsedMilliseconds;
+            if (_lastPushAt.TryGetValue(playerUid, out long last)
+                && now - last < PushCooldownMilliseconds)
+                return true;
+
+            _lastPushAt[playerUid] = now;
+            return false;
+        }
+
+        // True = stay quiet, this player was told the same thing moments ago.
+        private bool CapRefusalThrottled(string playerUid, string message)
+        {
+            if (playerUid == null) return false;
+            long now = _sapi.World.ElapsedMilliseconds;
+            if (_lastCapRefusal.TryGetValue(playerUid, out (string Message, long At) last)
+                && last.Message == message
+                && now - last.At < CapRefusalRepeatMilliseconds)
+                return true;
+
+            _lastCapRefusal[playerUid] = (message, now);
+            return false;
+        }
 
         // The live value of one admin setting, read from the managers rather than from _config, so the
         // confirmation message reports what is actually in force.
@@ -3453,6 +3877,33 @@ namespace Layout.Network
             return true;
         }
 
+        // ONE GUIDE PER PLAYER (v0.4.36). Grabbing a guide gives up whatever this player had grabbed before,
+        // and everyone is told those guides are free again. The shipped client already grabs one at a time,
+        // so in normal play this frees nothing and is invisible — but that was a CLIENT convention, and
+        // relying on it let a modified client lock every guide in the world and sit on them until it
+        // disconnected (GOTCHAS G32). The player's in-flight immense reshape is exempt: that lock belongs to
+        // work already running, not to a player holding a guide, and it releases itself when the validator
+        // finishes.
+        private void ReleaseSupersededLocks(IServerPlayer player, Guid grabbed)
+        {
+            Guid? retain = _pendingImmenseSculpts.TryGetValue(
+                player.PlayerUID, out PendingImmenseSculpt inFlight) ? inFlight.GuideId : (Guid?)null;
+
+            IReadOnlyList<Guid> freed = _locks.ReleaseOtherLocksForPlayer(
+                player.PlayerUID, grabbed, retain);
+            for (int i = 0; i < freed.Count; i++)
+                _channel.BroadcastPacket(new GuideLockStatePacket(freed[i], null));
+        }
+
+        // A coordinate that failed GuideBounds. The shipped client cannot produce one — it aims at blocks —
+        // so this is either a modified client or a genuinely broken packet. Say so plainly and do nothing
+        // else: no state was touched, and nothing is worth logging per packet.
+        private void RejectOutOfWorld(IServerPlayer player)
+        {
+            player?.SendIngameError("layout-outofworld",
+                "That guide position is outside the world and was ignored.");
+        }
+
         private static void SendClaimDenied(IServerPlayer player, BlockPos position,
             string message = "Guide crosses protected land; you do not have build permission there")
         {
@@ -3491,8 +3942,7 @@ namespace Layout.Network
             switch (result.Status)
             {
                 case GuideOpStatus.RejectedOverCap:
-                    _channel.SendPacket(
-                        new VoxelCapWarningPacket(id, result.VoxelCount, result.CapLimit), fromPlayer);
+                    SendCapRefusal(fromPlayer, id, result.VoxelCount, result.CapLimit);
                     SendResync(fromPlayer, result.Guide ?? live);
                     break;
                 case GuideOpStatus.RejectedClaimAccess:

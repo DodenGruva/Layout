@@ -2,6 +2,125 @@
 
 All notable changes to Layout will be recorded in this file going forward.
 
+## 0.4.43 - 2026-08-01
+
+### Fixed
+
+- **The tool remembers every shape again.** Seven of the fifteen — Dome, Cylinder, Cone, Box, Tapered
+  Cylinder, Polygonal Prism and Tapered Polygonal Prism — were reset to Arch every time the game started,
+  and the saved setting was overwritten as it happened, so the choice was gone rather than just ignored.
+
+## 0.4.42 - 2026-08-01
+
+### Fixed
+
+- **Chiseling highlights now light up by themselves after loading into a world**, instead of staying dark
+  until you refreshed them by hand. A guide built while the ground around it was still loading recorded
+  "nothing is built here" and kept that answer for the rest of the session; it now looks again as the
+  ground arrives.
+- `/layout built refresh` says when guides are still waiting for their terrain, rather than staying silent
+  about it.
+
+## 0.4.41 - 2026-08-01
+
+### Fixed
+
+- **The Players dialog worked once and then went dead** — tabs stayed pressed in and did nothing, and no
+  player could be selected. Introduced in 0.4.40 and reverted. Clicking still no longer pulls your typing
+  cursor back to the filter box, which was the part of that change worth keeping.
+
+## 0.4.40 - 2026-08-01
+
+### Fixed
+
+- **The Players list no longer looks empty after you filter a long roster.** It kept your scroll position
+  without checking the shorter list still reached that far, so the rows were drawn above the window and it
+  read as though the filter had matched nobody.
+- **Aiming is cheaper in worlds with many guides.** Every guide anywhere in the world was being tested
+  against your crosshair thirty-three times a second, however far away it was.
+- A greyed-out row could light up one of its buttons when another player changed the selected guide.
+- A long player name no longer runs through the numbers next to it in the Players list.
+
+## 0.4.39 - 2026-08-01
+
+### Fixed
+
+- **The cap readout in the HUD no longer says "REFUSED — over cap" when nothing was refused.** It said so
+  from the moment the HUD opened, in every version from 0.4.34 to 0.4.38.
+- **A refused edit that lands outside the world now corrects your screen.** Previously the guide could stay
+  where you dragged it even though the server had rejected the move.
+- **Releasing a guide can no longer be dropped when you are editing very fast**, which could have left a
+  guide locked until you disconnected.
+
+## 0.4.38 - 2026-08-01
+
+### Added
+
+- **A limit on how fast Layout will accept edits from one player.** Set far above anything you can do by
+  hand — dragging sends about ten edits a second and the allowance is 120 — so ordinary play never meets it.
+
+### Fixed
+
+- **Publishing private guides no longer re-saves every guide in the world once per guide.** Publishing 100
+  guides wrote the world's guide data 100 times; it now writes once.
+- **Publishing is limited to one batch at a time**, and a server that has private guides turned off no
+  longer accepts them.
+- **A very large guide no longer makes the chiselling colour update slow down over time.** Blocks you
+  changed were being remembered forever and re-checked several times a second.
+- **A guide can no longer settle across land that became protected while it was being checked.** Large
+  guides are checked a piece at a time; if the claims change mid-check, it now checks again.
+- **The two retired admin settings no longer report a change that never happened.** Asking for one used to
+  rewrite `layout.json` and announce "EnableChalkDurability is now unlimited". It now ignores the request
+  and tells you the truth.
+
+## 0.4.37 - 2026-08-01
+
+### Fixed
+
+- **A guide placed with its two clicks too close together is now refused, with a message saying so.**
+  Before, it was accepted as a guide with no voxels at all: invisible, listed at 0 voxels, and completely
+  silent — and because zero is under every limit, it passed even a very small voxel cap.
+- **Being refused twice in a row now tells you twice.** A second refusal within a few seconds was being
+  suppressed. Repeated refusals while *dragging* are still grouped, since those arrive ten times a second.
+
+## 0.4.36 - 2026-08-01
+
+### Changed
+
+- **Grabbing a guide now releases the one you had grabbed before.** In normal play you never notice — the
+  game already only lets you grab one at a time. A guide you are still having validated is left alone.
+
+### Fixed
+
+- **Cancelling a reshape of a very large guide now actually stops the work.** It used to run to completion
+  in the background, holding up everyone else's large guides.
+- **Cancelling a large reshape and immediately reshaping again no longer loses the second reshape.** It
+  used to snap back with no explanation.
+- **A rare graphical hiccup when chiselling near a guide.** A background rebuild could fail and fall back
+  to a slower one, which showed as a stutter.
+- **Hiding a guide that is already hidden, or setting divisions to what they already are, no longer saves
+  and re-broadcasts to everyone.**
+
+## 0.4.35 - 2026-07-31
+
+### Fixed
+
+- **Guide positions are now checked before anything is drawn from them.** A guide file edited by hand, or a
+  damaged world save, could previously lock up the game while loading. A guide with an impossible position
+  is now skipped, and a note is written to the log so you know one was.
+
+## 0.4.34 - 2026-07-31
+
+### Fixed
+
+- **Being refused because of a voxel limit now tells you which limit you hit.** Reshaping, rescaling,
+  hiding, filling, rotating, moving and a dozen other actions used to just spring back in silence. Repeated
+  refusals from a single drag are grouped so they cannot flood the chat.
+- **The cap readout in the HUD now flashes when something is refused**, instead of sitting unchanged.
+- **Lowering the world voxel limit below what the world is already using no longer freezes every guide.**
+  It used to refuse every edit, including the shrinking and dispelling that would have brought the world
+  back under the limit.
+
 ## 0.4.33 - 2026-07-29
 
 ### Changed

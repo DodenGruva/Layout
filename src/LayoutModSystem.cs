@@ -130,21 +130,30 @@ namespace Layout
             var serverPersistence = new ServerGuidePersistence(sapi);
             AdminPolicies = new LayoutAdminPolicyManager(serverPersistence, sapi.Logger);
 
+            // NAMED ARGUMENTS, not positional. Five consecutive ints of the same type, in an order nothing
+            // enforces — this was the last positional cap set in the tree, and it is the same seam R1's
+            // silent 1,000,000 default came through. LocalGuideAuthority was converted; this had not been.
             Guides = new GuideManager(
                 serverPersistence,
                 new BlockAccessorGuideProbe(() => sapi.World?.BlockAccessor),
                 sapi.Logger,
-                ServerConfig.PerGuideVoxelCap,
-                ServerConfig.TotalVoxelCap,
-                ServerConfig.PerPlayerTotalVoxelCap,
-                ServerConfig.MaxGuidesPerPlayer,
-                ServerConfig.MaxGuidesWorldWide,
-                uid => AdminPolicies.EffectiveGuideLimit(uid, ServerConfig.MaxGuidesPerPlayer),
-                uid => AdminPolicies.EffectivePlayerTotalVoxelCap(
-                    uid, ServerConfig.PerPlayerTotalVoxelCap));
+                perGuideVoxelCap: ServerConfig.PerGuideVoxelCap,
+                totalVoxelCap: ServerConfig.TotalVoxelCap,
+                perPlayerTotalVoxelCap: ServerConfig.PerPlayerTotalVoxelCap,
+                maxGuidesPerPlayer: ServerConfig.MaxGuidesPerPlayer,
+                maxGuidesWorldWide: ServerConfig.MaxGuidesWorldWide,
+                playerGuideLimitResolver:
+                    uid => AdminPolicies.EffectiveGuideLimit(uid, ServerConfig.MaxGuidesPerPlayer),
+                playerTotalVoxelCapResolver:
+                    uid => AdminPolicies.EffectivePlayerTotalVoxelCap(
+                        uid, ServerConfig.PerPlayerTotalVoxelCap));
 
             // Server save/load event ownership stays in the server composition root. GuideManager itself is
             // now side-neutral and can also back an intentionally transient client-only authority.
+            // FIRST in the chain, deliberately: Guides.Load scans every persisted guide, and a corrupted
+            // save with an absurd coordinate hangs that scan outright (GOTCHAS G31). The hard backstop in
+            // GuideBounds already applies without this call — this only narrows it to the real world.
+            sapi.Event.SaveGameLoaded += () => GuideBounds.UseWorldSize(sapi.World?.BlockAccessor);
             sapi.Event.SaveGameLoaded += AdminPolicies.Load;
             sapi.Event.SaveGameLoaded += Guides.Load;
             sapi.Event.GameWorldSave += AdminPolicies.Persist;
@@ -319,6 +328,11 @@ namespace Layout
         {
             StopModeDetection();
             _modeDetectionElapsedSeconds = 0f;
+
+            // The client half of the same range check the server does (GOTCHAS G31). This side matters for
+            // the PRIVATE guide files: a hand-edited Layout/ClientOnlyGuides/*.json with an absurd
+            // coordinate would hang this client's own world load, with no attacker anywhere in the picture.
+            GuideBounds.UseWorldSize(_capi.World?.BlockAccessor);
 
             if (Renderer?.RenderingEnabled == false)
                 _capi.ShowChatMessage(
@@ -783,11 +797,20 @@ namespace Layout
                     if (!ClientConfig.OccupancyRecolour)
                         return TextCommandResult.Error("Turn it on first: /layout built on.");
                     int stale = Renderer.OccupancyStaleGuides;
+                    int waiting = Renderer.OccupancyAwaitingChunks;
                     Renderer.RefreshOccupancy();
-                    return TextCommandResult.Success(stale > 0
-                        ? $"Re-read the world and rebuilt, including {stale} guide(s) too large to update live."
-                        : "Re-read the world and rebuilt. (Ordinary guides update by themselves as you "
-                          + "build — refresh is only needed for very large ones.)");
+                    if (stale > 0)
+                        return TextCommandResult.Success(
+                            $"Re-read the world and rebuilt, including {stale} guide(s) too large to update live.");
+                    // Named separately from the "too large" case: a guide waiting on terrain is not stale,
+                    // it simply has not been able to look yet, and it re-probes itself without this command.
+                    if (waiting > 0)
+                        return TextCommandResult.Success(
+                            $"Re-read the world and rebuilt. {waiting} guide(s) are still waiting for their "
+                            + "terrain to load and will colour themselves in as it arrives.");
+                    return TextCommandResult.Success(
+                        "Re-read the world and rebuilt. (Ordinary guides update by themselves as you "
+                        + "build — refresh is only needed for very large ones.)");
 
                 default:
                     return TextCommandResult.Error("Use /layout built on, off, or refresh.");

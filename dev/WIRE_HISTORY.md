@@ -67,6 +67,30 @@ server restart. What was withdrawn is the *wire path*: the panel no longer offer
 longer accepts them here, so a request naming one changes nothing.** That is deliberate — an inert slot is
 safe, a renumbered one is not.
 
+⚠️ **That last sentence was true of STATE and false of the REPLY until v0.4.38.** A request naming 6 or 7
+passed `Enum.IsDefined`, fell into the switch's `default:`, and then ran the whole tail: `layout.json`
+rewritten, the change logged, and the admin told *"EnableChalkDurability is now unlimited"* — for a setting
+that had not changed and is not a number. Both slots are now answered before the switch, with the truth and
+nothing else. **A retired wire slot has to be inert in what it says as well as in what it does.**
+
+---
+
+## Pinned enum values carried as packet payload
+
+Not every wire-pinned number is a packet position. These enums cross the wire **as integer fields**, so G1's
+append-only rule governs them too — a renumbering here is as breaking as one in `RegistrationOrder()`, and
+far easier to do by accident because the enum looks like ordinary code.
+
+| Enum | Carried by | Rule |
+|---|---|---|
+| `LayoutAdminSetting` | `LayoutAdminConfigRequestPacket.Setting` | Slots 6 and 7 retired but declared — see above |
+| `GuideOpStatus` | `GuidePlacementRejectedPacket.Reason` | **Append only.** `RejectedEmpty` was appended last at v0.4.37 |
+
+⚠️ **Today's client ignores `GuidePlacementRejectedPacket.Reason` entirely** — it fires a parameterless event
+and never reads the int. That is *why* appending to `GuideOpStatus` is safe without a protocol bump. **It is
+not a licence to renumber:** the moment any client reads that field, every value behind an inserted member
+means something else. Append, always.
+
 ---
 
 ## DataVersion ledger

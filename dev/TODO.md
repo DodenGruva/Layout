@@ -11,41 +11,63 @@
 
 ---
 
-## ⭐ Top of the list — NOTHING IS QUEUED
+## ⭐ Top of the list — the two oldest items are closed
 
-The F-queue has been empty since Session 33. The Session-33 polish queue shipped in full (v0.4.28) and the
-Session-34 Players-dialog work is done. What remains is the review backlog in **A10** and the "if asked"
-list in **B**.
+**`TODO` A10.1 and A13 are both delivered** (Session 38, → `DONE.md`). The GUI layer — the last unreviewed
+surface, roughly 8,000 lines — has been read end to end, and the doc-comment sweep is finished. With A14
+emptied in Session 37, **the review backlog is down to one item: A10.2.**
 
-**No open bugs.** B-S9-1 and B-S10-2 are both resolved and playtest-confirmed; kept as regression coverage
-in `DONE.md`.
+**v0.4.40–v0.4.43 have shipped.** v0.4.39 was playtested and passed. v0.4.42 (chiselling highlights) and
+v0.4.43 (shape memory) are the two with something specific to look for — see *Verification debts* below.
 
 ---
 
-## A10. Review backlog — the long-standing one
+## A10.2. Perform a performance-focused code review of the NON-RENDER code
 
-1. **Perform an adversarial code review.** — **OPEN, and BRIEFED: `dev/plans/PLAN_CODE_REVIEW.md`. Run it
-   in a FRESH session** (its §1 says why; the argument is bias, not context budget). Session 33 is the case
-   for it: four real bugs in shipped code found just by *reading* — a dropped admin packet, a Reveal All
-   filter that could never match, a cap bypass via private mode, and eleven messages printing their own
-   placeholders (`GOTCHAS` G11). The brief's do-not-re-litigate list is what stops a reviewer filing four
-   settled decisions as bugs.
-2. **Perform a performance-focused code review of the NON-RENDER code.** — **PARTLY ADDRESSED.** Session 28
-   measured and fixed the renderer; nothing equivalent has been done elsewhere.
+**The last of the review backlog, and still the honest answer is "nobody has looked."** Session 28 measured
+and fixed the renderer; nothing equivalent has been done anywhere else.
 
-*(The third item — consolidate the documentation — was delivered on 2026-07-30 and has moved to
-`dev/history/DONE.md`, per the rule at the top of this file.)*
+Two things have been removed from this axis incidentally rather than by search — Session 37 made `Persist()`
+batchable and put the push path on it, and Session 38's GUI review happened to walk past an aim loop that
+tested every guide in the world 33 times a second. **Neither was found by looking.** That is the argument
+for looking.
 
-## A13. Sweep the XML doc comments on the pinned enums and config classes
+**Start it after a clean playtest, not during one** — it will generate changes that need testing.
 
-**OPEN.** The overhaul dropped `ARCHITECTURE.md`'s module map because source is authoritative — which
-delegates authority to the code, so **a wrong comment is now the thing a reader is told to trust.** Two were
-already wrong (both fixed 2026-07-31): `LayoutClientConfig.colorScheme` documented a retired scheme value
-that players read when hand-editing, and `GuideMeshBuilder` named a method that does not exist — which
-`GOTCHAS` G8 had copied straight from it.
+## A15. What was deliberately deferred, and why
 
-**Where:** the pinned enums, both config classes, `PacketTypes.cs`. Check every value, default and
-cross-reference against what the code does. Detail in `sessions/SESSION_35.md`.
+Four items, each with a stated reason. **None is "forgotten" — re-opening any of them is a decision, not a
+discovery.**
+
+1. **A14.7's `long`/count-based loop rewrite.** The coordinates that trigger it are now rejected at every
+   entry point, so it is unreachable and this is defence in depth. **Deferred on evidence:** the hang was
+   reproduced 2026-08-01 and `GuideBounds.HardExtent` verified safe with a 4× margin — `GOTCHAS` **G31**,
+   `SESSION_37.md` §4.1. Seven of eight shapes carry the defect.
+2. **The `_settledMaterializations` concurrency gate.** One `LongRunning` task per streaming guide, so a
+   world load starts many at once. **Gated by `GOTCHAS` G2 and item B.1 below** — renderer work starts from a
+   measured bottleneck, not a hunch. The crash it made likelier is fixed.
+3. **The palette-lane cancellation** (A14.6's third part). A scheme/opacity change cancels only the settled
+   lane, so a guide mid-stream can settle with a few batches in the old colours. Bounded by the producer
+   queues and self-healing on the next rebuild. Same renderer gate as above.
+4. **`ResolveSculptCountLimit`'s wasted scan** (A14.6's first part). The review calls it **wasted work only**
+   — `CommitPreparedGuideMutation` re-validates, so it is not a cap bypass — and it is the same
+   shrink-escape shape that `GOTCHAS` G28 had just been fixed for. Not worth risking that to save a scan.
+
+**Also still open from A14.1's design:** naming the cap **in the HUD** needs a field appended to
+`VoxelCapWarningPacket`. Appending is sanctioned (G1) but it bumps the protocol. The chat message names the
+cap today, so this is polish.
+
+## A16. The occupancy re-probe covers the anchor, not the whole guide
+
+**Open by construction, not by oversight** — recorded so the next session does not mistake it for a bug.
+
+`_deferredOccupancy` (v0.4.42) defers a guide for re-probing when its **first real anchor's** chunk is
+absent at mesh time. A guide whose anchor is resident while terrain further along it is not will therefore
+not defer, and that part stays uncoloured until a block change nearby or `/layout built refresh`.
+
+It is still strictly better than before — a blind read is no longer cached, so nothing wrong is remembered
+(`GOTCHAS` **G37**). Widening it means per-region attribution, which is real work and was deliberately not
+bundled into a bug fix. **Do it only if play shows the gap matters.**
 
 ## A11. Open playtest focus
 
@@ -92,9 +114,17 @@ unfindable.
 | Session 32 | nine flags | `sessions/SESSION_32.md` §9 |
 | Session 33 | six flags | `sessions/SESSION_33.md` §8 |
 | Session 34 | six flags — notably send-to-ground ignoring Mirror (`GOTCHAS` G19) | `sessions/SESSION_34.md` §10 |
+| Session 37 | **seven — every tunable number that session invented.** Cap-refusal throttle (4 s), HUD flash wording/duration, `GuideBounds` map slack (4,096), rate-limit capacity/refill (240 / 120 per second) and its cost weights, push cooldown (3 s) and `MaxPushedControlPoints` (1,024), claim-revalidation restart cap (3), and the immense-reshape lock exemption | `sessions/SESSION_37.md` → *Flagged and unverified* |
+| **Session 38** | **two.** The targeting broad-phase padding (pick radius + ¼ of the guide's largest dimension), and surfacing `OccupancyAwaitingChunks` only in `/layout built refresh`'s reply rather than on the HUD | `sessions/SESSION_38.md` → *Flagged and unverified* |
 
 **The most substantive still-unreviewed calls**, if you only want to look at a few:
 
+- **Session-37 #7. The immense-reshape exemption from one-lock-per-player** — the one flag with a real
+  failure mode if it is wrong, and the one worth a deliberate try in play. Reshape a very large guide,
+  release, immediately grab a different one; the first reshape should still land.
+- **Session-38 #1. The broad-phase padding.** If a guide you can plainly see ever refuses to be clicked —
+  a long deeply-curved arch, a Free-Shape with corners spread wide — this is why, and the fix is more
+  padding.
 - **0f. Edit mode is SELECT-ONLY** — clicking a guide in Edit selects it for the settings rows but does not
   grab, insert or lock, so a select-click cannot accidentally reshape. All geometry editing stays in Create.
   *Alternative if wanted:* allow grabbing in Edit, with body-click = select and point-click = grab.
@@ -122,14 +152,21 @@ Not to-dos. Standing constraints on how the moving parts are allowed to behave.
   never upload one voxel at a time and never rebuild one growing mesh per frame.**
 - **Immense public validation is intentionally serialized.** One below-normal worker does pure
   generation/counting; claim checks consume ≤128 blocks or ~1 ms per 20 ms server tick. Longer build time is
-  acceptable — **server tick health is the priority.**
+  acceptable — **server tick health is the priority.** Since v0.4.36 the worker also *observes* cancellation,
+  so a cancelled job gives the lane back at its next seam instead of running to completion.
 - **Whole-guide + regional culling is conservative and measured.** A bound outside live
   `viewDistance`/frustum submits nothing; an intersecting immense clean Shell then tests fixed 32-block
   regions independently. Cross-region neighbours use complete guide occupancy, so boundaries add no internal
   faces.
+- **Targeting rejects by bounding box before it samples anything** (v0.4.40). The padding is deliberately
+  generous — see the Session-38 flag above. Rejecting nothing costs one pass over a guide's control points,
+  which is cheaper than the curve fingerprint it saves.
 - **Division marks add a render-side pass** *(verified)* — `DivisionMarks.Apply` runs on every mesh rebuild,
   walking `SampleCurve(128)` then a nearest-cell claim per boundary. Cheap, but it walks the cell list.
   Watch on very high division counts × large guides.
+- **A guide over 3,000,000 voxels can never have its occupancy colours updated live.** That is intended and
+  reported by `OccupancyStaleGuides`; since v0.4.38 those guides are held apart so they no longer pin the
+  changed-block list open (`SESSION_37.md` §8).
 - Carried from Session 7: item transforms · recipe balance · scroll-wheel bindings · Surface flatten's
   eventual move into the shape layer (`TODO(Surface)`).
 
@@ -140,12 +177,27 @@ Not to-dos. Standing constraints on how the moving parts are allowed to behave.
 **These are claims to test, not rules to follow** — `STATUS.md`'s *Known unverified claims* is the
 authoritative copy. Listed here because they are genuinely open work:
 
+- **Does the chiselling highlight light itself on a world load now?** (v0.4.42.) The fix defers a guide for
+  re-probing when its anchor's chunk is absent at mesh time; whether that window exists in practice cannot
+  be settled by reading. If the highlights still come up dark, see **A16** — the anchor test is the reason
+  and widening it is the fix.
+- **Does the tool now come back on the shape you left it on?** (v0.4.43.) Try one of the seven that used to
+  be forgotten — Dome, Cylinder, Cone, Box, Tapered Cylinder, Polygonal Prism, Tapered Polygonal Prism.
+- **v0.4.40's four GUI fixes are unverified as a set.** v0.4.41 superseded that build before it was played.
 - The hard **32-chalk ceiling is verified offline but never tested against xskills itself.** Craft a
   quality-bonus kit and confirm it comes out 32/32.
 - **1.22.x support is declared, not tested.** Built against 1.22.3; smoke-test a 1.22.0/1.22.1 install.
 - The **Players list's scroll container** rests on reasoning rather than a test (`GOTCHAS` G18).
 - Session-29 **block-occupancy verification items** — the diagnostic commands are hidden behind
   `"diagnosticCommands": true` in `layout-client.json`, not deleted, precisely for this.
+- **Is `GOTCHAS` G4's general case still live?** G4 says the stale-wireframe trap is "fixed for the Move path
+  only". `TryStartSettledShellMaterialization` now carries a `ScaffoldFingerprint` guard whose own comment
+  describes and closes exactly that case, and Session 36 found every other early return in
+  `OnGuideAddedOrUpdated` fingerprint-guarded or pose-matched. **One path was traced, not all of them** —
+  confirm before annotating G4. An entry that says "still live" when it is not sends the next session hunting
+  a fixed bug, which is R7's failure mode running the other way.
+- **How often does the immense-sculpt race actually fire?** The defect is fixed (v0.4.36) but its window was
+  never sized: "the worker is still counting when you re-grab". Only play can say whether it was common.
 
 ---
 

@@ -21,11 +21,20 @@ of that here; it goes stale the moment it is copied.
 |---|---|
 | touching the renderer | `dev/GOTCHAS.md` **G2** (order-dependent geometry) + **R2/R4/R5/R8**, then `dev/plans/PLAN_RENDER_PERFORMANCE.md` |
 | adding or changing a packet | `dev/GOTCHAS.md` **G1** (append-only, never renumber), `dev/WIRE_HISTORY.md` |
+| accepting ANY value from a client OR a file | `dev/GOTCHAS.md` **G31** — `Guide/GuideBounds.cs` is the one range check; call it — and **G32**, client conventions are not server invariants |
+| adding a shape, or touching a voxel counter | `dev/GOTCHAS.md` **G31** (the scan guards bound a shape's SIZE, never its POSITION) and **G34** (a shape that fails its frame check reports ZERO, and zero passes every cap) |
+| adding a rate limit, throttle or drop rule | `dev/GOTCHAS.md` **G35** — never drop the packet that RELEASES a resource |
+| writing a debounce or "already queued" guard | `dev/GOTCHAS.md` **G36** — the pending flag must never outlive its callback — and **R11**, which is what happened when it did |
+| caching any world read that can FAIL | `dev/GOTCHAS.md` **G37** — "cannot see" is not "empty", and a chunk load is not a block change |
+| validating a value against a pinned enum | `dev/GOTCHAS.md` **G38** — never bound it with a hand-written member name; config is rewritten on load, so a wrong bound DESTROYS the setting |
+| writing a "when did this last happen" field | `dev/GOTCHAS.md` **G33** — `long.MinValue` is not a safe "never"; it overflows the subtraction |
+| adding a packet that REFUSES something | `dev/GOTCHAS.md` **G27** — check a subscriber exists, or the player is told nothing |
+| writing anything that runs on a worker thread | `dev/GOTCHAS.md` **G30** (`BlockOccupancy` is lock-free) and **G29** (check identity before removing by key) |
 | adding any player-facing text | `dev/GOTCHAS.md` **G11** — `SendIngameError`'s parameter is a LANG KEY |
 | adding text to a dialog | `dev/GOTCHAS.md` **G13** — a static text wraps, but its bounds never grow |
 | adding a custom GUI element | `dev/GOTCHAS.md` **G6** — allocate the `LoadedTexture` first, or the client dies |
 | adding a setting that can gate itself | `dev/GOTCHAS.md` **G9** — disable, never block |
-| changing caps or limits | `dev/GOTCHAS.md` **R1** — private guides are deliberately NOT capped |
+| changing caps or limits | `dev/GOTCHAS.md` **R1** — private guides are deliberately NOT capped — and **G28**, the three caps are not symmetrical |
 | touching colours or the palette | `dev/GOTCHAS.md` **G8** — read the palette once per mesh build |
 | adding an optional command argument | `dev/GOTCHAS.md` **G3** — optional parsers return their DEFAULT, not null |
 | debugging "X doesn't work" | `dev/GOTCHAS.md` **G12** — run the existing diagnostic before writing a fix |

@@ -6,9 +6,21 @@ namespace Layout.Config
     /// Server-side configuration, persisted as <c>layout.json</c> in the game's ModConfig folder. Loaded by
     /// <see cref="LayoutModSystem"/> via <c>sapi.LoadModConfig</c> on server start; if the file is absent (or
     /// unreadable) a default instance is created and stored back so admins always have a file to edit.
-    /// The values are injected into the managers at construction — nothing reads this class after startup,
-    /// so edits take effect on the next server restart.
     /// </summary>
+    /// <remarks>
+    /// WHICH SETTINGS TAKE EFFECT WITHOUT A RESTART. Six of them do, because the settings page's Admin
+    /// section changes them live and writes the file back (v0.4.16): the five caps and
+    /// <see cref="AllowClientOnlyMode"/>. See <c>LayoutAdminSetting</c>.
+    ///
+    /// The rest are file-and-restart, deliberately. <see cref="RequiredPrivilege"/> and
+    /// <see cref="UndoHistoryDepth"/> were never offered in the panel — fumbling a privilege name in a GUI
+    /// can lock every player including the admin out of the tool, which is precisely what you then cannot
+    /// fix from inside the game. <see cref="AdminCanOverrideLocks"/> (v0.4.17) and
+    /// <see cref="EnableChalkDurability"/> (v0.4.20) were withdrawn from it since.
+    ///
+    /// This class said "nothing reads this after startup, so edits take effect on the next server restart"
+    /// until the 2026-08-01 sweep — true when it was written, and three-quarters wrong by v0.4.16.
+    /// </remarks>
     /// <remarks>
     /// UNLIMITED SEMANTICS. For all five caps, <c>0</c> or any negative value means "unlimited" — the check
     /// is skipped entirely. <see cref="Normalize"/> folds negatives to 0 so "unlimited" has one on-disk

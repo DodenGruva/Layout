@@ -82,6 +82,19 @@ namespace Layout.UI
         private bool _comatoseDraft;
         private bool _renderingEnabled = true;
 
+        // v0.4.34: the cap row briefly reports a REFUSAL instead of the percentage gauge. The gauge is
+        // passive — it shows how full the per-guide cap is and reacts to nothing — so a refused edit used
+        // to leave it completely unchanged. The warning packet cannot say WHICH cap fired (it carries a
+        // count and a limit only), so this stays deliberately generic; the server's chat line names it.
+        // The 150 ms tick clears the flash on its own.
+        // ⚠️ 0 means "never refused", NOT long.MinValue. Seeding this with long.MinValue looked like the
+        // obvious "infinitely long ago" and was a bug: `ElapsedMilliseconds - long.MinValue` OVERFLOWS
+        // long and wraps to a large NEGATIVE number, which is less than the window, so the row read
+        // "REFUSED" from the moment the HUD opened and never stopped. Fixed v0.4.39; shipped wrong in
+        // 0.4.34–0.4.38. ElapsedMilliseconds only ever counts up from 0, so 0 is a safe "never".
+        private const long CapRefusalFlashMilliseconds = 2500;
+        private long _capRefusedAtMs;
+
         // The HUD's copy of the Current Shape chip (0.1.16): which "-current" glyph is composed right
         // now, or null when hidden (non-Create modes). A change recomposes the HUD (rare — shape picks).
         private enum HudVisualState
@@ -420,7 +433,7 @@ namespace Layout.UI
                     SetText("ctx1", HorizontalDimensionsText(_draftExtent));
                     SetText("ctx2", VerticalDimensionsText(_draftExtent));
                     SetText("ctx3", TotalVoxelsText(_draftVoxelCount));
-                    SetText("ctx4", CapText(_draftVoxelCount, _net.PerGuideVoxelCap));
+                    SetText("ctx4", CapRowText(_draftVoxelCount, _net.PerGuideVoxelCap));
                 }
                 else
                 {
@@ -447,7 +460,7 @@ namespace Layout.UI
                 SetText("ctx1", HorizontalDimensionsText(extent));
                 SetText("ctx2", VerticalDimensionsText(extent));
                 SetText("ctx3", TotalVoxelsText(contextGuide.CachedVoxelCount));
-                SetText("ctx4", CapText(contextGuide.CachedVoxelCount, _net.PerGuideVoxelCap));
+                SetText("ctx4", CapRowText(contextGuide.CachedVoxelCount, _net.PerGuideVoxelCap));
             }
         }
 
@@ -618,6 +631,7 @@ namespace Layout.UI
             if (_subscribed) return;
             _net.GuideAddedOrUpdated     += OnGuideAddedOrUpdated;
             _net.GuideHudMetadataChanged += OnGuideHudMetadataChanged;
+            _net.VoxelCapWarningReceived += OnVoxelCapWarning;
             _subscribed = true;
         }
 
@@ -626,7 +640,17 @@ namespace Layout.UI
             if (!_subscribed) return;
             _net.GuideAddedOrUpdated     -= OnGuideAddedOrUpdated;
             _net.GuideHudMetadataChanged -= OnGuideHudMetadataChanged;
+            _net.VoxelCapWarningReceived -= OnVoxelCapWarning;
             _subscribed = false;
+        }
+
+        // Fires for public guides (server) and private ones (LocalGuideAuthority) alike. The guide id and
+        // the numbers are deliberately unused: a placement refusal names a guide that does not exist yet,
+        // and the cap row is about the player's current context either way.
+        private void OnVoxelCapWarning(Guid guideId, int currentCount, int cap)
+        {
+            _capRefusedAtMs = capi.World.ElapsedMilliseconds;
+            RefreshText();
         }
 
         private void OnGuideHudMetadataChanged(Guid guideId)
@@ -657,6 +681,17 @@ namespace Layout.UI
 
         private static string TotalVoxelsText(int count) =>
             Math.Max(0, count).ToString("N0");
+
+        // The cap row: normally the passive gauge, but a recent refusal takes the line over. Generic
+        // wording on purpose — the packet does not say which cap fired, and an honest "refused" beats
+        // the silence this replaces.
+        private string CapRowText(int count, int cap)
+        {
+            if (_capRefusedAtMs > 0
+                && capi.World.ElapsedMilliseconds - _capRefusedAtMs < CapRefusalFlashMilliseconds)
+                return "REFUSED — over cap";
+            return CapText(count, cap);
+        }
 
         private static string CapText(int count, int cap)
         {

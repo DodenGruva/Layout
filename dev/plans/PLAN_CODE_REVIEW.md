@@ -1,11 +1,39 @@
 # PLAN — Adversarial code review (`TODO` A10.1)
 
-> **Status: NOT STARTED. This document is the BRIEF for the review, not its findings.** Written 2026-07-31
-> at v0.4.33, at the end of the documentation-audit session, while the settled decisions and trap register
-> were still loaded. When the review runs, its findings go to `dev/TODO.md` and `dev/GOTCHAS.md` — not here.
-> This file is the starting point, and it should not need rewriting to be reused.
+> **Status: RUN ONCE — Session 36, 2026-07-31, against v0.4.33. Still current and still reusable.**
+> **This document is the BRIEF for the review, not its findings.** Written 2026-07-31 at v0.4.33, at the end
+> of the documentation-audit session, while the settled decisions and trap register were still loaded. Its
+> findings went to `dev/TODO.md` **A14** and `dev/GOTCHAS.md` **G27–G30**, with the narrative in
+> `dev/sessions/SESSION_36.md` — not here. This file is the starting point, and it should not need rewriting
+> to be reused.
 >
 > **Run this in a FRESH session.** See §1; the reason is not context budget.
+>
+> **What the first run did NOT cover:** the UI layer. `GuideToolController`, `GuideToolGui` and
+> `GuidePlayersDialog` were never read — roughly 7,000 lines, and the home of `GOTCHAS` G6, G13, G14, G16,
+> G17 and G18. **A second run should start there**, and §4's risk ranking should be re-read as covering the
+> server and renderer only.
+>
+> **What the first run proved about the brief itself:** §4.2's copy-path hypothesis was wrong (the path is
+> correctly capped and recounts), and the two highest-value findings came from §4.4's "verify it actively
+> ignores rather than falling through" and from checking a *symptom* claim — who actually consumes a
+> rejection packet — rather than from §4.1's concurrency ranking. Keep §2's "a path that exists, compiles,
+> and does nothing" as the signature to hunt; it produced both.
+>
+> ⚠️ **THE BRIEF'S LARGEST GAP: it never states a threat model, so the first run never asked what a MODIFIED
+> CLIENT would do.** A second, independent review of the same tree found six defects this brief's run missed
+> entirely — including the only **P0** either found: one crafted packet stops the server, because every scan
+> guard bounds a shape's size and nothing bounds its position (`GOTCHAS` **G31**). The two reviews overlapped
+> on **nothing**. §4's risk ranking is a *correctness* ranking; it is silent on robustness, and a run that
+> follows it alone will read half the surface. **Before the next run, decide and write down whether a
+> modified client is in scope** — and if it is, add a section covering input validation at every packet
+> boundary, per-player rate and resource limits, authorization on every endpoint that mutates or imports,
+> and time-of-check/time-of-use gaps in anything validated across ticks.
+>
+> ⚠️ **And state the scope of every NEGATIVE finding as narrowly as the test that produced it.** The first
+> run twice generalised from one traced path and was wrong both times — dismissing the P0 as "unverified",
+> and clearing the import seam as "hardened" when it was only hardened against large guides. "I tested X and
+> it holds" is not "it is safe". Detail: `dev/sessions/SESSION_36.md` §6.1.
 
 ---
 

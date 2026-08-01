@@ -20,6 +20,170 @@
 
 ---
 
+## A10.1's remaining half — the GUI layer — ✅ REVIEWED 2026-08-01, v0.4.40–v0.4.41 (Session 38)
+
+The part A10.1 explicitly did not cover. `GuideToolGui` (3,609 lines), `GuideToolController` (3,322) and
+`GuidePlayersDialog` (1,042) read end to end — roughly 8,000 lines, and the home of six trap entries.
+
+**The six known traps are all intact.** G6 (texture allocated before use), G13 (every variable-length text
+measured, not guessed), G14 (act on the press, not the resulting state), G16 (per-row confirmation carries a
+row identity), G17 (the roster and guide-list handlers still split), G18 (scroll container inside a
+fixed-height scope, still carrying its true height). Nothing had rotted.
+
+**Four defects, none of them crashes**, all fixed in v0.4.40 and carried forward through v0.4.41: the
+Players list appearing empty when a filter narrowed a long roster (a remembered scroll position never
+checked against the shorter list); the aim loop testing every guide in the world 33 times a second with no
+distance rejection; a ghosted row that could still light a tile from a remote update; and player names drawn
+unclipped through the column beside them.
+
+⚠️ **One fix in that batch was a regression and was reverted the next revision** — the redraw-guard rewrite
+that latched the Players dialog dead after a single click. `GOTCHAS` **R11**, trap **G36**,
+`SESSION_38.md` §3. The other four stand.
+
+**Rotate's independence from the Move/Copy/Mirror row was raised as a fifth finding and is not a defect** —
+human-confirmed as intended, and now documented in the code so it is not re-flagged.
+
+Narrative: `dev/sessions/SESSION_38.md` §1–§3.
+
+---
+
+## A13 — the XML doc-comment sweep — ✅ DELIVERED 2026-08-01, v0.4.43 (Session 38)
+
+Open since the doc overhaul made source the authority that `ARCHITECTURE.md` defers to, which is what turned
+a wrong comment into the thing a reader is told to trust.
+
+**Nine wrong statements corrected**, comment-only: the server config's claim that edits need a restart (six
+settings have been live since v0.4.16); the occupancy colours documented as static three sessions after live
+updates shipped in the same file (three places); a command named `/layout occupancy refresh` that does not
+exist — it is `/layout built refresh` — in three files; the chalk and lock-override retirement versions
+swapped between `PacketTypes.cs` and `GuideToolGui.cs`; `DefaultShape` documented as "0 = Arch, 1 = Ellipse";
+`ProtocolVersion` claiming "there is only one version"; and `ProjectionMode.Surface` naming a dormant render
+path. Each correction records what it used to claim, so the drift is visible and not just the fix.
+
+⚠️ **The sweep turned up a live bug** — a hand-written `> GuideShapeType.Sphere` bound meant seven of the
+fifteen shapes were never remembered between sessions, and the preference was overwritten on disk each load
+rather than merely ignored. `GOTCHAS` **G38**. That is the argument for the sweep having been worth running:
+the comment that listed the same enum incompletely and the check that bounded it by hand were the same drift.
+
+⚠️ **A verification pass over the sweep found an error the sweep itself had committed** — two comments
+asserting a version range that was never checked. Corrected. `SESSION_38.md` §6.
+
+Also verified correct and left alone: every cap default and clamp range in both config classes, all six
+opacity defaults against both their initialisers and their fallbacks, the "unlimited means zero" rule across
+all five caps, the pinned values of `PlaneAxis`, `ProjectionMode`, `GuideShapeType`, `ShapeConstraint` and
+`GuidePaletteScheme`, the retired palette number 2, and the two dead wire fields in the bulk sync.
+
+Narrative: `dev/sessions/SESSION_38.md` §5–§6.
+
+---
+
+## A14 — the twelve code-review defects — ✅ ALL FIXED 2026-08-01, v0.4.34–v0.4.39 (Session 37)
+
+Session 36 found them and was forbidden to fix any of them (the brief forbids fixing while reviewing).
+Session 37 fixed all twelve in the agreed order, one shippable revision at a time, plus two defects neither
+review had found. Narrative: `dev/sessions/SESSION_37.md`. Traps harvested to `GOTCHAS` **G33–G35** and
+**R10**; **G27–G32** each carry a *FIXED* note.
+
+| # | Defect | Fixed in |
+|---|---|---|
+| A14.1 | Cap refusals on edits were completely silent — the warning packet had no subscriber | v0.4.34 |
+| A14.2 | World-total cap had no shrink escape — **and needed a second clause the finding did not name** | v0.4.34 |
+| A14.7 | Unvalidated coordinates hang the server, a client, or a load — **validation half** | v0.4.35 |
+| A14.3 | Immense sculpt disowned then discarded; cancelling never stopped the worker | v0.4.36 |
+| A14.4 | `BlockOccupancy.GetOrBuild` could throw on a mesh worker thread | v0.4.36 |
+| A14.10 | One player could hoard the edit lock on every guide | v0.4.36 |
+| A14.9 | No rate limiting anywhere; no-op toggles persisted and broadcast | v0.4.36 + v0.4.38 |
+| A14.6 | Positional cap construction (the last one in the tree) | v0.4.36 |
+| A14.5 | `_occupancyChangedBlocks` grew without bound behind a permanently-stale guide | v0.4.38 |
+| A14.8 | Push endpoint: authorization, unlimited packets, unchecked lists, a save per guide | v0.4.38 |
+| A14.11 | Time-of-check/time-of-use in the tiled claim validation | v0.4.38 |
+| *(latent)* | Retired admin settings 6/7 reported a change that never happened | v0.4.38 |
+
+**Two defects neither review found, and both mattered:**
+
+- **A guide that voxelises to NOTHING passed every cap** and was created invisible, listed at 0 voxels, and
+  completely silent. Found **by the human in play** in about a minute, with a 5,000 per-guide cap set and the
+  cap expected to be what failed. It is also A14.8's stated hostile-client vector, reached by accident.
+  Fixed v0.4.37. `GOTCHAS` **G34**.
+- **The HUD cap row read `REFUSED — over cap` permanently** in v0.4.34–v0.4.38, because a `long.MinValue`
+  "never" sentinel overflows the subtraction that tests it. Found by the session reviewing its own diff.
+  Fixed v0.4.39. `GOTCHAS` **G33**.
+
+**Four deferrals carried forward to `TODO` A15**, each with a stated reason: A14.7's loop rewrite (now
+deferred on *evidence* — the hang was reproduced and the shipped bound verified with a 4× margin), the
+`_settledMaterializations` concurrency gate and the palette-lane cancellation (both gated behind `GOTCHAS`
+G2's measured-bottleneck rule), and `ResolveSculptCountLimit`'s wasted scan (the review's own words: wasted
+work only, not a cap bypass).
+
+**One proposed fix was rejected on the merits** — gating the guide-push endpoint on an outstanding server
+request would have broken the settings page's Publish button, which pushes unprompted by design.
+`GOTCHAS` **R10**.
+
+---
+
+## A14.7 reproduction — ✅ DEBT DISCHARGED 2026-08-01 (was a `STATUS.md` §6 unverified claim)
+
+The hang had been confirmed by tracing source and never observed. Reproduced with a throwaway harness — one
+process per shape, so a genuine hang can be killed — calling each volume shape's threshold counter directly
+at a crafted coordinate.
+
+**Seven of eight shapes never return** at 2^27 = 134,217,728, exactly where `world * 16` reaches
+`int.MaxValue + 1`. Correct one step below it, dead on the boundary. **`GuideBounds.HardExtent` verified safe
+with a 4× margin.**
+
+⚠️ **It corrected three claims that had been made from tracing alone:** `BoxShape` does **not** hang (it
+returns a nonsense count and terminates) though it had been recorded as traced end to end and confirmed;
+Sphere and Dome **hang rather than throw**, contradicting the `checked`-multiply prediction; and the four
+inferred shapes are confirmed. Table in `GOTCHAS` **G31**; method in `SESSION_37.md` §4.1.
+
+---
+
+## Adversarial code review — ✅ DELIVERED 2026-07-31 (was `TODO` A10, item 1)
+
+Open since the review backlog was first written; briefed on 2026-07-31 in `dev/plans/PLAN_CODE_REVIEW.md`
+and run the same day in a fresh session, against **v0.4.33**, with no code changed. Full narrative in
+`dev/sessions/SESSION_36.md`; the findings are open work in `dev/TODO.md` **A14**.
+
+**Six defects, all confirmed by tracing the path end to end in source.** The largest is that
+`ClientNetworkHandler.VoxelCapWarningReceived` is raised for every cap rejection and **has never had a
+subscriber** — so a cap refusal on an edit shows the player nothing at all. Second is a world-total voxel cap
+with no shrink escape, which freezes every edit in the world once the cap is set below current usage. Then an
+immense sculpt that an ordinary right-click-cancel can leave orphaned, a `ConcurrentDictionary` race in
+`BlockOccupancy` that can throw on a mesh worker, an unbounded block list behind a permanently-stale guide,
+and three smaller items. → `GOTCHAS` **G27**, **G28**, **G29**, **G30**.
+
+**What came back clean matters as much.** The brief's single most specific hypothesis — that
+`GuideTransformPacket`'s COPY path was built for in-place edits and might not re-validate caps — **does not
+hold**: `CopyGuide` routes through `RestoreGuide`, which applies every cap against the copier's uid and
+recounts rather than reusing the cached count (G5 honoured). The G11 placeholder sweep is complete with no
+regressions. Every admin handler re-checks privilege server-side. The private-guide push seam does not bypass
+caps. The legacy two-point rectangles and three-point boxes are handled on every edit path.
+
+> ⚠️ **ANNOTATED SAME DAY — "the push seam does not bypass caps" was overbroad.** It holds for the vector
+> that review tested (oversized geometry evading the voxel caps) and not generally: the endpoint requires no
+> authorization, and a guide with degenerate geometry costs zero voxels, so it evades the voxel budget while
+> both guide-count caps sit at unlimited by default. Found by a second, independent review the same day.
+> Open as `TODO` **A14.8**. Annotated rather than rewritten, per this file's own rule.
+
+⚠️ **Delivered for the authority, wire and renderer only.** `GuideToolController`, `GuideToolGui` and
+`GuidePlayersDialog` were not read — **the GUI layer remains unreviewed**, and six of the trap entries live
+there. Do not treat A10.1 as covering it.
+
+> ⚠️ **ANNOTATED 2026-08-01 — the GUI half has since been reviewed.** The paragraph above was true when
+> written and is no longer current state: Session 38 read all three files end to end. See the
+> *A10.1's remaining half* section at the top of this file. Annotated rather than rewritten, per this
+> file's own rule.
+
+**A second review, by another model, was evaluated and adopted the same day** — six further findings, all
+re-verified against source, at `TODO` **A14.7–A14.11** and `GOTCHAS` **G31–G32**. It found an entire class
+this one missed (hostile-client robustness: a P0 server hang from one crafted packet, an unauthenticated
+import endpoint, no rate limiting, lock hoarding). **The two reviews overlap on nothing.** That is the
+durable lesson: A10.1 was scoped as "read the code for defects" and delivered exactly that, while never
+asking what a modified client would do. A future review should state its threat model up front —
+`dev/plans/PLAN_CODE_REVIEW.md` now says so.
+
+---
+
 ## Documentation overhaul — ✅ DELIVERED 2026-07-30 (was `TODO` A10, item 5)
 
 **"Clean up and consolidate the documentation"** — open since Session 28, planned in detail on 2026-07-29 and
