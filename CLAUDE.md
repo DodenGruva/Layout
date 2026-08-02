@@ -25,6 +25,8 @@ of that here; it goes stale the moment it is copied.
 | adding a shape, or touching a voxel counter | `dev/GOTCHAS.md` **G31** (the scan guards bound a shape's SIZE, never its POSITION) and **G34** (a shape that fails its frame check reports ZERO, and zero passes every cap) |
 | adding a rate limit, throttle or drop rule | `dev/GOTCHAS.md` **G35** — never drop the packet that RELEASES a resource |
 | saving state from anywhere that is not a lifecycle point | `dev/GOTCHAS.md` **G39** — `Persist()` re-serialises the WHOLE registry; mutations call `MarkDirty()`, and deferring a write obliges every drop path to flush |
+| deferring a `StoreData` call to a worker or a later moment | `dev/GOTCHAS.md` **G44** — it reaches disk at the game's NEXT save, and after the last save there is no next one |
+| treating a null, false or empty return as "nothing to do" | `dev/GOTCHAS.md` **G43** — it may equally mean "I tried and failed"; skipping a fallback on that reading silently loses the work |
 | short-circuiting, caching or pre-filtering ANY access/claim/privilege check | `dev/GOTCHAS.md` **G40** and **R12** — `TestAccess` has seven denial reasons and only one is land claims; a filter must be certain about the whole check |
 | calling `GetPointAt` or any shape accessor more than once | `dev/GOTCHAS.md` **G41** — it may rebuild the entire geometry per call; hoist it, and keep the parameter types identical |
 | writing a debounce or "already queued" guard | `dev/GOTCHAS.md` **G36** — the pending flag must never outlive its callback — and **R11**, which is what happened when it did |

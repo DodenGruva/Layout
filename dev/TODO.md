@@ -24,34 +24,34 @@ play on 2026-08-01 — which also settled **A16** (→ `DONE.md`).
 ⚠️ **v0.4.48 must not be used** — it shipped a claim pre-filter that was a permissions hole and v0.4.49
 reverted it. `GOTCHAS` **R12**.
 
-**What A10.2 left behind:** **A18**, moving guide serialisation off the main thread — the one item large
-enough to stand on its own. Five smaller costs were measured and deliberately not fixed; they are recorded
-in `SESSION_39.md` §6 and in `DONE.md`, **not here**, because none of them is open work.
+**A18 is delivered** (Session 40, v0.4.50–v0.4.54 → `DONE.md`) — guide serialisation is off the server main
+thread, which was the last thing A10.2 left behind. Five smaller costs were measured and deliberately not
+fixed; they are recorded in `SESSION_39.md` §6 and in `DONE.md`, **not here**, because none of them is open
+work.
 
-⚠️ **A17 (per-guide "index cards") was proposed, agreed, and then DISMISSED in the same session** once the
-save layer was actually read. Do not re-propose it without reading `GOTCHAS` **G42** first.
+**Nothing is queued behind it.** The next piece of work is whatever the human chooses.
 
-## A18. Move guide serialisation off the main thread
+⚠️ **A17 (per-guide "index cards") was proposed, agreed, and then DISMISSED** once the save layer was
+actually read. Do not re-propose it without reading `GOTCHAS` **G42** first. → `DONE.md`; the original plan
+is archived intact at `dev/archive/superseded-2026-08-01/PLAN_GUIDE_PERSISTENCE.md`.
 
-**The next piece of work, and it replaces A17.** Full detail and open questions:
-**`dev/plans/PLAN_BACKGROUND_SAVE.md`** — written as a starting point, not a finished design.
+## A19. Awaiting a playtest — the background save
 
-**The one-line version:** editing is fine now (v0.4.45 stopped saving per mutation), but when the world
-saves, converting the whole registry to JSON still runs **on the server's main thread** — 42 ms at 3,000
-guides, 113 ms at 8,000, against a 20 ms tick. None of it needs to be there.
+**v0.4.54 is the build to test; v0.4.50–v0.4.52 each carry a defect a later revision fixed.** Nothing in
+Session 40 has been played yet — stated by the human, not assumed.
 
-**Measured 2026-08-01:** a deep copy of the registry costs **0.52 ms at 3,000 guides against 42 ms to
-serialise** — about 80× cheaper. So the main thread takes a private snapshot, a worker does the text
-conversion, and `EnqueueMainThreadTask` hands the bytes back. **~99% of the cost leaves the tick.**
+Two things only play can answer, both of which announce themselves:
 
-⚠️ **The snapshot is mandatory** — `GuideData.ControlPoints` is the same list instance a live shape mutates,
-so a worker reading the guides directly is a data race. ⚠️ **This is threading**, where the project has been
-burned before (`GOTCHAS` G29, G30). Gated like A10.2 was: after a clean playtest, in a session about only
-this.
+1. **Is the autosave rhythm as steady as the design assumes?** Repeated
+   `Background guide save did not complete before the world save; widening its lead` in the server log would
+   say it is not. One or two such lines early on are the design self-correcting and are expected.
+2. **Is shutdown detected before the final save?** Two independent signals are checked and both would have to
+   fail together. The symptom would be building from the last minutes of a session missing after a clean
+   `/stop` — see `GOTCHAS` **G44** for why that is the one path where a miss is unrecoverable.
 
-*(`TODO` **A17**, per-guide "index cards", is **dismissed** — the save layer cannot enumerate or delete keys,
-so it was never viable. → `DONE.md`, `GOTCHAS` **G42**, and the original plan is archived intact at
-`dev/archive/superseded-2026-08-01/PLAN_GUIDE_PERSISTENCE.md`.)*
+**`/layout info` reports both**: saves prepared off-thread versus paid on the tick, the learned period, and
+the current lead. ⚠️ Reach for it before writing a fix (`GOTCHAS` **G12**) — the whole reason it exists is
+that this feature is invisible when it works.
 
 ## A15. What was deliberately deferred, and why
 
@@ -122,7 +122,8 @@ unfindable.
 | Session 34 | six flags — notably send-to-ground ignoring Mirror (`GOTCHAS` G19) | `sessions/SESSION_34.md` §10 |
 | Session 37 | **seven — every tunable number that session invented.** Cap-refusal throttle (4 s), HUD flash wording/duration, `GuideBounds` map slack (4,096), rate-limit capacity/refill (240 / 120 per second) and its cost weights, push cooldown (3 s) and `MaxPushedControlPoints` (1,024), claim-revalidation restart cap (3), and the immense-reshape lock exemption | `sessions/SESSION_37.md` → *Flagged and unverified* |
 | Session 38 | **two.** The targeting broad-phase padding (pick radius + ¼ of the guide's largest dimension), and surfacing `OccupancyAwaitingChunks` only in `/layout built refresh`'s reply rather than on the HUD | `sessions/SESSION_38.md` → *Flagged and unverified* |
-| **Session 39** | **four.** The client's 60 s private-guide flush interval (the server's is the world's own cadence, human-set; the client has none to borrow); `VoxelCapKind.GuideCount` riding `VoxelCapWarningPacket` with numbers that are guides rather than voxels; the five costs measured and deliberately NOT fixed (§6); and the long-standing **admin bypass of claim validation**, surfaced here and left unchanged | `sessions/SESSION_39.md` → *Flagged and unverified* |
+| **Session 40** | **four.** The background save's tunable numbers — the lead's 3 s start, its doubling, and the 60 s cap; and the 20 s–30 min band outside which a save-to-save gap is not treated as the autosave rhythm. Plus two things deliberately left synchronous: the **admin policies** (a handful of records against the registry's megabytes) and the **client's private F4 guides** (a small file write, and file I/O on a worker is a nastier risk than text conversion) | `sessions/SESSION_40.md` → *Flagged and unverified* |
+| Session 39 | **four.** The client's 60 s private-guide flush interval (the server's is the world's own cadence, human-set; the client has none to borrow); `VoxelCapKind.GuideCount` riding `VoxelCapWarningPacket` with numbers that are guides rather than voxels; the five costs measured and deliberately NOT fixed (§6); and the long-standing **admin bypass of claim validation**, surfaced here and left unchanged | `sessions/SESSION_39.md` → *Flagged and unverified* |
 
 **The most substantive still-unreviewed calls**, if you only want to look at a few:
 

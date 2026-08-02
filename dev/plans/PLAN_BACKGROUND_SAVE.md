@@ -1,15 +1,28 @@
 # PLAN — Move guide serialisation off the main thread
 
-> **Status: PROPOSED, NOT STARTED.** Decided 2026-08-01 (Session 39), at the end of the session, after the
+> **Status: DELIVERED v0.4.50–v0.4.54** (Session 40, 2026-08-01). Written 2026-08-01 (Session 39) after the
 > investigation that **dismissed `TODO` A17** (per-guide "index cards"). This replaces it.
+>
+> **§1–§3, §5, §6 and §8 stand as written** — the problem, the save-layer constraints, the measurements, the
+> risks, and why A17 died. **§4 and §7 were superseded by what was built**; read `SESSION_40.md` for what
+> actually shipped, and `dev/history/DONE.md` → A18 for the summary. Two corrections worth carrying:
+>
+> - ⚠️ **§4's premise that the pass must run AHEAD of the world save is wrong.** `StoreData` only updates the
+>   in-memory blob, which the game flushes at its next save — so bytes handed over late are not lost, they
+>   ride the following save. That turns the trigger question from correctness into durability. **But it has a
+>   sharp edge §4 never saw: after the LAST save there is no following one.** `GOTCHAS` **G44**.
+> - ⚠️ **§6's "lifecycle paths must wait for an in-flight serialisation" did not hold.** The shutdown flush
+>   writes the live registry, always newer than any snapshot in flight, and drops the job so its completion
+>   discards its own bytes. Supersession pays the join obligation for nothing — **but only because of an
+>   identity check**, without which it is a silent rollback (**G29**).
+>
+> ⚠️ **§5's known unknown is UNTOUCHED and still open:** whether the *game's* own write of a large blob
+> hitches. This work moved Layout's serialisation off the tick; it did nothing about the size of what the
+> game then writes. Still no evidence it is a problem; still not a task.
 >
 > **Supersedes `dev/plans/PLAN_GUIDE_PERSISTENCE.md`**, archived intact at
 > `dev/archive/superseded-2026-08-01/PLAN_GUIDE_PERSISTENCE.md`. That plan's *measurements* are still good;
 > its *design* was built on an assumption about the save layer that turned out to be false (§2).
->
-> ⚠️ **This document is a STARTING POINT, not a finished design.** It records what was established, what was
-> disproved, and the open questions — deliberately stopping short of decisions that should be made with a
-> full session's attention. Do not treat §4 as settled.
 
 ---
 

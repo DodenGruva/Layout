@@ -80,6 +80,8 @@ namespace Layout.Network
         private readonly GuideLockManager _locks;
         private readonly UndoManager _undo;
         private readonly LayoutAdminPolicyManager _policies;
+        // Read ONLY for the /layout info status line, and may be null. See the constructor.
+        private readonly BackgroundGuidePersist _backgroundSave;
 
         // Server-config policy (Module 7). Empty/null privilege = everyone may use the tool.
         private readonly string _requiredPrivilege;
@@ -252,13 +254,17 @@ namespace Layout.Network
             UndoManager undoManager,
             LayoutAdminPolicyManager adminPolicies,
             LayoutServerConfig config = null,
-            Action<LayoutServerConfig> persistConfig = null)
+            Action<LayoutServerConfig> persistConfig = null,
+            BackgroundGuidePersist backgroundSave = null)
         {
             _sapi = sapi ?? throw new ArgumentNullException(nameof(sapi));
             _guides = guideManager ?? throw new ArgumentNullException(nameof(guideManager));
             _locks = lockManager ?? throw new ArgumentNullException(nameof(lockManager));
             _undo = undoManager ?? throw new ArgumentNullException(nameof(undoManager));
             _policies = adminPolicies ?? throw new ArgumentNullException(nameof(adminPolicies));
+            // Optional, and only ever read for the /layout info status line. Null simply omits that line —
+            // it must never become something the mutation paths depend on.
+            _backgroundSave = backgroundSave;
             _config = config ?? new LayoutServerConfig();
             _persistConfig = persistConfig;
             _requiredPrivilege = string.IsNullOrWhiteSpace(_config.RequiredPrivilege)
@@ -3709,6 +3715,7 @@ namespace Layout.Network
                 $"Jailed players: {_policies.JailedCount}; custom guide limits: {_policies.CustomGuideLimitCount}; custom per-guide voxel caps: {_policies.CustomVoxelCapCount}; custom cumulative voxel caps: {_policies.CustomPlayerTotalVoxelCapCount}",
                 $"Active edit locks: {_locks.ActiveLockCount}"
             };
+            if (_backgroundSave != null) lines.Add(_backgroundSave.StatusText());
             if (largest != null)
                 lines.Add($"Largest guide: {largest.ShapeType}, {largest.CachedVoxelCount:n0} voxels, {FormatAnchor(largest)}, ID {ShortId(largest.Id)}");
             return string.Join("\n", lines);

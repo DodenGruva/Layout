@@ -531,10 +531,14 @@ it describes is worth, and a separate cadence only makes it more durable at a pe
 with no disposal — safe only while every mutation wrote immediately. `EndWorldSession`, `RemoveLocalOverlay`
 and client shutdown all flush first now. A loader owes a write too: migration, re-stamping and backup
 recovery all changed state that used to reach disk by accident of the unconditional write.
-**Found:** Session 39, `TODO` A10.2. Fixed v0.4.45–v0.4.46. The remaining cost is not the *format* — it is
-that the one remaining flush **serialises on the main thread**; that is `TODO` **A18** and
-`dev/plans/PLAN_BACKGROUND_SAVE.md`. ⚠️ **Do not reach for per-guide storage** — see **G42**. Detail:
-`SESSION_39.md` §1 and §9.
+**Found:** Session 39, `TODO` A10.2. Fixed v0.4.45–v0.4.46. ⚠️ **Do not reach for per-guide storage** — see
+**G42**. Detail: `SESSION_39.md` §1 and §9.
+**The follow-on shipped in Session 40** (`TODO` A18, v0.4.50–v0.4.54): the one remaining flush no longer
+serialises on the main thread — the tick deep-copies the registry and a worker does the text. `Persist()` is
+still the synchronous whole-registry write and this entry still governs it; what changed is that the routine
+world save no longer calls it. **The drop-path obligation above did NOT become a "wait for the worker"
+obligation** — see **G44** for why supersession pays it instead, and **G43** for the trap that cost the most
+in getting there.
 
 ### G40 — A cheap filter in front of a permission check must be certain about the WHOLE check.
 **Trigger:** before short-circuiting, caching or pre-filtering **any** access, claim or privilege decision.
@@ -590,6 +594,43 @@ built, not how it is keyed. `dev/plans/PLAN_BACKGROUND_SAVE.md`.
 **Found:** Session 39 — **after** a whole plan (`TODO` A17, per-guide "index cards") had been written and
 agreed on the assumption that the interface implied the implementation. It did not. The same session had
 already shipped and withdrawn the claim pre-filter for the identical reason (**G40**, **R12**).
+
+### G43 — "It returned nothing" can mean "there was nothing to do" OR "I tried and failed."
+**Trigger:** before treating a null / false / empty return as success — above all from a `Begin*` or `Try*`
+that can decline for more than one reason, and anywhere the caller then SKIPS a fallback because of it.
+**Trap:** `GuideManager.BeginBackgroundPersist` returns null in three cases — nothing was owed, a pass is
+already pending, or **the snapshot itself threw and the registry is still unwritten**. The scheduler read all
+three as "this save is prepared" and skipped the synchronous write that covers an unprepared save. One of the
+three is good news; the caller acted as though all of them were.
+**And the mirror image, on the success path.** A serialisation that *faulted* still reported the save as
+prepared. ⚠️ **The obvious fix there is wrong**: reusing "does the registry still owe anything?" would have
+counted an edit arriving AFTER the snapshot as a failed pass — that edit is the intended staleness window,
+not a failure — and forced an on-tick serialisation at nearly every save on a busy world, undoing the whole
+feature. The right signal is *"did this pass store its bytes"*, not *"is the registry clean now"*.
+**Do:** ask the state, not the return — `HasUnsavedChanges` exists for exactly this and is the same condition
+`Persist` uses, so the two cannot drift. When a return value must carry an outcome, give it one; do not
+overload absence.
+**Found:** Session 40, in the second of three review passes — **after** a guard against this class of failure
+had been added in the first. **G36** is the same family: this is a "nothing is owed" flag latching true with
+work still outstanding. `SESSION_40.md` §6.
+
+### G44 — `StoreData` reaches disk at the game's NEXT save. After the last one, there is no next.
+**Trigger:** before deferring any `SaveGame.StoreData` call — to a worker, a timer, or anything later than
+the `GameWorldSave` that prompted it.
+**Trap:** `StoreData` writes nothing itself; it updates the in-memory savegame blob and the GAME flushes it
+when it next saves (**G42** — one blob, rewritten whole). That is what makes preparing bytes early safe, and
+it is exactly what makes preparing them late on the **final** save silently useless: nothing follows to carry
+them, and a flush in `Dispose` lands in a blob already written to disk. Guide edits from the last stretch of
+a session would vanish on a clean shutdown, with no error anywhere.
+**Do:** detect the last save and write on the tick there — a stall at shutdown costs nobody anything. Check
+it two ways: `IServerAPI.IsShuttingDown`, plus a flag set from
+`sapi.Event.ServerRunPhase(EnumServerRunPhase.Shutdown, …)`, which fires when shutdown BEGINS and so cannot
+be late. ⚠️ **Do not rely on `Dispose` as the safety net for this** — it runs after the game has written.
+**Do also:** the same shutdown flush is how the "wait for the worker" obligation is discharged without
+waiting. It writes the LIVE registry, always newer than any snapshot in flight, and drops the job so its
+completion discards its own older bytes. ⚠️ **The identity check that makes it discard is not optional** —
+without it the completing job writes stale bytes over newer ones, a silent rollback. Same shape as **G29**.
+**Found:** Session 40, tracing the shutdown path after the first build already worked. `SESSION_40.md` §6.
 
 ---
 

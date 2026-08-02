@@ -2,6 +2,53 @@
 
 All notable changes to Layout will be recorded in this file going forward.
 
+## 0.4.54 - 2026-08-01
+
+### Added
+
+- **`/layout info` now reports how guide saving is behaving** — how many world saves had their guide data
+  prepared in the background, how many had to do the work on the spot, and the save rhythm it has settled
+  into. The improvement below is invisible when it works, so this is how you can tell that it is.
+
+## 0.4.53 - 2026-08-01
+
+### Fixed
+
+- A background guide save that could not start, or that failed partway, no longer counts as having saved.
+  Previously the next world save would skip its own write in that case, and the affected edits waited for
+  the save after it.
+
+## 0.4.52 - 2026-08-01
+
+### Fixed
+
+- **A world save with no guide data prepared for it now writes that data immediately.** Without this, a
+  background save that got stuck could have stopped guide edits reaching the disk for the rest of a server
+  session, with nothing to show for it. Also covers the first saves after a server starts, which happen
+  before the mod has worked out the save rhythm.
+
+## 0.4.51 - 2026-08-01
+
+### Changed
+
+- Guide data is now prepared about 3 seconds before a world save rather than 10, so less recent building is
+  left waiting for the following save. If a server needs more time than that, the mod notices and gives
+  itself more, rather than the figure being a fixed guess.
+
+## 0.4.50 - 2026-08-01
+
+### Changed
+
+- **The server no longer pauses to write guide data when the world saves.** Converting every guide in the
+  world into saveable text took 42 milliseconds on a world with 3,000 guides — more than two server ticks,
+  felt by everyone as a stutter — and it happened on every autosave. That work now happens on a separate
+  thread, a few seconds ahead of the save, so the data is already waiting when the world writes itself. The
+  server keeps a copy of the guides for the background thread to work from, which costs about half a
+  millisecond.
+- **One deliberate trade:** a guide edit made in the last few seconds before an autosave now waits for the
+  next one instead of catching that save. Anything older is saved exactly as promptly as before. Shutdown is
+  unaffected — the server always writes guide data properly on its way out.
+
 ## 0.4.49 - 2026-08-01
 
 ### Reverted

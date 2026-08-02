@@ -9,9 +9,8 @@
 >
 > Supersedes `HANDOFF.md` and `dev/PROJECT_STATUS.md`, both frozen in `dev/archive/superseded-2026-07-30/`.
 
-**Regenerated at:** v0.4.49, 2026-08-01 (Session 39 — `TODO` **A10.2 closed**, and with it the whole review
-backlog: the non-render performance review, six fixes, five measured non-fixes, and **one fix shipped and
-withdrawn the same session**).
+**Regenerated at:** v0.4.54, 2026-08-01 (Session 40 — `TODO` **A18 delivered**: guide serialisation is off
+the server main thread. One session about only this, as A18 required).
 
 ---
 
@@ -26,8 +25,8 @@ guides on servers without Layout, and alongside public guides where permitted. T
 
 | | |
 |---|---|
-| **Current build** | **v0.4.49** on `beta`. ⚠️ **v0.4.48 must not be used** — it shipped a claim pre-filter that was a permissions hole; v0.4.49 reverted it (`GOTCHAS` **R12**) |
-| **Last `main` release** | **v0.4.33** — `main` and `beta` were level on 2026-07-31; Sessions 37–39's sixteen revisions are on `beta` only |
+| **Current build** | **v0.4.54** on `beta`. ⚠️ **v0.4.48 must not be used** — it shipped a claim pre-filter that was a permissions hole; v0.4.49 reverted it (`GOTCHAS` **R12**). ⚠️ **v0.4.50–v0.4.52 must not be used either** — each carries a background-save defect a later revision in the same session fixed |
+| **Last `main` release** | **v0.4.33** — `main` and `beta` were level on 2026-07-31; Sessions 37–40's twenty-one revisions are on `beta` only |
 | **Published at** | `github.com/DodenGruva/Layout` — **the repo is public; no personal paths or usernames in tracked files** |
 | **Branches** | `main`, `beta`. `beta-shader` no longer exists — the shader work landed and is what the mod renders with (human-confirmed 2026-07-29) |
 
@@ -36,8 +35,9 @@ what feels wrong in plain English, and they normally playtest **every revision a
 
 **Playtest position.** v0.4.42's chiselling highlights were **confirmed good** in play, and reload-after-edit
 was confirmed good around v0.4.45. v0.4.44 was played and is what surfaced the guide-count cap gap fixed in
-v0.4.46. **v0.4.47 and v0.4.49 are in play now with no result reported yet** — stated by the human, not
-assumed. See §6 for what to look for.
+v0.4.46. **v0.4.47 and v0.4.49 are in play now with no result reported yet**, and ⚠️ **nothing from Session
+40 (v0.4.50–v0.4.54) has been played at all** — both stated by the human, not assumed. **v0.4.54 is the build
+to test.** See §6 for what to look for.
 
 ⚠️ **Claim protection cannot be tested from a singleplayer world**, and this is the largest open verification
 item. The host player holds `controlserver`, and Layout **deliberately exempts** that privilege from claim
@@ -65,7 +65,7 @@ client or a server with nobody attacking anything. All three sources are now val
 |---|---|
 | **DataVersion** | **13** (12 → 13 in Session 33, the Rectangle/Box re-gesture) |
 | **Wire protocol** | **26** (24 → 25 → 26 in Session 39: `VoxelCapWarningPacket` gained `CapKind`, then `VoxelCapKind` gained `GuideCount`) |
-| **Source files** | **84** |
+| **Source files** | **85** |
 | **Shape catalog** | **15 types / 21 picker tiles** |
 
 **Packet registration is append-only — never renumber.** Retired slots stay declared-but-dead as padding
@@ -112,8 +112,23 @@ parseable file carrying an out-of-range coordinate is caught by `GuideBounds` in
 
 ## 3. What shipped recently
 
-Full detail in the session records; `dev/sessions/INDEX.md` indexes all 31.
+Full detail in the session records; `dev/sessions/INDEX.md` indexes all 32.
 
+- **Session 40 (v0.4.50–v0.4.54)** — **`TODO` A18 delivered: guide serialisation is off the server main
+  thread.** The tick deep-copies the registry (0.52 ms at 3,000 guides), a worker turns the copy into JSON
+  (42 ms there, 113 ms at 8,000), and `EnqueueMainThreadTask` hands the bytes back for the world's own save
+  to write. **When it runs is the human's design:** the game exposes no warning that a save is coming and no
+  autosave interval — the period is a constant inside `VintagestoryLib.dll` — so the period is **measured**
+  from the gap between two saves and the pass is aimed a short lead before the next. **That lead
+  self-corrects**, starting at 3 s and doubling on evidence, because it is sized for prediction uncertainty
+  and not for the work, which totals ~80 ms. ⚠️ **Three review passes found four defects and not one was in
+  the threading** — all four were in the bookkeeping deciding whether a save had been prepared, including a
+  latch that could have stopped guide edits reaching disk for a whole server session, and **a null return
+  with three meanings** that got through *after* a guard for its own failure class had been added
+  (`GOTCHAS` **G43**). ⚠️ **G44** is the one that nearly cost a session's last edits: bytes handed to
+  `StoreData` reach disk only at the game's NEXT save, and after the last save there is no next.
+  `/layout info` now reports the tally, because the feature is invisible when it works. **New: G43, G44;
+  G39 annotated with its follow-on. Nothing here is playtested.**
 - **Session 39 (v0.4.44–v0.4.49)** — **`TODO` A10.2 closed, and with it the review backlog.** The headline
   defect: **`Persist()` re-serialised every guide in the world on every mutation**, and a reshape drag does
   that about ten times a second — measured at ~4 ms/MB, so **18 ms per drag update at 1,000 guides against a
@@ -166,15 +181,14 @@ Full detail in the session records; `dev/sessions/INDEX.md` indexes all 31.
 **A10.2 closed in Session 39**. Nothing open is now a "nobody has looked at this" item — every remaining
 entry is work someone chose, a decision awaiting the human, or a claim awaiting a playtest.
 
-**`TODO` A18 — move guide serialisation off the main thread — is the largest open item.** **Editing is no
-longer the problem**: v0.4.45 stopped saving per mutation, so a drag at 3,000 guides went from ~57 ms per
-update to ~1 ms. What remains is that when the world saves, converting the registry to JSON runs **on the
-server's main thread** — 42 ms at 3,000 guides, 113 ms at 8,000, against a 20 ms tick — and it is there by
-accident rather than design. Measured 2026-08-01: **a deep copy costs 0.52 ms against 42 ms to serialise**,
-~80× cheaper, so the main thread can snapshot and a worker can do the rest. ⚠️ The snapshot is **mandatory**
-(`GuideData.ControlPoints` is the same list a live shape mutates) and ⚠️ **this is threading**, where the
-project has been burned (G29, G30). Plan and open questions: `dev/plans/PLAN_BACKGROUND_SAVE.md`. **Gated
-like A10.2 was: after a clean playtest, in a session about only this.**
+**`TODO` A18 is delivered** (Session 40, v0.4.50–v0.4.54 → `DONE.md`), and it was the largest open item.
+**Nothing is queued behind it** — the next piece of work is whatever the human chooses.
+
+**What A18 leaves open is a playtest, not code** (`TODO` **A19**). Two things only play can answer, both of
+which announce themselves: whether the autosave rhythm is as steady as the design assumes (repeated
+`widening its lead` in the server log would say it is not), and whether shutdown is detected before the final
+save (⚠️ the one path where a miss is unrecoverable — `GOTCHAS` **G44**). **`/layout info` reports both**, and
+exists precisely because the feature is invisible when it works.
 
 ⚠️ **`TODO` A17 — per-guide "index cards" — was proposed, agreed and DISMISSED in Session 39.** The save
 layer cannot enumerate or delete keys, so it was never viable; see `GOTCHAS` **G42** before re-proposing
@@ -246,8 +260,16 @@ Session-38 flag in `dev/TODO.md`.
 **The NON-render side was measured in Session 39** (`TODO` A10.2) and is no longer the unexamined half.
 `Persist()`'s per-mutation whole-registry write — the largest cost in the mod outside the renderer — is
 fixed: mutations mark dirty, the world save writes. `BatchPersist()` was **deleted**, not kept; `MarkDirty`
-coalesces every path without a scope having to ask. **What remains is `TODO` A17**, because one flush still
-writes the whole world.
+coalesces every path without a scope having to ask.
+
+**And in Session 40 the remaining flush left the tick entirely** (`TODO` A18, v0.4.50–v0.4.54). The main
+thread now pays only a deep copy — **0.52 ms at 3,000 guides in place of 42 ms** — while a worker does the
+text and hands the bytes back before the world's own save writes them. ⚠️ **The copy is mandatory, not an
+optimisation:** `GuideData.ControlPoints` is the same list a live shape mutates and `ControlPoint.SetPosition`
+mutates its `Vec3d` **in place**, so a worker reading live records would race a player's drag. Three cases
+still serialise on the tick deliberately — a session's opening saves, any save no pass prepared, and the
+final save (**G44**). ⚠️ **The blob the GAME then writes is unchanged in size**, and whether that write
+hitches was never measured; `dev/plans/PLAN_BACKGROUND_SAVE.md` §5 keeps it as a known unknown, not a task.
 
 **One cost the reviews noted remains unmeasured:** `_settledMaterializations` has no concurrency gate — and
 that one is renderer work, gated behind G2 like the rest.
@@ -270,6 +292,12 @@ checked.
    caps default to unlimited — so `maxGuidesPerPlayer` must be set in `layout.json` to exercise it at all.
 4. **Saving under the v0.4.46 cadence.** Reload-after-edit was confirmed good, but the server's timing moved
    to the world's own save *after* that. Private F4 guides are a separate path (60 s timer plus every exit).
+4a. ⚠️ **THE WHOLE OF SESSION 40 IS UNPLAYED** (v0.4.50–v0.4.54) — the human's stated intention was to test
+   later. **v0.4.54 is the build to test**; v0.4.50–v0.4.52 each carry a defect a later revision fixed. Two
+   specific unknowns, both self-announcing: whether the autosave rhythm is steady enough for the lead to be
+   aimed at (repeated `widening its lead` in the log says no), and whether shutdown is detected before the
+   final save (symptom: the last minutes of building missing after a clean `/stop`). `/layout info` reports
+   the state; `TODO` **A19**.
 5. **v0.4.40's four GUI fixes are unverified as a set.** v0.4.41 superseded that build before it was played
    through; the regression it carried was found immediately, the other four were not exercised.
 6. **The hard 32-chalk ceiling has never been tested against xskills itself.** The mechanism is understood
@@ -316,7 +344,7 @@ exception: `UndoManager` lives in `src/Systems/` as `Layout.Systems.UndoManager`
 | `src/` | `LayoutModSystem` — the composition root (registers systems, item, channels, keybinds, HUD). |
 | `Guide/` | Pure data: `GuideData`, `ControlPoint`, `VoxelPosition`, the pinned enums, projection/render settings, and **`GuideBounds`** (the one coordinate range check, shared by wire, restore and load). |
 | `Shapes/` | Pure geometry math. The `IGuideShape` seam, `ShapeFactory`, 14 generator classes backing 15 enum types, progressive/cancellable voxel generation, `CatmullRomSpline`, `VoxelMarch`, `ShapeGeometry`, `SoftPointFlow`, `DivisionMarks`. |
-| `Systems/` | Side-neutral `GuideManager` (authority + JSON persistence + cap validation), `GuideLockManager`, `DraftManager`, `UndoManager`, `GuideRenderer`, `GuideMeshBuilder`, `BlockOccupancy`, `GuidePalette`. |
+| `Systems/` | Side-neutral `GuideManager` (authority + JSON persistence + cap validation), **`BackgroundGuidePersist`** (server-only: keeps the guide blob current without serialising it on the tick), `GuideLockManager`, `DraftManager`, `UndoManager`, `GuideRenderer`, `GuideMeshBuilder`, `BlockOccupancy`, `GuidePalette`. |
 | `Network/` | `PacketTypes` (protobuf DTOs, **append-only registration**), `ServerNetworkHandler`, `ClientNetworkHandler`. |
 | `UI/` | `GuideToolGui` (the F-menu GUI **and** the settings page, its three custom elements, and `AdminCapSteps`), `GuidePlayersDialog`, `LayoutToolIcons` (Cairo glyphs), `GuideHud`. |
 | `Config/` | `LayoutServerConfig` (`layout.json`), `LayoutClientConfig` (`layout-client.json`). |
@@ -441,7 +469,7 @@ what mutates the stacks — without it the toggle would be a silent no-op.
 | `dev/GOTCHAS.md` | 1 | Traps (indexed by trigger) and **reversals** — things deliberately undone. |
 | **`STATUS.md`** | 2 | This file. Current state, regenerated. |
 | `CHANGELOG.md` | 3 | The player-facing release log. |
-| `dev/sessions/` | 3 | 30 per-session records + `INDEX.md` + `TEMPLATE.md`. |
+| `dev/sessions/` | 3 | 32 per-session records + `INDEX.md` + `TEMPLATE.md`. |
 | `dev/plans/` | 3 | Design plans, including the live rendering and occupancy plans, and the reusable code-review brief. |
 | `dev/history/` | 3 | `DONE.md` (delivered punch-list) and `CHANGELOG_ARCHITECTURE.md`. |
 | `dev/TODO.md` | — | Open items only. |
@@ -458,6 +486,8 @@ what mutates the stacks — without it the toggle would be a silent no-op.
 | **validating a value against a pinned enum** | `GOTCHAS` **G38** — never bound it with a hand-written member name; the config is rewritten on load, so a wrong bound destroys the setting |
 | **caching any world read that can fail** | `GOTCHAS` **G37** — "cannot see" is not "empty", and a chunk load is not a block change |
 | **writing a debounce or "already queued" guard** | `GOTCHAS` **G36** — the pending flag must never outlive its callback — and **R11** |
+| **treating a null / empty return as "nothing to do"** | `GOTCHAS` **G43** — it may equally mean "I tried and failed", and skipping a fallback on that reading loses the work |
+| **deferring a `StoreData` call to a worker or a later moment** | `GOTCHAS` **G44** — it reaches disk at the game's NEXT save, and after the last save there is none |
 | adding a packet that REFUSES something | `GOTCHAS` G27 — check a subscriber exists, or the player is told nothing |
 | adding a shape, or touching a voxel counter | `GOTCHAS` **G31** and **G34** — the guards bound size, not position; and a shape that fails its frame check reports ZERO, which passes every cap |
 | adding a rate limit, throttle or drop rule | `GOTCHAS` **G35** — never drop the packet that releases a resource |

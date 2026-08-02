@@ -255,6 +255,11 @@ namespace Layout.Systems
         // Something has changed since the last successful write. Set by MarkDirty on every mutation,
         // cleared by Persist. Server main thread only, like every field above. See MarkDirty's remarks.
         private bool _persistDirty;
+        // The background serialisation currently running on a worker, or null. Main thread only — a worker
+        // NEVER touches this field, it only reads its own job. Two things depend on it, both load-bearing:
+        // it stops a second worker starting, and it is the identity a completing job must match before it
+        // is allowed to store anything (GOTCHAS G29). See BeginBackgroundPersist.
+        private GuidePersistJob _persistInFlight;
 
         private readonly Dictionary<Guid, GuideData> _guides = new Dictionary<Guid, GuideData>();
         private readonly Dictionary<Guid, IGuideShape> _shapes = new Dictionary<Guid, IGuideShape>();
@@ -2117,26 +2122,199 @@ namespace Layout.Systems
         /// turn one transient serialisation fault into permanent data loss: the next flush would see
         /// nothing owed and skip, and every later flush would too. Never throws out of here either — a
         /// serialization fault must not crash the server.
+        ///
+        /// ⚠️ THIS IS ALSO THE OVERRIDE FOR A BACKGROUND PASS, and that is why "nothing owed" is not just
+        /// the dirty flag. A worker started by <see cref="BeginBackgroundPersist"/> has ALREADY cleared the
+        /// flag, against a snapshot whose bytes are not stored yet — so a clean flag with a job in flight
+        /// still owes a write, and reading only the flag here would skip it and lose everything since that
+        /// snapshot. This writes the LIVE registry (always the newer answer) and drops the job, whose
+        /// completion then finds itself superseded and discards its older bytes.
         /// </remarks>
+        /// <summary>
+        /// Whether the registry holds anything not yet handed to storage. **Main thread only.**
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ A CLEAN DIRTY FLAG IS NOT THE SAME AS NOTHING OWED, which is the whole reason this exists as
+        /// one named answer rather than a condition written out at each site. A background pass clears the
+        /// flag when it takes its snapshot, long before those bytes are stored — so between those two
+        /// moments the flag says "clean" while a write is still owed. Both <see cref="Persist"/> and the
+        /// background scheduler's decision to fall back to a synchronous write read this, and they must
+        /// read the same thing: a site that checked only the flag would skip a write that was still due.
+        /// </remarks>
+        public bool HasUnsavedChanges => _persistDirty || _persistInFlight != null;
+
         public void Persist()
         {
-            if (!_persistDirty) return;
+            if (!HasUnsavedChanges) return;
             _persistDirty = false;
+            // Dropping the reference IS the cancellation: the worker runs to completion on its own
+            // snapshot and CompleteBackgroundPersist throws the result away (GOTCHAS G29). There is
+            // deliberately nothing to join — a shutdown must not wait on a serialisation it is about to
+            // redo, and a background task thread never holds the process open.
+            _persistInFlight = null;
             try
             {
-                var root = new PersistedRoot
-                {
-                    Version = GuideData.CurrentDataVersion,
-                    Guides = _guides.Values.ToList()
-                };
-                string json = JsonConvert.SerializeObject(root, _jsonSettings);
-                byte[] bytes = Encoding.UTF8.GetBytes(json);
+                byte[] bytes = SerializeRegistry(_guides.Values.ToList());
                 _persistence.Store(StorageKey, bytes);
             }
             catch (Exception e)
             {
                 _persistDirty = true;
                 _logger.Error("[Layout] Failed to persist guides: {0}", e);
+            }
+        }
+
+        /// <summary>
+        /// Takes a private snapshot of the registry so the expensive half of a write — turning it into
+        /// text — can happen on a worker thread. Returns null when there is nothing to do. **Main thread
+        /// only.** The caller must run <see cref="GuidePersistJob.Run"/> off-thread and then hand the job
+        /// back to <see cref="CompleteBackgroundPersist"/> on the main thread.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ THE SNAPSHOT IS NOT AN OPTIMISATION, IT IS THE WHOLE REASON THIS IS SAFE, and nothing at the
+        /// call site says so. <see cref="GuideData.ControlPoints"/> is the SAME list instance the guide's
+        /// shape mutates (see that type's remarks): a worker walking the live records while a player drags
+        /// would read a half-applied reshape, or throw outright when <c>RestorePoints</c> clears and refills
+        /// the list under it. Deep-copying every record first is what makes the worker's view immutable.
+        ///
+        /// It is affordable because copying is ~80× cheaper than serialising — measured 2026-08-01 at
+        /// 0.52 ms versus 42 ms for three thousand guides. The main thread pays the copy; the 42 ms leaves
+        /// the tick entirely.
+        ///
+        /// ONE AT A TIME. A job already in flight means this returns null and the registry stays dirty, so
+        /// the next attempt picks the change up — the flag is never latched (GOTCHAS G36): every path out
+        /// of here either leaves work owed or has a job that will clear itself.
+        /// </remarks>
+        public GuidePersistJob BeginBackgroundPersist()
+        {
+            if (_persistInFlight != null || !_persistDirty) return null;
+
+            List<GuideData> snapshot;
+            try
+            {
+                snapshot = new List<GuideData>(_guides.Count);
+                foreach (GuideData g in _guides.Values)
+                    snapshot.Add(g.DeepClone());
+            }
+            catch (Exception e)
+            {
+                // Left dirty on purpose: the next pass, or the next world save, tries again.
+                _logger.Error("[Layout] Failed to snapshot guides for background save: {0}", e);
+                return null;
+            }
+
+            _persistDirty = false;
+            _persistInFlight = new GuidePersistJob(this, snapshot);
+            return _persistInFlight;
+        }
+
+        /// <summary>
+        /// Stores the bytes a finished <see cref="GuidePersistJob"/> produced. **Main thread only**, and
+        /// safe to call for a job that has been superseded — it checks first. Returns whether THIS job's
+        /// bytes reached storage.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ THE IDENTITY CHECK IS NOT DEFENSIVE, IT PREVENTS A ROLLBACK. Between a snapshot and its
+        /// completion, a synchronous <see cref="Persist"/> (shutdown, or a drop path) can have written the
+        /// LIVE registry. Storing this job's older bytes on top of that would silently undo everything
+        /// edited since the snapshot. Same shape as GOTCHAS G29: async work must prove it is still the
+        /// current work before acting on a shared slot.
+        ///
+        /// ⚠️ THE RETURN VALUE IS NOT <see cref="HasUnsavedChanges"/> INVERTED, and must not be simplified
+        /// into it. This answers "did this pass do its job", which stays true when an edit lands after the
+        /// snapshot — that edit belongs to the next cycle, and is the whole point of preparing bytes early.
+        /// Asking the registry instead would report every such edit as a failed pass and drive the caller
+        /// into a synchronous write, which on a world with several people building is most saves: the exact
+        /// on-tick cost this machinery exists to remove.
+        /// </remarks>
+        public bool CompleteBackgroundPersist(GuidePersistJob job)
+        {
+            if (job == null || !ReferenceEquals(_persistInFlight, job)) return false;
+            _persistInFlight = null;
+
+            if (job.Bytes == null)
+            {
+                // Serialisation faulted on the worker. Re-arm exactly as the synchronous path does, so the
+                // next pass retries rather than the failure becoming permanent.
+                _persistDirty = true;
+                _logger.Error("[Layout] Background guide serialisation failed: {0}", job.Error);
+                return false;
+            }
+
+            try
+            {
+                _persistence.Store(StorageKey, job.Bytes);
+                return true;
+            }
+            catch (Exception e)
+            {
+                _persistDirty = true;
+                _logger.Error("[Layout] Failed to store background-serialised guides: {0}", e);
+                return false;
+            }
+        }
+
+        // The one place the on-disk shape is built, shared by the synchronous and background paths so the
+        // two can never drift into writing different formats.
+        //
+        // ⚠️ CALLED FROM TWO THREADS, and possibly at the same instant (a shutdown flush while a worker is
+        // still running). That is safe only because everything it touches is immutable after construction:
+        // _jsonSettings is never mutated, and Vec3dJsonConverter holds no state. Adding a stateful
+        // converter, or reconfiguring the settings in play, would make this a race with no symptom until a
+        // save came out malformed.
+        private byte[] SerializeRegistry(List<GuideData> guides)
+        {
+            var root = new PersistedRoot
+            {
+                Version = GuideData.CurrentDataVersion,
+                Guides = guides
+            };
+            return Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(root, _jsonSettings));
+        }
+
+        /// <summary>
+        /// One background serialisation: a private snapshot of the registry, and the bytes it turns into.
+        /// Created by <see cref="BeginBackgroundPersist"/>, run on a worker, completed on the main thread.
+        /// </summary>
+        /// <remarks>
+        /// The snapshot is touched by exactly one thread at a time and handed over by the task boundary,
+        /// which is its own memory barrier — so no locking is needed here, and none should be added. What
+        /// makes that true is that the snapshot is PRIVATE (see <see cref="BeginBackgroundPersist"/>);
+        /// nothing else in the mod holds a reference to these records.
+        /// </remarks>
+        public sealed class GuidePersistJob
+        {
+            private readonly GuideManager _owner;
+            private readonly List<GuideData> _snapshot;
+
+            /// <summary>The serialised payload, or null if <see cref="Run"/> faulted.</summary>
+            public byte[] Bytes { get; private set; }
+
+            /// <summary>Why <see cref="Run"/> produced no bytes, or null on success.</summary>
+            public Exception Error { get; private set; }
+
+            internal GuidePersistJob(GuideManager owner, List<GuideData> snapshot)
+            {
+                _owner = owner;
+                _snapshot = snapshot;
+            }
+
+            /// <summary>
+            /// The expensive part — JSON plus UTF8, ~42 ms at three thousand guides. **Call this on a
+            /// worker thread; it must never run on the tick.** Never throws: a fault is recorded and dealt
+            /// with by <see cref="CompleteBackgroundPersist"/> back on the main thread.
+            /// </summary>
+            public void Run()
+            {
+                try
+                {
+                    Bytes = _owner.SerializeRegistry(_snapshot);
+                }
+                catch (Exception e)
+                {
+                    Bytes = null;
+                    Error = e;
+                }
             }
         }
 

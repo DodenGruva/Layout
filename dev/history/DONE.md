@@ -20,6 +20,41 @@
 
 ---
 
+## A18. Move guide serialisation off the main thread — ✅ DELIVERED v0.4.50–v0.4.54 (Session 40)
+
+The replacement for the dismissed A17 below, and the last thing `TODO` A10.2 left behind.
+
+**The problem:** editing was already fixed in v0.4.45, but when the world saved, converting the whole guide
+registry to JSON still ran on the server's main thread — 42 ms at 3,000 guides, 113 ms at 8,000, against a
+20 ms tick, on every autosave. There by accident of history, not design.
+
+**What shipped:** the tick deep-copies the registry (0.52 ms at 3,000 guides, ~80× cheaper than serialising),
+a worker turns the copy into JSON, and `EnqueueMainThreadTask` hands the bytes back to `StoreData` in time
+for the world's own save to write them. **The snapshot is mandatory, not an optimisation** —
+`GuideData.ControlPoints` is the same list a live shape mutates, and `ControlPoint.SetPosition` mutates its
+`Vec3d` in place, so a worker reading live records would race a player's drag.
+
+**When it runs — the human's design.** The game exposes no warning that a save is coming, and the autosave
+period is a constant inside `VintagestoryLib.dll` rather than a setting. So the period is **measured** from
+the gap between two saves, and the pass is aimed a short lead before the next one. The lead starts at 3 s and
+**widens itself** when a cycle proves it was too short; it is sized for prediction uncertainty, not for the
+work, which totals about 80 ms.
+
+**The one durability change, decided rather than slipped in:** an edit made inside the lead window before a
+save now waits for the following save. Everything older is written by the very next save, as before.
+
+**Three cases still serialise on the tick, deliberately:** the opening saves of a session (no period learned
+yet), any save no background pass prepared, and the final save of a session — see `GOTCHAS` **G44**, which is
+the trap that makes the last of those mandatory.
+
+⚠️ **Three review passes found four defects and none were in the threading** — all four were in the
+bookkeeping deciding whether a save had been prepared. `GOTCHAS` **G43** is the one that got through a guard
+added for its own failure class. Full account: `SESSION_40.md`.
+
+*(Not playtested at time of writing — the human's stated intention was to test v0.4.54 later.
+`dev/plans/PLAN_BACKGROUND_SAVE.md` is the design record; §5's unmeasured question, whether the GAME's own
+write of a large blob hitches, remains a known unknown and is untouched by this work.)*
+
 ## A17. Per-guide persistence, the "index cards" redesign — ❌ DISMISSED 2026-08-01 (Session 39)
 
 **Proposed, agreed by the human, and dismissed in the same session** once the save layer was read rather than

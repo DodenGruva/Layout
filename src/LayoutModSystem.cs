@@ -52,6 +52,9 @@ namespace Layout
         public LayoutServerConfig ServerConfig { get; private set; }
         public GuideManager Guides { get; private set; }
         public LayoutAdminPolicyManager AdminPolicies { get; private set; }
+        // Keeps the guide blob current without serialising it on the tick (TODO A18). Private: nothing else
+        // should reach for it — the only correct way to force a write is still Guides.Persist().
+        private BackgroundGuidePersist BackgroundSave;
         public GuideLockManager Locks { get; private set; }
         public UndoManager Undo { get; private set; }
         public ServerNetworkHandler ServerNet { get; private set; }
@@ -175,13 +178,26 @@ namespace Layout
             sapi.Event.SaveGameLoaded += AdminPolicies.Load;
             sapi.Event.SaveGameLoaded += Guides.Load;
             sapi.Event.GameWorldSave += AdminPolicies.Persist;
-            sapi.Event.GameWorldSave += Guides.Persist;
 
-            // NO PERIODIC FLUSH ON THE SERVER, deliberately (human-decided 2026-08-01). GameWorldSave above
-            // fires on the world's own autosave, and guide data is worth exactly what the rest of the world
-            // is worth: if a crash costs the world five minutes of blocks, costing it the same five minutes
-            // of guides is correct and consistent. A separate timer would only make Layout's data MORE
-            // durable than the world it describes, at a cost paid forever. Shutdown flushes in Dispose.
+            // GUIDES NO LONGER SERIALISE ON THE SAVE TICK (TODO A18). The admin policies above still do —
+            // they are a handful of records against the guide registry's megabytes, and threading them
+            // would add a second set of lifecycle obligations to save nothing measurable.
+            //
+            // BackgroundGuidePersist still hangs off GameWorldSave, but it uses the event as a CLOCK rather
+            // than as a deadline: it measures the autosave period and prepares the bytes ~10 s before the
+            // NEXT save, on a worker. See that class for why aiming works and why every way it can miss is
+            // harmless. It falls back to a synchronous write until it has a period to aim at.
+            BackgroundSave = new BackgroundGuidePersist(sapi, Guides);
+            sapi.Event.GameWorldSave += BackgroundSave.OnWorldSave;
+
+            // NO PERIODIC FLUSH ON THE SERVER, deliberately (human-decided 2026-08-01). Guide data is worth
+            // exactly what the rest of the world is worth: if a crash costs the world five minutes of
+            // blocks, costing it the same five minutes of guides is correct and consistent, and a separate
+            // cadence would only make Layout's data MORE durable than the world it describes.
+            // ⚠️ THE TIMER IN BackgroundGuidePersist IS NOT THAT, and the distinction is the whole reason
+            // it is allowed: it never writes to disk and never causes a save. It only decides WHEN the
+            // bytes are built, ahead of the world's own write, so the tick is not the thing building them.
+            // Guide data still reaches disk on the world's cadence and no other. Shutdown flushes in Dispose.
 
             Locks = new GuideLockManager();
             Undo = new UndoManager(Guides, ServerConfig.UndoHistoryDepth, Locks);
@@ -189,10 +205,13 @@ namespace Layout
             // The handler takes the config OBJECT, not a copy of four values: since v0.4.16 the settings
             // page's Admin section changes these in play, and the change has to reach both the live
             // managers and layout.json or it would silently revert on the next restart.
+            // backgroundSave is NAMED, for the reason R1 was: an optional argument on a long positional
+            // list is invisible at the call site. It is read only for the /layout info status line.
             ServerNet = new ServerNetworkHandler(
                 sapi, Guides, Locks, Undo, AdminPolicies,
                 ServerConfig,
-                cfg => StoreServerConfig(sapi, cfg));
+                cfg => StoreServerConfig(sapi, cfg),
+                backgroundSave: BackgroundSave);
 
             // The VERSION is logged first and deliberately (v0.4.23). Vintage Story loads exactly ONE mod
             // per modid, so leaving several Layout zips in the Mods folder means the build that runs is not
@@ -1153,8 +1172,23 @@ namespace Layout
 
             if (_sapi != null)
             {
-                // LAST CHANCE for public guides. GameWorldSave normally runs first on a clean shutdown and
-                // leaves nothing dirty, in which case this returns immediately. It matters when it does not.
+                // FIRST: stop aiming. Any pass scheduled for a save that will never come is now pointless,
+                // and one already running is about to be superseded by the flush below.
+                try { BackgroundSave?.Dispose(); }
+                catch (Exception e) { _sapi.Logger.Warning("[Layout] Background save dispose: {0}", e.Message); }
+                BackgroundSave = null;
+
+                // LAST CHANCE for public guides. On a clean shutdown GameWorldSave has already run and
+                // recognised itself as the final save, so this finds nothing owed and returns at once. It
+                // matters when that recognition fails — a shutdown the run-phase event and IsShuttingDown
+                // both missed — and for a teardown that never reached a save at all.
+                //
+                // ⚠️ AND IT IS THE JOIN THIS PATH WOULD OTHERWISE NEED, discharged without waiting on
+                // anything. Persist writes the LIVE registry and drops any background job still running, so
+                // that job finds itself superseded and throws its older bytes away instead of writing them
+                // over the top. Deferred writes oblige every drop path to flush (GOTCHAS G39); moving the
+                // write to a worker would have obliged them to wait as well, and supersession is how that
+                // second obligation is paid for nothing.
                 try { Guides?.Persist(); }
                 catch (Exception e) { _sapi.Logger.Error("[Layout] Final guide save failed: {0}", e); }
 
