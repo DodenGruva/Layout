@@ -88,13 +88,22 @@ namespace Layout.Shapes
         /// Claims the single cell nearest <paramref name="worldPos"/> for <paramref name="type"/>, if that
         /// beats the cell's current role (Locked > Primary > Anchor > Division > Normal).
         /// </summary>
-        public static void ClaimMarker(List<VoxelPosition> cells, int scale, Vec3d worldPos, VoxelRenderType type)
+        public static void ClaimMarker(
+            List<VoxelPosition> cells, int scale, Vec3d worldPos, VoxelRenderType type)
+            => ClaimMarker(cells, scale, worldPos, type, null);
+
+        internal static void ClaimMarker(
+            List<VoxelPosition> cells, int scale, Vec3d worldPos, VoxelRenderType type,
+            Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             if (cells.Count == 0 || type == VoxelRenderType.Normal) return;
             double half = scale * 0.5;
             int best = -1; double bestD2 = double.MaxValue;
+            int work = 0;
             for (int i = 0; i < cells.Count; i++)
             {
+                VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                 double dx = (cells[i].X + half) / 16.0 - worldPos.X;
                 double dy = (cells[i].Y + half) / 16.0 - worldPos.Y;
                 double dz = (cells[i].Z + half) / 16.0 - worldPos.Z;

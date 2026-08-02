@@ -24,7 +24,19 @@ namespace Layout.Shapes
             Vec3d halfSpaceNormal,
             int stopAfter,
             List<VoxelPosition> output)
-            => ScanCore(centre, radius, scale, halfSpaceNormal, stopAfter, output, null);
+            => Scan(centre, radius, scale, halfSpaceNormal, stopAfter, output, null);
+
+        internal static int Scan(
+            Vec3d centre,
+            double radius,
+            int scale,
+            Vec3d halfSpaceNormal,
+            int stopAfter,
+            List<VoxelPosition> output,
+            Func<bool> cancellationRequested)
+            => ScanCore(
+                centre, radius, scale, halfSpaceNormal, stopAfter,
+                output, null, cancellationRequested);
 
         internal static void ScanProgressively(
             Vec3d centre,
@@ -34,7 +46,9 @@ namespace Layout.Shapes
             ProgressiveVoxelCollector collector)
         {
             if (collector == null) throw new ArgumentNullException(nameof(collector));
-            ScanCore(centre, radius, scale, halfSpaceNormal, int.MaxValue, null, collector);
+            ScanCore(
+                centre, radius, scale, halfSpaceNormal, int.MaxValue,
+                null, collector, null);
         }
 
         private static int ScanCore(
@@ -44,8 +58,10 @@ namespace Layout.Shapes
             Vec3d halfSpaceNormal,
             int stopAfter,
             List<VoxelPosition> output,
-            ProgressiveVoxelCollector collector)
+            ProgressiveVoxelCollector collector,
+            Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             stopAfter = Math.Max(0, stopAfter);
             double cell = scale / 16.0;
             double r2 = radius * radius;
@@ -55,6 +71,7 @@ namespace Layout.Shapes
                    Math.Abs(halfSpaceNormal.Z)) * cell * 0.5
                 : 0.0;
             int count = 0;
+            int work = 0;
 
             int min16X = AlignDown(centre.X - radius, scale);
             int max16X = AlignDown(centre.X + radius, scale);
@@ -72,7 +89,8 @@ namespace Layout.Shapes
             int visitCount = columnOrder == null ? columnCount : columnOrder.Length;
             for (int visit = 0; visit < visitCount; visit++)
             {
-                collector?.ThrowIfCancellationRequested();
+                if (collector != null) collector.ThrowIfCancellationRequested();
+                else VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                 int column = columnOrder == null ? visit : columnOrder[visit];
                 int xi = column / yCount;
                 int yi = column % yCount;
@@ -109,7 +127,8 @@ namespace Layout.Shapes
                             ix, iy, outerMin16Z, outerMax16Z, scale,
                             centre, halfSpaceNormal, clipped, spread,
                             nxy2, fxy2, ccx, ccy, r2,
-                            stopAfter, output, collector, ref count))
+                            stopAfter, output, collector, ref count,
+                            ref work, cancellationRequested))
                         return Exceeded(stopAfter);
                     continue;
                 }
@@ -122,7 +141,8 @@ namespace Layout.Shapes
                         ix, iy, outerMin16Z, lowerEnd16Z, scale,
                         centre, halfSpaceNormal, clipped, spread,
                         nxy2, fxy2, ccx, ccy, r2,
-                        stopAfter, output, collector, ref count))
+                        stopAfter, output, collector, ref count,
+                        ref work, cancellationRequested))
                     return Exceeded(stopAfter);
 
                 int upperStart16Z = Math.Max(
@@ -134,7 +154,8 @@ namespace Layout.Shapes
                         ix, iy, upperStart16Z, outerMax16Z, scale,
                         centre, halfSpaceNormal, clipped, spread,
                         nxy2, fxy2, ccx, ccy, r2,
-                        stopAfter, output, collector, ref count))
+                        stopAfter, output, collector, ref count,
+                        ref work, cancellationRequested))
                     return Exceeded(stopAfter);
             }
 
@@ -160,13 +181,17 @@ namespace Layout.Shapes
             int stopAfter,
             List<VoxelPosition> output,
             ProgressiveVoxelCollector collector,
-            ref int count)
+            ref int count,
+            ref int work,
+            Func<bool> cancellationRequested)
         {
             if (first16Z > last16Z) return false;
             double cell = scale / 16.0;
 
             for (int iz = first16Z; iz <= last16Z; iz += scale)
             {
+                if (collector == null)
+                    VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                 double loz = iz / 16.0;
                 double nz = Nearest(centre.Z, loz, loz + cell);
                 if (nxy2 + nz * nz > r2) continue;

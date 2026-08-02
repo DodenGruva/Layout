@@ -27,7 +27,7 @@ of that here; it goes stale the moment it is copied.
 | saving state from anywhere that is not a lifecycle point | `dev/GOTCHAS.md` **G39** — `Persist()` re-serialises the WHOLE registry; mutations call `MarkDirty()`, and deferring a write obliges every drop path to flush |
 | deferring a `StoreData` call to a worker or a later moment | `dev/GOTCHAS.md` **G44** — it reaches disk at the game's NEXT save, and after the last save there is no next one |
 | treating a null, false or empty return as "nothing to do" | `dev/GOTCHAS.md` **G43** — it may equally mean "I tried and failed"; skipping a fallback on that reading silently loses the work |
-| short-circuiting, caching or pre-filtering ANY access/claim/privilege check | `dev/GOTCHAS.md` **G40** and **R12** — `TestAccess` has seven denial reasons and only one is land claims; a filter must be certain about the whole check |
+| short-circuiting, caching or pre-filtering ANY access/claim/privilege check | `dev/GOTCHAS.md` **G40** and **R12** — `TestAccess` has seven denial reasons and only one is land claims; **G47** permits bounds to scope staleness snapshots, never to replace the exact check |
 | calling `GetPointAt` or any shape accessor more than once | `dev/GOTCHAS.md` **G41** — it may rebuild the entire geometry per call; hoist it, and keep the parameter types identical |
 | writing a debounce or "already queued" guard | `dev/GOTCHAS.md` **G36** — the pending flag must never outlive its callback — and **R11**, which is what happened when it did |
 | caching any world read that can FAIL | `dev/GOTCHAS.md` **G37** — "cannot see" is not "empty", and a chunk load is not a block change |
@@ -35,6 +35,8 @@ of that here; it goes stale the moment it is copied.
 | writing a "when did this last happen" field | `dev/GOTCHAS.md` **G33** — `long.MinValue` is not a safe "never"; it overflows the subtraction |
 | adding a packet that REFUSES something | `dev/GOTCHAS.md` **G27** — check a subscriber exists, or the player is told nothing |
 | writing anything that runs on a worker thread | `dev/GOTCHAS.md` **G30** (`BlockOccupancy` is lock-free) and **G29** (check identity before removing by key) |
+| adding cancellation to long-running worker work | `dev/GOTCHAS.md` **G45** — checks between stages do not cancel the scan/materialisation inside them; carry the probe into the deepest loop and never publish a partial result |
+| adding a no-op/idempotent early return at an untrusted seam | `dev/GOTCHAS.md` **G46** — validate the request's domain first, then decide whether its valid meaning changes state |
 | adding any player-facing text | `dev/GOTCHAS.md` **G11** — `SendIngameError`'s parameter is a LANG KEY |
 | adding text to a dialog | `dev/GOTCHAS.md` **G13** — a static text wraps, but its bounds never grow |
 | adding a custom GUI element | `dev/GOTCHAS.md` **G6** — allocate the `LoadedTexture` first, or the client dies |

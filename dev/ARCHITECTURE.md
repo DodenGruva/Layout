@@ -329,7 +329,15 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   pathway. Immense guides use one below-normal-priority worker for pure generation/counting and a bounded
   main-thread claim pass (up to 128 block checks or roughly 1 ms per 20 ms tick). Only one immense
   create/sculpt lane runs at a time, keeping the server responsive; edits retain their exclusivity lock until
-  the asynchronous decision completes.
+  the asynchronous decision completes. Since v0.4.57 cancellation reaches every volume's active count,
+  exact voxel generation, large-volume fallback march, marker pass and footprint collapse; cancellation
+  abandons the whole result rather than publishing partial geometry (`GOTCHAS` G45). Sliced claim work is
+  guarded by an immutable structural snapshot of the relevant built-in claim/player authorization state,
+  compared before each later slice and after the final slice. Its spatial scope is the exact built block
+  footprint, including Surface projection's adjacent checks: outside claims are ignored, intersecting claim
+  geometry is clipped to the footprint, and a fourth relevant change after three restarts fails closed. The
+  snapshot detects staleness only; it never replaces exact per-block `TestAccess`, because other mods remain
+  an opaque denial source (`GOTCHAS` G40, G47 and R12).
 - **Full-exclusivity edit locks:** while held, every mutation from anyone else is rejected — geometry,
   toggles, and dispel. `adminCanOverrideLocks` (default true) lets admins override the **atomic** ops only
   (the stuck-lock remedy); geometry genuinely requires the lock. Undo respects the same gate (`Blocked`,
@@ -638,13 +646,18 @@ Volumetric ↔ Surface: switching a guide **to** Volumetric bakes the flattened 
 restores its stored plane. Plane, 2D Fill, and 3D Shell/Wireframe Form apply atomically with cap re-checks and
 roll back on rejection. All rebuild every client's mesh via the normal change events.
 
-### Transforming a placed guide (Transform mode — v0.3.86–v0.4.0)
+### Transforming a placed guide (Transform mode — v0.3.86–v0.4.0; transactional hardening v0.4.55)
 Select a guide exactly as in Edit, then act on it as a **whole object**: move, rotate, copy, mirror. Nothing
 here reshapes, so the mode adds no geometry verbs — the same argument that let Edit exist.
 
 - **One compound pad action is one message** (`GuideTransformPacket`, protocol 19): an optional mirror, an
   optional rotation and an optional translation together, applied in place or to a fresh **copy**. One
   server operation, one validation, **one undo step** — a compound action must not decompose into several.
+- **That promise is enforced at the manager transaction boundary since v0.4.55.** Public and F4-private
+  authority snapshot both point lists, shape axis and projection plane; apply rotate → mirror → translate;
+  validate the final bounds, caps and claims once; then commit once or restore exactly. Undo applies the
+  inverse in reverse order under the same boundary. A failed compound action cannot leave only rotation
+  committed or another client on stale geometry.
 - **The delta is whole voxels, as integers in 1/16 units.** A fractional nudge is not expressible by
   construction, which is what lets a pure translation reuse the cached voxel count.
 - **The pivot never crosses the wire.** The authority derives it from the guide, so the two sides cannot

@@ -164,6 +164,28 @@ namespace Layout.Shapes
     }
 
     /// <summary>
+    /// Additive worker-only extension of <see cref="IThresholdVoxelCounter"/>. Ordinary synchronous callers
+    /// keep the original contract; immense-operation workers supply a thread-safe cancellation probe so an
+    /// abandoned scan can release the single validator lane without publishing a partial count.
+    /// </summary>
+    public interface ICancellableThresholdVoxelCounter : IThresholdVoxelCounter
+    {
+        int GetVoxelCountUpTo(
+            int scale, bool filled, int stopAfter, Func<bool> cancellationRequested);
+    }
+
+    /// <summary>
+    /// Optional exact-generation path for immense-operation workers. Implementations must either return the
+    /// complete canonical voxel set or throw <see cref="OperationCanceledException"/>; a partially populated
+    /// list must never escape as a successful result.
+    /// </summary>
+    public interface ICancellableVoxelGenerator
+    {
+        List<VoxelPosition> GetVoxelPositions(
+            int scale, bool filled, Func<bool> cancellationRequested);
+    }
+
+    /// <summary>
     /// Optional nominal-dimension source for 3D shapes whose world-axis AABB diagonal is not their width.
     /// Circular and regular-polygon footprints use their true widest diameter; axial height is reported
     /// independently of placement orientation.
@@ -177,17 +199,75 @@ namespace Layout.Shapes
     public static class GuideShapeVoxelCounting
     {
         public static int CountUpTo(IGuideShape shape, int scale, bool filled, int stopAfter)
+            => CountUpTo(shape, scale, filled, stopAfter, null);
+
+        /// <summary>
+        /// Cancellable threshold count for the immense-operation worker. Cancellation is exceptional on
+        /// purpose: a partial count must never be mistaken for an exact result or a threshold sentinel.
+        /// </summary>
+        public static int CountUpTo(
+            IGuideShape shape, int scale, bool filled, int stopAfter,
+            Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             if (shape == null) return 0;
             stopAfter = Math.Max(0, stopAfter);
+            if (shape is ICancellableThresholdVoxelCounter cancellableCounter)
+                return cancellableCounter.GetVoxelCountUpTo(
+                    scale, filled, stopAfter, cancellationRequested);
             if (shape is IThresholdVoxelCounter thresholdCounter)
-                return thresholdCounter.GetVoxelCountUpTo(scale, filled, stopAfter);
+            {
+                int thresholdCount = thresholdCounter.GetVoxelCountUpTo(scale, filled, stopAfter);
+                VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
+                return thresholdCount;
+            }
 
             int count = shape.GetVoxelCount(scale, filled);
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             return count > stopAfter ? Exceeded(stopAfter) : count;
         }
 
         public static int Exceeded(int stopAfter) =>
             stopAfter >= int.MaxValue ? int.MaxValue : Math.Max(0, stopAfter) + 1;
+    }
+
+    /// <summary>Shared dispatch for cancellable exact voxel materialisation.</summary>
+    public static class GuideShapeVoxelGeneration
+    {
+        public static List<VoxelPosition> GetPositions(
+            IGuideShape shape, int scale, bool filled, Func<bool> cancellationRequested)
+        {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
+            if (shape == null) return new List<VoxelPosition>();
+            if (shape is ICancellableVoxelGenerator cancellableGenerator)
+                return cancellableGenerator.GetVoxelPositions(
+                    scale, filled, cancellationRequested);
+
+            List<VoxelPosition> result = shape.GetVoxelPositions(scale, filled);
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Cheap cooperative checkpoint shared by exact-count scanners. The probe runs once per 2,048 visited
+    /// scan cells, keeping normal counting overhead negligible while bounding cancellation latency.
+    /// </summary>
+    internal static class VoxelScanCancellation
+    {
+        private const int CheckMask = 2047;
+
+        internal static void ThrowIfRequested(Func<bool> cancellationRequested)
+        {
+            if (cancellationRequested?.Invoke() == true)
+                throw new OperationCanceledException();
+        }
+
+        internal static void Checkpoint(ref int work, Func<bool> cancellationRequested)
+        {
+            work++;
+            if ((work & CheckMask) == 0)
+                ThrowIfRequested(cancellationRequested);
+        }
     }
 }

@@ -178,10 +178,20 @@ namespace Layout.Systems
             Shape = shape ?? throw new ArgumentNullException(nameof(shape));
         }
 
-        public int CountUpTo(int stopAfter) => Guide.IsWireframe
-            ? ShapeWireframe.GetVoxelCount(Shape, Guide.VoxelScale)
-            : GuideShapeVoxelCounting.CountUpTo(
-                Shape, Guide.VoxelScale, Guide.IsFilled, stopAfter);
+        public int CountUpTo(int stopAfter) => CountUpTo(stopAfter, null);
+
+        public int CountUpTo(int stopAfter, Func<bool> cancellationRequested)
+        {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
+            if (!Guide.IsWireframe)
+                return GuideShapeVoxelCounting.CountUpTo(
+                    Shape, Guide.VoxelScale, Guide.IsFilled, stopAfter,
+                    cancellationRequested);
+
+            int count = ShapeWireframe.GetVoxelCount(Shape, Guide.VoxelScale);
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
+            return count;
+        }
     }
 
     /// <summary>
@@ -487,7 +497,9 @@ namespace Layout.Systems
             bool flatSideAligned = false)
         {
             if (start == null || end == null) return GuideOperationResult.Invalid();
-            if (!GuideData.IsValidVoxelScale(settings.Scale)) return GuideOperationResult.Invalid();
+            if (!GuideData.IsValidVoxelScale(settings.Scale)
+                || !GuideBounds.IsUsableProjection(settings.Mode, settings.Plane))
+                return GuideOperationResult.Invalid();
 
             // 3D volumes are always Volumetric, carry no division marks (0.1.20/0.1.21), and are always
             // HOLLOW shells (0.2.17 — exposed-face meshing made filled interiors emit no geometry, so fill
@@ -578,7 +590,8 @@ namespace Layout.Systems
         {
             prepared = null;
             failure = default;
-            if (start == null || end == null || !GuideData.IsValidVoxelScale(settings.Scale))
+            if (start == null || end == null || !GuideData.IsValidVoxelScale(settings.Scale)
+                || !GuideBounds.IsUsableProjection(settings.Mode, settings.Plane))
             {
                 failure = GuideOperationResult.Invalid();
                 return false;
@@ -649,6 +662,8 @@ namespace Layout.Systems
 
             GuideData data = prepared.Guide;
             if (_guides.ContainsKey(data.Id)) return GuideOperationResult.Invalid(data);
+            if (!GuideBounds.IsUsableProjection(data.Projection, data.Plane))
+                return GuideOperationResult.Invalid(data);
 
             GuideOperationResult countLimit = CheckCreateGuideCountLimits(data.CreatorUid);
             if (countLimit.Status == GuideOpStatus.RejectedOverGuideCount) return countLimit;
@@ -736,7 +751,8 @@ namespace Layout.Systems
             // client-only "push" import comes through, and CountForCaps below is exactly the scan that
             // never terminates on an out-of-world coordinate.
             if (!GuideBounds.AllUsable(live.ControlPoints)
-                || !GuideBounds.AllUsable(live.OriginalControlPoints))
+                || !GuideBounds.AllUsable(live.OriginalControlPoints)
+                || !GuideBounds.IsUsableProjection(live.Projection, live.Plane))
                 return GuideOperationResult.Invalid(live);
             IGuideShape shape = ShapeFactory.Adopt(live);
             shape.RecalculatePhantomPoints();
@@ -982,6 +998,8 @@ namespace Layout.Systems
         public GuideOperationResult SetProjection(Guid id, ProjectionMode mode, ProjectionPlane plane)
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
+            if (!GuideBounds.IsUsableProjection(mode, plane))
+                return GuideOperationResult.Invalid(g);
             // A 3D volume cannot go Surface (0.1.20/0.1.21) — the GUI greys the row; server-side gate.
             if (GuideShapeTypes.IsVolume(g.ShapeType) && mode == ProjectionMode.Surface)
                 return GuideOperationResult.Invalid(g);
@@ -1216,9 +1234,22 @@ namespace Layout.Systems
             GuideData accessBefore = AccessSnapshot(g);
             ProjectionPlane planeBefore = g.Plane;
 
+            if (!TryOffsetPlane(g.Plane, sx, sy, sz, out ProjectionPlane movedPlane))
+                return GuideOperationResult.Invalid(g);
+
             OffsetPoints(g.ControlPoints, delta);
             OffsetPoints(g.OriginalControlPoints, delta);
-            g.Plane = OffsetPlane(g.Plane, sx, sy, sz);
+            g.Plane = movedPlane;
+            if (!GuideBounds.AllUsable(g.ControlPoints)
+                || !GuideBounds.AllUsable(g.OriginalControlPoints)
+                || !GuideBounds.IsUsableProjection(g.Projection, g.Plane))
+            {
+                var back = new Vec3d(-delta.X, -delta.Y, -delta.Z);
+                OffsetPoints(g.ControlPoints, back);
+                OffsetPoints(g.OriginalControlPoints, back);
+                g.Plane = planeBefore;
+                return GuideOperationResult.Invalid(g);
+            }
             shape.RecalculatePhantomPoints();
 
             // No cap check: the count is unchanged by construction (see remarks), so a move can never push a
@@ -1254,8 +1285,15 @@ namespace Layout.Systems
             static bool TryAxis(double world, int scale, out int sixteenths)
             {
                 double exact = world * 16.0;
-                sixteenths = (int)Math.Round(exact);
-                return Math.Abs(exact - sixteenths) <= 1e-6 && sixteenths % scale == 0;
+                double rounded = Math.Round(exact);
+                if (double.IsNaN(rounded) || double.IsInfinity(rounded)
+                    || rounded < int.MinValue || rounded > int.MaxValue)
+                {
+                    sixteenths = 0;
+                    return false;
+                }
+                sixteenths = (int)rounded;
+                return Math.Abs(exact - rounded) <= 1e-6 && sixteenths % scale == 0;
             }
         }
 
@@ -1270,7 +1308,8 @@ namespace Layout.Systems
             }
         }
 
-        private static ProjectionPlane OffsetPlane(ProjectionPlane plane, int sx, int sy, int sz)
+        private static bool TryOffsetPlane(
+            ProjectionPlane plane, int sx, int sy, int sz, out ProjectionPlane moved)
         {
             int along = plane.FlattenedAxis switch
             {
@@ -1278,7 +1317,16 @@ namespace Layout.Systems
                 PlaneAxis.Z => sz,
                 _ => sy
             };
-            return along == 0 ? plane : new ProjectionPlane(plane.FlattenedAxis, plane.PlaneOffset + along);
+            long offset = (long)plane.PlaneOffset + along;
+            if (offset < int.MinValue || offset > int.MaxValue)
+            {
+                moved = plane;
+                return false;
+            }
+            moved = along == 0
+                ? plane
+                : new ProjectionPlane(plane.FlattenedAxis, (int)offset);
+            return true;
         }
 
         /// <summary>
@@ -1318,6 +1366,8 @@ namespace Layout.Systems
             int turns = ((quarterTurns % 4) + 4) % 4;
             if (turns == 0)
                 return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out int same) ? same : 0);
+            if (!Enum.IsDefined(typeof(PlaneAxis), axis))
+                return GuideOperationResult.Invalid(g);
 
             IGuideShape shape = _shapes[id];
             GuideData accessBefore = AccessSnapshot(g);
@@ -1331,14 +1381,21 @@ namespace Layout.Systems
             RotatePoints(g.OriginalControlPoints, axis, turns, pivot);
             g.ShapePlaneAxis = RotateAxis(g.ShapePlaneAxis, axis, turns);
 
+            if (g.Projection == ProjectionMode.Surface)
+                g.Plane = RotateProjectionPlane(g, planeBefore, axis, turns);
+            if (!GuideBounds.AllUsable(g.ControlPoints)
+                || !GuideBounds.AllUsable(g.OriginalControlPoints)
+                || !GuideBounds.IsUsableProjection(g.Projection, g.Plane))
+            {
+                RestoreRotation(id, g, before, originalBefore, shapeAxisBefore, planeBefore);
+                return GuideOperationResult.Invalid(g);
+            }
+
             // Re-adopt: the shape captured its preferred axis at construction, so a changed ShapePlaneAxis
             // only takes effect through a fresh adoption.
             shape = ShapeFactory.Adopt(g);
             _shapes[id] = shape;
             shape.RecalculatePhantomPoints();
-
-            if (g.Projection == ProjectionMode.Surface)
-                g.Plane = RotateProjectionPlane(g, planeBefore, axis, turns);
 
             int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled, g.IsWireframe);
             if (WouldExceedCaps(id, count, out int cap))
@@ -1484,11 +1541,28 @@ namespace Layout.Systems
         /// </remarks>
         public GuideOperationResult TransformGuide(
             Guid id, Vec3d delta, int mirrorAxis, ref Vec3d pivot)
+            => TransformGuide(
+                id, delta, mirrorAxis, PlaneAxis.Y, 0, inverseOrder: false, ref pivot);
+
+        /// <summary>
+        /// Applies one complete in-place Transform-pad action transactionally. Forward order preserves the
+        /// shipped behaviour: rotate, mirror, translate. <paramref name="inverseOrder"/> reverses that order
+        /// for undo: translate back, mirror back, rotate back. Either order validates and commits once.
+        /// </summary>
+        public GuideOperationResult TransformGuide(
+            Guid id, Vec3d delta, int mirrorAxis, PlaneAxis rotateAxis, int quarterTurns,
+            bool inverseOrder, ref Vec3d pivot)
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             bool mirroring = mirrorAxis >= 0;
+            int turns = ((quarterTurns % 4) + 4) % 4;
+            bool rotating = turns != 0;
             bool translating = delta != null && (delta.X != 0 || delta.Y != 0 || delta.Z != 0);
-            if (!mirroring && !translating)
+            if (mirrorAxis < -1
+                || (mirroring && !Enum.IsDefined(typeof(PlaneAxis), (PlaneAxis)mirrorAxis))
+                || (rotating && !Enum.IsDefined(typeof(PlaneAxis), rotateAxis)))
+                return GuideOperationResult.Invalid(g);
+            if (!mirroring && !rotating && !translating)
                 return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out int same) ? same : 0);
             if (translating && !TryQuantiseTranslation(delta, g.VoxelScale, out _, out _, out _))
                 return GuideOperationResult.Invalid(g);
@@ -1496,25 +1570,66 @@ namespace Layout.Systems
             GuideData accessBefore = AccessSnapshot(g);
             List<ControlPoint> before = SnapshotPoints(g);
             List<ControlPoint> originalBefore = SnapshotOriginalPoints(g);
+            PlaneAxis shapeAxisBefore = g.ShapePlaneAxis;
             ProjectionPlane planeBefore = g.Plane;
 
             pivot ??= RotationPivot(g);
-            if (mirroring)
+            if (!GuideBounds.IsUsable(pivot)) return GuideOperationResult.Invalid(g);
+            Vec3d appliedPivot = pivot;
+
+            void ApplyRotation()
             {
-                MirrorPoints(g.ControlPoints, (PlaneAxis)mirrorAxis, pivot);
-                MirrorPoints(g.OriginalControlPoints, (PlaneAxis)mirrorAxis, pivot);
+                if (!rotating) return;
+                RotatePoints(g.ControlPoints, rotateAxis, turns, appliedPivot);
+                RotatePoints(g.OriginalControlPoints, rotateAxis, turns, appliedPivot);
+                g.ShapePlaneAxis = RotateAxis(g.ShapePlaneAxis, rotateAxis, turns);
             }
-            if (translating)
+
+            void ApplyMirror()
             {
+                if (!mirroring) return;
+                MirrorPoints(g.ControlPoints, (PlaneAxis)mirrorAxis, appliedPivot);
+                MirrorPoints(g.OriginalControlPoints, (PlaneAxis)mirrorAxis, appliedPivot);
+            }
+
+            void ApplyTranslation()
+            {
+                if (!translating) return;
                 OffsetPoints(g.ControlPoints, delta);
                 OffsetPoints(g.OriginalControlPoints, delta);
+            }
+
+            if (inverseOrder)
+            {
+                ApplyTranslation();
+                ApplyMirror();
+                ApplyRotation();
+            }
+            else
+            {
+                ApplyRotation();
+                ApplyMirror();
+                ApplyTranslation();
+            }
+
+            if (g.Projection == ProjectionMode.Surface)
+            {
+                PlaneAxis flattened = rotating
+                    ? RotateAxis(planeBefore.FlattenedAxis, rotateAxis, turns)
+                    : planeBefore.FlattenedAxis;
+                g.Plane = RederiveSurfacePlane(g, flattened, planeBefore);
+            }
+            if (!GuideBounds.AllUsable(g.ControlPoints)
+                || !GuideBounds.AllUsable(g.OriginalControlPoints)
+                || !GuideBounds.IsUsableProjection(g.Projection, g.Plane))
+            {
+                RestoreRotation(id, g, before, originalBefore, shapeAxisBefore, planeBefore);
+                return GuideOperationResult.Invalid(g);
             }
 
             IGuideShape shape = ShapeFactory.Adopt(g);
             _shapes[id] = shape;
             shape.RecalculatePhantomPoints();
-            if (g.Projection == ProjectionMode.Surface)
-                g.Plane = RederiveSurfacePlane(g, planeBefore.FlattenedAxis, planeBefore);
 
             // A mirror can re-phase a polygon exactly as a rotation can (the in-plane frame sign-normalises
             // toward world up), so this recounts rather than reusing the cached figure the way a pure
@@ -1522,12 +1637,12 @@ namespace Layout.Systems
             int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled, g.IsWireframe);
             if (WouldExceedCaps(id, count, out int cap))
             {
-                RestoreRotation(id, g, before, originalBefore, g.ShapePlaneAxis, planeBefore);
+                RestoreRotation(id, g, before, originalBefore, shapeAxisBefore, planeBefore);
                 return GuideOperationResult.OverCap(g, count, cap);
             }
             if (AccessDenied(accessBefore, g, _shapes[id], out BlockPos deniedPosition))
             {
-                RestoreRotation(id, g, before, originalBefore, g.ShapePlaneAxis, planeBefore);
+                RestoreRotation(id, g, before, originalBefore, shapeAxisBefore, planeBefore);
                 return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
 
@@ -1548,6 +1663,14 @@ namespace Layout.Systems
         {
             if (!_guides.TryGetValue(id, out var source)) return GuideOperationResult.NotFound();
 
+            int turns = ((quarterTurns % 4) + 4) % 4;
+            if (mirrorAxis < -1
+                || (mirrorAxis >= 0 && !Enum.IsDefined(typeof(PlaneAxis), (PlaneAxis)mirrorAxis))
+                || (turns != 0 && !Enum.IsDefined(typeof(PlaneAxis), rotateAxis))
+                || (delta != null
+                    && !TryQuantiseTranslation(delta, source.VoxelScale, out _, out _, out _)))
+                return GuideOperationResult.Invalid(source);
+
             GuideData clone = source.DeepClone();
             clone.Id = Guid.NewGuid();
             clone.CreatorUid = creatorUid;
@@ -1561,7 +1684,6 @@ namespace Layout.Systems
                 MirrorPoints(clone.ControlPoints, (PlaneAxis)mirrorAxis, pivot);
                 MirrorPoints(clone.OriginalControlPoints, (PlaneAxis)mirrorAxis, pivot);
             }
-            int turns = ((quarterTurns % 4) + 4) % 4;
             if (turns != 0)
             {
                 RotatePoints(clone.ControlPoints, rotateAxis, turns, pivot);
@@ -2385,18 +2507,20 @@ namespace Layout.Systems
                 if (g.ControlPoints == null) g.ControlPoints = new List<ControlPoint>();
                 RemoveInactiveLockMarkers(g.ControlPoints);
 
-                // A guide whose coordinates are outside the world is DROPPED, not loaded (GOTCHAS G31).
+                // A guide whose coordinates or Surface plane are outside the world is DROPPED, not loaded
+                // (GOTCHAS G31). Undefined projection/axis values are rejected at this same untrusted seam.
                 // ExactVoxelCount below is the scan that hangs on one, and this method is reached both
                 // from the world save (a corrupted blob would hang the server at start) and from
                 // Layout/ClientOnlyGuides/*.json (a hand-edited private file would hang the player's own
                 // client on world load). Neither needs an attacker. Logged per guide because silently
                 // losing someone's work would be the worse surprise.
                 if (!GuideBounds.AllUsable(g.ControlPoints)
-                    || !GuideBounds.AllUsable(g.OriginalControlPoints))
+                    || !GuideBounds.AllUsable(g.OriginalControlPoints)
+                    || !GuideBounds.IsUsableProjection(g.Projection, g.Plane))
                 {
                     _logger?.Warning(
-                        "[Layout] Skipped guide {0}: control points lie outside the world. The record is "
-                        + "corrupt or hand-edited; it would have hung the voxel scan.", g.Id);
+                        "[Layout] Skipped guide {0}: coordinates or projection are invalid or outside the "
+                        + "world. The record is corrupt or hand-edited and is unsafe to load.", g.Id);
                     continue;
                 }
 

@@ -18,7 +18,7 @@ A10.1 and A13 closed in Session 38, A14 emptied in Session 37. **Nothing in this
 looked at this" item.** Every remaining entry is either work someone chose, a decision awaiting the human,
 or a claim awaiting a playtest.
 
-**v0.4.40–v0.4.49 have shipped.** v0.4.39 passed, and v0.4.42's chiselling highlights were confirmed good in
+**v0.4.40–v0.4.59 have shipped.** v0.4.39 passed, and v0.4.42's chiselling highlights were confirmed good in
 play on 2026-08-01 — which also settled **A16** (→ `DONE.md`).
 
 ⚠️ **v0.4.48 must not be used** — it shipped a claim pre-filter that was a permissions hole and v0.4.49
@@ -29,6 +29,11 @@ thread, which was the last thing A10.2 left behind. Five smaller costs were meas
 fixed; they are recorded in `SESSION_39.md` §6 and in `DONE.md`, **not here**, because none of them is open
 work.
 
+**Session 41 is delivered** (v0.4.55–v0.4.59 → `DONE.md`): whole-guide bounds/projection hardening,
+transactional compound Transform, malformed no-op rejection, and deep cancellation of active immense public
+geometry. Count-only claim revision was replaced by a fail-closed structural snapshot and then bounded to the
+exact guide footprint; distant claims cannot restart work and exact per-block access checks are unchanged.
+
 **Nothing is queued behind it.** The next piece of work is whatever the human chooses.
 
 ⚠️ **A17 (per-guide "index cards") was proposed, agreed, and then DISMISSED** once the save layer was
@@ -37,8 +42,9 @@ is archived intact at `dev/archive/superseded-2026-08-01/PLAN_GUIDE_PERSISTENCE.
 
 ## A19. Awaiting a playtest — the background save
 
-**v0.4.54 is the build to test; v0.4.50–v0.4.52 each carry a defect a later revision fixed.** Nothing in
-Session 40 has been played yet — stated by the human, not assumed.
+**v0.4.59 is the current build to test; it carries Session 40 unchanged. v0.4.50–v0.4.52 each contain a
+background-save defect fixed by v0.4.53/v0.4.54.** Nothing in Session 40 has been played yet — stated by the
+human, not assumed.
 
 Two things only play can answer, both of which announce themselves:
 
@@ -124,6 +130,7 @@ unfindable.
 | Session 38 | **two.** The targeting broad-phase padding (pick radius + ¼ of the guide's largest dimension), and surfacing `OccupancyAwaitingChunks` only in `/layout built refresh`'s reply rather than on the HUD | `sessions/SESSION_38.md` → *Flagged and unverified* |
 | **Session 40** | **four.** The background save's tunable numbers — the lead's 3 s start, its doubling, and the 60 s cap; and the 20 s–30 min band outside which a save-to-save gap is not treated as the autosave rhythm. Plus two things deliberately left synchronous: the **admin policies** (a handful of records against the registry's megabytes) and the **client's private F4 guides** (a small file write, and file I/O on a worker is a nastier risk than text conversion) | `sessions/SESSION_40.md` → *Flagged and unverified* |
 | Session 39 | **four.** The client's 60 s private-guide flush interval (the server's is the world's own cadence, human-set; the client has none to borrow); `VoxelCapKind.GuideCount` riding `VoxelCapWarningPacket` with numbers that are guides rather than voxels; the five costs measured and deliberately NOT fixed (§6); and the long-standing **admin bypass of claim validation**, surfaced here and left unchanged | `sessions/SESSION_39.md` → *Flagged and unverified* |
+| **Session 41** | **three.** Preserve successful in-place Transform order as rotate → mirror → translate; drop malformed legacy projection records instead of normalising them; and allow three relevant claim-state restarts before the fourth change fails closed as temporarily busy | `sessions/SESSION_41.md` → *Flagged and unverified* |
 
 **The most substantive still-unreviewed calls**, if you only want to look at a few:
 
@@ -164,8 +171,12 @@ Not to-dos. Standing constraints on how the moving parts are allowed to behave.
   never upload one voxel at a time and never rebuild one growing mesh per frame.**
 - **Immense public validation is intentionally serialized.** One below-normal worker does pure
   generation/counting; claim checks consume ≤128 blocks or ~1 ms per 20 ms server tick. Longer build time is
-  acceptable — **server tick health is the priority.** Since v0.4.36 the worker also *observes* cancellation,
-  so a cancelled job gives the lane back at its next seam instead of running to completion.
+  acceptable — **server tick health is the priority.** Since v0.4.57 a cancelled job interrupts every volume's
+  active count, exact generation, fallback scan, marker pass and footprint collapse; no partial geometry is
+  published. Since v0.4.59 claim consistency snapshots are bounded to the exact footprint: the API still
+  requires a cheap bounds scan of all claim areas, but distant claims are not copied, permission-tested or
+  compared and cannot restart the operation. Exact per-block `TestAccess` remains authoritative. `GOTCHAS`
+  **G45**, **G47**.
 - **Whole-guide + regional culling is conservative and measured.** A bound outside live
   `viewDistance`/frustum submits nothing; an intersecting immense clean Shell then tests fixed 32-block
   regions independently. Cross-region neighbours use complete guide occupancy, so boundaries add no internal
@@ -189,10 +200,13 @@ Not to-dos. Standing constraints on how the moving parts are allowed to behave.
 **These are claims to test, not rules to follow** — `STATUS.md`'s *Known unverified claims* is the
 authoritative copy. Listed here because they are genuinely open work:
 
-- ⚠️ **Does claim protection actually refuse a guide?** **This is the big one, and it cannot be tested from
+- ⚠️ **Does claim protection actually refuse a guide and remain stable during an immense check?** **This is
+  the big one, and it cannot be tested from
   singleplayer** — the host holds `controlserver` and Layout exempts it deliberately, in four places
-  (`SESSION_39.md` §4). Needs a non-admin account on a dedicated server. What is being verified is the
-  ORIGINAL implementation: v0.4.48's pre-filter was reverted in v0.4.49, so nothing new is under test.
+  (`SESSION_39.md` §4). Needs a non-admin account on a dedicated server. Verify an ordinary refusal, then an
+  immense operation while a relevant claim is replaced/resized or player authorization changes. v0.4.59's
+  bounds scope only the consistency snapshot; v0.4.48's unsafe shortcut remains reverted and exact access is
+  still tested for every affected block.
 - **Do filled arches still look and count right?** (v0.4.47.) The only shape whose counting code changed.
   Verified identical across 576 configurations offline; the geometry has not been seen in a world.
 - **Does a guide-COUNT cap now flash on the HUD?** (v0.4.46.) ⚠️ **Unreachable with default config** — both

@@ -2,6 +2,58 @@
 
 All notable changes to Layout will be recorded in this file going forward.
 
+## 0.4.59 - 2026-08-02
+
+### Changed
+
+- **Very large guide claim snapshots now track only claims that can touch the guide.** Layout still examines
+  each claim's bounds because the game exposes no regional claim query, but distant claims are no longer
+  copied, permission-tested, compared, or allowed to restart an operation. Exact per-block access checks are
+  unchanged, so other mods and every non-claim refusal still apply.
+- On a focused 10,000-claim benchmark with one relevant claim, the bounded snapshot took about 0.10-0.14 ms
+  and allocated about 820 bytes, versus 2.50-3.10 ms and 4.28 MB for the global snapshot introduced in
+  0.4.58.
+
+## 0.4.58 - 2026-08-02
+
+### Fixed
+
+- **A very large guide can no longer commit against a stale claim layout merely because the number of claims
+  stayed the same.** Equal-count claim replacement, in-place resizing, and relevant player authorization
+  changes now restart validation. Changes are checked before every slice and once more before commit.
+- After three claim-state restarts, continued churn now refuses the operation as temporarily busy instead of
+  eventually accepting a result validated against changing permissions.
+- Very large reshapes re-check build privilege and jail state immediately before committing.
+
+## 0.4.57 - 2026-08-02
+
+### Fixed
+
+- **Cancelling a very large guide now stops the geometry work already running for it.** Previously a cancelled
+  placement or reshape was discarded safely, but its counting and voxel generation could continue in the
+  background and keep Layout's single large-guide validation lane occupied. Cancellation now reaches every
+  3D volume scan, its large-shape fallback, marker work and land-claim footprint preparation.
+
+## 0.4.56 - 2026-08-02
+
+### Fixed
+
+- Malformed Transform requests are now rejected even when their valid parts would amount to no movement.
+  This only affects invalid data from a modified client; normal no-op Transform actions behave as before.
+
+## 0.4.55 - 2026-08-01
+
+### Fixed
+
+- **Move and Transform can no longer carry an otherwise valid guide outside the safe world-coordinate range.**
+  The resulting guide and projection plane are checked before any voxel scan, claim check, save or broadcast.
+- **A combined rotate, mirror and move is now genuinely one operation.** It validates once, either commits
+  completely or changes nothing, broadcasts one consistent result, and takes one Undo/Redo step for both public
+  and private guides. A refusal can no longer leave only the rotation committed or other players seeing stale
+  geometry.
+- Undefined projection modes/axes and unsafe plane offsets are rejected at packet, restore, load and mutation
+  boundaries instead of entering live or saved guide state.
+
 ## 0.4.54 - 2026-08-01
 
 ### Added

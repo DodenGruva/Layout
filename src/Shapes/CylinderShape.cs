@@ -20,8 +20,8 @@ namespace Layout.Shapes
     /// the accepted v1 trade. Solid is the matching fattened disc column, a strict superset of the shell.
     /// Same scan guard scheme as the sphere.
     /// </remarks>
-    public sealed class CylinderShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape,
-        IIntrinsicGuideExtent
+    public sealed class CylinderShape : IGuideShape, ICancellableThresholdVoxelCounter,
+        ICancellableVoxelGenerator, IProgressiveVoxelShape, IIntrinsicGuideExtent
     {
         private const double MinRadius = 0.05;
         private const double MinHeight = 0.05;
@@ -105,7 +105,12 @@ namespace Layout.Shapes
         // --- IGuideShape: voxels ---------------------------------------------------------------------
 
         public List<VoxelPosition> GetVoxelPositions(int scale, bool filled = false)
+            => GetVoxelPositions(scale, filled, null);
+
+        public List<VoxelPosition> GetVoxelPositions(
+            int scale, bool filled, Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             var result = new List<VoxelPosition>();
             if (!TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n, out double h))
@@ -113,8 +118,9 @@ namespace Layout.Shapes
             if (ScanTooBig(scale, c, n, r, h))
             {
                 result = LargeVolumeShellFallback.RadialShell(
-                    c, r, u, m, n, h, false, scale, int.MaxValue, out _);
-                ClaimHandleMarkers(result, scale);
+                    c, r, u, m, n, h, false, scale, int.MaxValue, out _,
+                    cancellationRequested);
+                ClaimHandleMarkers(result, scale, cancellationRequested);
                 return result;
             }
 
@@ -125,6 +131,7 @@ namespace Layout.Shapes
             GetAabb(c, n, r, h, cell, out double ax0, out double ay0, out double az0,
                 out double ax1, out double ay1, out double az1);
 
+            int work = 0;
             for (int ix = AlignDown(ax0, scale); ix <= AlignDown(ax1, scale); ix += scale)
             {
                 double px = ix / 16.0 + cell * 0.5 - c.X;
@@ -133,6 +140,7 @@ namespace Layout.Shapes
                     double py = iy / 16.0 + cell * 0.5 - c.Y;
                     for (int iz = AlignDown(az0, scale); iz <= AlignDown(az1, scale); iz += scale)
                     {
+                        VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                         double pz = iz / 16.0 + cell * 0.5 - c.Z;
                         double a = px * n.X + py * n.Y + pz * n.Z;          // axial coordinate
                         if (a < lo || a > hi) continue;
@@ -144,7 +152,7 @@ namespace Layout.Shapes
                 }
             }
 
-            ClaimHandleMarkers(result, scale);
+            ClaimHandleMarkers(result, scale, cancellationRequested);
             return result;
         }
 
@@ -217,16 +225,22 @@ namespace Layout.Shapes
             => GetVoxelCountUpTo(scale, filled, int.MaxValue);
 
         public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter)
+            => GetVoxelCountUpTo(scale, filled, stopAfter, null);
+
+        public int GetVoxelCountUpTo(
+            int scale, bool filled, int stopAfter, Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             if (!TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n, out double h))
                 return 0;
             if (ScanTooBig(scale, c, n, r, h))
             {
                 List<VoxelPosition> fallback = LargeVolumeShellFallback.RadialShell(
-                    c, r, u, m, n, h, false, scale, Math.Max(0, stopAfter), out bool exceeded);
+                    c, r, u, m, n, h, false, scale, Math.Max(0, stopAfter),
+                    out bool exceeded, cancellationRequested);
                 if (exceeded) return GuideShapeVoxelCounting.Exceeded(stopAfter);
-                ClaimHandleMarkers(fallback, scale);
+                ClaimHandleMarkers(fallback, scale, cancellationRequested);
                 return fallback.Count > stopAfter
                     ? GuideShapeVoxelCounting.Exceeded(stopAfter) : fallback.Count;
             }
@@ -236,6 +250,7 @@ namespace Layout.Shapes
             double hd = cell * 0.866;
             double lo = Math.Min(0, h), hi = Math.Max(0, h);
             int count = 0;
+            int work = 0;
 
             GetAabb(c, n, r, h, cell, out double ax0, out double ay0, out double az0,
                 out double ax1, out double ay1, out double az1);
@@ -248,6 +263,7 @@ namespace Layout.Shapes
                     double py = iy / 16.0 + cell * 0.5 - c.Y;
                     for (int iz = AlignDown(az0, scale); iz <= AlignDown(az1, scale); iz += scale)
                     {
+                        VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                         double pz = iz / 16.0 + cell * 0.5 - c.Z;
                         double a = px * n.X + py * n.Y + pz * n.Z;
                         if (a < lo || a > hi) continue;
@@ -297,14 +313,16 @@ namespace Layout.Shapes
             z0 = Math.Min(c.Z, ez) - pad; z1 = Math.Max(c.Z, ez) + pad;
         }
 
-        private void ClaimHandleMarkers(List<VoxelPosition> cells, int scale)
+        private void ClaimHandleMarkers(
+            List<VoxelPosition> cells, int scale, Func<bool> cancellationRequested = null)
         {
             for (int i = 0; i < 3 && i < _controlPoints.Count; i++)
             {
                 ControlPoint cp = _controlPoints[i];
                 VoxelRenderType t = cp.IsLocked ? VoxelRenderType.Locked
                     : cp.IsPrimary ? VoxelRenderType.Primary : VoxelRenderType.Anchor;
-                ShapeGeometry.ClaimMarker(cells, scale, cp.WorldPosition, t);
+                ShapeGeometry.ClaimMarker(
+                    cells, scale, cp.WorldPosition, t, cancellationRequested);
             }
         }
 

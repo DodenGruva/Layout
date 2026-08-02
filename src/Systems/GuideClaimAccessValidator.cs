@@ -259,9 +259,13 @@ namespace Layout.Systems
             var result = new List<BlockPos>();
             if (guide == null || shape == null) return result;
 
+            VoxelScanCancellation.ThrowIfRequested(cancelled);
+
             List<VoxelPosition> voxels = guide.IsWireframe
                 ? ShapeWireframe.GetVoxelPositions(shape, guide.VoxelScale)
-                : shape.GetVoxelPositions(guide.VoxelScale, guide.IsFilled);
+                : GuideShapeVoxelGeneration.GetPositions(
+                    shape, guide.VoxelScale, guide.IsFilled, cancelled);
+            VoxelScanCancellation.ThrowIfRequested(cancelled);
             var tested = new HashSet<(int X, int Y, int Z)>();
 
             void Add(int x, int y, int z)

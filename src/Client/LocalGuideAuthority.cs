@@ -723,22 +723,18 @@ namespace Layout.Client
                 return copy.Guide;
             }
 
-            if (quarterTurns % 4 != 0)
-            {
-                Vec3d rotatePivot = null;
-                GuideOperationResult turned = _guides.RotateGuide(id, rotateAxis, quarterTurns, ref rotatePivot);
-                if (!turned.IsSuccess) { HandleFailure(id, turned); return null; }
-                _undo.Record(PlayerUid, new RotateGuideCommand(id, rotateAxis, quarterTurns, rotatePivot));
-            }
-
             Vec3d pivot = null;
-            GuideOperationResult result = _guides.TransformGuide(id, delta, mirrorAxis, ref pivot);
+            GuideOperationResult result = _guides.TransformGuide(
+                id, delta, mirrorAxis, rotateAxis, quarterTurns,
+                inverseOrder: false, ref pivot);
             if (result.IsSuccess)
             {
-                bool changed = mirrorAxis >= 0 || delta.X != 0 || delta.Y != 0 || delta.Z != 0;
+                bool changed = quarterTurns % 4 != 0 || mirrorAxis >= 0
+                    || delta.X != 0 || delta.Y != 0 || delta.Z != 0;
                 if (changed)
                 {
-                    _undo.Record(PlayerUid, new TransformGuideCommand(id, delta, mirrorAxis, pivot));
+                    _undo.Record(PlayerUid, new TransformGuideCommand(
+                        id, delta, mirrorAxis, rotateAxis, quarterTurns, pivot));
                     StampLastSculptor(result.Guide, publishIncremental: false);
                 }
                 ApplyFull(result.Guide);

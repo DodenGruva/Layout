@@ -149,6 +149,7 @@ namespace Layout.Network
             public int VoxelCount;
             public int ExceededCap;
             public List<BlockPos> Footprint;
+            public ClaimFootprintBounds ClaimBounds;
         }
 
         private sealed class PendingImmenseCreate
@@ -160,7 +161,7 @@ namespace Layout.Network
             public Task<ImmenseCreateGeometry> GeometryTask;
             public ImmenseCreateGeometry Geometry;
             public int ClaimIndex;
-            public int ClaimRevision = -1;
+            public ClaimAccessSnapshot ClaimSnapshot;
             public int ClaimRestarts;
 
             // VOLATILE since v0.4.36: set on the server tick thread, now READ BY THE WORKER. Before this it
@@ -188,7 +189,7 @@ namespace Layout.Network
             public Task<ImmenseCreateGeometry> GeometryTask;
             public ImmenseCreateGeometry Geometry;
             public int ClaimIndex;
-            public int ClaimRevision = -1;
+            public ClaimAccessSnapshot ClaimSnapshot;
             public int ClaimRestarts;
             public bool ReleaseRequested;
 
@@ -1215,7 +1216,8 @@ namespace Layout.Network
                 // the result, so nothing consumes a partial answer — this just gives up the lane sooner.
                 if (pending.Cancelled) return null;
 
-                int count = pending.Prepared.CountUpTo(pending.CountLimit);
+                int count = pending.Prepared.CountUpTo(
+                    pending.CountLimit, () => pending.Cancelled);
                 if (pending.Cancelled) return null;
 
                 if (count > pending.CountLimit)
@@ -1232,8 +1234,13 @@ namespace Layout.Network
                 return new ImmenseCreateGeometry
                 {
                     VoxelCount = count,
-                    Footprint = footprint
+                    Footprint = footprint,
+                    ClaimBounds = ClaimFootprintBounds.FromFootprint(footprint)
                 };
+            }
+            catch (OperationCanceledException) when (pending.Cancelled)
+            {
+                return null;
             }
             finally
             {
@@ -1314,7 +1321,23 @@ namespace Layout.Network
             }
             else
             {
-                if (pending.ClaimRevision < 0) pending.ClaimRevision = ClaimRevision();
+                if (pending.ClaimSnapshot == null)
+                {
+                    pending.ClaimSnapshot = CaptureClaimAccessSnapshot(
+                        player, pending.Geometry.ClaimBounds);
+                }
+                else
+                {
+                    ClaimRevalidationResult beforeSlice = RevalidateClaimAccess(
+                        player, pending.Geometry.ClaimBounds, ref pending.ClaimSnapshot,
+                        ref pending.ClaimRestarts, ref pending.ClaimIndex);
+                    if (beforeSlice == ClaimRevalidationResult.Restarted) return;
+                    if (beforeSlice == ClaimRevalidationResult.TooMuchChurn)
+                    {
+                        RejectImmenseCreateForClaimChurn(player);
+                        return;
+                    }
+                }
 
                 var budget = Stopwatch.StartNew();
                 int checks = 0;
@@ -1337,10 +1360,18 @@ namespace Layout.Network
 
                 // Walk finished — but did the claims change while we were walking? If so, rewind and do it
                 // again against the world as it is now, rather than committing on a stale answer.
-                if (pending.ClaimIndex >= footprint.Count
-                    && ShouldRevalidateClaims(
-                        ref pending.ClaimRevision, ref pending.ClaimRestarts, ref pending.ClaimIndex))
-                    return;
+                if (pending.ClaimIndex >= footprint.Count)
+                {
+                    ClaimRevalidationResult freshness = RevalidateClaimAccess(
+                        player, pending.Geometry.ClaimBounds, ref pending.ClaimSnapshot,
+                        ref pending.ClaimRestarts, ref pending.ClaimIndex);
+                    if (freshness == ClaimRevalidationResult.Restarted) return;
+                    if (freshness == ClaimRevalidationResult.TooMuchChurn)
+                    {
+                        RejectImmenseCreateForClaimChurn(player);
+                        return;
+                    }
+                }
             }
 
             if (pending.ClaimIndex < footprint.Count) return;
@@ -1470,7 +1501,7 @@ namespace Layout.Network
                 .FirstOrDefault(player => player.PlayerUID == playerUid);
 
         // ==========================================================================================
-        //  Claim-validation consistency (A14.11)
+        //  Claim-validation consistency (A14.11 / Session 41 P2 follow-on)
         // ==========================================================================================
         //
         // An immense footprint is validated a slice at a time — ≤128 blocks or ~1 ms per 20 ms tick — so a
@@ -1478,37 +1509,66 @@ namespace Layout.Network
         // turned OFF because the walk above already did it. A claim CREATED over a block that was checked
         // early therefore never gets re-tested, and the guide settles across land that is now protected.
         //
-        // The engine exposes no claim revision, so this synthesises one from the claim COUNT: enough to
-        // notice a claim being added or removed mid-walk, which is the case the finding describes.
-        // ⚠️ It does NOT notice an existing claim being RESIZED in place. That is a smaller window again
-        // and would need either a full re-walk at commit — the very cost the time-slicing exists to avoid —
-        // or an engine-side revision the API does not offer.
-        //
-        // Guides are visual only and never touch blocks, so the worst outcome here is an overlay drawn
-        // across protected land, not damage.
-        // Null-safe on purpose: this runs on the server tick, and a claims API that is not there yet must
-        // read as "unchanged" rather than throw. A constant 0 simply means no revalidation ever fires.
-        private int ClaimRevision()
-        {
-            var all = _sapi.World?.Claims?.All;
-            return all == null ? 0 : all.Count();
-        }
-
+        // The engine exposes no claim revision. ClaimAccessSnapshot therefore captures claim intersections
+        // inside the exact footprint bounds plus relevant player state used by BuildOrBreak. Distant claims
+        // are scanned only far enough to rule them out; they are never permission-tested or compared. This
+        // remains a staleness detector around the exact TestAccess walk, never a substitute for that walk:
+        // the final mod-extensible DeniedByMod event deliberately remains unknowable from claim data (G40).
+        // Compare before every later slice as well as after the final one, so change-and-revert churn cannot
+        // hide a slice that ran under an intermediate claim state.
         private const int MaxClaimRevalidations = 3;
 
-        // True = the claim set changed under us; validation has been rewound and should run again.
-        // Returns false once the restart budget is spent, so a world where claims keep changing cannot
-        // trap a placement in a permanent re-validation loop.
-        private bool ShouldRevalidateClaims(ref int revision, ref int restarts, ref int claimIndex)
+        private enum ClaimRevalidationResult
         {
-            int now = ClaimRevision();
-            if (revision < 0 || revision == now) return false;
-            if (restarts >= MaxClaimRevalidations) return false;
+            Stable,
+            Restarted,
+            TooMuchChurn
+        }
+
+        private ClaimAccessSnapshot CaptureClaimAccessSnapshot(
+            IServerPlayer player, ClaimFootprintBounds bounds) =>
+            ClaimAccessSnapshot.Capture(_sapi.World?.Claims?.All, player, bounds);
+
+        private void RejectImmenseCreateForClaimChurn(IServerPlayer player)
+        {
+            player.SendIngameError("layout-validationbusy",
+                "Land permissions kept changing while this immense guide was checked. "
+                + "Please try placing it again.");
+            SendPlacementRejected(player, GuideOpStatus.InvalidArgument);
+            CompleteActiveImmenseCreate();
+        }
+
+        private void RejectImmenseSculptForClaimChurn(
+            IServerPlayer player, PendingImmenseSculpt pending)
+        {
+            player.SendIngameError("layout-validationbusy",
+                "Land permissions kept changing while this immense reshape was checked. "
+                + "Please try the reshape again.");
+            FinishRejectedImmenseSculpt(player, pending);
+            CompleteActiveImmenseSculpt();
+        }
+
+        // A changing claim/access environment can neither trap a job forever nor be treated as validated.
+        // The first three changes rewind the exact walk; a fourth rejects and asks the player to retry.
+        private ClaimRevalidationResult RevalidateClaimAccess(
+            IServerPlayer player, ClaimFootprintBounds bounds,
+            ref ClaimAccessSnapshot snapshot,
+            ref int restarts, ref int claimIndex)
+        {
+            ClaimAccessSnapshot now = CaptureClaimAccessSnapshot(player, bounds);
+            if (snapshot == null)
+            {
+                snapshot = now;
+                claimIndex = 0;
+                return ClaimRevalidationResult.Restarted;
+            }
+            if (snapshot.Equals(now)) return ClaimRevalidationResult.Stable;
+            if (restarts >= MaxClaimRevalidations) return ClaimRevalidationResult.TooMuchChurn;
 
             restarts++;
-            revision = now;
+            snapshot = now;
             claimIndex = 0;          // walk the whole footprint again, against the claims as they are now
-            return true;
+            return ClaimRevalidationResult.Restarted;
         }
 
         private void SendPlacementRejected(IServerPlayer player, GuideOpStatus status)
@@ -2164,7 +2224,8 @@ namespace Layout.Network
 
                 int count = GuideShapeVoxelCounting.CountUpTo(
                     pending.CandidateShape, pending.Candidate.VoxelScale,
-                    pending.Candidate.IsFilled, pending.CountLimit);
+                    pending.Candidate.IsFilled, pending.CountLimit,
+                    () => pending.Cancelled);
                 if (pending.Cancelled) return null;
 
                 if (count > pending.CountLimit)
@@ -2181,8 +2242,13 @@ namespace Layout.Network
                 return new ImmenseCreateGeometry
                 {
                     VoxelCount = count,
-                    Footprint = footprint
+                    Footprint = footprint,
+                    ClaimBounds = ClaimFootprintBounds.FromFootprint(footprint)
                 };
+            }
+            catch (OperationCanceledException) when (pending.Cancelled)
+            {
+                return null;
             }
             finally
             {
@@ -2262,7 +2328,23 @@ namespace Layout.Network
             }
             else
             {
-                if (pending.ClaimRevision < 0) pending.ClaimRevision = ClaimRevision();
+                if (pending.ClaimSnapshot == null)
+                {
+                    pending.ClaimSnapshot = CaptureClaimAccessSnapshot(
+                        player, pending.Geometry.ClaimBounds);
+                }
+                else
+                {
+                    ClaimRevalidationResult beforeSlice = RevalidateClaimAccess(
+                        player, pending.Geometry.ClaimBounds, ref pending.ClaimSnapshot,
+                        ref pending.ClaimRestarts, ref pending.ClaimIndex);
+                    if (beforeSlice == ClaimRevalidationResult.Restarted) return;
+                    if (beforeSlice == ClaimRevalidationResult.TooMuchChurn)
+                    {
+                        RejectImmenseSculptForClaimChurn(player, pending);
+                        return;
+                    }
+                }
 
                 var budget = Stopwatch.StartNew();
                 int checks = 0;
@@ -2283,13 +2365,31 @@ namespace Layout.Network
                     }
                 }
 
-                // Claims changed mid-walk — rewind and re-check. See ShouldRevalidateClaims.
-                if (pending.ClaimIndex >= footprint.Count
-                    && ShouldRevalidateClaims(
-                        ref pending.ClaimRevision, ref pending.ClaimRestarts, ref pending.ClaimIndex))
-                    return;
+                // Claims or relevant player access state changed mid-walk: rewind and re-check, or reject
+                // after bounded repeated churn. See RevalidateClaimAccess.
+                if (pending.ClaimIndex >= footprint.Count)
+                {
+                    ClaimRevalidationResult freshness = RevalidateClaimAccess(
+                        player, pending.Geometry.ClaimBounds, ref pending.ClaimSnapshot,
+                        ref pending.ClaimRestarts, ref pending.ClaimIndex);
+                    if (freshness == ClaimRevalidationResult.Restarted) return;
+                    if (freshness == ClaimRevalidationResult.TooMuchChurn)
+                    {
+                        RejectImmenseSculptForClaimChurn(player, pending);
+                        return;
+                    }
+                }
             }
             if (pending.ClaimIndex < footprint.Count) return;
+
+            // The initial handler gate may be many ticks old by now. Match immense create and re-check the
+            // Layout-specific privilege/jail policy immediately before the authoritative mutation.
+            if (DeniedByPrivilege(player))
+            {
+                FinishRejectedImmenseSculpt(player, pending);
+                CompleteActiveImmenseSculpt();
+                return;
+            }
 
             GuideOperationResult committed;
             int playerCap = _policies.EffectiveVoxelCap(
@@ -2900,27 +3000,20 @@ namespace Layout.Network
                 return;
             }
 
-            // In place. A rotation is its own authority call, so a compound "rotate and move" is applied as
-            // the rotation first and then the mirror/translate — each validating and each undoable.
-            if (p.QuarterTurns % 4 != 0)
-            {
-                Vec3d rotatePivot = null;
-                GuideOperationResult turned = _guides.RotateGuide(
-                    id, p.ResolveRotateAxis(), p.QuarterTurns, ref rotatePivot);
-                if (turned.Status != GuideOpStatus.Success) { HandleNonSuccessToggle(fromPlayer, id, turned, g); return; }
-                _undo.Record(fromPlayer.PlayerUID,
-                    new RotateGuideCommand(id, p.ResolveRotateAxis(), p.QuarterTurns, rotatePivot));
-            }
-
             Vec3d pivot = null;
-            GuideOperationResult result = _guides.TransformGuide(id, delta, p.MirrorAxis, ref pivot);
+            GuideOperationResult result = _guides.TransformGuide(
+                id, delta, p.MirrorAxis, p.ResolveRotateAxis(), p.QuarterTurns,
+                inverseOrder: false, ref pivot);
             if (result.Status == GuideOpStatus.Success)
             {
-                bool changed = p.MirrorAxis >= 0 || p.DeltaX != 0 || p.DeltaY != 0 || p.DeltaZ != 0;
+                bool changed = p.QuarterTurns % 4 != 0 || p.MirrorAxis >= 0
+                    || p.DeltaX != 0 || p.DeltaY != 0 || p.DeltaZ != 0;
                 if (changed)
                 {
                     _undo.Record(fromPlayer.PlayerUID,
-                        new TransformGuideCommand(id, delta, p.MirrorAxis, pivot));
+                        new TransformGuideCommand(
+                            id, delta, p.MirrorAxis,
+                            p.ResolveRotateAxis(), p.QuarterTurns, pivot));
                     StampLastSculptor(fromPlayer, result.Guide, broadcastIncremental: false);
                 }
                 _channel.BroadcastPacket(new GuideCreatePacket(GuideDataDto.From(result.Guide)));

@@ -32,8 +32,8 @@ namespace Layout.Guide
     /// <c>BlockOccupancy.Key</c> already calls "far beyond any world", and four times inside the coordinate
     /// that actually overflows.
     ///
-    /// Static because the three call sites sit in three layers that share no object: the server network
-    /// handler, <c>GuideManager</c>'s load/restore path (which holds no world API), and the client's private
+    /// Static because the call sites sit in layers that share no object: the server network handler,
+    /// <c>GuideManager</c>'s mutation/load/restore paths (which hold no world API), and the client's private
     /// guide authority. Both sides call <see cref="UseWorldSize"/> once at startup; until then, and forever
     /// if the engine reports nothing, the hard backstop alone applies — which is what closes the hang.
     /// </remarks>
@@ -113,6 +113,26 @@ namespace Layout.Guide
             for (int i = 0; i < points.Count; i++)
                 if (!IsUsable(points[i]?.WorldPosition)) return false;
             return true;
+        }
+
+        /// <summary>
+        /// True only for a defined projection mode and plane axis whose stored plane coordinate lies inside
+        /// the same world bounds as guide points. Volumetric guides do not render against that plane, but
+        /// whole-guide movement still carries it, so leaving an extreme dormant value would retain an
+        /// overflow seam and could make an otherwise valid guide impossible to move safely.
+        /// </summary>
+        public static bool IsUsableProjection(ProjectionMode mode, ProjectionPlane plane)
+        {
+            if (!Enum.IsDefined(typeof(ProjectionMode), mode)
+                || !Enum.IsDefined(typeof(PlaneAxis), plane.FlattenedAxis))
+                return false;
+            double coordinate = plane.PlaneOffset / 16.0;
+            return plane.FlattenedAxis switch
+            {
+                PlaneAxis.X => Within(coordinate, _limitX),
+                PlaneAxis.Z => Within(coordinate, _limitZ),
+                _ => Within(coordinate, _limitY)
+            };
         }
     }
 }

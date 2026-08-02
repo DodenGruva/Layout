@@ -20,6 +20,47 @@
 
 ---
 
+## A20. Session-41 review hardening, immense cancellation and claim consistency — ✅ DELIVERED v0.4.55–v0.4.59
+
+An independent review against the refreshed Session-40 tree found three authority gaps, then the requested
+adversarial reviews found further gaps in the fixes themselves. Full reasoning, verification and release
+artifacts: `dev/sessions/SESSION_41.md`.
+
+1. **Whole-guide coordinate/projection hardening (v0.4.55).** Move, Rotate, in-place Transform and Copy now
+   validate their finished point lists and projection state before any scan, claim check, save or broadcast.
+   This closes the 2^27 scan-hang boundary for coordinates synthesized after the original packet/load seams.
+2. **One transactional compound Transform (v0.4.55).** Rotate, mirror and translation execute under one
+   snapshot, bounds/cap/claim validation, commit/rollback and undo boundary for both public and F4-private
+   authority. A refusal cannot leave rotation committed or other clients stale; Undo applies the inverse in
+   reverse order under the same atomic boundary.
+3. **Projection domain validation (v0.4.55).** Undefined modes/axes and unsafe plane offsets are rejected at
+   packet, restore, load, property-change and mutation boundaries. Dormant Volumetric planes are included
+   because whole-guide movement still carries their offsets.
+4. **Malformed no-op rejection (v0.4.56).** Raw mirror sentinels and active rotation axes are validated before
+   the idempotent early return, so an invalid sentinel cannot report success merely because no valid portion
+   changes state. Rotation axis remains ignored when normalized turns are zero, as the packet specifies.
+   `GOTCHAS` **G46**.
+5. **Deep cancellation for active immense public geometry (v0.4.57).** Additive cancellable count and exact
+   generation seams cover every volume variant, their large-volume fallback scans, marker assignment and
+   claim-footprint collapse. Cancellation abandons the whole worker result; partial counts/lists never escape
+   with an exact, over-cap or empty meaning. `GOTCHAS` **G45**.
+6. **Structural claim consistency (v0.4.58).** Equal-count replacement, in-place resize and relevant player
+   authorization changes now restart sliced validation. State is compared before every later slice and after
+   the final slice; a fourth relevant change after three restarts refuses instead of committing stale work.
+   Immense sculpt repeats privilege and jail checks immediately before commit.
+7. **Footprint-bounded snapshots (v0.4.59).** The consistency snapshot is scoped to claims intersecting the
+   exact block footprint, including Surface-adjacent cells, and relevant claim geometry is clipped to it.
+   Distant claims cannot restart work and are not copied or permission-tested. Exact per-block `TestAccess`
+   remains unchanged, preserving every non-claim and other-mod refusal. `GOTCHAS` **G47**.
+8. **Verification.** Debug and Release builds pass with zero warnings/errors. The disposable focused harness
+   passes 29/29 groups, including 648 compound transform combinations, cancellation equivalence across all
+   eight volume variants, relevant claim churn, boundary/clipping cases and distant-claim exclusion. With
+   10,000 synthetic claims and one relevant claim, bounded capture measured 0.10–0.14 ms / about 820 bytes,
+   versus 2.50–3.10 ms / 4.28 MB for the global structural snapshot. The final v0.4.59 archive has 42
+   structurally verified entries.
+
+---
+
 ## A18. Move guide serialisation off the main thread — ✅ DELIVERED v0.4.50–v0.4.54 (Session 40)
 
 The replacement for the dismissed A17 below, and the last thing `TODO` A10.2 left behind.

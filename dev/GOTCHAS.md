@@ -632,6 +632,55 @@ completion discards its own older bytes. ⚠️ **The identity check that makes 
 without it the completing job writes stale bytes over newer ones, a silent rollback. Same shape as **G29**.
 **Found:** Session 40, tracing the shutdown path after the first build already worked. `SESSION_40.md` §6.
 
+### G45 — Cancellation at stage boundaries does not cancel the expensive stage between them.
+**Trigger:** before calling any long-running scan, materialisation, serialisation or allocation from a worker
+that is described as cancellable.
+**Trap:** the immense create/sculpt worker checked its volatile flag before and after `CountUpTo`, and
+`BuildFootprint` checked it while collapsing voxels. Cancelling safely discarded the result, but the count
+already running could not stop. Worse, `BuildFootprint` called ordinary `GetVoxelPositions` first, so the
+entire exact voxel list was materialised before its first collapse-loop cancellation check ran.
+**The first fix repeated the same mistake one level deeper.** Cancellation was threaded through every
+threshold counter and its scan loops, then an adversarial review traced the next stage and found exact voxel
+generation still outside the cancellable boundary. A flag at both ends of a call says nothing about the work
+inside the call.
+**Do:** trace every expensive substage and carry one cheap probe into the deepest repeated loop. Preserve the
+ordinary API with an additive cancellable seam when other callers share the code. On cancellation, throw or
+return an unmistakable abandoned state; **never return a partial count/list that can be read as exact, over-cap
+or empty.** Keep the worker's existing identity checks too — stopping old work sooner does not make removal by
+key safe (`G29`).
+**Found and fixed v0.4.57, Session 41 §4.** All eight volume variants now interrupt threshold counting, exact
+generation, large-volume fallback marching and marker claiming; footprint collapse retains its own checks.
+
+### G46 — Validate request fields before an idempotent/no-op early return.
+**Trigger:** before adding a “nothing changes, return success” fast path to a method that accepts values from a
+packet, file, command or any other untrusted seam.
+**Trap:** v0.4.55's transactional `TransformGuide` first decided whether rotation, mirror or translation would
+change the guide, then returned success for a no-op, and only after that validated the mirror/rotation values.
+A crafted `mirrorAxis = -2` therefore reported success whenever the rest of the action was inert. No geometry
+changed, but the authority had accepted a value its contract explicitly rejected and a future caller could
+legitimately attach effects to that false success.
+**Do:** validate the request's domain first; only then decide whether its valid meaning is idempotent. This is
+different from validating the resulting state — both are owed when raw input can be malformed.
+**Found by the v0.4.55 adversarial harness; fixed v0.4.56, Session 41 §4.**
+
+### G47 — Scope a consistency snapshot with bounds; never use those bounds as the permission answer.
+**Trigger:** before snapshotting global spatial state to protect sliced work from changes, or before using a
+bounding box to reduce land-claim work.
+**Trap:** v0.4.58 correctly replaced the immense validator's claim-count surrogate with structural state, but
+the first implementation copied and permission-tested every claim on every comparison. Claims wholly outside
+the guide cannot affect an exact access result, so this was safe but needlessly global. The tempting shortcut
+in the other direction is worse: v0.4.48 used a bounding box to skip `TestAccess` itself and bypassed player-
+global and other-mod denial reasons (`R12`, `G40`).
+**Do:** derive a 3D bound from the exact block footprint, including projection-adjacent cells; apply the
+engine's minimum-inclusive/maximum-exclusive Cuboidi convention and internal Y coordinates; clip relevant
+claim geometry to the bound so outside-only changes do not restart work. Use that snapshot only to decide
+whether sliced validation became stale. Keep the exact per-block `TestAccess` pass unchanged.
+**Cost boundary:** the installed API exposes `Claims.All` but no regional query, so every claim area's bounds
+still receive a cheap intersection test. Distant claims receive no permission test, copy or comparison and
+cannot trigger a restart. In the Session-41 focused 10,000-claim harness, this reduced snapshot capture from
+2.50–3.10 ms / 4.28 MB to 0.10–0.14 ms / about 820 bytes with one relevant claim.
+**Found and fixed v0.4.58–v0.4.59, Session 41 §5.**
+
 ---
 
 ## Reversals and disproved claims
