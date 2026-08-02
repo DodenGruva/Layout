@@ -2,6 +2,72 @@
 
 All notable changes to Layout will be recorded in this file going forward.
 
+## 0.4.49 - 2026-08-01
+
+### Reverted
+
+- **The land-claim shortcut added in 0.4.48 has been removed.** It skipped the full permission check when a
+  guide was nowhere near a land claim — but the game refuses building for several reasons besides claims
+  (a missing privilege, a dead player, another mod protecting the area), and the shortcut only understood
+  claims. Claim protection is back to checking every block, exactly as it did up to 0.4.47.
+
+## 0.4.48 - 2026-08-01
+
+### Changed
+
+- Faster land-claim checking while dragging a guide. **Withdrawn in 0.4.49 — do not use this build.**
+
+## 0.4.47 - 2026-08-01
+
+### Fixed
+
+- **Filled arches are much cheaper to edit.** Working out how many voxels a filled arch contains rebuilt the
+  arch's curve from scratch thousands of times over, every time — and that happens about ten times a second
+  while you drag one. The curve is now built once. The resulting count is unchanged: verified identical
+  across 576 arch shapes and every other shape in the mod.
+
+## 0.4.46 - 2026-08-01
+
+### Fixed
+
+- **Hitting a guide-count limit now shows on the HUD**, not only in chat. The limits on how many guides you
+  or the world may have took a different route from the voxel limits and never told the HUD anything, so the
+  cap row sat unchanged while chat explained the refusal.
+
+### Changed
+
+- **Guides are now saved when the world saves**, rather than on a timer of their own. Guide data is worth
+  what the rest of the world is worth — if a crash costs you five minutes of building, it costs you the same
+  five minutes of guides, and nothing more.
+- Private (F4) guides are written at most once a minute while you edit, and always when you leave a world,
+  quit, or switch modes.
+
+## 0.4.45 - 2026-08-01
+
+### Fixed
+
+- **Editing guides no longer gets slower as your world fills up.** Every single edit re-saved *every guide
+  in the world*, and dragging a control point does that about ten times a second. On a world with a thousand
+  guides one drag update took longer than the server's entire time budget for a tick. Saving now happens at
+  the points that need it, coalesced — about twenty times less work while dragging, and none at all when
+  nothing has changed.
+- **Opening the Players dialog no longer stalls on a busy server.** It walked the whole guide list twice for
+  every player listed; it now counts everyone in a single pass.
+- Removed two guide-size thresholds in the drag code that could never be reached.
+
+### Changed
+
+- Cap refusal wording on the HUD is now in Title Case — `REFUSED — Guide Cap`, `REFUSED — Too Large`.
+
+## 0.4.44 - 2026-08-01
+
+### Fixed
+
+- **The HUD now says which limit refused you.** The cap row could only ever say "over cap" while the chat
+  message named the actual limit. It now reads `REFUSED — Guide Cap`, `Your Total`, `World Full` or
+  `Too Large`, matching what chat says. Older servers, which cannot say which limit fired, still get the
+  general wording.
+
 ## 0.4.43 - 2026-08-01
 
 ### Fixed

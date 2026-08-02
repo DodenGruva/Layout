@@ -252,9 +252,9 @@ namespace Layout.Systems
         // so a personal per-guide cap can replace the server default without contaminating client authority.
         private int? _operationPerGuideVoxelCap;
         private GuideMutationAccessValidator _operationAccessValidator;
-        // Persist-coalescing scope — see BatchPersist. Server main thread only, like every field above.
-        private bool _persistSuspended;
-        private bool _persistPending;
+        // Something has changed since the last successful write. Set by MarkDirty on every mutation,
+        // cleared by Persist. Server main thread only, like every field above. See MarkDirty's remarks.
+        private bool _persistDirty;
 
         private readonly Dictionary<Guid, GuideData> _guides = new Dictionary<Guid, GuideData>();
         private readonly Dictionary<Guid, IGuideShape> _shapes = new Dictionary<Guid, IGuideShape>();
@@ -391,29 +391,24 @@ namespace Layout.Systems
         }
 
         /// <summary>
-        /// Coalesces every <see cref="Persist"/> inside the scope into ONE save when it closes — and only
-        /// if something actually asked to persist.
+        /// Records that the registry has changed and owes a save. **This is what every mutation calls.**
         /// </summary>
         /// <remarks>
-        /// Persist re-serialises the WHOLE guide registry. That is fine for a single edit and badly wrong
-        /// for a bulk operation: the client-only push accepts up to 100 guides per packet and called it
-        /// once per guide, so publishing a folder of private guides re-wrote the entire world's guide data
-        /// a hundred times over (A14.8). Main-thread only, like everything else here; nesting is safe and
-        /// only the outermost scope writes.
+        /// ⚠️ MUTATIONS MUST NEVER CALL <see cref="Persist"/> DIRECTLY. Persist re-serialises the WHOLE
+        /// registry — every guide in the world, not the one that changed — so its cost tracks world size
+        /// and not edit size. Calling it per mutation made a reshape drag, which sends about ten updates a
+        /// second, re-serialise everything ten times a second: measured at ~4 ms per megabyte of guide
+        /// data, that is ~20 ms of server main thread per drag update at a thousand guides, when a whole
+        /// server tick is 20 ms. It was invisible on a small test world and crippling on a large one.
+        ///
+        /// Setting a bool instead costs nothing, and the actual write happens at the points that need it:
+        /// the world save (where the data is about to hit disk anyway), a periodic flush, and shutdown.
+        ///
+        /// This also subsumes the old <c>BatchPersist</c> scope, which existed solely to stop the
+        /// client-only push writing the registry once per guide (A14.8). A bulk operation now marks the
+        /// same bool repeatedly and writes once, without needing a scope to say so.
         /// </remarks>
-        public IDisposable BatchPersist()
-        {
-            bool outermost = !_persistSuspended;
-            _persistSuspended = true;
-            return new ActionOnDispose(() =>
-            {
-                if (!outermost) return;
-                _persistSuspended = false;
-                if (!_persistPending) return;
-                _persistPending = false;
-                Persist();
-            });
-        }
+        private void MarkDirty() => _persistDirty = true;
 
         private int EffectivePerGuideVoxelCap => _operationPerGuideVoxelCap ?? _perGuideVoxelCap;
 
@@ -560,7 +555,7 @@ namespace Layout.Systems
             _guides[data.Id] = data;
             _shapes[data.Id] = shape;
             StoreCount(data.Id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(data, count);
         }
 
@@ -674,7 +669,7 @@ namespace Layout.Systems
             _guides[data.Id] = data;
             _shapes[data.Id] = prepared.Shape;
             StoreCount(data.Id, exactCount);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(data, exactCount);
         }
 
@@ -706,7 +701,7 @@ namespace Layout.Systems
             guide.LastSculptorUid = playerUid;
             guide.LastSculptorName = cleanName;
             guide.DataVersion = GuideData.CurrentDataVersion;
-            if (changed) Persist();
+            if (changed) MarkDirty();
             return true;
         }
 
@@ -777,7 +772,7 @@ namespace Layout.Systems
             _guides[live.Id] = live;
             _shapes[live.Id] = shape;
             StoreCount(live.Id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(live, count);
         }
 
@@ -827,7 +822,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -873,7 +868,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count, insertedIndex);
         }
 
@@ -918,7 +913,7 @@ namespace Layout.Systems
                 return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -937,7 +932,7 @@ namespace Layout.Systems
             if (cp.IsPhantom) return GuideOperationResult.Invalid(g);
 
             cp.IsLocked = locked;
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var c) ? c : 0);
         }
 
@@ -954,7 +949,7 @@ namespace Layout.Systems
             _guides.Remove(id);
             _shapes.Remove(id);
             RemoveCount(id);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, 0);
         }
 
@@ -970,7 +965,7 @@ namespace Layout.Systems
             if (g.IsHidden == hidden)
                 return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var same) ? same : 0);
             g.IsHidden = hidden;
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var c) ? c : 0);
         }
 
@@ -1046,7 +1041,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1127,7 +1122,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1179,7 +1174,7 @@ namespace Layout.Systems
                 return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1237,7 +1232,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, cached);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, cached);
         }
 
@@ -1353,7 +1348,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1532,7 +1527,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1681,7 +1676,7 @@ namespace Layout.Systems
                 return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1732,7 +1727,7 @@ namespace Layout.Systems
                 return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1753,7 +1748,7 @@ namespace Layout.Systems
             if (g.Divisions == clamped)
                 return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var same) ? same : 0);
             g.Divisions = clamped;
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var c0) ? c0 : 0);
         }
 
@@ -1782,7 +1777,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1811,7 +1806,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1835,7 +1830,7 @@ namespace Layout.Systems
             _guides[id] = candidate;
             _shapes[id] = candidateShape;
             StoreCount(id, exactVoxelCount);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(candidate, exactVoxelCount);
         }
 
@@ -1866,7 +1861,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1988,6 +1983,38 @@ namespace Layout.Systems
         }
 
         /// <summary>
+        /// Guide count and voxel total for EVERY creator at once, in a single pass over the registry.
+        /// </summary>
+        /// <remarks>
+        /// For a per-player figure, <see cref="CountGuidesBy"/> and <see cref="VoxelCountBy"/> are the right
+        /// tools — one scan is nothing next to the cap check that asked. **This exists for the case that
+        /// wants all of them**, which was building the admin roster: one row per player, each row calling
+        /// both of those, so the work was (players × guides) × 2 and grew with the product. With a couple of
+        /// hundred known players and a few thousand guides that is over a million passes to open one dialog.
+        ///
+        /// Creators are keyed by UID; guides with no creator (pre-attribution saves) belong to nobody and
+        /// are counted for nobody, matching the two single-player methods exactly.
+        /// </remarks>
+        public Dictionary<string, (int Guides, long Voxels)> TallyByCreator()
+        {
+            var tally = new Dictionary<string, (int Guides, long Voxels)>(StringComparer.Ordinal);
+            foreach (KeyValuePair<Guid, GuideData> entry in _guides)
+            {
+                string uid = entry.Value?.CreatorUid;
+                if (string.IsNullOrEmpty(uid)) continue;
+
+                // _voxelCounts, NOT GuideData.CachedVoxelCount — VoxelCountBy reads the live count map and
+                // this must agree with it exactly, or the roster and the cap checks would report different
+                // totals for the same player. A guide missing from the map contributes nothing, as there.
+                long voxels = _voxelCounts.TryGetValue(entry.Key, out int count) ? Math.Max(0, count) : 0;
+
+                tally.TryGetValue(uid, out (int Guides, long Voxels) current);
+                tally[uid] = (current.Guides + 1, current.Voxels + voxels);
+            }
+            return tally;
+        }
+
+        /// <summary>
         /// Sum of cached voxels across all currently existing guides attributed to one original creator.
         /// Guides from pre-attribution saves (no creator uid) count toward no player.
         /// </summary>
@@ -2077,12 +2104,24 @@ namespace Layout.Systems
 
         // --- Persistence --------------------------------------------------------------------------
 
-        // Serializes all guides into the save blob. Cheap (in-memory); the actual disk write happens on world
-        // save. Never throws out of here — a serialization fault must not crash the server.
+        /// <summary>
+        /// Writes the registry out, if anything has changed since the last write. **Call this from
+        /// lifecycle points, never from a mutation** — mutations call <see cref="MarkDirty"/>.
+        /// </summary>
+        /// <remarks>
+        /// WIRED TO: the world save (server), a periodic flush on both sides, and shutdown. Together those
+        /// bound how much can be lost to the flush interval, and the world-save hook guarantees the blob is
+        /// current at the moment the game writes it to disk.
+        ///
+        /// ⚠️ THE DIRTY FLAG IS RESTORED IF THE WRITE FAILS. Clearing it first and leaving it clear would
+        /// turn one transient serialisation fault into permanent data loss: the next flush would see
+        /// nothing owed and skip, and every later flush would too. Never throws out of here either — a
+        /// serialization fault must not crash the server.
+        /// </remarks>
         public void Persist()
         {
-            // Inside a BatchPersist scope, remember that a save is owed and let the scope do it once.
-            if (_persistSuspended) { _persistPending = true; return; }
+            if (!_persistDirty) return;
+            _persistDirty = false;
             try
             {
                 var root = new PersistedRoot
@@ -2096,6 +2135,7 @@ namespace Layout.Systems
             }
             catch (Exception e)
             {
+                _persistDirty = true;
                 _logger.Error("[Layout] Failed to persist guides: {0}", e);
             }
         }
@@ -2191,6 +2231,14 @@ namespace Layout.Systems
                 _shapes[g.Id] = shape;
                 StoreCount(g.Id, ExactVoxelCount(g.Id, shape, g.VoxelScale, g.IsFilled));
             }
+
+            // ⚠️ A LOAD OWES A WRITE, even though nobody edited anything. What is now in memory is not
+            // necessarily what is on disk: records migrate by deserialization default, DataVersion is
+            // re-stamped above, inactive lock markers are dropped, out-of-world guides are skipped
+            // entirely, and a backup recovery has just replaced a quarantined primary. Persist used to
+            // write unconditionally on every world save, so all of that reached disk by accident of the
+            // old design; now that a clean flag skips the write, the load has to declare it.
+            MarkDirty();
         }
 
         private void ClearLoadedState()

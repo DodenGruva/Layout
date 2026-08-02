@@ -11,7 +11,7 @@
 > the current number. This ledger was built by reading that list, not by reassembling prose. **If the two
 > ever disagree, the source is right and this file is wrong.**
 
-**Current: DataVersion 13, protocol 24.**
+**Current: DataVersion 13, protocol 26.**
 
 ---
 
@@ -44,6 +44,8 @@ One row per bump. "Packets added" is the exact set appended to `RegistrationOrde
 | 22 | — | 33 | *(none)* | Field/semantic change only |
 | 23 | v0.4.26 | 33 | `PlayerRosterRequestPacket`, `PlayerRosterPacket`, `PlayerGuidesRequestPacket`, `PlayerGuidesPacket` | The **Players dialog** (read-only) |
 | 24 | v0.4.31 | 34 | `PlayerPolicyEditPacket`, `PlayerJailPacket` | The Players dialog **became editable**. Jail is a separate, confirmed packet — not folded into the policy edit |
+| 25 | v0.4.44 | 39 | *(none)* | **`VoxelCapWarningPacket` gained `CapKind`** (`[ProtoMember(4)]`), so the HUD can name WHICH of the four caps refused an edit instead of saying "over cap". Field append; an older server leaves it 0 and the client shows the old wording |
+| 26 | v0.4.46 | 39 | *(none)* | **`VoxelCapKind` gained `GuideCount = 5`** — the guide-COUNT caps reach the HUD now. Enum append, but the *meaning set* of a field clients read grew, so the number moved |
 
 **Rows marked *(none)*** bumped the protocol without appending a packet — a field was added to an existing
 packet, or a meaning changed. The version still moved because both sides must agree.
@@ -85,6 +87,7 @@ far easier to do by accident because the enum looks like ordinary code.
 |---|---|---|
 | `LayoutAdminSetting` | `LayoutAdminConfigRequestPacket.Setting` | Slots 6 and 7 retired but declared — see above |
 | `GuideOpStatus` | `GuidePlacementRejectedPacket.Reason` | **Append only.** `RejectedEmpty` was appended last at v0.4.37 |
+| `VoxelCapKind` | `VoxelCapWarningPacket.CapKind` | **Append only.** `GuideCount` appended last at v0.4.46 (protocol 26). ⚠️ **This one IS read by the client**, unlike `GuideOpStatus` below — `GuideHud` switches on it — so an insertion would silently re-label every value after it. `0` is `Unspecified` on purpose: it is what a pre-25 server sends AND what the client normalises any unrecognised value to, so both collapse to the old generic wording |
 
 ⚠️ **Today's client ignores `GuidePlacementRejectedPacket.Reason` entirely** — it fires a parameterless event
 and never reads the int. That is *why* appending to `GuideOpStatus` is safe without a protocol bump. **It is

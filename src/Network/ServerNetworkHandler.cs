@@ -857,7 +857,7 @@ namespace Layout.Network
 
             // ONE PUSH AT A TIME. MaxGuidesPerPush bounds a single packet at 100 and nothing bounded the
             // PACKETS, so an unbounded stream of them was accepted — each one running claim validation,
-            // voxel counting and (before BatchPersist below) a full registry save per guide.
+            // voxel counting and — before saves were deferred — a full registry save per guide.
             //
             // ⚠️ Deliberately a cooldown and NOT "require an outstanding server request", which is what the
             // review proposed. `ClientGuidePushPacket` is legitimately sent unprompted by the settings
@@ -878,9 +878,10 @@ namespace Layout.Network
             int rejected = Math.Max(0, incoming.Length - MaxGuidesPerPush);
             int count = Math.Min(incoming.Length, MaxGuidesPerPush);
 
-            // ONE SAVE for the whole batch instead of one per accepted guide. Persist() re-serialises the
-            // entire world's guide registry; publishing 100 guides used to write it 100 times (A14.8).
-            using IDisposable batched = _guides.BatchPersist();
+            // ONE SAVE for the whole batch instead of one per accepted guide (A14.8): publishing 100
+            // guides used to re-serialise the entire world's registry 100 times. This needed an explicit
+            // BatchPersist scope until mutations stopped writing at all — GuideManager.MarkDirty now
+            // coalesces every save on every path, so the batch is handled without saying anything here.
 
             for (int i = 0; i < count; i++)
             {
@@ -1063,7 +1064,7 @@ namespace Layout.Network
                 case GuideOpStatus.RejectedOverGuideCount:
                     // Per-player or world-wide guide-count cap (server config). Nothing was built; leave the
                     // draft so the player can dispel an old guide and complete this one afterwards.
-                    fromPlayer.SendIngameError("layout-guidecountcap", GuideCountCapText(result));
+                    SendGuideCountRefusal(fromPlayer, result);
                     break;
 
                 case GuideOpStatus.RejectedClaimAccess:
@@ -1389,7 +1390,7 @@ namespace Layout.Network
                     break;
 
                 case GuideOpStatus.RejectedOverGuideCount:
-                    player.SendIngameError("layout-guidecountcap", GuideCountCapText(result));
+                    SendGuideCountRefusal(player, result);
                     break;
 
                 case GuideOpStatus.RejectedClaimAccess:
@@ -2964,7 +2965,7 @@ namespace Layout.Network
                             break;
 
                         case GuideOpStatus.RejectedOverGuideCount:
-                            fromPlayer.SendIngameError("layout-guidecountcap",
+                            SendGuideCountRefusal(fromPlayer, blockedResult,
                                 "Can't restore that guide - the guide limit ("
                                 + blockedResult.VoxelCount.ToString("N0") + " of "
                                 + blockedResult.CapLimit.ToString("N0") + ") is reached.");
@@ -3436,18 +3437,24 @@ namespace Layout.Network
             foreach (GuideData g in _guides.AllGuides.Values)
                 Remember(g?.CreatorUid, g?.CreatorName);
 
+            // ONE PASS for everyone's guide count and voxel total. Asking per row instead walked the whole
+            // registry twice per player, so opening this dialog cost (players × guides × 2) — a hitch that
+            // grows with the product of two things a busy server has plenty of.
+            Dictionary<string, (int Guides, long Voxels)> tally = _guides.TallyByCreator();
+
             var rows = new List<PlayerRosterEntryDto>(names.Count);
             foreach (var pair in names)
             {
                 string uid = pair.Key;
+                tally.TryGetValue(uid, out (int Guides, long Voxels) owned);
                 rows.Add(new PlayerRosterEntryDto
                 {
                     Uid = uid,
                     Name = pair.Value,
                     Online = online.Contains(uid),
                     Jailed = _policies.IsJailed(uid),
-                    GuideCount = _guides.CountGuidesBy(uid),
-                    VoxelTotal = _guides.VoxelCountBy(uid),
+                    GuideCount = owned.Guides,
+                    VoxelTotal = owned.Voxels,
                     VoxelCapOverride = _policies.VoxelCapOverride(uid),
                     TotalVoxelCapOverride = _policies.PlayerTotalVoxelCapOverride(uid),
                     GuideLimitOverride = _policies.GuideLimitOverride(uid),
@@ -3530,30 +3537,61 @@ namespace Layout.Network
         {
             if (player == null) return;
 
-            (string key, string text) = CapRefusalMessage(player, voxelCount, capLimit);
+            (string key, string text, VoxelCapKind kind) = CapRefusalMessage(player, voxelCount, capLimit);
             if (!throttle || !CapRefusalThrottled(player.PlayerUID, text))
                 player.SendIngameError(key, text);
 
-            _channel.SendPacket(new VoxelCapWarningPacket(guideId, voxelCount, capLimit), player);
+            _channel.SendPacket(new VoxelCapWarningPacket(guideId, voxelCount, capLimit, kind), player);
+        }
+
+        /// <summary>
+        /// The guide-COUNT refusal, which is the same event to the player as a voxel one and belongs on the
+        /// same HUD row.
+        /// </summary>
+        /// <remarks>
+        /// The chat error existed since the count caps did; the PACKET did not, so for three call sites the
+        /// HUD's cap row sat unchanged while chat explained the refusal. Reported in play 2026-08-01.
+        /// Deliberately NOT routed through <see cref="SendCapRefusal"/>: that method's whole job is working
+        /// out WHICH voxel cap fired by matching limit values, and a guide count is not one of them.
+        /// </remarks>
+        /// <param name="text">
+        /// Overrides the standard wording. The undo/redo path says "can't RESTORE that guide", which is a
+        /// different situation to being refused a new one and should not be flattened into the same
+        /// sentence — but it is the same refusal as far as the HUD is concerned.
+        /// </param>
+        private void SendGuideCountRefusal(
+            IServerPlayer player, GuideOperationResult result, string text = null)
+        {
+            if (player == null) return;
+            player.SendIngameError("layout-guidecountcap", text ?? GuideCountCapText(result));
+            _channel.SendPacket(
+                new VoxelCapWarningPacket(
+                    result.Guide?.Id ?? Guid.Empty, result.VoxelCount, result.CapLimit,
+                    VoxelCapKind.GuideCount),
+                player);
         }
 
         // Which of the four caps was it? Matched by VALUE against the caps in force for this player,
         // because the result only reports the number it hit. Anything unmatched is the world total.
-        private (string key, string text) CapRefusalMessage(
+        //
+        // THE KIND COMES FROM HERE and nowhere else (protocol 25). This cascade is the only place that
+        // can tell the four apart, so the HUD is told what it decided rather than deciding again — a
+        // second copy of this matching would be free to disagree with the chat message.
+        private (string key, string text, VoxelCapKind kind) CapRefusalMessage(
             IServerPlayer player, int voxelCount, int capLimit)
         {
             if (capLimit >= GuideManager.HardVoxelCeiling)
-                return ("layout-toolarge", TooLargeText(voxelCount));
+                return ("layout-toolarge", TooLargeText(voxelCount), VoxelCapKind.HardCeiling);
 
             int perGuide = _policies.EffectiveVoxelCap(player.PlayerUID, _guides.PerGuideVoxelCap);
             if (perGuide > 0 && capLimit == perGuide)
-                return ("layout-overcap", PerGuideCapText(capLimit));
+                return ("layout-overcap", PerGuideCapText(capLimit), VoxelCapKind.PerGuide);
 
             int perPlayer = _guides.EffectivePerPlayerTotalVoxelCap(player.PlayerUID);
             if (perPlayer > 0 && capLimit == perPlayer)
-                return ("layout-playerovercap", PlayerCapText(capLimit));
+                return ("layout-playerovercap", PlayerCapText(capLimit), VoxelCapKind.PerPlayer);
 
-            return ("layout-overcap", WorldCapText(voxelCount, capLimit));
+            return ("layout-overcap", WorldCapText(voxelCount, capLimit), VoxelCapKind.World);
         }
 
         // True = refuse this push, the player's last one was moments ago. Records the attempt only when it

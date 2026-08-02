@@ -24,6 +24,9 @@ of that here; it goes stale the moment it is copied.
 | accepting ANY value from a client OR a file | `dev/GOTCHAS.md` **G31** — `Guide/GuideBounds.cs` is the one range check; call it — and **G32**, client conventions are not server invariants |
 | adding a shape, or touching a voxel counter | `dev/GOTCHAS.md` **G31** (the scan guards bound a shape's SIZE, never its POSITION) and **G34** (a shape that fails its frame check reports ZERO, and zero passes every cap) |
 | adding a rate limit, throttle or drop rule | `dev/GOTCHAS.md` **G35** — never drop the packet that RELEASES a resource |
+| saving state from anywhere that is not a lifecycle point | `dev/GOTCHAS.md` **G39** — `Persist()` re-serialises the WHOLE registry; mutations call `MarkDirty()`, and deferring a write obliges every drop path to flush |
+| short-circuiting, caching or pre-filtering ANY access/claim/privilege check | `dev/GOTCHAS.md` **G40** and **R12** — `TestAccess` has seven denial reasons and only one is land claims; a filter must be certain about the whole check |
+| calling `GetPointAt` or any shape accessor more than once | `dev/GOTCHAS.md` **G41** — it may rebuild the entire geometry per call; hoist it, and keep the parameter types identical |
 | writing a debounce or "already queued" guard | `dev/GOTCHAS.md` **G36** — the pending flag must never outlive its callback — and **R11**, which is what happened when it did |
 | caching any world read that can FAIL | `dev/GOTCHAS.md` **G37** — "cannot see" is not "empty", and a chunk load is not a block change |
 | validating a value against a pinned enum | `dev/GOTCHAS.md` **G38** — never bound it with a hand-written member name; config is rewritten on load, so a wrong bound DESTROYS the setting |
@@ -98,6 +101,10 @@ personal paths, no personal usernames, in any tracked file. **Commit and push ON
   says "update the documents" or "finalize the session".
   **Exception:** if the conversation is nearing a context trim while docs are stale, **warn the human first**
   so nothing is lost unrecorded.
+  ⚠️ **That warning belongs at the END of a session or before a context trim — NOT after every revision.**
+  Track the doc debt silently and present it once, complete, when the moment comes. *(Human-set 2026-08-01,
+  after three consecutive iterations ended with a stale-docs note: "Any reminders more frequent than that
+  become too frequent, though I appreciate the notice.")*
 
 ### When the human says "update the documents"
 

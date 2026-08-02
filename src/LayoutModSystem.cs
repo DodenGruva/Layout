@@ -96,6 +96,24 @@ namespace Layout
         private float _modeDetectionElapsedSeconds;
         private const float ModeDetectionGraceSeconds = 3f;
 
+        /// <summary>
+        /// How often PRIVATE (F4) guides are written out when something has changed. **Client-side only.**
+        /// </summary>
+        /// <remarks>
+        /// The server has no equivalent and deliberately runs no timer: it flushes on the world's own save
+        /// (see StartServerSide), which is the frequency the human asked for — guide data should be exactly
+        /// as durable as the world it describes, no more.
+        ///
+        /// ⚠️ THE CLIENT CANNOT DO THAT, because there is no client-side world-save event to hook — and in
+        /// client-only mode against a REMOTE server there is no local server whose save could stand in.
+        /// A timer is the only option here, so it is set long rather than eager: every ordinary way of
+        /// ending a session (leaving the world, quitting, the server withdrawing client-only permission)
+        /// already flushes explicitly, so this only covers a hard crash.
+        /// </remarks>
+        private const int ClientPersistFlushIntervalMs = 60_000;
+
+        private long _clientPersistFlushTickId;
+
         // ==========================================================================================
         //  Common (both sides)
         // ==========================================================================================
@@ -158,6 +176,12 @@ namespace Layout
             sapi.Event.SaveGameLoaded += Guides.Load;
             sapi.Event.GameWorldSave += AdminPolicies.Persist;
             sapi.Event.GameWorldSave += Guides.Persist;
+
+            // NO PERIODIC FLUSH ON THE SERVER, deliberately (human-decided 2026-08-01). GameWorldSave above
+            // fires on the world's own autosave, and guide data is worth exactly what the rest of the world
+            // is worth: if a crash costs the world five minutes of blocks, costing it the same five minutes
+            // of guides is correct and consistent. A separate timer would only make Layout's data MORE
+            // durable than the world it describes, at a cost paid forever. Shutdown flushes in Dispose.
 
             Locks = new GuideLockManager();
             Undo = new UndoManager(Guides, ServerConfig.UndoHistoryDepth, Locks);
@@ -319,6 +343,13 @@ namespace Layout
 
             capi.Input.RegisterHotKey("layoutredo", "Layout: redo", GlKeys.Y, HotkeyType.CharacterControls, ctrlPressed: true);
             capi.Input.SetHotKeyHandler("layoutredo", _ => Controller.OnRedoHotkey());
+
+            // The client half of the persist flush — private (F4) guides write to a real file, so this is
+            // what stops a drag doing three filesystem operations ten times a second. Registered for the
+            // mod's whole client life rather than per authority: LocalGuideAuthority is replaced by plain
+            // assignment on every world change, so a listener owned by it would outlive it.
+            _clientPersistFlushTickId = capi.Event.RegisterGameTickListener(
+                _ => ClientNet?.FlushLocalGuides(), ClientPersistFlushIntervalMs);
 
             capi.Logger.Notification("[Layout] Client started. Tool defaults: scale {0}, {1}, {2}.",
                 Draft.Scale, Draft.Projection, Draft.Filled ? "filled" : "hollow");
@@ -1078,6 +1109,16 @@ namespace Layout
             {
                 SaveClientConfig();
 
+                // LAST CHANCE for private guides. Ordinarily EndWorldSession has already flushed on the
+                // way out of a world; this covers a shutdown that never went through it.
+                try { ClientNet?.FlushLocalGuides(); }
+                catch (Exception e) { _capi.Logger.Error("[Layout] Final private-guide save failed: {0}", e); }
+                if (_clientPersistFlushTickId != 0)
+                {
+                    _capi.Event.UnregisterGameTickListener(_clientPersistFlushTickId);
+                    _clientPersistFlushTickId = 0;
+                }
+
                 StopModeDetection();
                 _capi.Event.LevelFinalize -= OnLevelFinalize;
                 _capi.Event.LeftWorld -= OnLeftWorld;
@@ -1112,6 +1153,11 @@ namespace Layout
 
             if (_sapi != null)
             {
+                // LAST CHANCE for public guides. GameWorldSave normally runs first on a clean shutdown and
+                // leaves nothing dirty, in which case this returns immediately. It matters when it does not.
+                try { Guides?.Persist(); }
+                catch (Exception e) { _sapi.Logger.Error("[Layout] Final guide save failed: {0}", e); }
+
                 try { ServerNet?.Dispose(); }
                 catch (Exception e) { _sapi.Logger.Warning("[Layout] Server network dispose: {0}", e.Message); }
                 ServerNet = null;

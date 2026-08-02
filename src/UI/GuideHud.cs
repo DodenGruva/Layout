@@ -84,9 +84,9 @@ namespace Layout.UI
 
         // v0.4.34: the cap row briefly reports a REFUSAL instead of the percentage gauge. The gauge is
         // passive — it shows how full the per-guide cap is and reacts to nothing — so a refused edit used
-        // to leave it completely unchanged. The warning packet cannot say WHICH cap fired (it carries a
-        // count and a limit only), so this stays deliberately generic; the server's chat line names it.
-        // The 150 ms tick clears the flash on its own.
+        // to leave it completely unchanged. The 150 ms tick clears the flash on its own.
+        // The packet now names WHICH cap fired (protocol 25); before that it carried a count and a limit
+        // only and this row could not say more than "over cap". An older server still says exactly that.
         // ⚠️ 0 means "never refused", NOT long.MinValue. Seeding this with long.MinValue looked like the
         // obvious "infinitely long ago" and was a bug: `ElapsedMilliseconds - long.MinValue` OVERFLOWS
         // long and wraps to a large NEGATIVE number, which is less than the window, so the row read
@@ -94,6 +94,7 @@ namespace Layout.UI
         // 0.4.34–0.4.38. ElapsedMilliseconds only ever counts up from 0, so 0 is a safe "never".
         private const long CapRefusalFlashMilliseconds = 2500;
         private long _capRefusedAtMs;
+        private VoxelCapKind _capRefusedKind;
 
         // The HUD's copy of the Current Shape chip (0.1.16): which "-current" glyph is composed right
         // now, or null when hidden (non-Create modes). A change recomposes the HUD (rare — shape picks).
@@ -646,10 +647,12 @@ namespace Layout.UI
 
         // Fires for public guides (server) and private ones (LocalGuideAuthority) alike. The guide id and
         // the numbers are deliberately unused: a placement refusal names a guide that does not exist yet,
-        // and the cap row is about the player's current context either way.
-        private void OnVoxelCapWarning(Guid guideId, int currentCount, int cap)
+        // and the cap row is about the player's current context either way. The KIND is used — it is the
+        // one thing here that the row cannot work out for itself.
+        private void OnVoxelCapWarning(Guid guideId, int currentCount, int cap, VoxelCapKind capKind)
         {
             _capRefusedAtMs = capi.World.ElapsedMilliseconds;
+            _capRefusedKind = capKind;
             RefreshText();
         }
 
@@ -682,16 +685,28 @@ namespace Layout.UI
         private static string TotalVoxelsText(int count) =>
             Math.Max(0, count).ToString("N0");
 
-        // The cap row: normally the passive gauge, but a recent refusal takes the line over. Generic
-        // wording on purpose — the packet does not say which cap fired, and an honest "refused" beats
-        // the silence this replaces.
+        // The cap row: normally the passive gauge, but a recent refusal takes the line over.
         private string CapRowText(int count, int cap)
         {
             if (_capRefusedAtMs > 0
                 && capi.World.ElapsedMilliseconds - _capRefusedAtMs < CapRefusalFlashMilliseconds)
-                return "REFUSED — over cap";
+                return CapRefusalText(_capRefusedKind);
             return CapText(count, cap);
         }
+
+        // ⚠️ THIS ROW CANNOT WRAP AND CANNOT GROW (GOTCHAS G13). Its box is one line of
+        // panelW - capLabelW - 4 px, so every arm here is kept to roughly the length of the generic
+        // wording it replaces. A longer phrase is not "slightly tight" — it is clipped.
+        // Unspecified is the pre-25 server AND anything unrecognised, and says what shipped before.
+        private static string CapRefusalText(VoxelCapKind kind) => kind switch
+        {
+            VoxelCapKind.PerGuide    => "REFUSED — Guide Cap",
+            VoxelCapKind.PerPlayer   => "REFUSED — Your Total",
+            VoxelCapKind.World       => "REFUSED — World Full",
+            VoxelCapKind.HardCeiling => "REFUSED — Too Large",
+            VoxelCapKind.GuideCount  => "REFUSED — Too Many",
+            _                        => "REFUSED — Over Cap"
+        };
 
         private static string CapText(int count, int cap)
         {

@@ -1145,10 +1145,14 @@ namespace Layout.Client
             // the authority recount every historical size and can leave a costly packet backlog behind a
             // cancel. Only FinishRelease sends its final pose; cancellation sends no geometry at all.
             if (g.CachedVoxelCount > PreviewFullResVoxelThreshold) return;
-            int sendInterval = g.CachedVoxelCount > 20_000 ? 500
-                : g.CachedVoxelCount > 8_000 ? 250
-                : MoveSendIntervalMs;
-            if (now - _grab.LastSendMs >= sendInterval &&
+
+            // ⚠️ NO TIERED INTERVAL HERE, deliberately. Two slower tiers used to be written just below this
+            // line — 500 ms over 20,000 voxels, 250 ms over 8,000 — and BOTH WERE UNREACHABLE, because the
+            // return above already sends nothing at all past 8,000 (PreviewFullResVoxelThreshold). Every
+            // guide that reaches this line is under that, so the interval was always MoveSendIntervalMs and
+            // the tiers were describing behaviour the code did not have. If graduated throttling is ever
+            // wanted, it has to go ABOVE the early return, not below it.
+            if (now - _grab.LastSendMs >= MoveSendIntervalMs &&
                 (_grab.LastSentPos == null || !NearlySame(_grab.LastSentPos, target)))
             {
                 _net.SendMovePoint(_grab.GuideId, _grab.PointIndex, target);

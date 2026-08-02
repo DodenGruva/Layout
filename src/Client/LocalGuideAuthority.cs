@@ -132,6 +132,23 @@ namespace Layout.Client
                     storagePath, _guides.AllGuides.Count);
         }
 
+        /// <summary>
+        /// Writes private guides out if anything has changed. Driven by the client's flush tick, and called
+        /// on every path that DROPS this authority — leaving a world, a server withdrawing client-only
+        /// permission, or shutdown.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ THE DROP PATHS ARE NOT OPTIONAL. Mutations only mark the registry dirty, and this object is
+        /// discarded by assignment (<c>_local = null</c>) with no disposal, so an unflushed drop silently
+        /// loses every private edit since the last tick. It was safe to drop this way only while every
+        /// mutation wrote to disk immediately — which is the whole thing that changed.
+        ///
+        /// The write itself is three filesystem operations (write temp, copy primary to backup, move temp
+        /// over primary), measured at 1.3–2.9 ms. That is why it no longer runs ten times a second during
+        /// a drag.
+        /// </remarks>
+        public void FlushPersist() => _guides.Persist();
+
         public GuideBulkSyncPacket CreateBulkSyncPacket()
         {
             GuideDataDto[] guides = _guides.AllGuides.Values
@@ -795,7 +812,10 @@ namespace Layout.Client
                 // non-renderable mirror around until another operation happens to refresh it.
                 if (result.Guide != null) ApplyFull(result.Guide);
                 Guid warningId = result.Guide?.Id ?? id;
-                _applyCapWarning(new VoxelCapWarningPacket(warningId, result.VoxelCount, result.CapLimit));
+                // Always HardCeiling here: private guides are deliberately NOT capped (GOTCHAS R1), so the
+                // render ceiling is the only limit a client-only guide can ever hit. Matches the error below.
+                _applyCapWarning(new VoxelCapWarningPacket(
+                    warningId, result.VoxelCount, result.CapLimit, VoxelCapKind.HardCeiling));
                 Error("layout-toolarge",
                     $"That guide is too large to render ({result.VoxelCount:n0} voxels). Make it smaller or use a coarser scale.");
             }

@@ -46,9 +46,17 @@ the `is float` idiom.
 **Trigger:** before touching guide update/rebuild paths, or when a guide renders at a pose it no longer has.
 **Trap:** the early return never touches the scaffold mesh, leaving a **stale wireframe at the guide's old
 pose** while the shell streams at the new one. It looks like a renderer bug; it is a control-flow one.
-**Do:** know that this is **fixed for the Move path only** — a held guide goes straight to the rebuild.
-**The general case is still live.** If you see a ghost at an old pose, this is your first suspect.
-**Found:** Session 30. Detail: `dev/sessions/SESSION_30.md` §5 and §7.
+**Do:** know that **this is now closed, and the entry is kept for the pattern, not the bug.** Every early
+exit in `OnGuideAddedOrUpdated` is either **pose-matched** — it skips the rebuild only when
+`RenderFingerprint` proves the geometry identical, control-point positions included — or ends in
+`RebuildGuide`. The load-bearing guard is `mesh.ScaffoldFingerprint`: it is written in exactly one place,
+beside `RenderedWireframe = true`, and **fails closed** — when it cannot prove the wireframe on screen
+depicts the current guide it declines and sends the caller down `RebuildGuide`.
+⚠️ **The wording here read "fixed for the Move path only — the general case is still live" until Session
+39**, three sessions after the general case was actually closed. **An entry that says "still live" when it
+is not sends the next session hunting a fixed bug** — R7's failure mode running the other way. Confirmed by
+tracing every early return, not by tracing one.
+**Found:** Session 30. **Closed:** verified Session 39. Detail: `dev/sessions/SESSION_30.md` §5 and §7.
 
 ### G5 — Rotate and mirror do NOT preserve the voxel count. Only translation may reuse it.
 **Trigger:** before caching, reusing or trusting a guide's voxel count across a transform.
@@ -507,6 +515,82 @@ path is worth a check that cannot go stale. A repo-wide sweep after the fix foun
 **Found:** Session 38, by `TODO` A13's comment sweep — the bug was under a comment that listed the same
 enum's values incompletely, which is the same drift wearing a different hat. `SESSION_38.md` §5.
 
+### G39 — A save that re-serialises EVERYTHING must never run per mutation.
+**Trigger:** before calling `GuideManager.Persist` from anywhere that is not a lifecycle point, and before
+writing any "save the state" call inside an edit path.
+**Trap:** `Persist()` serialises the **whole guide registry**, so its cost tracks **how much has ever been
+built**, not what just changed. Called per mutation it looked fine forever, because a reshape drag sends
+about ten updates a second and a test world holds a handful of guides. Measured at ~4 ms per megabyte:
+**18 ms per drag update at 1,000 guides — a whole 20 ms server tick — and 55% of the server's entire main
+thread at 3,000.** Invisible on the machine it was written on; crippling on a world two months old.
+**Do:** mutations call `MarkDirty()`; the write happens at the world save, and at shutdown. **Never add a
+periodic timer on the server** — human-set, `SESSION_39.md` §1: guide data is worth exactly what the world
+it describes is worth, and a separate cadence only makes it more durable at a permanent cost.
+⚠️ **AND THE SECOND HALF, which is the easier one to miss.** Deferring the write creates an obligation on
+**every path that DROPS the owner**. `LocalGuideAuthority` is discarded by plain assignment (`_local = null`)
+with no disposal — safe only while every mutation wrote immediately. `EndWorldSession`, `RemoveLocalOverlay`
+and client shutdown all flush first now. A loader owes a write too: migration, re-stamping and backup
+recovery all changed state that used to reach disk by accident of the unconditional write.
+**Found:** Session 39, `TODO` A10.2. Fixed v0.4.45–v0.4.46. The remaining cost is not the *format* — it is
+that the one remaining flush **serialises on the main thread**; that is `TODO` **A18** and
+`dev/plans/PLAN_BACKGROUND_SAVE.md`. ⚠️ **Do not reach for per-guide storage** — see **G42**. Detail:
+`SESSION_39.md` §1 and §9.
+
+### G40 — A cheap filter in front of a permission check must be certain about the WHOLE check.
+**Trigger:** before short-circuiting, caching or pre-filtering **any** access, claim or privilege decision.
+**Trap:** you verify the half you can see and assume the half you cannot. A bounding-box pre-filter for the
+claim check tested `ILandClaimAPI.All` and skipped the exact check when nothing intersected — but
+`TestAccess` answers with **seven** responses and only one comes from that list:
+`Granted` · **`LandClaimed`** · `NoPrivilege` · `InSpectatorMode` · `InGuestMode` · `PlayerDead` ·
+**`DeniedByMod`**. So *"no claim overlaps"* never meant *"permission would be granted"*: a player without
+the build privilege, a dead player, or land protected by **another mod** would all have been waved through.
+**The geometry had been verified across 5,400 configurations. The premise had never been checked at all.**
+**Do:** enumerate every way the real check can say no, in the API docs, before writing anything in front of
+it. If even one reason is unknowable from outside — `DeniedByMod` is, by construction — **there is no sound
+filter**, and correctness-over-performance decides it.
+**Also:** a safety bound that passes with **zero margin** has not really passed. The containment test's
+first run put voxels exactly on the box's edge, which only holds if the other system treats that edge as
+inside. Slack goes on last, after every union.
+**Found:** Session 39, shipped v0.4.48 and withdrawn v0.4.49 — see **R12**. Detail: `SESSION_39.md` §3.
+
+### G41 — A shape accessor may rebuild its whole geometry on every call.
+**Trigger:** before calling `IGuideShape.GetPointAt`, or any similar-looking accessor, more than once in a
+row — above all inside a loop.
+**Trap:** it reads like a cheap lookup and is not. `ArchShape.GetPointAt` calls `BuildSpline()`, which
+allocates two Lists and a `CatmullRomSpline` that deep-copies its points. `SampleBodyCells`'s filled path
+runs up to **8,193** rules and called it once per rule, so counting one filled arch rebuilt the same
+constant spline thousands of times — **1.55 ms and 3.2 MB for a small arch, ten times a second while
+dragging**.
+**Do:** hoist the geometry out of the loop and evaluate against it. ⚠️ **Keep the parameter types and
+clamping identical when you do** — `RulePointAt` still takes a `float` because evaluating the caller's
+double directly shifts sampled positions in the last bits, and this count feeds the cap check that
+`IGuideShape.GetVoxelCount` requires to agree exactly with what renders.
+**Verify by comparing builds, not by argument:** the pre-fix DLL was extracted from the shipped zip and run
+beside the new one over 720 configurations across all fifteen shapes. Every count identical.
+**Found:** Session 39, `TODO` A10.2. Fixed v0.4.47. Detail: `SESSION_39.md` §2.
+
+### G42 — The world save is ONE blob, and `StoreData` can neither enumerate nor delete.
+**Trigger:** before designing anything around how guides (or any mod data) are stored in the world save —
+above all any scheme with more than one key.
+**Trap:** `ISaveGame` looks like a key-value store and is not one at the storage layer. Established
+2026-08-01 by reading a real `.vcdbs` and the API:
+- The savegame is SQLite, and **all mod data lives in one row of one table** —
+  `CREATE TABLE gamedata (savegameid integer PRIMARY KEY, data BLOB)`. Layout's keys were found
+  **uncompressed** inside that blob, so `StoreData` is a dictionary serialised into a single blob.
+- **The API is only `GetData(key)` and `StoreData(key, bytes)`.** No key enumeration. **No delete.**
+
+**So:** ⚠️ **per-guide keys are not viable** — no enumeration means maintaining an index, and no delete means
+a dispelled guide's key can only be blanked, never removed, so dead keys accumulate in the world save
+forever. ⚠️ **Sharding into buckets buys nothing** — every bucket sits in the same blob and the whole row is
+rewritten regardless. **There is no in-save route to finer write granularity at all**; the only way to get it
+is to leave the world save, which costs rollback consistency (a restored world would no longer bring its
+matching guides).
+**Do:** treat the save as one blob that is rewritten whole. Optimise **when** and **on which thread** it is
+built, not how it is keyed. `dev/plans/PLAN_BACKGROUND_SAVE.md`.
+**Found:** Session 39 — **after** a whole plan (`TODO` A17, per-guide "index cards") had been written and
+agreed on the assumption that the interface implied the implementation. It did not. The same session had
+already shipped and withdrawn the claim pre-filter for the identical reason (**G40**, **R12**).
+
 ---
 
 ## Reversals and disproved claims
@@ -637,6 +721,36 @@ third of a second of latency on one uncommon interleaving — **an acceptable pr
 attempt at this.** If it is ever revisited, the scheme must reschedule the remainder rather than return.
 
 **Detail:** `SESSION_38.md` §3.
+
+### R12 — A bounding-box pre-filter in front of the claim check. Applied v0.4.48, reverted v0.4.49.
+**Do not skip `GuideClaimAccessValidator`'s exact footprint check on the strength of a bounding box tested
+against `ILandClaimAPI.All`.** It has been tried, it shipped, and it was a permissions hole.
+
+The reasoning that was **right**, and still is: `SESSION_23.md` §3 rejected bounding-box validation because
+*"bounding-box validation would wrongly reject hollow guides that merely surround one"* — a dome placed
+around a claimed block has it inside the box while no voxel touches it. **That rejects the box as the
+ANSWER.** As a **negative filter** the objection does not apply: a box that intersects a claim falls through
+to the exact check, so the dome case is unaffected, and only guides nowhere near a claim take the shortcut.
+That distinction is sound and should not be re-litigated.
+
+The geometry was **right too, and verified**: 5,400 configurations — every shape, six sizes, five scales,
+filled and hollow, three orientations, both projections — every voxel inside the box with four blocks to
+spare, after a first run that passed with zero margin was tightened. Measured 1,800× cheaper than the work
+it replaced, still ahead at 5,000 claims.
+
+The reasoning that was **wrong**: that land claims are what `TestAccess` decides on. They are one of
+**seven** reasons it can refuse, and `DeniedByMod` — any other mod, any position — cannot be enumerated from
+outside at all. A player lacking the build privilege, a dead player, or another mod's protected area would
+every one have been permitted. **The half that looked hard was proven exhaustively; the half that looked
+obvious was never checked.** See **G40**.
+
+**If it is ever revisited:** a single `TestAccess` probe settles the player-global reasons (privilege,
+spectator, guest, dead) cheaply, and the box handles `LandClaimed` — but **`DeniedByMod` needs an answer
+first**, and there may not be one. Do not start from the box; `TryConservativeFootprintRect` is retained,
+unwired, precisely so that the geometry is not the reason to start.
+
+**Detail:** `SESSION_39.md` §3. ⚠️ Related but separate: claim protection **cannot be tested from a
+singleplayer world** — the host holds `controlserver` and Layout exempts it deliberately (§4).
 
 ---
 

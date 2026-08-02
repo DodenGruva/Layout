@@ -9,9 +9,9 @@
 >
 > Supersedes `HANDOFF.md` and `dev/PROJECT_STATUS.md`, both frozen in `dev/archive/superseded-2026-07-30/`.
 
-**Regenerated at:** v0.4.43, 2026-08-01 (Session 38 — `TODO` **A10.1 and A13 both closed**: the GUI layer
-reviewed end to end, the doc-comment sweep finished, and a regression shipped and reverted inside the
-session).
+**Regenerated at:** v0.4.49, 2026-08-01 (Session 39 — `TODO` **A10.2 closed**, and with it the whole review
+backlog: the non-render performance review, six fixes, five measured non-fixes, and **one fix shipped and
+withdrawn the same session**).
 
 ---
 
@@ -26,18 +26,23 @@ guides on servers without Layout, and alongside public guides where permitted. T
 
 | | |
 |---|---|
-| **Current build** | **v0.4.43** on `beta` |
-| **Last `main` release** | **v0.4.33** — `main` and `beta` were level on 2026-07-31; Sessions 37–38's ten revisions are on `beta` only |
+| **Current build** | **v0.4.49** on `beta`. ⚠️ **v0.4.48 must not be used** — it shipped a claim pre-filter that was a permissions hole; v0.4.49 reverted it (`GOTCHAS` **R12**) |
+| **Last `main` release** | **v0.4.33** — `main` and `beta` were level on 2026-07-31; Sessions 37–39's sixteen revisions are on `beta` only |
 | **Published at** | `github.com/DodenGruva/Layout` — **the repo is public; no personal paths or usernames in tracked files** |
 | **Branches** | `main`, `beta`. `beta-shader` no longer exists — the shader work landed and is what the mod renders with (human-confirmed 2026-07-29) |
 
 **The human is not a programmer and does not read code.** They validate by *playing the mod* and describing
 what feels wrong in plain English, and they normally playtest **every revision as it ships**.
 
-**Playtest position.** v0.4.39 was played and passed, which cleared Session 37's six-revision backlog.
-v0.4.40 was played and is what surfaced both of this session's bug reports. **v0.4.41–v0.4.43 are in play
-now with no result reported yet** — stated by the human ("while I test"), not assumed. See §6 for what to
-look for in each.
+**Playtest position.** v0.4.42's chiselling highlights were **confirmed good** in play, and reload-after-edit
+was confirmed good around v0.4.45. v0.4.44 was played and is what surfaced the guide-count cap gap fixed in
+v0.4.46. **v0.4.47 and v0.4.49 are in play now with no result reported yet** — stated by the human, not
+assumed. See §6 for what to look for.
+
+⚠️ **Claim protection cannot be tested from a singleplayer world**, and this is the largest open verification
+item. The host player holds `controlserver`, and Layout **deliberately exempts** that privilege from claim
+validation in four places. Game mode is not privilege — switching to survival changes what *vanilla* allows,
+not what Layout checks. Verification needs a non-admin account on a dedicated server. `SESSION_39.md` §4.
 
 ### Threat model — settled 2026-07-31 (human-set)
 
@@ -59,7 +64,7 @@ client or a server with nobody attacking anything. All three sources are now val
 | | |
 |---|---|
 | **DataVersion** | **13** (12 → 13 in Session 33, the Rectangle/Box re-gesture) |
-| **Wire protocol** | **24** (23 → 24 in Session 34, the editable Players dialog) |
+| **Wire protocol** | **26** (24 → 25 → 26 in Session 39: `VoxelCapWarningPacket` gained `CapKind`, then `VoxelCapKind` gained `GuideCount`) |
 | **Source files** | **84** |
 | **Shape catalog** | **15 types / 21 picker tiles** |
 
@@ -84,10 +89,14 @@ cost-weighted rate budget set far above human input (~10 edits/second in play ag
 allowance). It **logs when it trips**. ⚠️ Release and cancel-grab are deliberately **exempt** — dropping the
 packet that frees a lock would strand the guide. `GOTCHAS` **G35**.
 
-**`VoxelCapWarningPacket` says how much and how many, never WHICH CAP.** That is why cap refusals are
-explained by a **server-side** chat message; the packet drives only a generic HUD flash. Adding the missing
-field is an append (G1) and a protocol bump — deferred, not rejected, and the chat message names the cap
-today.
+**`VoxelCapWarningPacket` now says WHICH CAP** (v0.4.44, protocol 25; `GuideCount` added v0.4.46, protocol
+26). The kind comes from the **same server-side cascade** that words the chat message, so the two cannot
+disagree — a second copy of that value-matching would be free to drift. ⚠️ **`VoxelCapKind` is read by the
+client** (`GuideHud` switches on it), unlike `GuideOpStatus`, so inserting a member would silently re-label
+every value after it. `Unspecified = 0` is deliberate: it is both what a pre-25 server sends and what the
+client normalises any unrecognised value to, and both fall back to the old generic wording. ⚠️ For
+`GuideCount` alone the packet's two numbers are **guides, not voxels** — tolerable only because the HUD uses
+the kind and ignores the numbers.
 
 **Legacy encodings are read IN PLACE, never migrated.** Two-point rectangles and three-point boxes reproduce
 to the voxel. Migration is not merely unnecessary but unsafe: **shapes are adopted on renderer worker
@@ -103,8 +112,20 @@ parseable file carrying an out-of-range coordinate is caught by `GuideBounds` in
 
 ## 3. What shipped recently
 
-Full detail in the session records; `dev/sessions/INDEX.md` indexes all 30.
+Full detail in the session records; `dev/sessions/INDEX.md` indexes all 31.
 
+- **Session 39 (v0.4.44–v0.4.49)** — **`TODO` A10.2 closed, and with it the review backlog.** The headline
+  defect: **`Persist()` re-serialised every guide in the world on every mutation**, and a reshape drag does
+  that about ten times a second — measured at ~4 ms/MB, so **18 ms per drag update at 1,000 guides against a
+  20 ms tick**, and 55% of the server main thread at 3,000. Saves are deferred and coalesced (**20× less
+  work**), with the human setting the server's cadence to the world's own save rather than a timer of
+  Layout's. Also: **arches rebuilt their spline up to 8,193 times per voxel count** (1.55 → 0.45 ms); the
+  Players roster was quadratic; **guide-count caps never reached the HUD**, found by the human in play.
+  ⚠️ **A claim pre-filter shipped in v0.4.48 and was withdrawn in v0.4.49** — its geometry was verified
+  across 5,400 configurations, but `TestAccess` has **seven** denial reasons and only one is land claims, so
+  a missing privilege or another mod's protection would have been waved through. `GOTCHAS` **R12**, **G40**.
+  New: **G39–G41**, **R12**; **G4 annotated closed**. Five costs were measured and deliberately not fixed;
+  persistence itself became `TODO` **A17**.
 - **Session 38 (v0.4.40–v0.4.43)** — **the two oldest open items closed.** `TODO` **A10.1**'s remaining half:
   `GuideToolGui`, `GuideToolController` and `GuidePlayersDialog` read end to end (~8,000 lines), with all six
   trap entries living there confirmed intact and four defects fixed — the Players list appearing empty after
@@ -141,11 +162,23 @@ Full detail in the session records; `dev/sessions/INDEX.md` indexes all 30.
 
 **`dev/TODO.md` is the punch-list — this is a pointer, not a copy.**
 
-**The review backlog is down to one item.** With A14 emptied in Session 37 and A10.1 and A13 both closed in
-Session 38, what remains is **A10.2 — a performance-focused review of the NON-RENDER code.** Nobody has
-looked. Session 28 measured and fixed the renderer; nothing equivalent has been done elsewhere. The two costs
-removed on that axis so far were both found incidentally rather than by searching, which is the argument for
-searching. **Start it after a clean playtest, not during one.**
+**THE REVIEW BACKLOG IS EMPTY.** A14 emptied in Session 37, A10.1 and A13 closed in Session 38, and
+**A10.2 closed in Session 39**. Nothing open is now a "nobody has looked at this" item — every remaining
+entry is work someone chose, a decision awaiting the human, or a claim awaiting a playtest.
+
+**`TODO` A18 — move guide serialisation off the main thread — is the largest open item.** **Editing is no
+longer the problem**: v0.4.45 stopped saving per mutation, so a drag at 3,000 guides went from ~57 ms per
+update to ~1 ms. What remains is that when the world saves, converting the registry to JSON runs **on the
+server's main thread** — 42 ms at 3,000 guides, 113 ms at 8,000, against a 20 ms tick — and it is there by
+accident rather than design. Measured 2026-08-01: **a deep copy costs 0.52 ms against 42 ms to serialise**,
+~80× cheaper, so the main thread can snapshot and a worker can do the rest. ⚠️ The snapshot is **mandatory**
+(`GuideData.ControlPoints` is the same list a live shape mutates) and ⚠️ **this is threading**, where the
+project has been burned (G29, G30). Plan and open questions: `dev/plans/PLAN_BACKGROUND_SAVE.md`. **Gated
+like A10.2 was: after a clean playtest, in a session about only this.**
+
+⚠️ **`TODO` A17 — per-guide "index cards" — was proposed, agreed and DISMISSED in Session 39.** The save
+layer cannot enumerate or delete keys, so it was never viable; see `GOTCHAS` **G42** before re-proposing
+anything of that shape. → `DONE.md`; original plan archived intact under `dev/archive/superseded-2026-08-01/`.
 
 **Four deliberate deferrals** (`TODO` **A15**) — each has a stated reason, so re-opening any is a decision
 rather than a discovery:
@@ -160,15 +193,17 @@ Items 2 and 3 are renderer work and gated behind `GOTCHAS` **G2**'s measured-bot
 
 Also open:
 
-- **`TODO` A16 — the occupancy re-probe covers a guide's ANCHOR, not its whole extent.** Open by
-  construction, recorded so it is not mistaken for a bug. A guide whose anchor chunk is resident while
-  terrain further along it is not will not defer, and that part stays uncoloured until a block change nearby
-  or `/layout built refresh`. Widening it means per-region attribution, deliberately not bundled into a bug
-  fix.
-- Naming the cap **in the HUD** still needs a field appended to `VoxelCapWarningPacket` — an append (G1) and
-  a protocol bump, so polish rather than a defect while the chat message names it.
+- **Five costs measured in Session 39 and deliberately NOT fixed** — flat filled shapes counting by
+  materialising their voxel list; the geometry walked twice per drag update (cap count + claim footprint);
+  3D volumes at large sizes (paid per action, not per drag); `VoxelCountBy`'s registry scan inside the cap
+  check; `BlockOccupancy`'s unbounded cache. **Each is a judgement that the fix costs more risk than the
+  gain is worth**, not an oversight. `SESSION_39.md` §6.
 - Flagged decisions awaiting review are indexed in `dev/TODO.md`. Session 37 added seven — every tunable
-  number it invented; Session 38 added two.
+  number it invented; Session 38 added two; **Session 39 added four**, including the long-standing **admin
+  bypass of claim validation**, surfaced and left unchanged.
+
+*(`TODO` **A16** — the anchor-only occupancy re-probe — **closed**: play showed the gap did not appear.
+A14.1's last leftover, naming the cap in the HUD, **delivered** in v0.4.44/v0.4.46. Both → `DONE.md`.)*
 
 ---
 
@@ -208,10 +243,14 @@ test against up to 512 curve segments — though nothing past 12 blocks is targe
 world rather than with what was in front of the player. The padding is deliberately generous; see the
 Session-38 flag in `dev/TODO.md`.
 
-**One cost the reviews noted remains unmeasured:** `_settledMaterializations` has no concurrency gate. The
-other — `GuideManager.Persist()` re-serialising the entire registry on every mutation — is unchanged in the
-general case, but `BatchPersist()` now exists and the bulk path uses it, so publishing 100 private guides
-writes once rather than a hundred times.
+**The NON-render side was measured in Session 39** (`TODO` A10.2) and is no longer the unexamined half.
+`Persist()`'s per-mutation whole-registry write — the largest cost in the mod outside the renderer — is
+fixed: mutations mark dirty, the world save writes. `BatchPersist()` was **deleted**, not kept; `MarkDirty`
+coalesces every path without a scope having to ask. **What remains is `TODO` A17**, because one flush still
+writes the whole world.
+
+**One cost the reviews noted remains unmeasured:** `_settledMaterializations` has no concurrency gate — and
+that one is renderer work, gated behind G2 like the rest.
 
 ---
 
@@ -220,50 +259,50 @@ writes once rather than a hundred times.
 **What is declared but not tested.** Kept in one place so nobody re-derives it, and nobody assumes it was
 checked.
 
-1. **v0.4.41–v0.4.43 are in play with no result reported yet.** Three things have something specific to look
-   for: whether the **Players dialog** is fully recovered (v0.4.41 reverted the guard that killed it);
-   whether the **chiselling highlight lights itself after a world load** (v0.4.42 — if it still comes up
-   dark, `TODO` A16 is the reason); and whether the **tool comes back on the shape you left it on**
-   (v0.4.43 — try one of the seven that used to be forgotten). *Stated by the human, not assumed.*
-2. **v0.4.40's four GUI fixes are unverified as a set.** v0.4.41 superseded that build before it was played
+1. ⚠️ **CLAIM PROTECTION HAS NEVER BEEN VERIFIED IN PLAY, and cannot be from singleplayer.** The host holds
+   `controlserver` and Layout exempts it in four places, deliberately. Needs a non-admin account on a
+   dedicated server — the human is arranging one. **What is under test is the ORIGINAL implementation**:
+   v0.4.48's pre-filter was reverted in v0.4.49, so nothing new is being verified. *(Session 39 §3–§4.)*
+2. **Filled arches after v0.4.47.** The only shape whose counting code changed. Verified identical across
+   576 arch configurations and 720 across all shapes by running the pre-fix DLL beside the new one — but the
+   geometry has not been looked at in a world.
+3. **The guide-count cap reaching the HUD** (v0.4.46). ⚠️ **Unreachable with default config** — both count
+   caps default to unlimited — so `maxGuidesPerPlayer` must be set in `layout.json` to exercise it at all.
+4. **Saving under the v0.4.46 cadence.** Reload-after-edit was confirmed good, but the server's timing moved
+   to the world's own save *after* that. Private F4 guides are a separate path (60 s timer plus every exit).
+5. **v0.4.40's four GUI fixes are unverified as a set.** v0.4.41 superseded that build before it was played
    through; the regression it carried was found immediately, the other four were not exercised.
-3. **Whether the occupancy anchor test catches the real load ordering.** The deferral fires when a guide's
-   anchor chunk is absent *at mesh time*; whether that window exists in practice cannot be settled by
-   reading. *(Session 38 — `TODO` A16.)*
-4. **The hard 32-chalk ceiling has never been tested against xskills itself.** The mechanism is understood
+6. **The hard 32-chalk ceiling has never been tested against xskills itself.** The mechanism is understood
    and both attack routes are covered, but nobody has crafted a quality-bonus kit and confirmed it comes out
    32/32. Do that before trusting it. *(Session 17)*
-5. **1.22.x support is DECLARED, not tested.** `modinfo.json` declares a 1.22.0 minimum and Vintage Story
+7. **1.22.x support is DECLARED, not tested.** `modinfo.json` declares a 1.22.0 minimum and Vintage Story
    reads that as a minimum, so all of 1.22.x is nominally covered — but the code was built against **1.22.3**
    and nobody has confirmed every API used exists in 1.22.0. Smoke-test a 1.22.0/1.22.1 install. *(Session 17)*
-6. **The Players list's scroll container is unverified outside the game.** It rests on reasoning rather than
+8. **The Players list's scroll container is unverified outside the game.** It rests on reasoning rather than
    a test. If the dialog ever opens absurdly tall on a long roster, that is why, and the fix is explicit
    dialog sizing. *(`dev/GOTCHAS.md` G18)*
-7. **Settled-shell streaming's remote-arrival half is unverified.** v0.3.58 makes guides above 100,000 voxels
+9. **Settled-shell streaming's remote-arrival half is unverified.** v0.3.58 makes guides above 100,000 voxels
    scaffold and stream; the "another player watches a large guide arrive" case needs a second player. Also
    open: world load with the 8M guide, and whether 100,000 is the right threshold.
-8. **Session-29 block-occupancy verification items.** The diagnostic commands are hidden behind
-   `"diagnosticCommands": true` in `layout-client.json` — **hidden, not deleted, precisely for this.**
-9. **Whether `GOTCHAS` G4's general case is still live.** G4 says the stale-wireframe trap is fixed for the
-   Move path only. A `ScaffoldFingerprint` guard now appears to close the general case too, but only one path
-   was traced. Confirm before annotating G4 — an entry that says "still live" when it is not sends the next
-   session hunting a fixed bug. *(Session 36)*
-10. **How often the immense-sculpt race actually fired.** The defect is fixed (v0.4.36) but its window was
+10. **Session-29 block-occupancy verification items.** The diagnostic commands are hidden behind
+    `"diagnosticCommands": true` in `layout-client.json` — **hidden, not deleted, precisely for this.**
+11. **How often the immense-sculpt race actually fired.** The defect is fixed (v0.4.36) but its window was
     never sized. Only play can say whether it was common or vanishingly rare. *(Session 37)*
-11. **The exact Vintage Story maximum world size is still not known here** — but it no longer matters the way
+12. **The exact Vintage Story maximum world size is still not known here** — but it no longer matters the way
     it did. `GuideBounds` asks the engine via `IBlockAccessor.MapSize*` and narrows to it when told, and
     carries a hard ±33.5M backstop that applies regardless. The backstop alone is what closes the hang, and
     it is now **measured** safe with a 4× margin rather than assumed.
 
-*(Two long-standing items left this list. A14.7's hang WAS reproduced on 2026-08-01 — see `GOTCHAS` G31. And
-"the UI layer has never been code-reviewed" was closed by Session 38, which read all three files end to end
-and found the six traps living there intact.)*
+*(Items that LEFT this list. A14.7's hang WAS reproduced on 2026-08-01 — `GOTCHAS` G31. "The UI layer has
+never been code-reviewed" closed in Session 38. **`GOTCHAS` G4's general case closed in Session 39** — every
+early return in `OnGuideAddedOrUpdated` was traced, not just one, and G4 is annotated accordingly. **The
+chiselling highlight and the occupancy anchor window closed by play**, which also settled `TODO` A16.)*
 
 > **Do not add an item here on an assumption.** The human playtests every revision, so shipped work is
 > tested unless they say otherwise. Session 32 was recorded as unplaytested, wrongly, and the correction had
 > to be made across four files — an untrue "unverified" banner would have sent a later session re-testing
-> settled work. See `dev/GOTCHAS.md` R7. Items 1 and 2 above are here because the human *said* they were
-> still testing.
+> settled work. See `dev/GOTCHAS.md` R7. Items 1–4 above are here because they are genuinely untested — item
+> 1 because it *cannot* be tested from the setup available, not because nobody got round to it.
 
 ---
 

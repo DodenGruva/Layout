@@ -20,6 +20,77 @@
 
 ---
 
+## A17. Per-guide persistence, the "index cards" redesign — ❌ DISMISSED 2026-08-01 (Session 39)
+
+**Proposed, agreed by the human, and dismissed in the same session** once the save layer was read rather than
+assumed. Kept here because the idea is reasonable on its face and will occur to someone again.
+
+**The idea:** every guide lives in ONE blob, so a save re-serialises everything. Give each guide its own
+stored record and an edit writes one guide instead of the whole world.
+
+**Why it is dead — `GOTCHAS` G42.** The savegame is SQLite with **all mod data in one row of one table**, and
+`ISaveGame` offers only `GetData`/`StoreData`: **no key enumeration, no delete.** So per-guide records need a
+self-maintained index *and* leak a dead key for every dispelled guide, permanently, inside the world save.
+Bucketing avoids the leak but saves nothing, because the whole row is rewritten regardless. **There is no
+in-save route to finer write granularity** — only leaving the world save, which costs rollback consistency.
+
+**And the premise had already weakened.** A17 rested on "the cost of an edit grows with how much has ever
+been built", which stopped being true in **v0.4.45**, when mutations stopped saving at all. What remained was
+a per-save cost, not a per-edit one — and it can be moved off the main thread entirely without touching the
+storage format at all. That work is **`TODO` A18**, `dev/plans/PLAN_BACKGROUND_SAVE.md`.
+
+⚠️ **The lesson, which is the reason this entry is long:** both of us reasoned about a storage design from
+its *interface* rather than its *implementation*, and committed to it. The same session had already shipped
+and withdrawn a claim pre-filter for exactly that reason (`GOTCHAS` **R12**). Twice in one session, the half
+that looked obvious was the half nobody checked.
+
+**The original plan is archived intact** at `dev/archive/superseded-2026-08-01/PLAN_GUIDE_PERSISTENCE.md`.
+**Its measurements remain valid** — ~4 ms per MB, the 1,940-byte real guide record, the world-size curve —
+and were reused in the plan that replaced it.
+
+## A10.2. Performance review of the NON-RENDER code — ✅ DELIVERED 2026-08-01, v0.4.44–v0.4.49 (Session 39)
+
+The last item of the review backlog, opened with the honest note *"nobody has looked"* — Session 28 measured
+and fixed the renderer and nothing equivalent had been done anywhere else. **Closed.** Full detail:
+`dev/sessions/SESSION_39.md`.
+
+**Six defects fixed:**
+
+1. **Every edit re-serialised every guide in the world** (v0.4.45). ~4 ms per megabyte, so 18 ms per drag
+   update at 1,000 guides against a 20 ms tick, and 55% of the server main thread at 3,000. Saves deferred
+   and coalesced: **20× less work** on a sustained drag. `GOTCHAS` **G39**.
+2. **The server's save cadence set to the world's own** (v0.4.46, human-decided). No separate timer.
+3. **The Players roster was quadratic** (v0.4.45) — one row per player, each walking the whole registry
+   twice. One pass now.
+4. **Arches rebuilt their spline up to 8,193 times per voxel count** (v0.4.47). 1.55 ms → 0.45 ms,
+   3.2 MB → 0.5 MB. `GOTCHAS` **G41**.
+5. **Guide-count caps never reached the HUD** (v0.4.46) — found by the human in play, not by the review.
+6. **The HUD names which cap refused an edit** (v0.4.44), and dead drag-throttle tiers removed (v0.4.45).
+
+**One fix shipped and withdrawn:** the bounding-box claim pre-filter (v0.4.48 → v0.4.49). Geometry verified
+across 5,400 configurations; premise never checked. `GOTCHAS` **R12** and **G40**.
+
+**Five costs measured and deliberately NOT fixed**, each because the fix costs more risk than the gain:
+flat filled shapes counting by materialising their list; the geometry walked twice per drag update (count +
+claim footprint); 3D volumes at large sizes (paid per action, not per drag); `VoxelCountBy`'s registry scan
+in the cap check; `BlockOccupancy`'s unbounded cache. `SESSION_39.md` §6.
+
+**Verified clean:** the targeting broad-phase and curve cache, the settings GUI, the icon system, the
+Players dialog client side, held-item rendering, the chalk effects, and all eight 3D volume shapes — which
+count without allocating anything at all.
+
+**What it produced rather than closed:** an item of its own for the one remaining cost — the world-save
+flush. First written as `TODO` **A17** (per-guide storage), **dismissed the same session** once the save
+layer was read (see the A17 entry above), and replaced by **A18**: move the serialisation off the main
+thread. `dev/plans/PLAN_BACKGROUND_SAVE.md`.
+
+## A16. The occupancy re-probe covers the anchor, not the whole guide — ✅ CLOSED 2026-08-01 (Session 39)
+
+Recorded as open-by-construction in Session 38 with the instruction *"Do it only if play shows the gap
+matters."* **Play did not show it.** The human confirmed on 2026-08-01 that the chiselling highlights light
+themselves correctly on a world load, so the anchor-only re-probe window did not appear in practice and the
+per-region attribution it would have taken was not needed. Reopen only if it resurfaces.
+
 ## A10.1's remaining half — the GUI layer — ✅ REVIEWED 2026-08-01, v0.4.40–v0.4.41 (Session 38)
 
 The part A10.1 explicitly did not cover. `GuideToolGui` (3,609 lines), `GuideToolController` (3,322) and
