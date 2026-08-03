@@ -38,6 +38,7 @@ namespace Layout.Network
         private readonly IClientNetworkChannel _channel;
         private LocalGuideAuthority _local;
         private bool _receivedServerBulkSync;
+        private int _serverProtocolVersion;
         private bool _preferClientOnly;
 
         // A "Publish Private Guides" waiting on the server to confirm the switch to public mode.
@@ -75,6 +76,9 @@ namespace Layout.Network
         public ClientAuthorityMode AuthorityMode { get; private set; } = ClientAuthorityMode.Detecting;
         public bool ServerLayoutAvailable => _serverLayoutAvailable;
         public bool ServerAllowsClientOnlyMode => _serverAllowsClientOnlyMode;
+        /// <summary>Roundover needs the protocol-27 shape meaning on a public authority.</summary>
+        public bool RoundoverPlacementSupported => AuthorityMode == ClientAuthorityMode.Local
+            || (AuthorityMode == ClientAuthorityMode.Networked && _serverProtocolVersion >= 27);
         public bool PublicGuideAccessJailed { get; private set; }
 
         // -- Read-only views for the renderer / HUD / tool ----------------------------------------
@@ -437,6 +441,7 @@ namespace Layout.Network
             _receivedServerBulkSync = false;
             _serverLayoutAvailable = false;
             _serverAllowsClientOnlyMode = false;
+            _serverProtocolVersion = 0;
             // Dropped with the session: carrying one server's settings into the next world would show the
             // Admin section on a server that never sent one, with somebody else's caps in it.
             AdminConfig = null;
@@ -500,6 +505,7 @@ namespace Layout.Network
         {
             _receivedServerBulkSync = true;
             _serverLayoutAvailable = true;
+            _serverProtocolVersion = p?.ProtocolVersion ?? 0;
             bool supportsClientOnlyPolicy = p?.ProtocolVersion >= 2;
             _serverAllowsClientOnlyMode = supportsClientOnlyPolicy && p.AllowClientOnlyMode;
             OnServerBulkSync(p);

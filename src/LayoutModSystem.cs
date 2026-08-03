@@ -439,7 +439,7 @@ namespace Layout
                 .EndSubCommand()
                 .BeginSubCommand("inset")
                     .WithDescription(
-                        "Set the anti-z-fight inset in blocks (0-0.05, default 0.003). Raise it if guides "
+                        "Set the anti-z-fight inset in blocks (0-0.05, default 0.0002). Raise it if guides "
                         + "resting on the ground shimmer. No argument reports the current value.")
                     .WithArgs(parsers.OptionalFloat("blocks", float.NaN))   // NaN = "not supplied"; see Supplied()
                     .HandleWith(OnClientInsetCommand)

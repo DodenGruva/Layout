@@ -36,9 +36,9 @@ blocks underneath.
 The tool is a held item with an F-key **tile menu** (Create/Edit/Transform/Delete mode, the shape picker, voxel scale
 1×1×1–16×16×16 defaulting to the finest to match chisel resolution, projection, plane, fill); all interaction
 uses first-person clicks and crosshair targeting rather than transform gizmos. The **shape catalog** is
-**15 shape types shown as 21 picker tiles**, split into a **2D section** — arch · half-circle · circle ·
+**16 shape types shown as 22 picker tiles**, split into a **2D section** — arch · half-circle · circle ·
 ellipse · line · triangle (+ right/equilateral/isosceles) · rectangle (+ square) · polygon (regular N-gon) ·
-Free-Shape (irregular polyline) — and a **3D VOLUME section** — sphere · dome · cylinder · tapered
+Free-Shape (irregular polyline) — and a **3D VOLUME section** — Roundover Path · sphere · dome · cylinder · tapered
 cylinder · polygonal prism · tapered polygonal prism · cone · box. It is
 built on the **primitives+constraints** model (a half-circle is an arch under a SemiCircle constraint, a
 circle is an ellipse under a Circle constraint, a square is a rectangle under a Square constraint, and the
@@ -46,8 +46,9 @@ triangle constraints derive the apex); constrained variants are **not** separate
 with a two-click gesture**, with the deliberately reopened exceptions: the free/right/isosceles triangles,
 the free Rectangle, and the 3D cylinder/polygonal prism/cone take **three clicks**, the Box and the Tapered
 Cylinder / Tapered Polygonal Prism take **four** (the tapered pair's fourth click is a rim setting the top
-radius; the Box's is an ordinary height), and the Free-Shape takes
-**unbounded chained clicks** (≤64). `DraftManager.NeedsApexClick` and `NeedsFourthClick` are the authority
+radius; the Box's is an ordinary height), the Free-Shape takes **unbounded chained clicks** (≤64), and
+Roundover takes an open route followed by one radius/quadrant handle. `DraftManager.NeedsApexClick`,
+`NeedsFourthClick`, and the chained-shape state are the authority
 on which shape takes how many. Players reshape 2D guides by grabbing points (clicking the body
 inserts-and-grabs in one motion on the arch and Free-Shape families, or grabs the nearest handle on every
 other parametric shape), locking points as constraints, and relying on two standing contracts:
@@ -284,7 +285,12 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   v0.3.70 **removed the probe entirely** and flipped the direction. An outset needs far less displacement
   than an inset — an inset had to open a visible gap to escape the surface behind it, while an outset only
   has to win the depth comparison. The magnitude is the client's `zFightInset` (the key keeps the historical
-  name); `GuideMeshBuilder.BlockPlaneInset` holds it and `STATUS.md` §8 records the current default.
+  name); `GuideMeshBuilder.BlockPlaneInset` holds it and `STATUS.md` records the current default.
+  **The model transform must remain an exact world translation.** A former 0.003-block pull of the entire
+  mesh toward the camera shifted guide cells off Vintage Story's exact 1/16 micro-block lattice. Direct
+  playtest confirmed that deleting that pull completely restored registration; a 0.0001 face outset then
+  worked without shimmer and 0.0002 was selected as a small-buffer default. Clearance belongs on exposed
+  faces only, never on the whole mesh (`dev/GOTCHAS.md` G48).
   **Do not reintroduce a world probe here** — `dev/GOTCHAS.md` **R9**. `GuideMeshOptions.OccupancyProbe` is
   not one: it asks about a voxel's OWN cell and feeds colour only, never geometry.
 - **Settled guides always render at their true scale**; `ChooseRenderScale` coarsening (8,000-voxel cap) is
@@ -528,16 +534,17 @@ Pinned, append-only. Constrained variants are **not** types; fill is **not** a t
 ```
 enum GuideShapeType  { Arch = 0, Ellipse = 1, Line = 2, Triangle = 3, Rectangle = 4, Polygon = 5,
                        FreeShape = 6, Sphere = 7, Dome = 8, Cylinder = 9, Cone = 10, Box = 11,
-                       TaperedCylinder = 12, PolygonalPrism = 13, TaperedPolygonalPrism = 14 }
+                       TaperedCylinder = 12, PolygonalPrism = 13, TaperedPolygonalPrism = 14,
+                       Roundover = 15 }
 enum ShapeConstraint { None = 0, SemiCircle = 1, Circle = 2, Right = 3, Equilateral = 4, Isosceles = 5, Square = 6 }
 ```
-`GuideShapeTypes.IsVolume(type)` explicitly classifies the eight volume types (never inferred from enum ordering,
-so future 2D shapes can be appended after the volumes). The 21-tile catalog (type, constraint) — **2D
+`GuideShapeTypes.IsVolume(type)` explicitly classifies the nine volume types (never inferred from enum ordering,
+so future 2D shapes can be appended after the volumes). The 22-tile catalog (type, constraint) — **2D
 section:** Arch = (Arch, None) · Half-circle = (Arch, SemiCircle) · Circle = (Ellipse, Circle) ·
 Ellipse = (Ellipse, None) · Line = (Line, None) · Triangle = (Triangle, None) · Right = (Triangle, Right) ·
 Equilateral = (Triangle, Equilateral) · Isosceles = (Triangle, Isosceles) · Rectangle = (Rectangle, None) ·
 Square = (Rectangle, Square) · Polygon = (Polygon, None) · Free-Shape = (FreeShape, None); **3D section:**
-Sphere = (Sphere, None) · Dome = (Dome, None) · Cylinder = (Cylinder, None) · Tapered Cylinder =
+Roundover Path = (Roundover, None) · Sphere = (Sphere, None) · Dome = (Dome, None) · Cylinder = (Cylinder, None) · Tapered Cylinder =
 (TaperedCylinder, None) · Polygonal Prism = (PolygonalPrism, None) · Tapered Polygonal Prism =
 (TaperedPolygonalPrism, None) · Cone = (Cone, None) · Box = (Box, None). (Polygon side count lives in
 `GuideData.Sides`, not a constraint.)
@@ -604,7 +611,10 @@ Guides are referenced off blocks only at placement — never bound; removing the
    the ghost's apex then tracks the crosshair — **SHIFT centres it on the base (0.1.15)** — and the THIRD
    click completes. **Free-Shape (0.1.15):** every click chains a corner (CTRL snaps relative to the
    PREVIOUS corner); clicking the LAST corner finishes open, the FIRST (≥3) closes the loop; the full
-   chain + closed flag cross in the create request. Cylinder/Polygonal Prism/Cone use a third height
+   chain + closed flag cross in the create request. **Roundover Path:** chain an open route, click its last
+   point to finish the route, then place a handle perpendicular to the first segment; its distance and side
+   set the constant rolling-ball radius/quadrant. Route corners are sculpted rolling transitions, not mitres.
+   Cylinder/Polygonal Prism/Cone use a third height
    click; Tapered Cylinder/Tapered Polygonal Prism add a fourth rim-radius click. **The free Rectangle's
    third click is a WIDTH** (its second having set one edge, v0.4.15), and **the Box's fourth click is its
    height** — an ordinary height, which must not inherit the tapered rim's flare clamp or CTRL/SHIFT

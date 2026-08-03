@@ -103,7 +103,13 @@ namespace Layout.Guide
         /// Tapered Polygonal Prism (0.2.38): the four-click polygonal counterpart to Tapered Cylinder.
         /// The final rim click controls the top polygon's circumradius.
         /// </summary>
-        TaperedPolygonalPrism = 14
+        TaperedPolygonalPrism = 14,
+
+        /// <summary>
+        /// Roundover path: an open chain describes a sharp edge and one final tangent handle sets a
+        /// constant quarter-round radius. Route corners use rolling-ball transitions rather than mitres.
+        /// </summary>
+        Roundover = 15
 
         // Reserved for future shapes — append only, never renumber: Roof, Tunnel ...
     }
@@ -125,7 +131,8 @@ namespace Layout.Guide
         {
             GuideShapeType.Sphere or GuideShapeType.Dome or GuideShapeType.Cylinder
                 or GuideShapeType.TaperedCylinder or GuideShapeType.PolygonalPrism
-                or GuideShapeType.TaperedPolygonalPrism or GuideShapeType.Cone or GuideShapeType.Box => true,
+                or GuideShapeType.TaperedPolygonalPrism or GuideShapeType.Cone or GuideShapeType.Box
+                or GuideShapeType.Roundover => true,
             _ => false
         };
 

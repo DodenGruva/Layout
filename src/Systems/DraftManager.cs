@@ -127,6 +127,7 @@ namespace Layout.Systems
         private Vec3d _draftSecond;                     // Session 11: the placed BASE end of a 3-click draft
         private Vec3d _draftThird;                      // 0.2.24: the placed HEIGHT point of a 4-click draft
         private bool _draftFlatSideAligned;
+        private bool _roundoverRouteReady;
         private PlaneAxis _draftPlaneAxis = PlaneAxis.Y; // intrinsic plane for the ellipse family, from click 1's face
 
         // Session 11 (0.1.15): the Free-Shape's growing corner chain. Seeded with the start point on
@@ -253,7 +254,7 @@ namespace Layout.Systems
                     or GuideShapeType.Sphere or GuideShapeType.Dome or GuideShapeType.Cylinder
                     or GuideShapeType.TaperedCylinder or GuideShapeType.PolygonalPrism
                     or GuideShapeType.TaperedPolygonalPrism or GuideShapeType.Cone
-                    or GuideShapeType.Box => shape,
+                    or GuideShapeType.Box or GuideShapeType.Roundover => shape,
                 _ => GuideShapeType.Arch
             };
             _constraint = IsValidPair(_shape, constraint) ? constraint : ShapeConstraint.None;
@@ -265,8 +266,9 @@ namespace Layout.Systems
             if (!NeedsFourthClick(_shape)) _draftThird = null;
             // Switching away from the Free-Shape mid-draft drops any chained corners beyond the first
             // (the draft steps back to "one anchor placed", same as the 3-click base rule above).
-            if (_shape != GuideShapeType.FreeShape && _draftChain.Count > 1)
+            if (!IsChainShape(_shape) && _draftChain.Count > 1)
                 _draftChain.RemoveRange(1, _draftChain.Count - 1);
+            if (_shape != GuideShapeType.Roundover) _roundoverRouteReady = false;
         }
 
         /// <summary>The catalog's valid primitive+constraint pairs (Session 9 expansion).</summary>
@@ -310,8 +312,9 @@ namespace Layout.Systems
         public static bool IsTaperedRimStage(GuideShapeType shape) =>
             shape == GuideShapeType.TaperedCylinder || shape == GuideShapeType.TaperedPolygonalPrism;
 
-        /// <summary>True for the chained-click Free-Shape (Session 11, 0.1.15).</summary>
-        public static bool IsChainShape(GuideShapeType shape) => shape == GuideShapeType.FreeShape;
+        /// <summary>True for shapes whose placement begins as an open clicked route.</summary>
+        public static bool IsChainShape(GuideShapeType shape) =>
+            shape == GuideShapeType.FreeShape || shape == GuideShapeType.Roundover;
 
         /// <summary>The intrinsic plane the active draft captured from its first click's block face.</summary>
         public PlaneAxis DraftPlaneAxis => _draftPlaneAxis;
@@ -515,6 +518,10 @@ namespace Layout.Systems
         /// <summary>True when the active draft has its height down and is now aiming the RIM (click 4 of 4).</summary>
         public bool AwaitingRim => _hasDraft && _draftThird != null;
 
+        /// <summary>True after a Roundover route is finished and the next click sets its radius/quadrant.</summary>
+        public bool AwaitingRoundoverRadius =>
+            _hasDraft && _shape == GuideShapeType.Roundover && _roundoverRouteReady;
+
         // --- Free-Shape corner chain (Session 11, 0.1.15) ----------------------------------------
 
         /// <summary>How many Free-Shape corners the active draft has placed (start point included).</summary>
@@ -550,9 +557,39 @@ namespace Layout.Systems
         public bool AppendChainPoint(Vec3d point)
         {
             if (!_hasDraft || point == null) return false;
-            if (_draftChain.Count >= Shapes.FreeShape.MaxCorners) return false;
+            int maximum = _shape == GuideShapeType.Roundover
+                ? Shapes.RoundoverShape.MaxRoutePoints : Shapes.FreeShape.MaxCorners;
+            if (_draftChain.Count >= maximum) return false;
             _draftChain.Add(new Vec3d(point.X, point.Y, point.Z));
             return true;
+        }
+
+        /// <summary>Fixes the open Roundover route; the next click supplies its tangent/radius handle.</summary>
+        public bool BeginRoundoverRadiusStage()
+        {
+            if (!_hasDraft || _shape != GuideShapeType.Roundover || _draftChain.Count < 2) return false;
+            _roundoverRouteReady = true;
+            return true;
+        }
+
+        /// <summary>Checks a completed Roundover (route plus final radius handle) against the live cap.</summary>
+        public DraftCompletion TryCompleteRoundover(
+            Vec3d radiusHandle, int knownVoxelCount = -1, bool deferCapCheckToAuthority = false)
+        {
+            if (!AwaitingRoundoverRadius || radiusHandle == null)
+                return new DraftCompletion(DraftCompletionStatus.NoActiveDraft, null, null, 0, 0);
+
+            var points = DraftChain;
+            points.Add(new Vec3d(radiusHandle.X, radiusHandle.Y, radiusHandle.Z));
+            int count = knownVoxelCount;
+            if (count < 0 && !deferCapCheckToAuthority)
+                count = CountDraftVoxels(new Shapes.RoundoverShape(points));
+            if (count < 0) count = 0;
+            DraftCompletionStatus status = !deferCapCheckToAuthority
+                && _perGuideVoxelCap > 0 && count > _perGuideVoxelCap
+                ? DraftCompletionStatus.RejectedOverCap
+                : DraftCompletionStatus.Ready;
+            return new DraftCompletion(status, ChainFirst, ChainLast, count, _perGuideVoxelCap);
         }
 
         /// <summary>
@@ -588,6 +625,7 @@ namespace Layout.Systems
             _draftSecond = null;
             _draftThird = null;
             _draftFlatSideAligned = false;
+            _roundoverRouteReady = false;
             _draftChain.Clear();
             _draftChain.Add(new Vec3d(startPoint.X, startPoint.Y, startPoint.Z));
             _draftPlaneAxis = shapePlaneAxis;
@@ -626,6 +664,11 @@ namespace Layout.Systems
         public bool StepBackDraft()
         {
             if (!_hasDraft) return false;
+            if (AwaitingRoundoverRadius)
+            {
+                _roundoverRouteReady = false;
+                return true;
+            }
             if (IsChainShape(_shape) && _draftChain.Count > 1)
             {
                 _draftChain.RemoveAt(_draftChain.Count - 1);
@@ -723,6 +766,7 @@ namespace Layout.Systems
             _draftSecond = null;
             _draftThird = null;
             _draftFlatSideAligned = false;
+            _roundoverRouteReady = false;
             _draftChain.Clear();
         }
     }

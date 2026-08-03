@@ -181,8 +181,11 @@ namespace Layout.Client
                 if (_draft.HasActiveDraft)
                 {
                     if (DraftManager.IsChainShape(_draft.Shape))
+                    {
+                        if (_draft.AwaitingRoundoverRadius) return ShapeModifierHelp.None;
                         return ShapeModifierHelp.CtrlCardinal | ShapeModifierHelp.ShiftVertical
                             | ShapeModifierHelp.CtrlShiftDiagonal;
+                    }
                     if (_draft.AwaitingRim)
                         return DraftManager.IsTaperedRimStage(_draft.Shape)
                             ? ShapeModifierHelp.CtrlCloseRim | ShapeModifierHelp.ShiftAllowFlare
@@ -975,12 +978,24 @@ namespace Layout.Client
                     Vec3d aim = blockSel != null ? ResolveAnchorPoint(blockSel) : FreeAirAim();
                     if (DraftManager.IsChainShape(_draft.Shape))
                     {
+                        if (_draft.AwaitingRoundoverRadius)
+                        {
+                            aim = ConstrainRoundoverRadiusAim(aim);
+                            ObserveDraftMotion(aim, flatSideAligned: false);
+                            PresentDraft(new DraftPreviewSpec(0, BuildSettings(blockSel, aim),
+                                GuideShapeType.Roundover, _draft.DraftChain, aim, closing: false,
+                                planeAxis: _draft.DraftPlaneAxis),
+                                aim, false);
+                            return;
+                        }
+
                         // Free-Shape (0.1.15): the ghost is the placed chain + a live segment to the
                         // crosshair. CTRL snaps the segment level-and-cardinal off the LAST placed corner;
                         // SHIFT (0.1.16) snaps it VERTICAL (straight up/down from that corner). Aiming
                         // near the first corner (with ≥3 placed) snaps onto it and previews the CLOSED loop.
                         aim = ConstrainChainAim(aim);
-                        bool closing = _draft.ChainCount >= 3
+                        bool closing = _draft.Shape == GuideShapeType.FreeShape
+                            && _draft.ChainCount >= 3
                             && Dist(aim, _draft.ChainFirst) <= ChainSnapRadius();
                         if (closing) aim = _draft.ChainFirst;
                         ObserveDraftMotion(aim, flatSideAligned: false);
@@ -1910,6 +1925,13 @@ namespace Layout.Client
 
             if (!_draft.HasActiveDraft)
             {
+                if (_draft.Shape == GuideShapeType.Roundover && !_net.RoundoverPlacementSupported)
+                {
+                    Error("layout-roundoverprotocol",
+                        "Roundover Path requires Layout 0.4.60 or newer on the server. Private placement remains available where the server permits it.");
+                    return;
+                }
+
                 if (_renderer.PlacementMaterializationBusy || _renderer.SculptMaterializationBusy)
                 {
                     Error("layout-guide-materializing",
@@ -1948,17 +1970,30 @@ namespace Layout.Client
             {
                 Vec3d corner = ConstrainChainAim(ResolveAnchorPoint(blockSel));
 
+                if (_draft.AwaitingRoundoverRadius)
+                {
+                    Vec3d radiusHandle = ConstrainRoundoverRadiusAim(corner);
+                    CompleteRoundover(blockSel, radiusHandle);
+                    return;
+                }
+
                 double snap = ChainSnapRadius();
                 bool onFirst = _draft.ChainFirst != null && Dist(corner, _draft.ChainFirst) <= snap;
                 bool onLast = _draft.ChainLast != null && Dist(corner, _draft.ChainLast) <= snap;
 
-                if (onFirst && _draft.ChainCount >= 3)
+                if (_draft.Shape == GuideShapeType.FreeShape && onFirst && _draft.ChainCount >= 3)
                 {
                     CompleteChain(closed: true, blockSel, corner);
                 }
                 else if (onLast && _draft.ChainCount >= 2)
                 {
-                    CompleteChain(closed: false, blockSel, corner);
+                    if (_draft.Shape == GuideShapeType.Roundover)
+                    {
+                        _draft.BeginRoundoverRadiusStage();
+                        ResetDraftVisualState();
+                        _renderer.ClearDraftPreview();
+                    }
+                    else CompleteChain(closed: false, blockSel, corner);
                 }
                 else if (onFirst || onLast)
                 {
@@ -1967,8 +2002,10 @@ namespace Layout.Client
                 }
                 else if (!_draft.AppendChainPoint(corner))
                 {
-                    Error("layout-freeshapecap",
-                        $"Free-Shape corner limit reached ({Shapes.FreeShape.MaxCorners}). Finish or step back.");
+                    int maximum = _draft.Shape == GuideShapeType.Roundover
+                        ? Shapes.RoundoverShape.MaxRoutePoints : Shapes.FreeShape.MaxCorners;
+                    Error("layout-chaincap",
+                        $"Route corner limit reached ({maximum}). Finish or step back.");
                 }
                 return;
             }
@@ -2109,6 +2146,52 @@ namespace Layout.Client
             }
         }
 
+        private void CompleteRoundover(BlockSelection blockSel, Vec3d radiusHandle)
+        {
+            if (radiusHandle == null) return;
+            List<Vec3d> chain = _draft.DraftChain;
+            chain.Add(new Vec3d(radiusHandle.X, radiusHandle.Y, radiusHandle.Z));
+            var shape = new Shapes.RoundoverShape(chain);
+            if (GuideShapeVoxelCounting.CountUpTo(shape, _draft.Scale, false, 0) == 0)
+            {
+                Error("layout-roundoverradius",
+                    "Choose a smaller radius or place route corners farther apart. The radius must stay away from the route, and the route cannot reverse directly back on itself.");
+                return;
+            }
+
+            GuideRenderSettings settings = BuildSettings(blockSel, radiusHandle);
+            var candidateSpec = new DraftPreviewSpec(
+                _draftGeneration, settings, GuideShapeType.Roundover,
+                _draft.DraftChain, radiusHandle, closing: false,
+                planeAxis: _draft.DraftPlaneAxis);
+            bool candidateMatchesPreview = candidateSpec.Fingerprint() == _draftPoseFingerprint;
+            int knownVoxelCount = candidateMatchesPreview
+                && _acceptedDraftScale == settings.Scale ? _acceptedDraftVoxelCount : -1;
+            bool deferCapCheck = knownVoxelCount < 0
+                && _net.AuthorityMode == ClientAuthorityMode.Networked
+                && !_draft.Wireframe;
+            DraftCompletion completion = _draft.TryCompleteRoundover(
+                radiusHandle, knownVoxelCount, deferCapCheck);
+            if (completion.IsReady)
+            {
+                bool retainedExactPreview = _renderer.RetainExactDraftForPlacement(candidateSpec);
+                _net.SendCreateRequest(completion.Start, completion.End, settings,
+                    GuideShapeType.Roundover, ShapeConstraint.None, _draft.DraftPlaneAxis,
+                    inverted: false, sides: 0, apex: null,
+                    chain: chain, closed: false,
+                    deferPlacementEffects: retainedExactPreview);
+                _draft.ClearDraft();
+                ResetDraftVisualState();
+                _hud.ClearDraftAim();
+                if (!retainedExactPreview) _renderer.ClearDraftPreview();
+            }
+            else if (completion.Status == DraftCompletionStatus.RejectedOverCap)
+            {
+                Error("layout-overcap",
+                    $"Too large: {completion.VoxelCount:n0} voxels (cap {completion.CapLimit:n0}). Choose a smaller radius, shorten the route, or coarsen the scale.");
+            }
+        }
+
         // The click-forgiveness radius for finishing a Free-Shape on an existing corner: the lock-snap
         // formula, floored a touch higher (clicked cells resolve to identical snapped coords, so this only
         // has to absorb an adjacent-cell miss).
@@ -2126,6 +2209,27 @@ namespace Layout.Client
             if (ShiftHeld()) return new Vec3d(reference.X, aim.Y, reference.Z);
             if (CtrlHeld()) return ConstrainTo(reference, aim);
             return aim;
+        }
+
+        // The radius handle lives in the plane normal to the route's first segment. Keeping the stored
+        // point on that plane makes it coincide exactly with the visible tangent edge and gives edits a
+        // stable, literal radius (distance from route start to green handle).
+        private Vec3d ConstrainRoundoverRadiusAim(Vec3d aim)
+        {
+            Vec3d start = _draft.ChainFirst;
+            List<Vec3d> route = _draft.DraftChain;
+            if (aim == null || start == null || route.Count < 2) return aim;
+            Vec3d direction = new Vec3d(route[1].X - start.X,
+                route[1].Y - start.Y, route[1].Z - start.Z);
+            double length = Math.Sqrt(direction.X * direction.X
+                + direction.Y * direction.Y + direction.Z * direction.Z);
+            if (length < 1e-9) return start;
+            direction.X /= length; direction.Y /= length; direction.Z /= length;
+            double dx = aim.X - start.X, dy = aim.Y - start.Y, dz = aim.Z - start.Z;
+            double along = dx * direction.X + dy * direction.Y + dz * direction.Z;
+            return new Vec3d(aim.X - direction.X * along,
+                aim.Y - direction.Y * along,
+                aim.Z - direction.Z * along);
         }
 
         // The 2D Line shares Free-Shape's world-vertical SHIFT constraint. CTRL retains the usual
@@ -2831,6 +2935,29 @@ namespace Layout.Client
         private static int FindPointOwningVoxel(GuideData guide, List<VoxelPosition> voxels,
             VoxelPosition clicked, bool surface, PlaneAxis flatAxis, double plane)
         {
+            if (guide.ShapeType == GuideShapeType.Roundover && !guide.IsWireframe)
+            {
+                // Roundover routes may combine a large shell with many route controls. The generic
+                // nearest-cell ownership below is O(points × voxels) per crosshair hit. This shape exposes
+                // exact sampled marker positions, keeping the work bounded by the small route itself.
+                var roundover = ShapeFactory.Adopt(guide) as RoundoverShape;
+                int fastOwner = -1, fastOwnerRole = -1;
+                for (int i = 0; i < guide.ControlPoints.Count; i++)
+                {
+                    ControlPoint point = guide.ControlPoints[i];
+                    if (point == null || point.IsPhantom
+                        || !roundover.TryGetMarkerPosition(i, guide.VoxelScale, out Vec3d marker))
+                        continue;
+                    int x = (int)Math.Floor(marker.X * 16.0 / guide.VoxelScale) * guide.VoxelScale;
+                    int y = (int)Math.Floor(marker.Y * 16.0 / guide.VoxelScale) * guide.VoxelScale;
+                    int z = (int)Math.Floor(marker.Z * 16.0 / guide.VoxelScale) * guide.VoxelScale;
+                    if (x != clicked.X || y != clicked.Y || z != clicked.Z) continue;
+                    int role = point.IsLocked ? 3 : point.IsPrimary ? 2 : point.IsAnchor ? 1 : 0;
+                    if (role > fastOwnerRole) { fastOwner = i; fastOwnerRole = role; }
+                }
+                return fastOwner;
+            }
+
             double edge = guide.VoxelScale / 16.0;
             double half = edge * 0.5;
             int owner = -1;

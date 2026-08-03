@@ -1597,21 +1597,9 @@ namespace Layout.Systems
 
         private void SetModelMatrix(double dx, double dy, double dz)
         {
-            // ANTI-Z-FIGHT NUDGE (Session-8): volumetric voxels sit flush against block faces and z-fought
-            // slightly, exactly as Surface did. Per-cube shrinking is ruled out (Session-7 finding: all-axis
-            // insets open visible gaps between neighbours), so instead the WHOLE mesh is pulled a hair toward
-            // the camera each frame — the classic decal trick. It is view-dependent on purpose: whichever
-            // face you are looking at is the face that gains depth separation, and glancing angles (where the
-            // pull is least effective) are where z-fighting is least visible anyway. 3 mm is imperceptible as
-            // displacement but far above depth-buffer precision. Applies to guides, ghost, and anchor dots
-            // alike, since (dx,dy,dz) is always meshOrigin − cameraPos.
-            double len = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-            if (len > 0.5) // skip when the camera is essentially inside the mesh origin
-            {
-                double k = CameraNudge / len;
-                dx -= dx * k; dy -= dy * k; dz -= dz * k;
-            }
-
+            // Keep guide geometry registered to Vintage Story's exact 1/16 lattice. A former 0.003-block
+            // whole-mesh pull toward the camera caused the guide cells to visibly miss micro-block edges.
+            // Z-fight clearance belongs on exposed faces in GuideMeshBuilder, never in this transform.
             Mat4f.Identity(_modelMat);
             Mat4f.Translate(_modelMat, _modelMat, (float)dx, (float)dy, (float)dz);
         }
@@ -1679,9 +1667,6 @@ namespace Layout.Systems
                 stats.SubmittedBytes += cost.Bytes;
             }
         }
-
-        // World-unit pull toward the camera applied to every guide mesh (see SetModelMatrix). Tune by eye.
-        private const double CameraNudge = 0.003;
 
         // -- Network events (main thread) ----------------------------------------------------------
 

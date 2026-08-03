@@ -213,7 +213,7 @@ namespace Layout.Config
 
         /// <summary>
         /// How far a guide's exposed faces are pushed OUT of the voxel, in world blocks, so they cannot
-        /// z-fight a world block surface lying in the same plane. Default 0.0006. Raise it if guide voxels
+        /// z-fight a world block surface lying in the same plane. Default 0.0002. Raise it if guide voxels
         /// shimmer against material; lower it if guides look inflated or float off their own cells.
         /// </summary>
         /// <remarks>
@@ -222,13 +222,14 @@ namespace Layout.Config
         /// playtest history all still line up.
         ///
         /// Playtest history. As an inset: 0.004 seamy, 0.001 shimmered with distance, 0.003 chosen (0.2.14).
-        /// As an outset (v0.3.71): **0.0006**, five times smaller, confirmed in play. That is the expected
-        /// direction — an inset had to open a visible gap to escape the surface behind it, while an outset
-        /// only has to win the depth comparison, so it needs barely more than the depth buffer's precision.
+        /// As an outset: 0.0006 was initially confirmed in play (v0.3.71). A later systemic alignment test
+        /// found that the renderer was also translating the entire mesh 0.003 blocks toward the camera.
+        /// Removing that off-grid translation made 0.0001 stable in play; 0.0002 was chosen as the default
+        /// for a small extra buffer while remaining only 0.32% of a scale-1 micro-block.
         /// Tune live with <c>/layout inset</c>.
         /// </remarks>
         [JsonProperty("zFightInset")]
-        public float ZFightInset { get; set; } = 0.0006f;
+        public float ZFightInset { get; set; } = 0.0002f;
 
         /// <summary>
         /// Draw guide body voxels that already hold world material in the "built" colour (cyan), so you can

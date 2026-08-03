@@ -42,6 +42,9 @@ namespace Layout.Shapes
                 case GuideShapeType.FreeShape:
                     return new FreeShape(chain != null && chain.Count >= 2 ? chain : new[] { start, end },
                         closed && chain != null && chain.Count >= 3);
+                case GuideShapeType.Roundover:
+                    return new RoundoverShape(chain != null && chain.Count >= 3
+                        ? chain : new[] { start, end, start });
                 case GuideShapeType.Sphere:
                     return new SphereShape(start, end);
                 case GuideShapeType.Dome:
@@ -85,6 +88,8 @@ namespace Layout.Shapes
                     return new PolygonShape(g.ControlPoints, g.ShapePlaneAxis, g.Sides, g.FlatSideAligned);
                 case GuideShapeType.FreeShape:
                     return new FreeShape(g.ControlPoints, g.IsClosed);
+                case GuideShapeType.Roundover:
+                    return new RoundoverShape(g.ControlPoints);
                 case GuideShapeType.Sphere:
                     return new SphereShape(g.ControlPoints);
                 case GuideShapeType.Dome:
@@ -127,6 +132,8 @@ namespace Layout.Shapes
                     return new PolygonShape(points, shapePlaneAxis, sides, flatSideAligned);
                 case GuideShapeType.FreeShape:
                     return new FreeShape(points, closed);
+                case GuideShapeType.Roundover:
+                    return new RoundoverShape(points);
                 case GuideShapeType.Sphere:
                     return new SphereShape(points);
                 case GuideShapeType.Dome:

@@ -127,14 +127,14 @@ namespace Layout.UI
             "arch", "halfcircle", "circle", "ellipse",
             "line", "triangle", "righttri", "equilateral",
             "isosceles", "rectangle", "square", "polygon",
-            "freeshape",
+            "freeshape", "roundover",
             "sphere", "dome", "cylinder", "taperedcylinder",
             "polygonalprism", "taperedpolygonalprism", "cone", "box" };
         private static readonly string[] ShapeNames = {
             "Arch", "Half-circle", "Circle", "Ellipse",
             "Line", "Triangle", "Right triangle", "Equilateral",
             "Isosceles", "Rectangle", "Square", "Polygon",
-            "Free-Shape",
+            "Free-Shape", "Roundover Path",
             "Sphere", "Dome", "Cylinder", "Tapered Cylinder",
             "Polygonal Prism", "Tapered Polygonal Prism", "Cone", "Box" };
 
@@ -164,7 +164,7 @@ namespace Layout.UI
             LayoutToolIcons.Arch, LayoutToolIcons.HalfCircle, LayoutToolIcons.Circle, LayoutToolIcons.Ellipse,
             LayoutToolIcons.Line, LayoutToolIcons.Triangle, LayoutToolIcons.RightTri, LayoutToolIcons.Equilateral,
             LayoutToolIcons.Isosceles, LayoutToolIcons.Rectangle, LayoutToolIcons.Square, LayoutToolIcons.Polygon,
-            LayoutToolIcons.FreeShapeIcon,
+            LayoutToolIcons.FreeShapeIcon, LayoutToolIcons.Roundover,
             LayoutToolIcons.Sphere, LayoutToolIcons.Dome, LayoutToolIcons.Cylinder,
             LayoutToolIcons.TaperedCylinder, LayoutToolIcons.PolygonalPrism,
             LayoutToolIcons.TaperedPolygonalPrism, LayoutToolIcons.Cone, LayoutToolIcons.Box };
@@ -3532,6 +3532,7 @@ namespace Layout.UI
             "square"      => (GuideShapeType.Rectangle, ShapeConstraint.Square),
             "polygon"     => (GuideShapeType.Polygon,   ShapeConstraint.None),
             "freeshape"   => (GuideShapeType.FreeShape, ShapeConstraint.None),
+            "roundover"   => (GuideShapeType.Roundover, ShapeConstraint.None),
             "sphere"      => (GuideShapeType.Sphere,    ShapeConstraint.None),
             "dome"        => (GuideShapeType.Dome,      ShapeConstraint.None),
             "cylinder"    => (GuideShapeType.Cylinder,  ShapeConstraint.None),
@@ -3559,14 +3560,15 @@ namespace Layout.UI
             GuideShapeType.Rectangle => constraint == ShapeConstraint.Square ? 10 : 9,
             GuideShapeType.Polygon   => 11,
             GuideShapeType.FreeShape => 12,
-            GuideShapeType.Sphere    => 13,
-            GuideShapeType.Dome      => 14,
-            GuideShapeType.Cylinder  => 15,
-            GuideShapeType.TaperedCylinder => 16,
-            GuideShapeType.PolygonalPrism => 17,
-            GuideShapeType.TaperedPolygonalPrism => 18,
-            GuideShapeType.Cone      => 19,
-            GuideShapeType.Box       => 20,
+            GuideShapeType.Roundover => 13,
+            GuideShapeType.Sphere    => 14,
+            GuideShapeType.Dome      => 15,
+            GuideShapeType.Cylinder  => 16,
+            GuideShapeType.TaperedCylinder => 17,
+            GuideShapeType.PolygonalPrism => 18,
+            GuideShapeType.TaperedPolygonalPrism => 19,
+            GuideShapeType.Cone      => 20,
+            GuideShapeType.Box       => 21,
             _ => constraint == ShapeConstraint.SemiCircle ? 1 : 0
         };
 

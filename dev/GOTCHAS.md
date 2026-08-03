@@ -681,6 +681,18 @@ cannot trigger a restart. In the Session-41 focused 10,000-claim harness, this r
 2.50–3.10 ms / 4.28 MB to 0.10–0.14 ms / about 820 bytes with one relevant claim.
 **Found and fixed v0.4.58–v0.4.59, Session 41 §5.**
 
+### G48 — Never move the whole guide mesh to solve z-fighting.
+**Trigger:** before changing `GuideRenderer.SetModelMatrix`, adding camera-relative guide displacement, or
+trying to cure guide/block shimmer outside `GuideMeshBuilder`'s exposed-face clearance.
+**Trap:** Layout once pulled every guide mesh 0.003 blocks toward the camera. The raw guide cells and Vintage
+Story micro-blocks both use exact multiples of 1/16, but the later model translation moved the rendered guide
+off that lattice. The error looked angle-dependent and encouraged ever-larger face inset values; 0.003 alone
+was 4.8% of a scale-1 micro-block.
+**Do:** keep the model matrix at the exact world translation. Use the uniform per-exposed-face outset only;
+never add a second whole-mesh compensation. After the camera pull was removed in play, 0.0001 worked cleanly
+and 0.0002 was selected as the small-buffer default (0.32% of a scale-1 micro-block).
+**Found and confirmed in play v0.4.63–v0.4.64, Session 41 §8.**
+
 ---
 
 ## Reversals and disproved claims

@@ -39,6 +39,7 @@ namespace Layout.UI
         public const string Square = "layout-square";
         public const string Polygon = "layout-polygon";
         public const string FreeShapeIcon = "layout-freeshape";
+        public const string Roundover = "layout-roundover";
         public const string Sphere = "layout-sphere";
         public const string Dome = "layout-dome";
         public const string Cylinder = "layout-cylinder";
@@ -157,6 +158,7 @@ namespace Layout.UI
             reg[Square] = DrawSquare;
             reg[Polygon] = DrawPolygon;
             reg[FreeShapeIcon] = DrawFreeShape;
+            reg[Roundover] = DrawRoundover;
             reg[Sphere] = DrawSphere;
             reg[Dome] = DrawDome;
             reg[Cylinder] = DrawCylinder;
@@ -174,7 +176,7 @@ namespace Layout.UI
             foreach (string shapeName in new[]
             {
                 Arch, HalfCircle, Circle, Ellipse, Line, Triangle, RightTri, Equilateral,
-                Isosceles, Rectangle, Square, Polygon, FreeShapeIcon, Sphere, Dome, Cylinder,
+                Isosceles, Rectangle, Square, Polygon, FreeShapeIcon, Roundover, Sphere, Dome, Cylinder,
                 TaperedCylinder, PolygonalPrism, TaperedPolygonalPrism, Cone, Box
             })
             {
@@ -602,6 +604,26 @@ namespace Layout.UI
                 ctx.Arc(c.X(uv[i]), c.Y(uv[i + 1]), c.L(3.0), 0, 2 * Math.PI);
                 ctx.Fill();
             }
+        }
+
+        // A quarter-round ribbon following a bent route. Three nested rails make the rounded cross-section
+        // legible at tile size; the route itself turns without a mitred point.
+        private static void DrawRoundover(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 76);
+            Pen(ctx, rgba, c.L(2.4));
+            void Rail(double inset)
+            {
+                ctx.MoveTo(c.X(16 + inset), c.Y(56 - inset));
+                ctx.LineTo(c.X(16 + inset), c.Y(34));
+                ctx.CurveTo(c.X(16 + inset), c.Y(23 + inset),
+                    c.X(25 + inset), c.Y(16 + inset), c.X(36), c.Y(16 + inset));
+                ctx.LineTo(c.X(60 - inset), c.Y(16 + inset));
+                ctx.Stroke();
+            }
+            Rail(0);
+            Rail(6);
+            Rail(12);
         }
 
         // The sphere (0.1.20, the first 3D volume): a circle with an equatorial ellipse — the classic

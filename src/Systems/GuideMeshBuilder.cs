@@ -270,11 +270,14 @@ namespace Layout.Systems
         // Anti-z-fight face clearance, in world blocks. SINCE v0.3.70 THIS IS AN OUTSET, not an inset: it
         // is applied outward to every exposed face of a volumetric guide (the name is kept so `/layout
         // inset`, the client config key, and the playtest history all still line up). Magnitude semantics
-        // are unchanged, so the value below is still the one three rounds of playtest settled on.
+        // are unchanged. The current value was settled after removing the renderer's separate whole-mesh
+        // camera translation, which had shifted the guide off Vintage Story's exact 1/16 lattice.
         //
         // Tuned by playtest twice, once per direction. As an INSET: 0.004 was safe but seamy; 0.001
         // shimmered when moving toward/away from the guide (depth precision falls with distance); 0.003 was
-        // the human's call (0.2.14). As an OUTSET: 0.0006, confirmed in play (v0.3.71) — five times smaller.
+        // the human's call (0.2.14). As an OUTSET: 0.0006 was initially confirmed in play (v0.3.71).
+        // With the off-grid 0.003 camera translation removed, 0.0001 was stable and 0.0002 was selected as
+        // the extra-buffer default. At scale 1 it is only 0.32% of one micro-block.
         //
         // The drop is the expected consequence of the flip, not a re-tune of the same problem. An inset had
         // to open a gap WIDE ENOUGH TO SEE PAST the world surface sitting in front of it, so it paid for
@@ -287,8 +290,8 @@ namespace Layout.Systems
         /// <remarks>
         /// TUNABLE SINCE v0.3.65 — a field, not a const, so <c>/layout inset</c> can dial it in play. A
         /// reported ground z-fight cannot be reproduced or judged from outside the game, and this value was
-        /// settled by three rounds of playtest; guessing at a new one blind is how the Session 25–26
-        /// regressions happened.
+        /// settled by direct playtest; guessing at a new one blind is how the Session 25–26 regressions
+        /// happened. Do not compensate for z-fighting by translating the whole mesh off the voxel lattice.
         ///
         /// Worth knowing before raising it: the reason 0.004 was rejected as "seamy" no longer applies. That
         /// seam was between two guide voxels meeting across a block boundary, and exposed-face meshing means
@@ -296,7 +299,7 @@ namespace Layout.Systems
         /// separates a guide face from a WORLD BLOCK face, so the old ceiling on it is obsolete and larger
         /// values are safer than they were when this was tuned.
         /// </remarks>
-        private static float BlockPlaneInset = 0.0006f;
+        private static float BlockPlaneInset = 0.0002f;
 
         /// <summary>Sets the anti-z-fight inset, in world blocks. Meshes must be rebuilt to take effect.</summary>
         public static void ConfigureBlockPlaneInset(float inset) => BlockPlaneInset = inset;

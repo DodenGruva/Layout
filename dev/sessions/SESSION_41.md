@@ -1,6 +1,6 @@
-# Session 41 — v0.4.55 → v0.4.59
+# Session 41 — v0.4.55 → v0.4.64
 
-**Branch:** `codex/review-hardening-v055`. **DataVersion 13. Protocol 26.** **86 source files** (one added).
+**Branch:** `codex/review-hardening-v055`. **DataVersion 13. Protocol 27.** **87 source files** (two added).
 
 An independent whole-project review found that Session 37's coordinate defence did not cover the later
 whole-guide Transform tools, and that a compound Transform packet was documented as one operation while the
@@ -15,6 +15,10 @@ transactional and one-step undoable, projection fields acquired central validati
 packets were rejected, and cancelling an immense create or reshape now interrupts the expensive geometry
 already running for it. The former count-only claim revision was replaced by a fail-closed structural snapshot,
 then bounded to the guide's exact block footprint so distant claims cannot restart or inflate the operation.
+The same working session then added the Roundover Path volume and corrected its first mitred-corner attempt
+to a rolling-ball transition. Finally, direct play exposed a longstanding renderer error: Layout's exact
+1/16 guide lattice was translated 0.003 blocks toward the camera after meshing. Removing that translation
+restored perfect micro-block registration and allowed the face outset to fall to a confirmed 0.0002 default.
 
 ---
 
@@ -232,10 +236,58 @@ it never skips the exact per-block access check that v0.4.48 incorrectly bypasse
 - Final `Layout0.4.59.zip`: 42 explicit entries and 368,115 bytes; root metadata first, 39/39 assets present,
   no directory entries or backslash paths, and embedded `modinfo.json` reports v0.4.59. The packaged DLL
   SHA-256 is `50C92417D16BE059104E46E0C4B40479CF61C1BC07ADC6A0390EE16C39E57307`.
+- Final `Layout0.4.64.zip`: 42 explicit entries and 373,225 bytes; 39/39 assets, no directory entries,
+  backslash paths, PDBs or dependency manifests; embedded metadata reports v0.4.64. The packaged DLL matches
+  Release at SHA-256 `79BADD7882183713BB50F84BD17337553530B511E5D0BFDA7A7F3EA628FD43DF`;
+  archive SHA-256 is `A01636A011DE009DA26DDFC6A3FBB74D8DE157D9673386A2BF4273319EB021B5`.
 - No automated test project was added to the repository. The focused harness is deliberately disposable;
   actual game feel and dedicated-server lifecycle behavior still require play.
 
 `DocCheck.ps1` was run after the documentation update and passes all mechanical checks.
+
+## 7. Roundover Path: a routed rolling-ball cut
+
+`RoundoverShape` is a new hollow volume whose open control-point chain describes the sharp route being
+rounded. A final handle lies in the plane perpendicular to the first route segment; its distance selects the
+constant radius and its side selects the quadrant. The first implementation joined route segments with a
+mitred corner. That contradicted the requested physical model — a ball rolling through the corner and leaving
+its smooth imprint — so the route solver was replaced with a rolling transition that remains continuous
+through arbitrary turns.
+
+The placement gesture reuses the chained-shape machinery but deliberately differs from Free-Shape: clicking
+the last route point finishes the open route, then one final click sets radius/quadrant. Roundover never closes
+onto its first point. It is classified as a volume, uses the ordinary progressive/cancellable voxel paths,
+emits route-aware chalk effects, and supplies direct marker positions so point ownership does not degrade to
+an O(points × voxels) scan on a large shell. `GuideShapeType.Roundover = 15` is append-only wire state;
+protocol 27 gates public placement against older servers while private placement remains local.
+
+A disposable Release harness passed 52 checks covering straight and bent routes, exact count/materialization
+equivalence, coordinate deduplication, marker roles, threshold cancellation, transition continuity, and the
+absence of the rejected mitred corner. The human playtested the corrected rolling transition and reported it
+“much, much better.”
+
+## 8. Guide/micro-block registration: the grid was right, the transform was wrong
+
+An angle-dependent clipping report first suggested a depth-buffer problem, and a shader depth-bias experiment
+was started. The human stopped that direction after photographing alternating built-cyan and unbuilt-yellow
+guide cells visibly missing the game's chisel-cell boundaries. The experiment was fully rolled back before a
+build was made.
+
+Source comparison against Vintage Story's installed micro-block mesher established that both systems already
+use the same exact lattice. The game locates cell origins at `coordinate * 0.0625` and uses `1/32` half-extents;
+Layout builds the corresponding bounds at `v / 16` through `(v + scale) / 16`. No half-cell correction or
+quantisation change was needed.
+
+The displacement happened later in `GuideRenderer.SetModelMatrix`: every mesh was pulled 0.003 blocks toward
+the camera as a legacy anti-z-fight measure. At scale 1 that physical translation is 4.8% of one micro-block,
+matching the photographed error. v0.4.63 removed only that translation and retained the existing adjustable
+per-exposed-face outset. The shader remained content-identical to the branch baseline; no depth-bias uniform,
+viewport plumbing, or clip-space offset survived the abandoned experiment.
+
+The human's result was decisive: the guide aligned completely, `0.0001` outset worked without a problem, and
+`0.0002` was chosen for an extra buffer. v0.4.64 makes that value the saved-config default and mesh-builder
+fallback, corrects `/layout inset` help, and records the no-whole-mesh-shift invariant in source,
+`ARCHITECTURE.md`, and `GOTCHAS.md` G48.
 
 ---
 
@@ -254,6 +306,12 @@ it never skips the exact per-block access check that v0.4.48 incorrectly bypasse
 - **v0.4.59** — Bounded claim snapshots to the exact guide footprint while retaining every exact block access
   check; made distant claims irrelevant and reduced the synthetic 10,000-claim snapshot by roughly 20–31× in
   time and more than 5,000× in allocation; packaged the final release.
+- **v0.4.60–v0.4.62** — Added Roundover Path, replaced its rejected mitred turn with a rolling-ball transition,
+  and hardened its placement/selection path; the focused shape harness passes 52 checks.
+- **v0.4.63** — Removed the legacy camera-relative whole-mesh translation. Direct play confirmed complete
+  registration with Vintage Story's micro-block lattice and stable rendering at a 0.0001 face outset.
+- **v0.4.64** — Set the confirmed small-buffer outset default to 0.0002, corrected command help, and made the
+  exact-model-transform rule durable in source and project documentation.
 
 ## Decisions
 
@@ -281,6 +339,9 @@ it never skips the exact per-block access check that v0.4.48 incorrectly bypasse
   operation stale. It does not answer whether a block is buildable; exact `TestAccess` remains authoritative.
 - **Use the exact built footprint as the bound.** This avoids reconstructing shape/projection rules and
   automatically includes the adjacent block checked for Surface projection.
+- **Keep anti-z-fight correction local to exposed faces.** The mesh's world transform is part of geometric
+  registration, not a tuning surface. Physically translating it toward the camera invalidates exact lattice
+  coordinates even though the mesh builder remains mathematically correct.
 
 ## Traps
 
@@ -322,6 +383,10 @@ changes when only a spatial subset can affect the result. Do: derive bounds from
 intersecting state to those bounds, and ignore outside-only churn — while retaining the full per-block access
 check so opaque denial sources are never bypassed.
 
+⚠️ **Correct lattice arithmetic can still render off-lattice if the model transform moves it afterward.**
+Trigger: diagnosing view-angle guide clipping or z-fighting. Do: compare the entire coordinate pipeline, not
+only voxel generation; keep whole-mesh translation exact and tune only the per-exposed-face outset.
+
 ## Flagged and unverified
 
 **Judgement calls awaiting review:**
@@ -350,3 +415,5 @@ check so opaque denial sources are never bypassed.
   three-restart refusal; singleplayer's privileged host cannot exercise Layout's claim enforcement.
 - v0.4.55 includes Session 40's background-save implementation unchanged. The human had explicitly not
   playtested v0.4.50–v0.4.54 before this session, so that separate verification remains outstanding too.
+- Roundover's corrected bent transition and the exact guide/micro-block registration are play-confirmed. More
+  varied three-dimensional routes and extreme radii remain ordinary feature playtesting, not known defects.

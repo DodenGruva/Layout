@@ -68,36 +68,59 @@ namespace Layout.Systems
             IReadOnlyList<Vec3d> chain,
             Vec3d aim,
             bool closing)
+            : this(generation, settings, GuideShapeType.FreeShape, chain, aim, closing)
+        {
+        }
+
+        /// <summary>
+        /// Chained-shape draft. Free-Shape appends the live aim as its next route corner; Roundover uses
+        /// the live aim as its final radius handle after the route has been fixed.
+        /// </summary>
+        public DraftPreviewSpec(
+            int generation,
+            GuideRenderSettings settings,
+            GuideShapeType shapeType,
+            IReadOnlyList<Vec3d> chain,
+            Vec3d aim,
+            bool closing,
+            PlaneAxis planeAxis = PlaneAxis.Y)
         {
             Generation = generation;
             Settings = settings;
-            ShapeType = GuideShapeType.FreeShape;
+            ShapeType = shapeType;
             Constraint = ShapeConstraint.None;
-            PlaneAxis = PlaneAxis.Y;
+            PlaneAxis = planeAxis;
             IsChain = true;
-            ChainClosing = closing;
+            ChainClosing = shapeType == GuideShapeType.FreeShape && closing;
 
-            var copy = new List<Vec3d>((chain?.Count ?? 0) + (closing || aim == null ? 0 : 1));
+            bool appendAim = aim != null && (shapeType == GuideShapeType.Roundover || !closing);
+            var copy = new List<Vec3d>((chain?.Count ?? 0) + (appendAim ? 1 : 0));
             if (chain != null)
                 for (int i = 0; i < chain.Count; i++) copy.Add(Copy(chain[i]));
-            if (!closing && aim != null) copy.Add(Copy(aim));
+            if (appendAim) copy.Add(Copy(aim));
             Chain = copy;
             Start = copy.Count > 0 ? Copy(copy[0]) : null;
-            End = copy.Count > 1 ? Copy(copy[copy.Count - 1]) : null;
+            int endIndex = shapeType == GuideShapeType.Roundover ? copy.Count - 2 : copy.Count - 1;
+            End = endIndex >= 1 ? Copy(copy[endIndex]) : null;
             ActiveAim = Copy(closing && copy.Count > 0 ? copy[0] : End);
+            if (shapeType == GuideShapeType.Roundover) ActiveAim = Copy(aim ?? (copy.Count > 0 ? copy[copy.Count - 1] : null));
         }
 
         public DraftPreviewSpec WithGeneration(int generation)
         {
             if (IsChain)
-                return new DraftPreviewSpec(generation, Settings, Chain, null, ChainClosing);
+                return new DraftPreviewSpec(
+                    generation, Settings, ShapeType, Chain, null, ChainClosing, PlaneAxis);
             return new DraftPreviewSpec(generation, Settings, ShapeType, Constraint, PlaneAxis,
                 Start, End, Sides, Inverted, Apex, Rim, FlatSideAligned);
         }
 
         public IGuideShape CreateShape()
         {
-            if (IsChain) return new FreeShape(new List<Vec3d>(Chain), ChainClosing);
+            if (IsChain)
+                return ShapeType == GuideShapeType.Roundover
+                    ? new RoundoverShape(new List<Vec3d>(Chain))
+                    : new FreeShape(new List<Vec3d>(Chain), ChainClosing);
 
             IGuideShape shape = ShapeFactory.Create(ShapeType, Constraint, PlaneAxis, Start, End,
                 Inverted, Sides, flatSideAligned: FlatSideAligned);

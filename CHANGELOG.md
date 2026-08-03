@@ -2,6 +2,23 @@
 
 All notable changes to Layout will be recorded in this file going forward.
 
+## 0.4.64 - 2026-08-02
+
+### Added
+
+- **Roundover Path**, a constant-radius sculpted corner that follows an open route through arbitrary turns.
+  Corners use smooth rolling-ball transitions rather than mitres; a final perpendicular handle selects the
+  radius and quadrant. Public placement is gated to protocol-27 servers while private placement remains local.
+
+### Fixed
+
+- **Guide voxels now register exactly with Vintage Story's 1/16 micro-block lattice.** Removed a legacy
+  0.003-block camera-relative translation that shifted the entire rendered guide off its mathematically exact
+  coordinates and made the apparent error change with view angle.
+- The anti-z-fight face outset now defaults to the playtest-confirmed `0.0002` blocks. `0.0001` was already
+  stable after removing the whole-mesh shift; the extra `0.0001` is a small safety buffer. `/layout inset`
+  help now reports the real default.
+
 ## 0.4.59 - 2026-08-02
 
 ### Changed
