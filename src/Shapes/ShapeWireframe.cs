@@ -12,16 +12,35 @@ namespace Layout.Shapes
             var voxels = new List<VoxelPosition>();
             if (shape == null || scale <= 0) return voxels;
 
-            List<Vec3d> curve = shape.SampleCurve(128);
             var seen = new HashSet<(int, int, int)>();
-            if (curve != null)
+            if (shape is RoundoverShape roundover)
             {
-                if (curve.Count == 1) VoxelMarch.MarchInto(voxels, seen, curve, scale);
-                else for (int i = 1; i < curve.Count; i++)
+                List<List<Vec3d>> rails = roundover.SampleWireframeRails(128);
+                for (int railIndex = 0; railIndex < rails.Count; railIndex++)
                 {
-                    Vec3d a = curve[i - 1], b = curve[i];
-                    if (a == null || b == null) continue;
-                    VoxelMarch.MarchSegmentInto(voxels, seen, a, b, scale);
+                    List<Vec3d> rail = rails[railIndex];
+                    if (rail == null) continue;
+                    if (rail.Count == 1) VoxelMarch.MarchInto(voxels, seen, rail, scale);
+                    else for (int i = 1; i < rail.Count; i++)
+                    {
+                        Vec3d a = rail[i - 1], b = rail[i];
+                        if (a == null || b == null) continue;
+                        VoxelMarch.MarchSegmentInto(voxels, seen, a, b, scale);
+                    }
+                }
+            }
+            else
+            {
+                List<Vec3d> curve = shape.SampleCurve(128);
+                if (curve != null)
+                {
+                    if (curve.Count == 1) VoxelMarch.MarchInto(voxels, seen, curve, scale);
+                    else for (int i = 1; i < curve.Count; i++)
+                    {
+                        Vec3d a = curve[i - 1], b = curve[i];
+                        if (a == null || b == null) continue;
+                        VoxelMarch.MarchSegmentInto(voxels, seen, a, b, scale);
+                    }
                 }
             }
 

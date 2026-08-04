@@ -10,6 +10,9 @@
   "heldhelp-layout-flatside": "Align Flat Side",
   "heldhelp-layout-diagonal": "Constrain Diagonally",
   "heldhelp-layout-flare": "Allow Flare",
+  "heldhelp-layout-roundoverroute": "Set Profile · Add Sweep Path · Click Final Point Again to Place",
+  "heldhelp-layout-guideembed": "Embed Guide",
+  "heldhelp-layout-bypassgrab": "Bypass Grab and Ignore Existing Guides",
   "item-chalkingpowder": "Chalking Powder",
   "itemdesc-chalkingpowder": "Yellow marking chalk for the Chalking Kit. Hold it and right-click to refill a kit anywhere in your hotbar, or SHIFT+right-click a kit set down on the ground to refill it in place — tap for one scoop (+4 chalk), keep holding to pour until full. Mixed from any powder and a splash of yellow dye."
 }

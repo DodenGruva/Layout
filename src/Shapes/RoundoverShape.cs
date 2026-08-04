@@ -7,16 +7,15 @@ using Vintagestory.API.MathTools;
 namespace Layout.Shapes
 {
     /// <summary>
-    /// A constant-radius quarter-round swept along an open route. The route control points describe the
-    /// original sharp edge; the final control point is a visible tangent handle whose distance from the
-    /// route sets the radius. Interior route corners are replaced with tangent circular arcs before the
-    /// profile is swept, producing the smooth transition a ball rolling along the edge would leave behind.
+    /// A rounded profile swept along an open route. New guides store the exact two clicked profile legs
+    /// after the route controls; older guides with one radius handle retain their original quarter-round
+    /// interpretation. Interior route corners are replaced with tangent arcs before the profile is swept.
     /// </summary>
     public sealed class RoundoverShape : IGuideShape, ICancellableThresholdVoxelCounter,
         ICancellableVoxelGenerator, IProgressiveVoxelShape
     {
-        /// <summary>The wire carries route points plus one radius handle in the shared chain field.</summary>
-        public const int MaxRoutePoints = FreeShape.MaxCorners - 1;
+        /// <summary>The wire carries route points plus two profile handles in the shared chain field.</summary>
+        public const int MaxRoutePoints = FreeShape.MaxCorners - 2;
 
         private const double MinLength = 0.05;
         private const double QuarterTurn = Math.PI * 0.5;
@@ -25,18 +24,24 @@ namespace Layout.Shapes
         public List<ControlPoint> ControlPoints => _controlPoints;
         public ShapeConstraint Constraint => ShapeConstraint.None;
 
-        /// <summary>Creates a fresh shape from route points followed by the tangent/radius handle.</summary>
+        /// <summary>Creates a legacy shape from route points followed by one tangent/radius handle.</summary>
         public RoundoverShape(IReadOnlyList<Vec3d> points)
+            : this(points, hasTwoProfileHandles: false)
+        {
+        }
+
+        /// <summary>Creates a profile-first shape from route points followed by both exact profile legs.</summary>
+        public RoundoverShape(IReadOnlyList<Vec3d> points, bool hasTwoProfileHandles)
         {
             if (points == null) throw new ArgumentNullException(nameof(points));
             _controlPoints = new List<ControlPoint>(points.Count);
-            int radiusIndex = points.Count - 1;
+            int profileIndex = points.Count - (hasTwoProfileHandles ? 2 : 1);
             for (int i = 0; i < points.Count; i++)
             {
                 Vec3d point = points[i] ?? new Vec3d();
                 _controlPoints.Add(new ControlPoint(point,
-                    isAnchor: i < radiusIndex,
-                    isPrimary: i == radiusIndex));
+                    isAnchor: i < profileIndex,
+                    isPrimary: i >= profileIndex));
             }
         }
 
@@ -46,31 +51,48 @@ namespace Layout.Shapes
             _controlPoints = controlPoints ?? throw new ArgumentNullException(nameof(controlPoints));
         }
 
-        private int RouteCount => Math.Max(0, _controlPoints.Count - 1);
+        private int ProfileHandleCount => _controlPoints.Count >= 4
+            && _controlPoints[_controlPoints.Count - 1].IsPrimary
+            && _controlPoints[_controlPoints.Count - 2].IsPrimary ? 2 : 1;
+        private int RouteCount => Math.Max(0, _controlPoints.Count - ProfileHandleCount);
 
-        private bool TryInitialFrame(out double radius, out Vec3d tangent, out Vec3d u, out Vec3d v)
+        private bool TryInitialFrame(
+            out double profileExtent, out Vec3d tangent, out Vec3d u, out Vec3d v)
         {
-            radius = 0;
+            profileExtent = 0;
             tangent = u = v = null;
             if (RouteCount < 2) return false;
 
             Vec3d start = _controlPoints[0].WorldPosition;
             Vec3d second = _controlPoints[1].WorldPosition;
-            Vec3d handle = _controlPoints[_controlPoints.Count - 1].WorldPosition;
             tangent = Unit(Sub(second, start));
             if (tangent == null) return false;
 
+            if (ProfileHandleCount == 2)
+            {
+                u = Sub(_controlPoints[RouteCount].WorldPosition, start);
+                v = Sub(_controlPoints[RouteCount + 1].WorldPosition, start);
+                double uLength = ShapeGeometry.Len(u);
+                double vLength = ShapeGeometry.Len(v);
+                profileExtent = Math.Max(uLength, vLength);
+                return uLength >= MinLength && vLength >= MinLength;
+            }
+
+            Vec3d handle = _controlPoints[_controlPoints.Count - 1].WorldPosition;
             Vec3d radial = Sub(handle, start);
             double along = ShapeGeometry.Dot(radial, tangent);
             radial = new Vec3d(radial.X - tangent.X * along,
                 radial.Y - tangent.Y * along,
                 radial.Z - tangent.Z * along);
-            radius = ShapeGeometry.Len(radial);
-            if (radius < MinLength) return false;
+            profileExtent = ShapeGeometry.Len(radial);
+            if (profileExtent < MinLength) return false;
 
-            v = Scale(radial, 1.0 / radius);
-            u = Unit(ShapeGeometry.Cross(tangent, v));
-            return u != null;
+            v = radial;
+            Vec3d unitV = Scale(radial, 1.0 / profileExtent);
+            Vec3d unitU = Unit(ShapeGeometry.Cross(tangent, unitV));
+            if (unitU == null) return false;
+            u = Scale(unitU, profileExtent);
+            return true;
         }
 
         private bool TryRouteTangents(out Vec3d[] tangents)
@@ -272,14 +294,14 @@ namespace Layout.Shapes
         private void GenerateSurface(int scale, VoxelAccumulator sink, bool markControlPoints)
         {
             if (!GuideData.IsValidVoxelScale(scale)
-                || !TryInitialFrame(out double radius, out _,
+                || !TryInitialFrame(out double profileExtent, out _,
                     out Vec3d initialU, out Vec3d initialV)
                 || !TryRouteTangents(out Vec3d[] tangents)
-                || !TryBuildFillets(radius, tangents, out CornerFillet[] fillets))
+                || !TryBuildFillets(profileExtent, tangents, out CornerFillet[] fillets))
                 return;
 
             double halfCell = scale / 32.0;
-            int profileSteps = StepCount(QuarterTurn * radius, halfCell, minimum: 4);
+            int profileSteps = StepCount(QuarterTurn * profileExtent, halfCell, minimum: 4);
             for (int profileIndex = 0; profileIndex <= profileSteps && !sink.Exceeded; profileIndex++)
             {
                 double theta = QuarterTurn * profileIndex / profileSteps;
@@ -290,7 +312,7 @@ namespace Layout.Shapes
                 Vec3d u = Copy(initialU), v = Copy(initialV);
 
                 Vec3d cursor = _controlPoints[0].WorldPosition;
-                if (!sink.Claim(ProfilePoint(cursor, radius, u, v, cos, sin), scale)) break;
+                if (!sink.Claim(ProfilePoint(cursor, u, v, cos, sin), scale)) break;
 
                 for (int segment = 0; segment < tangents.Length && !sink.Exceeded; segment++)
                 {
@@ -303,7 +325,7 @@ namespace Layout.Shapes
                     {
                         Vec3d position = ShapeGeometry.Lerp(
                             cursor, straightEnd, (double)step / longitudinalSteps);
-                        if (!sink.Claim(ProfilePoint(position, radius, u, v, cos, sin), scale)) break;
+                        if (!sink.Claim(ProfilePoint(position, u, v, cos, sin), scale)) break;
                     }
                     cursor = straightEnd;
                     if (sink.Exceeded || fillet == null) continue;
@@ -312,7 +334,7 @@ namespace Layout.Shapes
                     Vec3d startOffset = Sub(fillet.Start, fillet.Center);
                     // The outermost swept rail travels as far as routeRadius + profileRadius.
                     int joinSteps = StepCount(
-                        (fillet.Radius + radius) * fillet.Angle, halfCell, minimum: 2);
+                        (fillet.Radius + profileExtent) * fillet.Angle, halfCell, minimum: 2);
                     for (int step = 1; step <= joinSteps; step++)
                     {
                         double turn = fillet.Angle * step / joinSteps;
@@ -321,7 +343,7 @@ namespace Layout.Shapes
                         Vec3d turnedU = Rotate(beforeU, fillet.Axis, turn);
                         Vec3d turnedV = Rotate(beforeV, fillet.Axis, turn);
                         if (!sink.Claim(ProfilePoint(
-                            routePoint, radius, turnedU, turnedV, cos, sin), scale)) break;
+                            routePoint, turnedU, turnedV, cos, sin), scale)) break;
                     }
                     u = Rotate(beforeU, fillet.Axis, fillet.Angle);
                     v = Rotate(beforeV, fillet.Axis, fillet.Angle);
@@ -357,14 +379,14 @@ namespace Layout.Shapes
             marker = null;
             if (index < 0 || index >= _controlPoints.Count
                 || !GuideData.IsValidVoxelScale(scale)
-                || !TryInitialFrame(out double radius, out _, out Vec3d u, out Vec3d v)
+                || !TryInitialFrame(out double profileExtent, out _, out Vec3d u, out Vec3d v)
                 || !TryRouteTangents(out Vec3d[] tangents)
-                || !TryBuildFillets(radius, tangents, out CornerFillet[] fillets))
+                || !TryBuildFillets(profileExtent, tangents, out CornerFillet[] fillets))
                 return false;
 
-            if (index == _controlPoints.Count - 1)
+            if (index >= RouteCount)
             {
-                marker = Add(_controlPoints[0].WorldPosition, Scale(v, radius));
+                marker = Copy(_controlPoints[index].WorldPosition);
                 return true;
             }
 
@@ -376,7 +398,7 @@ namespace Layout.Shapes
                 v = Rotate(v, preceding.Axis, preceding.Angle);
             }
 
-            int profileSteps = StepCount(QuarterTurn * radius, scale / 32.0, minimum: 4);
+            int profileSteps = StepCount(QuarterTurn * profileExtent, scale / 32.0, minimum: 4);
             int nearestProfileIndex = (int)Math.Round(profileSteps * 0.5);
             double theta = QuarterTurn * nearestProfileIndex / profileSteps;
             double cos = nearestProfileIndex == profileSteps ? 0.0 : Math.Cos(theta);
@@ -387,7 +409,7 @@ namespace Layout.Shapes
             if (ownFillet != null)
             {
                 int joinSteps = StepCount(
-                    (ownFillet.Radius + radius) * ownFillet.Angle,
+                    (ownFillet.Radius + profileExtent) * ownFillet.Angle,
                     scale / 32.0, minimum: 2);
                 int middleStep = Math.Max(1, (int)Math.Round(joinSteps * 0.5));
                 double turn = ownFillet.Angle * middleStep / joinSteps;
@@ -397,25 +419,43 @@ namespace Layout.Shapes
                 v = Rotate(v, ownFillet.Axis, turn);
             }
 
-            marker = ProfilePoint(routePoint, radius, u, v, cos, sin);
+            marker = ProfilePoint(routePoint, u, v, cos, sin);
             return true;
         }
 
         private static Vec3d ProfilePoint(
-            Vec3d routePoint, double radius, Vec3d u, Vec3d v, double cos, double sin) =>
+            Vec3d routePoint, Vec3d u, Vec3d v, double cos, double sin) =>
             new Vec3d(
-                routePoint.X + radius * ((1.0 - cos) * u.X + (1.0 - sin) * v.X),
-                routePoint.Y + radius * ((1.0 - cos) * u.Y + (1.0 - sin) * v.Y),
-                routePoint.Z + radius * ((1.0 - cos) * u.Z + (1.0 - sin) * v.Z));
+                routePoint.X + (1.0 - cos) * u.X + (1.0 - sin) * v.X,
+                routePoint.Y + (1.0 - cos) * u.Y + (1.0 - sin) * v.Y,
+                routePoint.Z + (1.0 - cos) * u.Z + (1.0 - sin) * v.Z);
 
         // --- targeting / editing -----------------------------------------------------------------
 
-        public List<Vec3d> SampleCurve(int samples)
+        public List<Vec3d> SampleCurve(int samples) =>
+            SampleRail(samples, Math.Sqrt(0.5), Math.Sqrt(0.5));
+
+        /// <summary>
+        /// The useful construction cage for a Roundover: both exact clicked profile endpoints swept along
+        /// the path, plus the original sharp-corner route between them. Keeping these as separate polylines
+        /// prevents the wireframe marcher from drawing false cross-connections between the three rails.
+        /// </summary>
+        public List<List<Vec3d>> SampleWireframeRails(int samples)
+        {
+            return new List<List<Vec3d>>
+            {
+                SampleRail(samples, cos: 0.0, sin: 1.0),
+                SampleRail(samples, cos: 1.0, sin: 1.0),
+                SampleRail(samples, cos: 1.0, sin: 0.0)
+            };
+        }
+
+        private List<Vec3d> SampleRail(int samples, double cos, double sin)
         {
             var result = new List<Vec3d>();
-            if (!TryInitialFrame(out double radius, out _, out Vec3d u, out Vec3d v)
+            if (!TryInitialFrame(out double profileExtent, out _, out Vec3d u, out Vec3d v)
                 || !TryRouteTangents(out Vec3d[] tangents)
-                || !TryBuildFillets(radius, tangents, out CornerFillet[] fillets))
+                || !TryBuildFillets(profileExtent, tangents, out CornerFillet[] fillets))
                 return result;
 
             double total = 0;
@@ -434,9 +474,8 @@ namespace Layout.Shapes
                 else lengthCursor = straightEnd;
             }
             double targetStep = total / Math.Max(16, samples);
-            double c = Math.Sqrt(0.5);
             Vec3d cursor = _controlPoints[0].WorldPosition;
-            result.Add(ProfilePoint(cursor, radius, u, v, c, c));
+            result.Add(ProfilePoint(cursor, u, v, cos, sin));
 
             for (int segment = 0; segment < tangents.Length; segment++)
             {
@@ -448,22 +487,22 @@ namespace Layout.Shapes
                 for (int step = 1; step <= steps; step++)
                     result.Add(ProfilePoint(ShapeGeometry.Lerp(
                             cursor, straightEnd, (double)step / steps),
-                        radius, u, v, c, c));
+                        u, v, cos, sin));
                 cursor = straightEnd;
 
                 if (fillet == null) continue;
                 Vec3d beforeU = u, beforeV = v;
                 Vec3d startOffset = Sub(fillet.Start, fillet.Center);
-                int joinSteps = StepCount((fillet.Radius + radius) * fillet.Angle,
+                int joinSteps = StepCount((fillet.Radius + profileExtent) * fillet.Angle,
                     Math.Max(MinLength, targetStep), minimum: 2);
                 for (int step = 1; step <= joinSteps; step++)
                 {
                     double turn = fillet.Angle * step / joinSteps;
                     Vec3d routePoint = Add(fillet.Center,
                         Rotate(startOffset, fillet.Axis, turn));
-                    result.Add(ProfilePoint(routePoint, radius,
+                    result.Add(ProfilePoint(routePoint,
                         Rotate(beforeU, fillet.Axis, turn),
-                        Rotate(beforeV, fillet.Axis, turn), c, c));
+                        Rotate(beforeV, fillet.Axis, turn), cos, sin));
                 }
                 u = Rotate(beforeU, fillet.Axis, fillet.Angle);
                 v = Rotate(beforeV, fillet.Axis, fillet.Angle);

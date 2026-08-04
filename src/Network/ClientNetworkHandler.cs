@@ -76,9 +76,9 @@ namespace Layout.Network
         public ClientAuthorityMode AuthorityMode { get; private set; } = ClientAuthorityMode.Detecting;
         public bool ServerLayoutAvailable => _serverLayoutAvailable;
         public bool ServerAllowsClientOnlyMode => _serverAllowsClientOnlyMode;
-        /// <summary>Roundover needs the protocol-27 shape meaning on a public authority.</summary>
+        /// <summary>Profile-first Roundover needs the protocol-28 chain meaning on a public authority.</summary>
         public bool RoundoverPlacementSupported => AuthorityMode == ClientAuthorityMode.Local
-            || (AuthorityMode == ClientAuthorityMode.Networked && _serverProtocolVersion >= 27);
+            || (AuthorityMode == ClientAuthorityMode.Networked && _serverProtocolVersion >= 28);
         public bool PublicGuideAccessJailed { get; private set; }
 
         // -- Read-only views for the renderer / HUD / tool ----------------------------------------

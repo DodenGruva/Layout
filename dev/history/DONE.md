@@ -20,6 +20,28 @@
 
 ---
 
+## A21. Roundover control redesign and universal placement modifiers — ✅ DELIVERED v0.4.65–v0.4.71
+
+The Roundover's original route-first/radius-handle gesture was replaced through successive in-game control
+experiments. Full narrative and compatibility detail: `dev/sessions/SESSION_42.md`.
+
+1. **Two discarded approaches (v0.4.65–v0.4.66).** A GUI Radius spinner and automatic inside/outside-corner
+   occupancy probing were each implemented, played and removed. They remain documented in `GOTCHAS` **R13**
+   so neither is mistaken for an untried obvious improvement.
+2. **Exact profile-first construction (v0.4.67).** The first three clicks set the sharp corner and two literal
+   profile endpoints; following unsnapped clicks define the open sweep. Clicking its final point again places.
+   Old one-handle Roundovers retain their original geometry. Protocol 28 gates the new public chain meaning.
+3. **Placement visibility (v0.4.68–v0.4.69).** SHIFT can place Roundover points one guide cell inside material.
+   The live sweep preview becomes a three-rail wireframe—both profile edges and the sharp route—so an interior
+   corner remains visible and the construction can be registered to clicked surfaces.
+4. **Initial-placement modifiers (v0.4.70–v0.4.71).** Idle CTRL+Left-click bypasses grabbing and ignores existing
+   guides when starting a new one. First-click SHIFT embeds every guide type and persists that material-side
+   choice through the draft, while later-stage modifier meanings remain intact.
+5. **Release.** `Layout0.4.71.zip` contains 42 verified entries and 39/39 assets; its packaged DLL matches the
+   zero-warning, zero-error Release build.
+
+---
+
 ## A20. Session-41 review hardening, immense cancellation and claim consistency — ✅ DELIVERED v0.4.55–v0.4.59
 
 An independent review against the refreshed Session-40 tree found three authority gaps, then the requested

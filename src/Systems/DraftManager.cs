@@ -127,7 +127,9 @@ namespace Layout.Systems
         private Vec3d _draftSecond;                     // Session 11: the placed BASE end of a 3-click draft
         private Vec3d _draftThird;                      // 0.2.24: the placed HEIGHT point of a 4-click draft
         private bool _draftFlatSideAligned;
-        private bool _roundoverRouteReady;
+        private bool _draftEmbedded;
+        private Vec3d _roundoverProfileFirst;
+        private Vec3d _roundoverProfileSecond;
         private PlaneAxis _draftPlaneAxis = PlaneAxis.Y; // intrinsic plane for the ellipse family, from click 1's face
 
         // Session 11 (0.1.15): the Free-Shape's growing corner chain. Seeded with the start point on
@@ -189,6 +191,8 @@ namespace Layout.Systems
                 ShiftDraftPoint(_draftStart, offset);
                 ShiftDraftPoint(_draftSecond, offset);
                 ShiftDraftPoint(_draftThird, offset);
+                ShiftDraftPoint(_roundoverProfileFirst, offset);
+                ShiftDraftPoint(_roundoverProfileSecond, offset);
                 foreach (Vec3d point in _draftChain) ShiftDraftPoint(point, offset);
             }
 
@@ -268,7 +272,11 @@ namespace Layout.Systems
             // (the draft steps back to "one anchor placed", same as the 3-click base rule above).
             if (!IsChainShape(_shape) && _draftChain.Count > 1)
                 _draftChain.RemoveRange(1, _draftChain.Count - 1);
-            if (_shape != GuideShapeType.Roundover) _roundoverRouteReady = false;
+            if (_shape != GuideShapeType.Roundover)
+            {
+                _roundoverProfileFirst = null;
+                _roundoverProfileSecond = null;
+            }
         }
 
         /// <summary>The catalog's valid primitive+constraint pairs (Session 9 expansion).</summary>
@@ -492,6 +500,7 @@ namespace Layout.Systems
         // --- Draft lifecycle --------------------------------------------------------------------
 
         public bool HasActiveDraft => _hasDraft;
+        public bool DraftEmbedded => _hasDraft && _draftEmbedded;
 
         /// <summary>The draft's start point as a deep copy, or null if no draft is active.</summary>
         public Vec3d DraftStart => _hasDraft ? new Vec3d(_draftStart.X, _draftStart.Y, _draftStart.Z) : null;
@@ -518,9 +527,28 @@ namespace Layout.Systems
         /// <summary>True when the active draft has its height down and is now aiming the RIM (click 4 of 4).</summary>
         public bool AwaitingRim => _hasDraft && _draftThird != null;
 
-        /// <summary>True after a Roundover route is finished and the next click sets its radius/quadrant.</summary>
-        public bool AwaitingRoundoverRadius =>
-            _hasDraft && _shape == GuideShapeType.Roundover && _roundoverRouteReady;
+        public Vec3d RoundoverProfileFirst => CopyDraftPoint(_roundoverProfileFirst);
+        public Vec3d RoundoverProfileSecond => CopyDraftPoint(_roundoverProfileSecond);
+        public bool AwaitingRoundoverProfileFirst =>
+            _hasDraft && _shape == GuideShapeType.Roundover && _roundoverProfileFirst == null;
+        public bool AwaitingRoundoverProfileSecond =>
+            _hasDraft && _shape == GuideShapeType.Roundover
+            && _roundoverProfileFirst != null && _roundoverProfileSecond == null;
+        public bool RoundoverProfileReady =>
+            _hasDraft && _shape == GuideShapeType.Roundover
+            && _roundoverProfileFirst != null && _roundoverProfileSecond != null;
+
+        private static Vec3d CopyDraftPoint(Vec3d point) => point == null
+            ? null : new Vec3d(point.X, point.Y, point.Z);
+
+        public void PlaceRoundoverProfilePoint(Vec3d point)
+        {
+            if (!_hasDraft || _shape != GuideShapeType.Roundover || point == null) return;
+            if (_roundoverProfileFirst == null)
+                _roundoverProfileFirst = new Vec3d(point.X, point.Y, point.Z);
+            else if (_roundoverProfileSecond == null)
+                _roundoverProfileSecond = new Vec3d(point.X, point.Y, point.Z);
+        }
 
         // --- Free-Shape corner chain (Session 11, 0.1.15) ----------------------------------------
 
@@ -564,26 +592,20 @@ namespace Layout.Systems
             return true;
         }
 
-        /// <summary>Fixes the open Roundover route; the next click supplies its tangent/radius handle.</summary>
-        public bool BeginRoundoverRadiusStage()
-        {
-            if (!_hasDraft || _shape != GuideShapeType.Roundover || _draftChain.Count < 2) return false;
-            _roundoverRouteReady = true;
-            return true;
-        }
-
-        /// <summary>Checks a completed Roundover (route plus final radius handle) against the live cap.</summary>
+        /// <summary>Checks a profile-first Roundover against the live cap.</summary>
         public DraftCompletion TryCompleteRoundover(
-            Vec3d radiusHandle, int knownVoxelCount = -1, bool deferCapCheckToAuthority = false)
+            int knownVoxelCount = -1, bool deferCapCheckToAuthority = false)
         {
-            if (!AwaitingRoundoverRadius || radiusHandle == null)
+            if (!_hasDraft || _shape != GuideShapeType.Roundover
+                || _draftChain.Count < 2 || !RoundoverProfileReady)
                 return new DraftCompletion(DraftCompletionStatus.NoActiveDraft, null, null, 0, 0);
 
             var points = DraftChain;
-            points.Add(new Vec3d(radiusHandle.X, radiusHandle.Y, radiusHandle.Z));
+            points.Add(RoundoverProfileFirst);
+            points.Add(RoundoverProfileSecond);
             int count = knownVoxelCount;
             if (count < 0 && !deferCapCheckToAuthority)
-                count = CountDraftVoxels(new Shapes.RoundoverShape(points));
+                count = CountDraftVoxels(new Shapes.RoundoverShape(points, hasTwoProfileHandles: true));
             if (count < 0) count = 0;
             DraftCompletionStatus status = !deferCapCheckToAuthority
                 && _perGuideVoxelCap > 0 && count > _perGuideVoxelCap
@@ -618,14 +640,16 @@ namespace Layout.Systems
         /// Starting a new draft replaces any existing one.
         /// </summary>
         public void StartDraft(Vec3d startPoint, PlaneAxis shapePlaneAxis = PlaneAxis.Y,
-            bool planeNegative = false)
+            bool planeNegative = false, bool embedded = false)
         {
             if (startPoint == null) throw new ArgumentNullException(nameof(startPoint));
             _draftStart = new Vec3d(startPoint.X, startPoint.Y, startPoint.Z);
             _draftSecond = null;
             _draftThird = null;
             _draftFlatSideAligned = false;
-            _roundoverRouteReady = false;
+            _draftEmbedded = embedded;
+            _roundoverProfileFirst = null;
+            _roundoverProfileSecond = null;
             _draftChain.Clear();
             _draftChain.Add(new Vec3d(startPoint.X, startPoint.Y, startPoint.Z));
             _draftPlaneAxis = shapePlaneAxis;
@@ -664,14 +688,19 @@ namespace Layout.Systems
         public bool StepBackDraft()
         {
             if (!_hasDraft) return false;
-            if (AwaitingRoundoverRadius)
-            {
-                _roundoverRouteReady = false;
-                return true;
-            }
             if (IsChainShape(_shape) && _draftChain.Count > 1)
             {
                 _draftChain.RemoveAt(_draftChain.Count - 1);
+                return true;
+            }
+            if (_shape == GuideShapeType.Roundover && _roundoverProfileSecond != null)
+            {
+                _roundoverProfileSecond = null;
+                return true;
+            }
+            if (_shape == GuideShapeType.Roundover && _roundoverProfileFirst != null)
+            {
+                _roundoverProfileFirst = null;
                 return true;
             }
             if (_draftThird != null)
@@ -766,7 +795,9 @@ namespace Layout.Systems
             _draftSecond = null;
             _draftThird = null;
             _draftFlatSideAligned = false;
-            _roundoverRouteReady = false;
+            _draftEmbedded = false;
+            _roundoverProfileFirst = null;
+            _roundoverProfileSecond = null;
             _draftChain.Clear();
         }
     }

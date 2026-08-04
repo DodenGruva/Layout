@@ -25,7 +25,10 @@ namespace Layout.Client
         ShiftRestore = 1 << 5,
         ShiftFlatSide = 1 << 6,
         CtrlShiftDiagonal = 1 << 7,
-        ShiftAllowFlare = 1 << 8
+        ShiftAllowFlare = 1 << 8,
+        RoundoverRoute = 1 << 9,
+        ShiftEmbedGuide = 1 << 10,
+        CtrlBypassGrab = 1 << 11
     }
 
     /// <summary>
@@ -182,9 +185,13 @@ namespace Layout.Client
                 {
                     if (DraftManager.IsChainShape(_draft.Shape))
                     {
-                        if (_draft.AwaitingRoundoverRadius) return ShapeModifierHelp.None;
-                        return ShapeModifierHelp.CtrlCardinal | ShapeModifierHelp.ShiftVertical
-                            | ShapeModifierHelp.CtrlShiftDiagonal;
+                        if (_draft.Shape == GuideShapeType.Roundover)
+                            return ShapeModifierHelp.RoundoverRoute
+                                | (_draft.DraftEmbedded
+                                    ? ShapeModifierHelp.None : ShapeModifierHelp.ShiftEmbedGuide);
+                        ShapeModifierHelp chainHelp = ShapeModifierHelp.CtrlCardinal
+                            | ShapeModifierHelp.ShiftVertical | ShapeModifierHelp.CtrlShiftDiagonal;
+                        return chainHelp;
                     }
                     if (_draft.AwaitingRim)
                         return DraftManager.IsTaperedRimStage(_draft.Shape)
@@ -218,9 +225,15 @@ namespace Layout.Client
                         return ShapeModifierHelp.CtrlCloseRim | ShapeModifierHelp.ShiftAllowFlare;
                     if (guide.ControlPoints[_grab.PointIndex].IsAnchor)
                         return ShapeModifierHelp.CtrlCardinal;
+                    return _springBackAvailable ? ShapeModifierHelp.ShiftRestore : ShapeModifierHelp.None;
                 }
 
-                return _springBackAvailable ? ShapeModifierHelp.ShiftRestore : ShapeModifierHelp.None;
+                ShapeModifierHelp idleHelp = ShapeModifierHelp.CtrlBypassGrab;
+                if (_springBackAvailable && !CtrlHeld())
+                    idleHelp |= ShapeModifierHelp.ShiftRestore;
+                else
+                    idleHelp |= ShapeModifierHelp.ShiftEmbedGuide;
+                return idleHelp;
             }
         }
 
@@ -975,17 +988,40 @@ namespace Layout.Client
                 // none the height handle follows the view ray. Every other stage still needs a block.
                 if (blockSel != null || AwaitingVolumeHeight)
                 {
-                    Vec3d aim = blockSel != null ? ResolveAnchorPoint(blockSel) : FreeAirAim();
+                    bool embedAim = _draft.DraftEmbedded
+                        || (_draft.Shape == GuideShapeType.Roundover && ShiftHeld());
+                    Vec3d aim = blockSel != null
+                        ? ResolveGuidePoint(blockSel, embedAim) : FreeAirAim();
                     if (DraftManager.IsChainShape(_draft.Shape))
                     {
-                        if (_draft.AwaitingRoundoverRadius)
+                        if (_draft.Shape == GuideShapeType.Roundover)
                         {
-                            aim = ConstrainRoundoverRadiusAim(aim);
                             ObserveDraftMotion(aim, flatSideAligned: false);
-                            PresentDraft(new DraftPreviewSpec(0, BuildSettings(blockSel, aim),
-                                GuideShapeType.Roundover, _draft.DraftChain, aim, closing: false,
-                                planeAxis: _draft.DraftPlaneAxis),
-                                aim, false);
+                            if (_draft.AwaitingRoundoverProfileFirst)
+                            {
+                                PresentDraft(new DraftPreviewSpec(
+                                    0, BuildSettings(blockSel, aim), _draft.DraftChain, aim, false),
+                                    aim, false);
+                            }
+                            else if (_draft.AwaitingRoundoverProfileSecond)
+                            {
+                                var profileLegs = new List<Vec3d>
+                                {
+                                    _draft.RoundoverProfileFirst,
+                                    _draft.DraftStart
+                                };
+                                PresentDraft(new DraftPreviewSpec(
+                                    0, BuildSettings(blockSel, aim), profileLegs, aim, false),
+                                    aim, false);
+                            }
+                            else
+                            {
+                                Vec3d routeAim = Dist(aim, _draft.ChainLast) > 1e-7 ? aim : null;
+                                PresentDraft(new DraftPreviewSpec(
+                                    0, RoundoverSweepPreviewSettings(blockSel, aim), _draft.DraftChain,
+                                    _draft.RoundoverProfileFirst, _draft.RoundoverProfileSecond,
+                                    routeAim, _draft.DraftPlaneAxis), aim, false);
+                            }
                             return;
                         }
 
@@ -1701,6 +1737,16 @@ namespace Layout.Client
                 return;
             }
 
+            // Idle CTRL+click is an explicit placement override. Layout's guides have no engine selection
+            // boxes, so the block selection still names the real block behind the translucent guide; skip
+            // only our own guide hit-test and feed that block directly into first-anchor placement.
+            if (CtrlHeld())
+            {
+                _draft.ClearSelection();
+                HandleCreateClick(blockSel);
+                return;
+            }
+
             // 3./4. A guide under the crosshair outranks anchor placement.
             TargetHit hit = FindTarget(includeLockedPoints: false); // locked points are not grabbable
             if (hit.Found)
@@ -1916,7 +1962,12 @@ namespace Layout.Client
             // it may complete in free air (0.1.23), the view ray standing in for the click point.
             if (blockSel == null && !AwaitingVolumeHeight) return;
 
-            Vec3d anchor = blockSel != null ? ResolveAnchorPoint(blockSel) : FreeAirAim();
+            bool embedPoint = !_draft.HasActiveDraft
+                ? ShiftHeld()
+                : _draft.DraftEmbedded
+                    || (_draft.Shape == GuideShapeType.Roundover && ShiftHeld());
+            Vec3d anchor = blockSel != null
+                ? ResolveGuidePoint(blockSel, embedPoint) : FreeAirAim();
             // Base-stage modifiers: SHIFT makes a Line vertical; CTRL supplies the normal cardinal snap.
             // SHIFT wins if both are held. Multi-corner Free-Shape segments use their own equivalent helper.
             if (_draft.HasActiveDraft && !_draft.AwaitingApex
@@ -1928,7 +1979,7 @@ namespace Layout.Client
                 if (_draft.Shape == GuideShapeType.Roundover && !_net.RoundoverPlacementSupported)
                 {
                     Error("layout-roundoverprotocol",
-                        "Roundover Path requires Layout 0.4.60 or newer on the server. Private placement remains available where the server permits it.");
+                        "Profile-first Roundover requires Layout 0.4.67 or newer on the server. Private placement remains available where the server permits it.");
                     return;
                 }
 
@@ -1953,7 +2004,8 @@ namespace Layout.Client
                 // The first click also fixes the INTRINSIC plane for the ellipse family (Session 8): click
                 // the ground → a flat ring (normal Y); click a wall → a ring on the wall (normal X/Z). The
                 // arch family carries it unused.
-                _draft.StartDraft(anchor, AxisFromFace(blockSel), FaceIsNegative(blockSel));
+                _draft.StartDraft(anchor, AxisFromFace(blockSel), FaceIsNegative(blockSel),
+                    embedded: embedPoint);
                 _rimAimArmed = false;
                 _rimAwaitingRelease = false;
                 ResetDraftVisualState();
@@ -1968,14 +2020,47 @@ namespace Layout.Client
             // finishes it open. CTRL snaps each new segment relative to the PREVIOUS corner.
             if (DraftManager.IsChainShape(_draft.Shape))
             {
-                Vec3d corner = ConstrainChainAim(ResolveAnchorPoint(blockSel));
+                Vec3d corner = _draft.Shape == GuideShapeType.Roundover
+                    ? ResolveGuidePoint(blockSel, _draft.DraftEmbedded || ShiftHeld())
+                    : ResolveGuidePoint(blockSel, _draft.DraftEmbedded);
 
-                if (_draft.AwaitingRoundoverRadius)
+                if (_draft.Shape == GuideShapeType.Roundover)
                 {
-                    Vec3d radiusHandle = ConstrainRoundoverRadiusAim(corner);
-                    CompleteRoundover(blockSel, radiusHandle);
+                    if (_draft.AwaitingRoundoverProfileFirst || _draft.AwaitingRoundoverProfileSecond)
+                    {
+                        if (Dist(corner, _draft.DraftStart) < 1e-7)
+                        {
+                            Error("layout-roundoverprofile",
+                                "Place each profile endpoint away from the sharp corner.");
+                            return;
+                        }
+                        if (_draft.AwaitingRoundoverProfileSecond
+                            && Dist(corner, _draft.RoundoverProfileFirst) < 1e-7)
+                        {
+                            Error("layout-roundoverprofile",
+                                "Place the second profile endpoint at a different point from the first.");
+                            return;
+                        }
+                        _draft.PlaceRoundoverProfilePoint(corner);
+                        ResetDraftVisualState();
+                        return;
+                    }
+
+                    if (Dist(corner, _draft.ChainLast) < 1e-7)
+                    {
+                        if (_draft.ChainCount >= 2) CompleteRoundover(blockSel);
+                        return;
+                    }
+
+                    if (!_draft.AppendChainPoint(corner))
+                    {
+                        Error("layout-chaincap",
+                            $"Route corner limit reached ({Shapes.RoundoverShape.MaxRoutePoints}). Finish or step back.");
+                    }
                     return;
                 }
+
+                corner = ConstrainChainAim(corner);
 
                 double snap = ChainSnapRadius();
                 bool onFirst = _draft.ChainFirst != null && Dist(corner, _draft.ChainFirst) <= snap;
@@ -1987,13 +2072,7 @@ namespace Layout.Client
                 }
                 else if (onLast && _draft.ChainCount >= 2)
                 {
-                    if (_draft.Shape == GuideShapeType.Roundover)
-                    {
-                        _draft.BeginRoundoverRadiusStage();
-                        ResetDraftVisualState();
-                        _renderer.ClearDraftPreview();
-                    }
-                    else CompleteChain(closed: false, blockSel, corner);
+                    CompleteChain(closed: false, blockSel, corner);
                 }
                 else if (onFirst || onLast)
                 {
@@ -2002,8 +2081,7 @@ namespace Layout.Client
                 }
                 else if (!_draft.AppendChainPoint(corner))
                 {
-                    int maximum = _draft.Shape == GuideShapeType.Roundover
-                        ? Shapes.RoundoverShape.MaxRoutePoints : Shapes.FreeShape.MaxCorners;
+                    int maximum = Shapes.FreeShape.MaxCorners;
                     Error("layout-chaincap",
                         $"Route corner limit reached ({maximum}). Finish or step back.");
                 }
@@ -2146,39 +2224,39 @@ namespace Layout.Client
             }
         }
 
-        private void CompleteRoundover(BlockSelection blockSel, Vec3d radiusHandle)
+        private void CompleteRoundover(BlockSelection blockSel)
         {
-            if (radiusHandle == null) return;
             List<Vec3d> chain = _draft.DraftChain;
-            chain.Add(new Vec3d(radiusHandle.X, radiusHandle.Y, radiusHandle.Z));
-            var shape = new Shapes.RoundoverShape(chain);
+            chain.Add(_draft.RoundoverProfileFirst);
+            chain.Add(_draft.RoundoverProfileSecond);
+            var shape = new Shapes.RoundoverShape(chain, hasTwoProfileHandles: true);
             if (GuideShapeVoxelCounting.CountUpTo(shape, _draft.Scale, false, 0) == 0)
             {
                 Error("layout-roundoverradius",
-                    "Choose a smaller radius or place route corners farther apart. The radius must stay away from the route, and the route cannot reverse directly back on itself.");
+                    "The profile endpoints must stay away from the sharp corner, and the sweep path cannot reverse directly back on itself.");
                 return;
             }
 
-            GuideRenderSettings settings = BuildSettings(blockSel, radiusHandle);
+            Vec3d lastAim = _draft.ChainLast;
+            GuideRenderSettings settings = BuildSettings(blockSel, lastAim);
             var candidateSpec = new DraftPreviewSpec(
-                _draftGeneration, settings, GuideShapeType.Roundover,
-                _draft.DraftChain, radiusHandle, closing: false,
-                planeAxis: _draft.DraftPlaneAxis);
+                _draftGeneration, settings, _draft.DraftChain,
+                _draft.RoundoverProfileFirst, _draft.RoundoverProfileSecond,
+                null, _draft.DraftPlaneAxis);
             bool candidateMatchesPreview = candidateSpec.Fingerprint() == _draftPoseFingerprint;
             int knownVoxelCount = candidateMatchesPreview
                 && _acceptedDraftScale == settings.Scale ? _acceptedDraftVoxelCount : -1;
             bool deferCapCheck = knownVoxelCount < 0
                 && _net.AuthorityMode == ClientAuthorityMode.Networked
                 && !_draft.Wireframe;
-            DraftCompletion completion = _draft.TryCompleteRoundover(
-                radiusHandle, knownVoxelCount, deferCapCheck);
+            DraftCompletion completion = _draft.TryCompleteRoundover(knownVoxelCount, deferCapCheck);
             if (completion.IsReady)
             {
                 bool retainedExactPreview = _renderer.RetainExactDraftForPlacement(candidateSpec);
                 _net.SendCreateRequest(completion.Start, completion.End, settings,
                     GuideShapeType.Roundover, ShapeConstraint.None, _draft.DraftPlaneAxis,
                     inverted: false, sides: 0, apex: null,
-                    chain: chain, closed: false,
+                    chain: chain, closed: true,
                     deferPlacementEffects: retainedExactPreview);
                 _draft.ClearDraft();
                 ResetDraftVisualState();
@@ -2209,27 +2287,6 @@ namespace Layout.Client
             if (ShiftHeld()) return new Vec3d(reference.X, aim.Y, reference.Z);
             if (CtrlHeld()) return ConstrainTo(reference, aim);
             return aim;
-        }
-
-        // The radius handle lives in the plane normal to the route's first segment. Keeping the stored
-        // point on that plane makes it coincide exactly with the visible tangent edge and gives edits a
-        // stable, literal radius (distance from route start to green handle).
-        private Vec3d ConstrainRoundoverRadiusAim(Vec3d aim)
-        {
-            Vec3d start = _draft.ChainFirst;
-            List<Vec3d> route = _draft.DraftChain;
-            if (aim == null || start == null || route.Count < 2) return aim;
-            Vec3d direction = new Vec3d(route[1].X - start.X,
-                route[1].Y - start.Y, route[1].Z - start.Z);
-            double length = Math.Sqrt(direction.X * direction.X
-                + direction.Y * direction.Y + direction.Z * direction.Z);
-            if (length < 1e-9) return start;
-            direction.X /= length; direction.Y /= length; direction.Z /= length;
-            double dx = aim.X - start.X, dy = aim.Y - start.Y, dz = aim.Z - start.Z;
-            double along = dx * direction.X + dy * direction.Y + dz * direction.Z;
-            return new Vec3d(aim.X - direction.X * along,
-                aim.Y - direction.Y * along,
-                aim.Z - direction.Z * along);
         }
 
         // The 2D Line shares Free-Shape's world-vertical SHIFT constraint. CTRL retains the usual
@@ -3170,6 +3227,23 @@ namespace Layout.Client
             return new Vec3d(x, y, z);
         }
 
+        // Embedded placement chooses the material-side voxel without changing either tangential coordinate.
+        // Volumetric anchors move exactly one selected-scale cell from the ordinary outside-cell centre to
+        // the matching centre inside the targeted block. Surface mode starts on the face plane, so half a
+        // cell reaches that same material-side centre.
+        private Vec3d ResolveGuidePoint(BlockSelection blockSel, bool embed)
+        {
+            Vec3d point = ResolveAnchorPoint(blockSel);
+            if (!embed || blockSel?.Face == null) return point;
+
+            Vec3i normal = blockSel.Face.Normali;
+            double cell = _draft.Scale / 16.0;
+            double inward = _draft.Projection == ProjectionMode.Surface ? cell * 0.5 : cell;
+            return new Vec3d(point.X - normal.X * inward,
+                point.Y - normal.Y * inward,
+                point.Z - normal.Z * inward);
+        }
+
         // True when the active draft is on a free-air-capable stage of a 3D volume: the HEIGHT stage
         // (cylinder/cone, base placed) or — 0.2.24 — the Tapered Cylinder's RIM stage after it.
         private bool AwaitingVolumeHeight
@@ -3403,6 +3477,14 @@ namespace Layout.Client
                     settings.Plane, settings.Filled, 0, settings.Wireframe);
 
             return settings;
+        }
+
+        private GuideRenderSettings RoundoverSweepPreviewSettings(
+            BlockSelection blockSel, Vec3d anchor)
+        {
+            GuideRenderSettings settings = BuildSettings(blockSel, anchor);
+            return new GuideRenderSettings(settings.Scale, settings.Mode, settings.Plane,
+                settings.Filled, settings.Divisions, wireframe: true);
         }
 
         // ==========================================================================================

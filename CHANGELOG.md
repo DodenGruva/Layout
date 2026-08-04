@@ -2,6 +2,72 @@
 
 All notable changes to Layout will be recorded in this file going forward.
 
+## 0.4.71 - 2026-08-04
+
+### Added
+
+- **SHIFT on the first click embeds any new guide into the material.** The whole draft remembers that choice,
+  so later points stay on the same material side without holding SHIFT again. Roundover still allows SHIFT on
+  individual later points when the draft did not begin embedded.
+
+### Changed
+
+- The placement tooltip now says **“Embed Guide.”** Existing later-stage SHIFT controls, including vertical,
+  inverted and flat-side placement, keep their prior meanings.
+
+## 0.4.70 - 2026-08-04
+
+### Added
+
+- **CTRL+Left-click can start a new guide through an existing guide.** In idle Create mode it bypasses grabbing
+  and ignores Layout guide targeting, using the real block behind the translucent guide. Active draft and grab
+  controls are unchanged. The held-help tooltip reads “Bypass Grab and Ignore Existing Guides.”
+
+## 0.4.69 - 2026-08-03
+
+### Changed
+
+- **Roundover's wireframe preview now shows three construction rails:** both clicked profile edges swept along
+  the route, plus the sharp-corner route itself. This replaces the floating midpoint wire and makes interior
+  sweep placement readable against the corner being followed.
+
+## 0.4.68 - 2026-08-03
+
+### Added
+
+- **SHIFT places a Roundover point inside the targeted material** by one guide cell, allowing exterior-corner
+  profiles to occupy the block instead of landing outside its face.
+
+### Changed
+
+- The live Roundover sweep preview uses wireframe after the profile is established, keeping the corner under
+  the crosshair visible.
+
+## 0.4.67 - 2026-08-03
+
+### Changed
+
+- **Roundover placement is now profile-first.** Click the sharp corner, click the two exact profile endpoints,
+  then click the sweep path; click the final path point again to place. Neither profile nor path points snap.
+- Both profile legs remain editable. Older one-handle Roundovers retain their original geometry. Public
+  profile-first placement requires protocol 28; private placement remains local.
+- Removed the Radius-field and automatic corner-probing experiments from 0.4.65–0.4.66.
+
+## 0.4.66 - 2026-08-03
+
+### Added
+
+- Tried automatic interior/exterior Roundover selection by probing material around the first guide point.
+  **Withdrawn in 0.4.67:** partial and chiselled block layouts made inference less useful than exact player
+  input.
+
+## 0.4.65 - 2026-08-03
+
+### Added
+
+- Tried a GUI Radius field with spinner controls for Roundover. **Withdrawn in 0.4.67:** the number exposed the
+  setting but did not make the spatial construction more intuitive.
+
 ## 0.4.64 - 2026-08-02
 
 ### Added

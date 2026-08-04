@@ -428,6 +428,12 @@ namespace Layout.UI
 
             if (_tool.HasActiveDraft && _tool.DraftStart != null)
             {
+                if (_tool.Shape == GuideShapeType.Roundover)
+                {
+                    ShowRoundoverDraftContext();
+                    return;
+                }
+
                 ShowContextLabels();
                 if (_draftMeasurementReady)
                 {
@@ -463,6 +469,43 @@ namespace Layout.UI
                 SetText("ctx3", TotalVoxelsText(contextGuide.CachedVoxelCount));
                 SetText("ctx4", CapRowText(contextGuide.CachedVoxelCount, _net.PerGuideVoxelCap));
             }
+        }
+
+        private void ShowRoundoverDraftContext()
+        {
+            ClearContextRows();
+            if (_tool.AwaitingRoundoverProfileFirst)
+            {
+                SetText("ctx1", "Profile: sharp corner placed");
+                SetText("ctx2", "Click first profile endpoint");
+                SetText("ctx3", "SHIFT: place inside block");
+                return;
+            }
+
+            double first = ProfileDistance(_tool.RoundoverProfileFirst);
+            if (_tool.AwaitingRoundoverProfileSecond)
+            {
+                SetText("ctx1", $"First leg: {first:0.####} blocks");
+                SetText("ctx2", "Click second profile endpoint");
+                SetText("ctx3", "SHIFT: place inside block");
+                return;
+            }
+
+            double second = ProfileDistance(_tool.RoundoverProfileSecond);
+            SetText("ctx1", $"Profile legs: {first:0.####} / {second:0.####}");
+            SetText("ctx2", _tool.ChainCount < 2
+                ? "Click to begin sweep path"
+                : $"Sweep points: {_tool.ChainCount}");
+            SetText("ctx3", "SHIFT: place inside block");
+            SetText("ctx4", "Click final point again: place");
+        }
+
+        private double ProfileDistance(Vec3d point)
+        {
+            Vec3d start = _tool.DraftStart;
+            if (point == null || start == null) return 0;
+            double x = point.X - start.X, y = point.Y - start.Y, z = point.Z - start.Z;
+            return Math.Sqrt(x * x + y * y + z * z);
         }
 
         private void ClearContextRows()

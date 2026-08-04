@@ -54,7 +54,7 @@ namespace Layout.Network
         /// because every change so far has been append-only and therefore back-compatible by construction.
         /// <c>dev/WIRE_HISTORY.md</c> records what each number added.
         /// </summary>
-        public const int ProtocolVersion = 27;
+        public const int ProtocolVersion = 28;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>

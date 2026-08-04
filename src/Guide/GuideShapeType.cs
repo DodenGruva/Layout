@@ -106,8 +106,8 @@ namespace Layout.Guide
         TaperedPolygonalPrism = 14,
 
         /// <summary>
-        /// Roundover path: an open chain describes a sharp edge and one final tangent handle sets a
-        /// constant quarter-round radius. Route corners use rolling-ball transitions rather than mitres.
+        /// Roundover path: the first three clicks describe the sharp corner and two exact profile legs;
+        /// the remaining open chain describes the sweep path.
         /// </summary>
         Roundover = 15
 

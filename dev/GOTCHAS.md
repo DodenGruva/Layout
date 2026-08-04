@@ -693,6 +693,19 @@ never add a second whole-mesh compensation. After the camera pull was removed in
 and 0.0002 was selected as the small-buffer default (0.32% of a scale-1 micro-block).
 **Found and confirmed in play v0.4.63–v0.4.64, Session 41 §8.**
 
+### G49 — Profile-first Roundovers are identified by control-point roles, not `IsClosed`.
+**Trigger:** before changing Roundover chain parsing, terminal control-point roles, `ShapeFactory`'s `closed`
+argument, or `GuideData.IsClosed` handling.
+**Trap:** the profile-first create request reuses `Closed = true` to select the two-profile constructor because
+the shared packet has no dedicated encoding flag. The created geometry is still an open sweep, and
+`GuideManager` persists closed state only for Free-Shape. New Roundovers therefore identify themselves later
+by two terminal Primary control points; legacy Roundovers have one terminal Primary handle and must retain
+their original constant-radius interpretation.
+**Do:** preserve both terminal Primary roles and detect the representation from them when adopting saved/wire
+control points. Treat `closed` only as the create-seam discriminator. Never rewrite old guides or infer the
+representation from `GuideData.IsClosed`.
+**Introduced v0.4.67, Session 42 §2.**
+
 ---
 
 ## Reversals and disproved claims
@@ -853,6 +866,22 @@ unwired, precisely so that the geometry is not the reason to start.
 
 **Detail:** `SESSION_39.md` §3. ⚠️ Related but separate: claim protection **cannot be tested from a
 singleplayer world** — the host holds `controlserver` and Layout exempts it deliberately (§4).
+
+### R13 — Roundover is profile-first, not Radius-field or block-probed. Tried v0.4.65–v0.4.66, replaced v0.4.67.
+**Do not reintroduce either discarded control scheme as the default Roundover gesture.** Both were built and
+evaluated in play.
+
+The GUI Radius field made the parameter visible but left the spatial relationship indirect; the human found
+the controls less intuitive. Automatic inside/outside-corner selection from nearby material looked simpler,
+but partial and chiselled blocks made the inference less dependable than the player's intended cut.
+
+The settled gesture records construction geometry directly: sharp corner, first profile endpoint, second
+profile endpoint, then the unsnapped sweep path. It does not ask the player to click the floating arc midpoint,
+and it does not remove precision through positional or angular snapping. The human reported this works “MUCH
+better.” SHIFT material-side placement and the three-rail wireframe solve the exterior/interior visibility
+problems without changing that explicit geometry.
+
+**Detail:** `SESSION_42.md` §§1–3.
 
 ---
 

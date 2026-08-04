@@ -2066,7 +2066,7 @@ namespace Layout.Systems
 
                 int movingScale = ChooseMovingWireframeScale(
                     curve, Math.Max(selectedScale, adaptiveMinimumScale));
-                List<VoxelPosition> voxels = BuildWireframe(curve, movingScale);
+                List<VoxelPosition> voxels = BuildWireframe(shape, curve, movingScale);
 
                 for (int i = 0; i < shape.ControlPoints.Count; i++)
                 {
@@ -2146,6 +2146,12 @@ namespace Layout.Systems
                 VoxelMarch.MarchSegmentInto(voxels, seen, curve[i - 1], curve[i], scale);
             return voxels;
         }
+
+        private static List<VoxelPosition> BuildWireframe(
+            IGuideShape shape, IReadOnlyList<Vec3d> fallbackCurve, int scale) =>
+            shape is RoundoverShape
+                ? ShapeWireframe.GetVoxelPositions(shape, scale)
+                : BuildWireframe(fallbackCurve, scale);
 
         private void UploadPrecisionLayers(
             IGuideShape shape, IReadOnlyList<Vec3d> curve, DraftPreviewSpec spec, int movingScale)
@@ -3046,7 +3052,7 @@ namespace Layout.Systems
                 if (estimate <= PreviewFullResVoxelCap) return false;
 
                 int movingScale = ChooseMovingWireframeScale(curve, selectedScale);
-                List<VoxelPosition> voxels = BuildWireframe(curve, movingScale);
+                List<VoxelPosition> voxels = BuildWireframe(shape, curve, movingScale);
                 for (int i = 0; i < shape.ControlPoints.Count; i++)
                 {
                     ControlPoint point = shape.ControlPoints[i];
@@ -4192,7 +4198,7 @@ namespace Layout.Systems
         {
             List<Vec3d> curve = shape.SampleCurve(128);
             int scaffoldScale = ChooseMovingWireframeScale(curve, guide.VoxelScale);
-            List<VoxelPosition> coarse = BuildWireframe(curve, scaffoldScale);
+            List<VoxelPosition> coarse = BuildWireframe(shape, curve, scaffoldScale);
 
             for (int i = 0; i < points.Count; i++)
             {
@@ -4407,7 +4413,7 @@ namespace Layout.Systems
                 _grabAdaptiveScale > 0 ? _grabAdaptiveScale : selectedScale);
             List<Vec3d> curve = shape.SampleCurve(128);
             int movingScale = ChooseMovingWireframeScale(curve, minimumScale);
-            List<VoxelPosition> coarse = BuildWireframe(curve, movingScale);
+            List<VoxelPosition> coarse = BuildWireframe(shape, curve, movingScale);
 
             for (int i = 0; i < points.Count; i++)
             {

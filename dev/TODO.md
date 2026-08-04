@@ -18,7 +18,7 @@ A10.1 and A13 closed in Session 38, A14 emptied in Session 37. **Nothing in this
 looked at this" item.** Every remaining entry is either work someone chose, a decision awaiting the human,
 or a claim awaiting a playtest.
 
-**v0.4.40–v0.4.59 have shipped.** v0.4.39 passed, and v0.4.42's chiselling highlights were confirmed good in
+**v0.4.40–v0.4.71 have shipped.** v0.4.39 passed, and v0.4.42's chiselling highlights were confirmed good in
 play on 2026-08-01 — which also settled **A16** (→ `DONE.md`).
 
 ⚠️ **v0.4.48 must not be used** — it shipped a claim pre-filter that was a permissions hole and v0.4.49
@@ -34,6 +34,11 @@ transactional compound Transform, malformed no-op rejection, and deep cancellati
 geometry. Count-only claim revision was replaced by a fail-closed structural snapshot and then bounded to the
 exact guide footprint; distant claims cannot restart work and exact per-block access checks are unchanged.
 
+**Session 42 is delivered** (v0.4.65–v0.4.71 → `DONE.md`): Roundover now takes an exact three-click profile
+followed by an unsnapped sweep path; material embedding and the three-rail wireframe answer exterior/interior
+placement problems. CTRL bypass and persistent first-click SHIFT embedding now apply across initial guide
+placement. The Radius-field and block-probing experiments are deliberately retired (`GOTCHAS` **R13**).
+
 **Nothing is queued behind it.** The next piece of work is whatever the human chooses.
 
 ⚠️ **A17 (per-guide "index cards") was proposed, agreed, and then DISMISSED** once the save layer was
@@ -42,7 +47,7 @@ is archived intact at `dev/archive/superseded-2026-08-01/PLAN_GUIDE_PERSISTENCE.
 
 ## A19. Awaiting a playtest — the background save
 
-**v0.4.59 is the current build to test; it carries Session 40 unchanged. v0.4.50–v0.4.52 each contain a
+**v0.4.71 is the current build to test; it carries Session 40 unchanged. v0.4.50–v0.4.52 each contain a
 background-save defect fixed by v0.4.53/v0.4.54.** Nothing in Session 40 has been played yet — stated by the
 human, not assumed.
 

@@ -43,8 +43,12 @@ namespace Layout.Shapes
                     return new FreeShape(chain != null && chain.Count >= 2 ? chain : new[] { start, end },
                         closed && chain != null && chain.Count >= 3);
                 case GuideShapeType.Roundover:
-                    return new RoundoverShape(chain != null && chain.Count >= 3
-                        ? chain : new[] { start, end, start });
+                    IReadOnlyList<Vec3d> roundoverPoints = chain != null
+                        && chain.Count >= (closed ? 4 : 3)
+                        ? chain
+                        : closed ? new[] { start, end, start, start }
+                        : new[] { start, end, start };
+                    return new RoundoverShape(roundoverPoints, hasTwoProfileHandles: closed);
                 case GuideShapeType.Sphere:
                     return new SphereShape(start, end);
                 case GuideShapeType.Dome:
