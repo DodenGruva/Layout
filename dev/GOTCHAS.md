@@ -739,6 +739,38 @@ picture by creating a worse immense-guide cost.
 (`sqrt(3)/2 × edge`) with no block-sized floor. Every mutating action retains exact rendered-cell confirmation.
 **Found and confirmed in play v0.4.73, Session 43 §3.**
 
+### G53 — Progressive reveal order is not settled geometry order.
+**Trigger:** before publishing a progressive volume's final voxels, sorting shape output, or changing marker
+claiming that resolves equal-distance cells by first occurrence.
+**Trap:** Dome materialisation intentionally shuffles cells for an organic reveal. Publishing that list as the
+settled mesh retained a splotchy final appearance. Restoring X/Y/Z order only after marker claiming still
+changed 44 role assignments across nine orientation/scale cases because equal-distance marker ties followed
+the shuffled first occurrence.
+**Do:** restore the ordinary generator's canonical order before any order-sensitive role/marker pass, then
+build the settled mesh from that result. Keep reveal ordering as transient animation state only. Compare the
+complete final voxel sequence and roles against ordinary generation, not merely the occupied-cell set.
+**Found and fixed v0.4.77–v0.4.78, Session 44 §3.**
+
+### G54 — Blank HUD labels still reserve their configured width.
+**Trigger:** before spreading multi-line state prose across shared HUD context rows or changing their bounds.
+**Trap:** the standard context rows reserve different left-label widths for other modes. Giving those rows
+empty labels did not remove the reservation, so successive lines of Fillet's final instruction started at
+different horizontal positions. Globally equalising the rows would risk every other HUD layout.
+**Do:** give mode-specific multi-line prose dedicated overlay rows that share one left bound, clear them
+outside that mode, and leave the general label/value rows unchanged.
+**Found and fixed v0.4.81, Session 44 §4.**
+
+### G55 — Conservative estimates and exact authority cannot both own completion.
+**Trigger:** before changing large-volume threshold prediction, pending materialisation handoff, or placement
+sound/effect ownership.
+**Trap:** the client can conservatively predict background work while authority's exact count selects the
+ordinary path. If exact completion does not cancel that false-positive pending handoff, both paths can finish:
+the placement sound plays twice and a second settled mesh arrives with a visible lighting/shading change.
+**Do:** make exact authority completion cancel any conservative pending state, and assign materialisation and
+placement effects to one explicit owner. Estimates may choose a provisional UX path; they cannot establish a
+second completion contract.
+**Found and fixed v0.4.76, Session 44 §2.**
+
 ---
 
 ## Reversals and disproved claims
@@ -929,6 +961,10 @@ restore nearest-handle grab mapping as a fallback. Right-click locking retains i
 
 The HUD's candidate envelope was tightened in v0.4.73 to match this precision without regenerating immense
 voxel sets every tick. The human reported the final result excellent.
+
+**Narrow Dome exception added v0.4.77:** an exact hit on a visible base-circumference cell maps to the nearer
+diameter anchor, restoring the former rim-drag affordance. This is not arbitrary nearest-handle snapping:
+upper-shell cells and empty space do nothing, and other parametric bodies still require exact marker hits.
 
 **Detail:** `SESSION_43.md` §§2–3.
 

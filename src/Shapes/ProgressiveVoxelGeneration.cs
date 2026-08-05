@@ -116,6 +116,30 @@ namespace Layout.Shapes
         private const int SpatialTileEdge = 8;
 
         /// <summary>
+        /// Restores the X/Y/Z scan order used by spherical settled shells. The linear pre-check avoids a
+        /// second O(n log n) sort when a shape has already canonicalised its progressive result before
+        /// assigning order-sensitive control-point marker ties.
+        /// </summary>
+        internal static void EnsureSpatialOrder(List<VoxelPosition> voxels)
+        {
+            if (voxels == null || voxels.Count < 2) return;
+            for (int i = 1; i < voxels.Count; i++)
+            {
+                if (CompareSpatial(voxels[i - 1], voxels[i]) <= 0) continue;
+                voxels.Sort(CompareSpatial);
+                return;
+            }
+        }
+
+        private static int CompareSpatial(VoxelPosition a, VoxelPosition b)
+        {
+            int byX = a.X.CompareTo(b.X);
+            if (byX != 0) return byX;
+            int byY = a.Y.CompareTo(b.Y);
+            return byY != 0 ? byY : a.Z.CompareTo(b.Z);
+        }
+
+        /// <summary>
         /// Divides a scan volume into small patches and visits those patches in a deterministic shuffled
         /// order. Accepted cells remain locally clustered, but successive clusters come from unrelated
         /// parts of the whole guide, producing a splotchy reveal without changing the final voxel set.

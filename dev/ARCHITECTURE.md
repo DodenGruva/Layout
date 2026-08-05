@@ -38,7 +38,7 @@ The tool is a held item with an F-key **tile menu** (Create/Edit/Transform/Delet
 uses first-person clicks and crosshair targeting rather than transform gizmos. The **shape catalog** is
 **16 shape types shown as 22 picker tiles**, split into a **2D section** — arch · half-circle · circle ·
 ellipse · line · triangle (+ right/equilateral/isosceles) · rectangle (+ square) · polygon (regular N-gon) ·
-Free-Shape (irregular polyline) — and a **3D VOLUME section** — Roundover Path · sphere · dome · cylinder · tapered
+Free-Shape (irregular polyline) — and a **3D VOLUME section** — Fillet · sphere · dome · cylinder · tapered
 cylinder · polygonal prism · tapered polygonal prism · cone · box. It is
 built on the **primitives+constraints** model (a half-circle is an arch under a SemiCircle constraint, a
 circle is an ellipse under a Circle constraint, a square is a rectangle under a Square constraint, and the
@@ -47,19 +47,20 @@ with a two-click gesture**, with the deliberately reopened exceptions: the free/
 the free Rectangle, and the 3D cylinder/polygonal prism/cone take **three clicks**, the Box and the Tapered
 Cylinder / Tapered Polygonal Prism take **four** (the tapered pair's fourth click is a rim setting the top
 radius; the Box's is an ordinary height), the Free-Shape takes **unbounded chained clicks** (≤64), and
-Roundover takes an open route followed by one radius/quadrant handle. `DraftManager.NeedsApexClick`,
+Fillet records a corner and two profile-side points before chaining its open sweep path. `DraftManager.NeedsApexClick`,
 `NeedsFourthClick`, and the chained-shape state are the authority
-on which shape takes how many. Players reshape 2D guides by grabbing points (clicking the body
-inserts-and-grabs in one motion on the arch and Free-Shape families, or grabs the nearest handle on every
-other parametric shape), locking points as constraints, and relying on two standing contracts:
+on which shape takes how many. Players reshape guides by grabbing exact rendered cells: clicking the body
+inserts-and-grabs in one motion on the Arch and Free-Shape families; parametric shapes otherwise require an
+exact coloured marker, with one narrow Dome exception that maps an exact visible base-rim cell to the nearer
+diameter anchor. They lock points as constraints and rely on two standing contracts:
 **absorb-or-break** (a grab a constraint can absorb, it absorbs; one it cannot absorb demotes the shape to
 its free parent, seamlessly and undoably) and **soft-point flow** (slave-regime: an interior grab slaves
 unlocked points onto the curve with zero offset, a structural grab keeps shape-preserving proportional flow —
 locking is the only thing that pins geometry). Each guide can additionally be rescaled, toggled between
 volumetric (3D) and surface (flat decal) projection, set hollow or **filled** (arch family: the region closed
 by the foot-to-foot chord; ellipse/polygon: the disc/interior; triangle/rectangle: the interior/box;
-3D volumes: the solid), given a purely-visual **equal-parts division** overlay, and hidden or shown. **The 3D
-volumes are always Volumetric** (Surface and Divisions do not apply to them) and are voxelised by a cell-
+3D volume fill is retired), given a purely-visual **equal-parts division** overlay, and hidden or shown. **The
+3D volumes are always Volumetric** (Surface and Divisions do not apply to them) and are voxelised by a cell-
 lattice shell/solid scan rather than curve-marching.
 
 Colors: yellow body, red locked points, green apex/primary, blue anchors (indigo off-shade for a non-coplanar
@@ -295,6 +296,11 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   not one: it asks about a voxel's OWN cell and feeds colour only, never geometry.
 - **Settled guides always render at their true scale**; `ChooseRenderScale` coarsening (8,000-voxel cap) is
   a **draft-ghost-only** courtesy — it once leaked into placed guides and permanently degraded them.
+- **Settled order is canonical, never progressive reveal order.** Organic volume materialisation may reorder
+  cells while revealing them, but finalisation restores the ordinary generator's order before marker-role
+  claiming and mesh emission. Occupancy refresh snapshots preserve both that order and `IsWireframe`; exact
+  authority completion cancels conservative pending materialisation so only one path owns effects (`G53`,
+  `G55`).
 - **Large-guide meshing — exposed faces + whole-guide culling (v0.2.14–v0.3.42; restored v0.3.49):**
   `GuideMeshBuilder`'s
   Volumetric cube path now does **exposed-face meshing** — it builds a presence set of rendered cells,
@@ -316,7 +322,8 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   conventions, so later live points and earlier anchors remain on the same lattice.
 - **Color language:** yellow body · red locked · green primary/apex · blue anchors with the **indigo
   off-shade** on a far foot that is not level-and-cardinal (an at-a-glance "is this clean?" cue, deliberately
-  shifted violet-ward away from green) · white grabbed · hidden guides = anchors only at low alpha. All six
+  shifted violet-ward away from green) · white grabbed · hidden guides = anchors only at low alpha. Occupied
+  red/green/blue cells shift toward cyan so material-filled control voxels remain distinguishable. All six
   type opacities are client-configurable.
 - **Personal render control (protocol 16):** `/layout off` and `/layout on` (with `.layout off|on` for the
   local command path) disable/enable the entire Layout render pass for that player. The preference is saved
@@ -544,7 +551,7 @@ section:** Arch = (Arch, None) · Half-circle = (Arch, SemiCircle) · Circle = (
 Ellipse = (Ellipse, None) · Line = (Line, None) · Triangle = (Triangle, None) · Right = (Triangle, Right) ·
 Equilateral = (Triangle, Equilateral) · Isosceles = (Triangle, Isosceles) · Rectangle = (Rectangle, None) ·
 Square = (Rectangle, Square) · Polygon = (Polygon, None) · Free-Shape = (FreeShape, None); **3D section:**
-Roundover Path = (Roundover, None) · Sphere = (Sphere, None) · Dome = (Dome, None) · Cylinder = (Cylinder, None) · Tapered Cylinder =
+Fillet = (Roundover, None) · Sphere = (Sphere, None) · Dome = (Dome, None) · Cylinder = (Cylinder, None) · Tapered Cylinder =
 (TaperedCylinder, None) · Polygonal Prism = (PolygonalPrism, None) · Tapered Polygonal Prism =
 (TaperedPolygonalPrism, None) · Cone = (Cone, None) · Box = (Box, None). (Polygon side count lives in
 `GuideData.Sides`, not a constraint.)
@@ -611,9 +618,10 @@ Guides are referenced off blocks only at placement — never bound; removing the
    the ghost's apex then tracks the crosshair — **SHIFT centres it on the base (0.1.15)** — and the THIRD
    click completes. **Free-Shape (0.1.15):** every click chains a corner (CTRL snaps relative to the
    PREVIOUS corner); clicking the LAST corner finishes open, the FIRST (≥3) closes the loop; the full
-   chain + closed flag cross in the create request. **Roundover Path:** chain an open route, click its last
-   point to finish the route, then place a handle perpendicular to the first segment; its distance and side
-   set the constant rolling-ball radius/quadrant. Route corners are sculpted rolling transitions, not mitres.
+    chain + closed flag cross in the create request. **Fillet:** click the sharp corner, first profile side and
+    second profile side, then chain an unsnapped open sweep path; clicking its last point again finishes. The
+    profile endpoints define the rolling corner directly, and route corners are sculpted transitions rather
+    than mitres. Internal save/wire identifiers remain `Roundover` for compatibility.
    Cylinder/Polygonal Prism/Cone use a third height
    click; Tapered Cylinder/Tapered Polygonal Prism add a fourth rim-radius click. **The free Rectangle's
    third click is a WIDTH** (its second having set one edge, v0.4.15), and **the Box's fourth click is its
@@ -623,10 +631,11 @@ Guides are referenced off blocks only at placement — never bound; removing the
    (chains retract a corner, triangles the base end; otherwise the draft is discarded).
 
 ### Grabbing and reshaping (Create mode)
-1. **Left-click a point** → grab (lock acquired, `GuideLockStatePacket` broadcast). **Left-click the body:**
-   arch family → the server inserts a point at the nearest curve parameter and the client adopts it as a
-   grab in one gesture (a constrained guide **breaks first** — one undo command, one full-state broadcast
-   carrying both changes); ellipse family → the nearest handle is grabbed instead.
+1. **Left-click an exact rendered cell** → grab (lock acquired, `GuideLockStatePacket` broadcast). **Body
+   cells:** Arch/Free-Shape insert the exact clicked cell and adopt it as a grab in one gesture (a constrained
+   guide **breaks first** — one undo command, one full-state broadcast carrying both changes). Other
+   parametric bodies do nothing unless the cell is a coloured control marker. Dome alone maps an exact visible
+   base-circumference cell to the nearer diameter anchor; upper-shell cells and empty space do not grab.
 2. **Dragging:** anchors snap to block faces (CTRL → cardinal line through the other anchor; Session 11 —
    SHIFT+left-click on a guide is now spring-back-to-original instead of a grab); interior
    points move at retained depth. The client previews locally with full geometry semantics; giant guides may

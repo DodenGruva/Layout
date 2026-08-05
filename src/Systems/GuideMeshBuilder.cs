@@ -312,6 +312,11 @@ namespace Layout.Systems
         // deliberately raised or angled one reads off.
         private const double CoplanarEpsilon = 1e-6;
 
+        // Occupied control markers keep their role colour, but move visibly toward the configured built
+        // cyan. A full replacement would make locked/apex/anchor cells indistinguishable from ordinary
+        // built body cells; this partial shift communicates both facts at once.
+        private const float OccupiedMarkerCyanShift = 0.35f;
+
         // Outward-facing (CCW) triangle winding for the 8 cube corners laid out in <see cref="AddBox"/>.
         private static readonly int[] CubeIndices =
         {
@@ -454,17 +459,21 @@ namespace Layout.Systems
                     if (options.Hidden) a = pal.HiddenAnchorAlpha; // only anchors reach here when hidden
 
                     // BLOCK-OCCUPANCY RECOLOUR (v0.3.79, PLAN_BLOCK_OCCUPANCY stage 2). A voxel whose own
-                    // cell already holds world material is drawn in the "built" colour instead of its role
-                    // colour, so the player can see at a glance which parts of the plan exist.
+                    // cell already holds world material communicates that state through the built cyan.
+                    // Ordinary body voxels become cyan; locked, primary and anchor markers shift part-way
+                    // toward cyan so their structural role remains recognisable too.
                     //
                     // Alpha is deliberately kept from the role colour: the guide's transparency is a
                     // separate, player-tuned setting, and changing it here would read as the guide fading
                     // rather than as a state change. Only the hue moves.
                     //
-                    // The probe is skipped for anchors and the grabbed point — those mark the GUIDE's own
-                    // structure, not the world's, and recolouring them would lose information the player
-                    // needs while placing. Body voxels are the ones this is about.
-                    if (options.OccupancyProbe != null && v.Type == VoxelRenderType.Normal)
+                    // The grabbed point stays white: it is a momentary interaction override, not a role
+                    // colour. Division marks stay magenta because their equal-part cue was not requested.
+                    if (options.OccupancyProbe != null
+                        && (v.Type == VoxelRenderType.Normal
+                            || v.Type == VoxelRenderType.Locked
+                            || v.Type == VoxelRenderType.Primary
+                            || v.Type == VoxelRenderType.Anchor))
                     {
                         // Sample the CENTRE cell of the voxel. At scale 1 that is the voxel itself and the
                         // correspondence with a chisel voxel is exact; at coarser scales one guide voxel
@@ -473,7 +482,16 @@ namespace Layout.Systems
                         int mid = scale >> 1;
                         if (options.OccupancyProbe(v.X + mid, v.Y + mid, v.Z + mid))
                         {
-                            r = pal.Built[0]; g = pal.Built[1]; b = pal.Built[2];
+                            if (v.Type == VoxelRenderType.Normal)
+                            {
+                                r = pal.Built[0]; g = pal.Built[1]; b = pal.Built[2];
+                            }
+                            else
+                            {
+                                r += (pal.Built[0] - r) * OccupiedMarkerCyanShift;
+                                g += (pal.Built[1] - g) * OccupiedMarkerCyanShift;
+                                b += (pal.Built[2] - b) * OccupiedMarkerCyanShift;
+                            }
                         }
                     }
                 }

@@ -2,6 +2,74 @@
 
 All notable changes to Layout will be recorded in this file going forward.
 
+## 0.4.81 - 2026-08-05
+
+### Fixed
+
+- **Fillet's final multi-line HUD instruction now shares one left edge.** Dedicated Fillet-only overlay rows
+  avoid the unequal label widths used by other modes, so their HUD layouts are unchanged.
+
+## 0.4.80 - 2026-08-05
+
+### Changed
+
+- **Fillet placement shows only the numbered stage instruction.** Redundant side measurements and SHIFT
+  reminders were removed from stages 2–4.
+
+## 0.4.79 - 2026-08-05
+
+### Changed
+
+- **Roundover is now called Fillet everywhere players see it.** Internal save and network identifiers remain
+  unchanged for compatibility.
+- **Fillet placement has five explicit HUD stages:** select the corner, set both sides, set the sweep path,
+  then continue or click the last point again to finish.
+
+## 0.4.78 - 2026-08-05
+
+### Fixed
+
+- **Progressive Dome completion now preserves ordinary marker roles.** Canonical spatial order is restored
+  before first-occurrence marker ties are decided; a 465-check orientation/scale harness passes.
+
+### Changed
+
+- **The Fillet curve uses widely spaced round dots.** The broken construction edge remains readable at small
+  picker-tile sizes.
+
+## 0.4.77 - 2026-08-05
+
+### Fixed
+
+- **New Domes no longer retain the splotchy materialisation order as their final appearance.** Settled output
+  is restored to the ordinary spatial order.
+- **A Dome can again be dragged from any exact visible cell on its base circumference.** The hit maps to the
+  nearer diameter anchor; upper-shell cells and empty space remain non-grabbable.
+
+## 0.4.76 - 2026-08-05
+
+### Fixed
+
+- **Nearby world edits no longer turn wireframe guides solid or change their shading once.** Occupancy refresh
+  snapshots retain wireframe form and preserve the shape's canonical primitive order.
+- **Dome placement no longer plays duplicate feedback or completes visually twice.** Exact authority counts
+  cancel conservative client false positives, and one path owns placement effects.
+
+## 0.4.75 - 2026-08-05
+
+### Changed
+
+- **The Roundover glyph now shows the requested corner with a larger-radius broken curve.** The filleted edge
+  reads as the construction feature rather than an ordinary rounded rectangle.
+
+## 0.4.74 - 2026-08-05
+
+### Changed
+
+- **Roundover received a CAD-style rounded-corner picker icon.**
+- **Occupied red, green and blue guide voxels shift toward cyan.** Material-filled control cells are easier
+  to distinguish without losing their role colours.
+
 ## 0.4.73 - 2026-08-04
 
 ### Fixed

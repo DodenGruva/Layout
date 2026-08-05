@@ -19,7 +19,7 @@ of that here; it goes stale the moment it is copied.
 
 | …doing this | …read this FIRST |
 |---|---|
-| touching the renderer | `dev/GOTCHAS.md` **G2** (order-dependent geometry) + **R2/R4/R5/R8**, then `dev/plans/PLAN_RENDER_PERFORMANCE.md` |
+| touching the renderer or progressive finalisation | `dev/GOTCHAS.md` **G2** and **G53** (order-dependent geometry/reveal order), **G55** (one completion owner) + **R2/R4/R5/R8**, then `dev/plans/PLAN_RENDER_PERFORMANCE.md` |
 | adding or changing a packet | `dev/GOTCHAS.md` **G1** (append-only, never renumber), `dev/WIRE_HISTORY.md` |
 | accepting ANY value from a client OR a file | `dev/GOTCHAS.md` **G31** — `Guide/GuideBounds.cs` is the one range check; call it — and **G32**, client conventions are not server invariants |
 | adding a shape, or touching a voxel counter | `dev/GOTCHAS.md` **G31** (the scan guards bound a shape's SIZE, never its POSITION) and **G34** (a shape that fails its frame check reports ZERO, and zero passes every cap) |
@@ -39,6 +39,7 @@ of that here; it goes stale the moment it is copied.
 | adding a no-op/idempotent early return at an untrusted seam | `dev/GOTCHAS.md` **G46** — validate the request's domain first, then decide whether its valid meaning changes state |
 | adding any player-facing text | `dev/GOTCHAS.md` **G11** — `SendIngameError`'s parameter is a LANG KEY |
 | adding text to a dialog | `dev/GOTCHAS.md` **G13** — a static text wraps, but its bounds never grow |
+| laying out multi-line HUD state text | `dev/GOTCHAS.md` **G54** — blank labels still reserve unequal widths; isolate same-bound overlays |
 | adding a custom GUI element | `dev/GOTCHAS.md` **G6** — allocate the `LoadedTexture` first, or the client dies |
 | adding a setting that can gate itself | `dev/GOTCHAS.md` **G9** — disable, never block |
 | changing caps or limits | `dev/GOTCHAS.md` **R1** — private guides are deliberately NOT capped — and **G28**, the three caps are not symmetrical |

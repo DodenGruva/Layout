@@ -246,6 +246,13 @@ namespace Layout.Systems
         /// </summary>
         public const int HardVoxelCeiling = 10_000_000;
 
+        /// <summary>
+        /// Exact volume size above which creation/refinement crosses to the shared background pipeline.
+        /// The server and client must use one value: the server owns public placement feedback below this
+        /// line, while the client owns it after a streamed placement finishes above it.
+        /// </summary>
+        public const int BackgroundVolumeVoxelThreshold = 8000;
+
         private readonly IGuidePersistence _persistence;
         private readonly IGuideBlockProbe _blockProbe;
         private readonly ILogger _logger;

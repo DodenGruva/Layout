@@ -134,7 +134,7 @@ namespace Layout.UI
             "Arch", "Half-circle", "Circle", "Ellipse",
             "Line", "Triangle", "Right triangle", "Equilateral",
             "Isosceles", "Rectangle", "Square", "Polygon",
-            "Free-Shape", "Roundover Path",
+            "Free-Shape", "Fillet",
             "Sphere", "Dome", "Cylinder", "Tapered Cylinder",
             "Polygonal Prism", "Tapered Polygonal Prism", "Cone", "Box" };
 

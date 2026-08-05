@@ -20,6 +20,29 @@
 
 ---
 
+## A23. Stable settled rendering and the Fillet workflow — ✅ DELIVERED v0.4.74–v0.4.81
+
+The picker/readability work expanded into a renderer and placement-state investigation, followed by Dome
+interaction recovery and a complete player-facing Fillet pass. Full narrative: `dev/sessions/SESSION_44.md`.
+
+1. **Readable construction UI.** The picker uses a CAD-style square with a large dotted fillet corner;
+   occupied red/green/blue guide roles shift toward cyan so material-filled cells remain legible.
+2. **Stable occupancy refresh.** Nearby block changes preserve wireframe form and the ordinary shape output's
+   canonical primitive order, preventing wireframe→solid and one-time shading transitions.
+3. **Single completion owner.** Exact authority completion cancels conservative pending materialisation and
+   owns placement feedback once, eliminating duplicate Dome sound/effect completion.
+4. **Clean and draggable Domes.** Progressive reveal ordering cannot become final settled ordering. Exact
+   visible base-rim hits map to the nearer diameter anchor; upper shell and empty space remain excluded.
+5. **Verified marker semantics.** Canonical order is restored before first-occurrence marker ties. A
+   disposable 465-check harness passes across X/Y/Z orientations and scales 1/4/16.
+6. **Fillet terminology and HUD.** Player text says Fillet while internal `Roundover` save/wire names remain
+   compatible. Five numbered stages replace incidental measurements/modifier reminders, and dedicated
+   same-bound overlay rows align the final multi-line instruction without changing other modes.
+7. **Release.** `Layout0.4.81.zip` contains 42 entries and 39/39 assets; the packaged DLL matches Release and
+   SHA-256 is `ACDC5D2463A38247AE00DB54D34C3A641BE07E5757FA3207A9D1C253201A91FD`.
+
+---
+
 ## A22. Exact guide targeting and review follow-up — ✅ DELIVERED v0.4.72–v0.4.73
 
 An external review was re-verified against the source, exposing two authority defects beneath observations

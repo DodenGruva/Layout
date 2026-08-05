@@ -1753,7 +1753,8 @@ namespace Layout.Client
             {
                 // The sampled curve is only a cheap candidate finder. A grab exists only when the view ray
                 // actually enters a rendered guide voxel; this removes both point-radius forgiveness and
-                // parametric body-to-nearest-handle snapping from the left-click gesture.
+                // invisible parametric body-to-nearest-handle snapping from the left-click gesture. The
+                // exact visible Dome base-rim exception is routed below.
                 if (!_net.Guides.TryGetValue(hit.GuideId, out GuideData exactGuide)
                     || !TryFindFirstGuideVoxelHit(
                         exactGuide, out Vec3d exactCell, out int exactPoint))
@@ -1788,7 +1789,13 @@ namespace Layout.Client
                          && !GuideShapeTypes.SupportsBodyInsert(bodyG.ShapeType))
                 {
                     // A parametric body voxel has no independent point to move. It must not silently grab
-                    // some other handle: the player can grab only the exact coloured marker voxel they hit.
+                    // some other handle. The Dome's base rim is the one intentional exception: historically
+                    // its complete circumference acted as the diameter grip, which is essential when its two
+                    // marker voxels are hidden behind the shell. The click is still required to hit an exact
+                    // rendered voxel above, and the plane check below limits the mapping to the visible rim.
+                    int handle = DomeBaseHandleAt(bodyG, hit.BodyPos);
+                    if (handle >= 0 && !bodyG.ControlPoints[handle].IsLocked)
+                        StartGrab(hit.GuideId, handle);
                 }
                 else
                 {
@@ -1903,7 +1910,8 @@ namespace Layout.Client
         // Which shape families take BODY INSERTS (clicking between points creates a new point there):
         // the arch (free spline) and, since 0.1.15, the Free-Shape (hand-placed polyline — inserting a
         // corner mid-segment is exactly how you refine one). Every other shape is parametric: left-click
-        // body grabs do nothing, while right-click lock intent maps to the nearest existing handle.
+        // body grabs do nothing except on the Dome's base rim, while right-click lock intent maps to the
+        // nearest existing handle.
         // Nearest real (non-phantom) control point to a world position — the ellipse family's body-hit →
         // handle mapping.
         private static int NearestHandleIndex(GuideData g, Vec3d pos)
@@ -1919,6 +1927,47 @@ namespace Layout.Client
                 if (d2 < bestD2) { bestD2 = d2; best = i; }
             }
             return best;
+        }
+
+        // Maps an exact Dome base-rim voxel to one of its two diameter anchors. The tolerance covers the
+        // centre of a voxel intersecting the mathematical base plane, including diagonally oriented domes;
+        // curved-shell/rib voxels farther up the hemisphere remain ordinary non-grabbable body voxels.
+        private static int DomeBaseHandleAt(GuideData g, Vec3d pos)
+        {
+            if (g == null || g.ShapeType != GuideShapeType.Dome || pos == null
+                || g.ControlPoints == null || g.ControlPoints.Count < 3)
+                return -1;
+
+            if (g.ControlPoints[0]?.WorldPosition == null
+                || g.ControlPoints[1]?.WorldPosition == null
+                || g.ControlPoints[2]?.WorldPosition == null)
+                return -1;
+
+            Vec3d a = g.ControlPoints[0].WorldPosition;
+            Vec3d b = g.ControlPoints[1].WorldPosition;
+            Vec3d apex = g.ControlPoints[2].WorldPosition;
+            var centre = new Vec3d(
+                (a.X + b.X) * 0.5,
+                (a.Y + b.Y) * 0.5,
+                (a.Z + b.Z) * 0.5);
+            double nx = apex.X - centre.X;
+            double ny = apex.Y - centre.Y;
+            double nz = apex.Z - centre.Z;
+            double normalLength = Math.Sqrt(nx * nx + ny * ny + nz * nz);
+            if (normalLength < 1e-9) return -1;
+
+            double px = pos.X - centre.X;
+            double py = pos.Y - centre.Y;
+            double pz = pos.Z - centre.Z;
+            double planeDistance = Math.Abs(px * nx + py * ny + pz * nz) / normalLength;
+            double cell = Math.Max(1, g.VoxelScale) / 16.0;
+            if (planeDistance > cell * 1.5) return -1;
+
+            double daX = pos.X - a.X, daY = pos.Y - a.Y, daZ = pos.Z - a.Z;
+            double dbX = pos.X - b.X, dbY = pos.Y - b.Y, dbZ = pos.Z - b.Z;
+            double da2 = daX * daX + daY * daY + daZ * daZ;
+            double db2 = dbX * dbX + dbY * dbY + dbZ * dbZ;
+            return da2 <= db2 ? 0 : 1;
         }
 
         // Body hit in Create: insert a new control point there and adopt it as a grab, one gesture. The
@@ -1982,7 +2031,7 @@ namespace Layout.Client
                 if (_draft.Shape == GuideShapeType.Roundover && !_net.RoundoverPlacementSupported)
                 {
                     Error("layout-roundoverprotocol",
-                        "Profile-first Roundover requires Layout 0.4.67 or newer on the server. Private placement remains available where the server permits it.");
+                        "Fillet placement requires Layout 0.4.67 or newer on the server. Private placement remains available where the server permits it.");
                     return;
                 }
 
@@ -2034,14 +2083,14 @@ namespace Layout.Client
                         if (Dist(corner, _draft.DraftStart) < 1e-7)
                         {
                             Error("layout-roundoverprofile",
-                                "Place each profile endpoint away from the sharp corner.");
+                                "Set each fillet side away from corner.");
                             return;
                         }
                         if (_draft.AwaitingRoundoverProfileSecond
                             && Dist(corner, _draft.RoundoverProfileFirst) < 1e-7)
                         {
                             Error("layout-roundoverprofile",
-                                "Place the second profile endpoint at a different point from the first.");
+                                "Set second fillet side at a different point from first.");
                             return;
                         }
                         _draft.PlaceRoundoverProfilePoint(corner);
@@ -2236,7 +2285,7 @@ namespace Layout.Client
             if (GuideShapeVoxelCounting.CountUpTo(shape, _draft.Scale, false, 0) == 0)
             {
                 Error("layout-roundoverradius",
-                    "The profile endpoints must stay away from the sharp corner, and the sweep path cannot reverse directly back on itself.");
+                    "Fillet sides must stay away from corner, and sweep path cannot reverse directly back on itself.");
                 return;
             }
 

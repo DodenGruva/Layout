@@ -325,24 +325,32 @@ namespace Layout.UI
                 ElementBounds.Fixed(0, y, dimensionLabelW, lineH), "ctx1label");
             c.AddDynamicText("", font, ElementBounds.Fixed(dimensionLabelW, y,
                 panelW - dimensionLabelW, lineH), "ctx1");
+            c.AddDynamicText("", font, ElementBounds.Fixed(dimensionLabelW, y,
+                panelW - dimensionLabelW, lineH), "filletctx1");
             y += lineH + gap;
 
             c.AddDynamicText("", dimensionLabelFont,
                 ElementBounds.Fixed(0, y, dimensionLabelW, lineH), "ctx2label");
             c.AddDynamicText("", font, ElementBounds.Fixed(dimensionLabelW, y,
                 panelW - dimensionLabelW, lineH), "ctx2");
+            c.AddDynamicText("", font, ElementBounds.Fixed(dimensionLabelW, y,
+                panelW - dimensionLabelW, lineH), "filletctx2");
             y += lineH + gap;
 
             const double totalLabelW = 100;
             c.AddDynamicText("", labelFont, ElementBounds.Fixed(0, y, totalLabelW, lineH), "ctx3label");
             c.AddDynamicText("", font, ElementBounds.Fixed(totalLabelW + 4, y,
                 panelW - totalLabelW - 4, lineH), "ctx3");
+            c.AddDynamicText("", font, ElementBounds.Fixed(dimensionLabelW, y,
+                panelW - dimensionLabelW, lineH), "filletctx3");
             y += lineH + gap;
 
             const double capLabelW = 34;
             c.AddDynamicText("", labelFont, ElementBounds.Fixed(0, y, capLabelW, lineH), "ctx4label");
             c.AddDynamicText("", font, ElementBounds.Fixed(capLabelW + 4, y,
                 panelW - capLabelW - 4, lineH), "ctx4");
+            c.AddDynamicText("", font, ElementBounds.Fixed(dimensionLabelW, y,
+                panelW - dimensionLabelW, lineH), "filletctx4");
             y += lineH + gap;
 
             SingleComposer = c.EndChildElements().Compose();
@@ -426,14 +434,17 @@ namespace Layout.UI
 
             ClearContextRows();
 
+            // Fillet placement is a five-stage construction gesture. Keep its current instruction visible
+            // even before the first click; otherwise the most important "where do I begin?" stage would be
+            // the only one absent from the HUD.
+            if (_tool.Mode == ToolMode.Create && _tool.Shape == GuideShapeType.Roundover)
+            {
+                ShowFilletDraftContext();
+                return;
+            }
+
             if (_tool.HasActiveDraft && _tool.DraftStart != null)
             {
-                if (_tool.Shape == GuideShapeType.Roundover)
-                {
-                    ShowRoundoverDraftContext();
-                    return;
-                }
-
                 ShowContextLabels();
                 if (_draftMeasurementReady)
                 {
@@ -471,41 +482,41 @@ namespace Layout.UI
             }
         }
 
-        private void ShowRoundoverDraftContext()
+        private void ShowFilletDraftContext()
         {
             ClearContextRows();
+            if (!_tool.HasActiveDraft || _tool.DraftStart == null)
+            {
+                SetText("filletctx1", "Fillet 1/5");
+                SetText("filletctx2", "Select corner to fillet.");
+                return;
+            }
+
             if (_tool.AwaitingRoundoverProfileFirst)
             {
-                SetText("ctx1", "Profile: sharp corner placed");
-                SetText("ctx2", "Click first profile endpoint");
-                SetText("ctx3", "SHIFT: place inside block");
+                SetText("filletctx1", "Fillet 2/5");
+                SetText("filletctx2", "Set first fillet side.");
                 return;
             }
 
-            double first = ProfileDistance(_tool.RoundoverProfileFirst);
             if (_tool.AwaitingRoundoverProfileSecond)
             {
-                SetText("ctx1", $"First leg: {first:0.####} blocks");
-                SetText("ctx2", "Click second profile endpoint");
-                SetText("ctx3", "SHIFT: place inside block");
+                SetText("filletctx1", "Fillet 3/5");
+                SetText("filletctx2", "Set second fillet side.");
                 return;
             }
 
-            double second = ProfileDistance(_tool.RoundoverProfileSecond);
-            SetText("ctx1", $"Profile legs: {first:0.####} / {second:0.####}");
-            SetText("ctx2", _tool.ChainCount < 2
-                ? "Click to begin sweep path"
-                : $"Sweep points: {_tool.ChainCount}");
-            SetText("ctx3", "SHIFT: place inside block");
-            SetText("ctx4", "Click final point again: place");
-        }
+            if (_tool.ChainCount < 2)
+            {
+                SetText("filletctx1", "Fillet 4/5");
+                SetText("filletctx2", "Set first sweep-path point.");
+                return;
+            }
 
-        private double ProfileDistance(Vec3d point)
-        {
-            Vec3d start = _tool.DraftStart;
-            if (point == null || start == null) return 0;
-            double x = point.X - start.X, y = point.Y - start.Y, z = point.Z - start.Z;
-            return Math.Sqrt(x * x + y * y + z * z);
+            SetText("filletctx1", "Fillet 5/5");
+            SetText("filletctx2", "Continue sweep path, or");
+            SetText("filletctx3", "left-click last point again");
+            SetText("filletctx4", "to finish.");
         }
 
         private void ClearContextRows()
@@ -514,6 +525,7 @@ namespace Layout.UI
             {
                 SetText("ctx" + i + "label", "");
                 SetText("ctx" + i, "");
+                SetText("filletctx" + i, "");
             }
         }
 

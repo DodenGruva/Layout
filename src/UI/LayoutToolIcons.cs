@@ -606,24 +606,25 @@ namespace Layout.UI
             }
         }
 
-        // A quarter-round ribbon following a bent route. Three nested rails make the rounded cross-section
-        // legible at tile size; the route itself turns without a mitred point.
+        // The conventional CAD fillet cue: solid square edges lead into a large dotted upper-left fillet.
+        // Widely separated round dots isolate the operation at even the smallest tile size.
         private static void DrawRoundover(Context ctx, int x, int y, float w, float h, double[] rgba)
         {
             var c = new Canvas(x, y, w, h, 76);
-            Pen(ctx, rgba, c.L(2.4));
-            void Rail(double inset)
-            {
-                ctx.MoveTo(c.X(16 + inset), c.Y(56 - inset));
-                ctx.LineTo(c.X(16 + inset), c.Y(34));
-                ctx.CurveTo(c.X(16 + inset), c.Y(23 + inset),
-                    c.X(25 + inset), c.Y(16 + inset), c.X(36), c.Y(16 + inset));
-                ctx.LineTo(c.X(60 - inset), c.Y(16 + inset));
-                ctx.Stroke();
-            }
-            Rail(0);
-            Rail(6);
-            Rail(12);
+            Pen(ctx, rgba, c.L(3.0));
+            ctx.MoveTo(c.X(12), c.Y(40));
+            ctx.LineTo(c.X(12), c.Y(64));
+            ctx.LineTo(c.X(64), c.Y(64));
+            ctx.LineTo(c.X(64), c.Y(12));
+            ctx.LineTo(c.X(40), c.Y(12));
+            ctx.Stroke();
+
+            double dashUnit = Math.Max(1.4, c.L(3.0));
+            ctx.SetDash(new[] { dashUnit * 0.2, dashUnit * 2.2 }, 0);
+            ctx.MoveTo(c.X(40), c.Y(12));
+            ctx.CurveTo(c.X(24.536), c.Y(12), c.X(12), c.Y(24.536), c.X(12), c.Y(40));
+            ctx.Stroke();
+            ctx.SetDash(Array.Empty<double>(), 0);
         }
 
         // The sphere (0.1.20, the first 3D volume): a circle with an equatorial ellipse — the classic

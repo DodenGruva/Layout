@@ -10,7 +10,7 @@
   "heldhelp-layout-flatside": "Align Flat Side",
   "heldhelp-layout-diagonal": "Constrain Diagonally",
   "heldhelp-layout-flare": "Allow Flare",
-  "heldhelp-layout-roundoverroute": "Set Profile · Add Sweep Path · Click Final Point Again to Place",
+  "heldhelp-layout-roundoverroute": "Set Fillet Sides · Add Sweep Path · Left-click Last Point Again to Finish",
   "heldhelp-layout-guideembed": "Embed Guide",
   "heldhelp-layout-bypassgrab": "Bypass Existing Guides",
   "item-chalkingpowder": "Chalking Powder",

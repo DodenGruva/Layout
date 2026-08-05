@@ -83,19 +83,23 @@ $Glyphs = @{
     roundover = {
         param($g, $c)
         $f = 60.0 / 76.0
-        $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::White), ([float](& $c.L (2.4 * $f)))
-        foreach ($inset in @(0.0, 6.0, 12.0)) {
-            $path = New-Object System.Drawing.Drawing2D.GraphicsPath
-            $pt = { param($u, $v) New-Object System.Drawing.PointF(
-                [float](& $c.X ($u * $f)), [float](& $c.Y ($v * $f))) }
-            $path.AddLine((& $pt (16 + $inset) (56 - $inset)), (& $pt (16 + $inset) 34))
-            $path.AddBezier((& $pt (16 + $inset) 34), (& $pt (16 + $inset) (23 + $inset)),
-                (& $pt (25 + $inset) (16 + $inset)), (& $pt 36 (16 + $inset)))
-            $path.AddLine((& $pt 36 (16 + $inset)), (& $pt (60 - $inset) (16 + $inset)))
-            $g.DrawPath($pen, $path)
-            $path.Dispose()
-        }
-        $pen.Dispose()
+        $solid = & $Script:NewPen $c (3.0 * $f)
+        $dashed = & $Script:NewPen $c (3.0 * $f)
+        $dashed.DashStyle = [System.Drawing.Drawing2D.DashStyle]::Custom
+        $dashed.DashCap = [System.Drawing.Drawing2D.DashCap]::Round
+        $dashed.DashPattern = [single[]]@(0.2, 2.2)
+        $pt = { param($u, $v) New-Object System.Drawing.PointF(
+            [float](& $c.X ($u * $f)), [float](& $c.Y ($v * $f))) }
+
+        $g.DrawLines($solid, @(
+            (& $pt 12 40), (& $pt 12 64), (& $pt 64 64), (& $pt 64 12), (& $pt 40 12)))
+
+        $arc = New-Object System.Drawing.Drawing2D.GraphicsPath
+        $arc.AddBezier((& $pt 40 12), (& $pt 24.536 12), (& $pt 12 24.536), (& $pt 12 40))
+        $g.DrawPath($dashed, $arc)
+        $arc.Dispose()
+        $dashed.Dispose()
+        $solid.Dispose()
     }
 
     # Mirrors LayoutToolIcons.DrawGear as shipped in v0.4.11: a spoked wheel-gear in THREE separate fill

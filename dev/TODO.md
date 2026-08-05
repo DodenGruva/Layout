@@ -18,7 +18,7 @@ A10.1 and A13 closed in Session 38, A14 emptied in Session 37. **Nothing in this
 looked at this" item.** Every remaining entry is either work someone chose, a decision awaiting the human,
 or a claim awaiting a playtest.
 
-**v0.4.40–v0.4.73 have shipped.** v0.4.39 passed, and v0.4.42's chiselling highlights were confirmed good in
+**v0.4.40–v0.4.81 have shipped.** v0.4.39 passed, and v0.4.42's chiselling highlights were confirmed good in
 play on 2026-08-01 — which also settled **A16** (→ `DONE.md`).
 
 ⚠️ **v0.4.48 must not be used** — it shipped a claim pre-filter that was a permissions hole and v0.4.49
@@ -34,7 +34,7 @@ transactional compound Transform, malformed no-op rejection, and deep cancellati
 geometry. Count-only claim revision was replaced by a fail-closed structural snapshot and then bounded to the
 exact guide footprint; distant claims cannot restart work and exact per-block access checks are unchanged.
 
-**Session 42 is delivered** (v0.4.65–v0.4.71 → `DONE.md`): Roundover now takes an exact three-click profile
+**Session 42 is delivered** (v0.4.65–v0.4.71 → `DONE.md`): Fillet now takes an exact three-click profile
 followed by an unsnapped sweep path; material embedding and the three-rail wireframe answer exterior/interior
 placement problems. CTRL bypass and persistent first-click SHIFT embedding now apply across initial guide
 placement. The Radius-field and block-probing experiments are deliberately retired (`GOTCHAS` **R13**).
@@ -43,6 +43,11 @@ placement. The Radius-field and block-probing experiments are deliberately retir
 insertions are rejected in authority, grabs require the exact clicked cell instead of snapping parametric
 bodies to nearby handles, and the HUD candidate envelope follows the physical voxel scale. v0.4.73 is directly
 play-confirmed excellent; nearest-handle grab snapping is deliberately retired (`GOTCHAS` **R14**).
+
+**Session 44 is delivered** (v0.4.74–v0.4.81 → `DONE.md`): occupied guide roles are more legible; world-edit
+refreshes preserve wireframe state and deterministic settled ordering; Dome placement has one completion/effect
+owner, clean final ordering and exact base-rim dragging; and the player-facing Fillet has a CAD-style dotted
+icon plus five aligned HUD stages. Internal save/wire names remain unchanged.
 
 **Nothing is queued behind it.** The next piece of work is whatever the human chooses.
 

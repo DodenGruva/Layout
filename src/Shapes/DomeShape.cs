@@ -187,6 +187,10 @@ namespace Layout.Shapes
                 return collector.Result;
             SphericalShellScan.ScanProgressively(c, r, scale, n, collector);
             collector.Flush();
+            // The progressive scan deliberately shuffles columns. Marker claiming resolves exact distance
+            // ties by first occurrence, so claim only after restoring the settled scan order; otherwise a
+            // few blue/green cells can jump to their tied neighbour when the clean shell takes over.
+            ProgressiveVoxelOrder.EnsureSpatialOrder(collector.Result);
             ClaimHandleMarkers(collector.Result, scale);
             return collector.Result;
         }

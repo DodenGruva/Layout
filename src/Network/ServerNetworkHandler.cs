@@ -139,7 +139,7 @@ namespace Layout.Network
 
         // Immense public placements take a second path. The tick thread only performs a small threshold
         // probe and bounded claim lookups; one low-priority worker at a time owns the expensive pure geometry.
-        private const int StreamedCreateVoxelThreshold = 8000;
+        private const int StreamedCreateVoxelThreshold = GuideManager.BackgroundVolumeVoxelThreshold;
         private const int MaxQueuedImmenseCreates = 8;
         private const int MaxClaimChecksPerTick = 128;
         private const double ClaimCheckBudgetMilliseconds = 1.0;
@@ -3623,8 +3623,8 @@ namespace Layout.Network
 
         private static string EmptyReshapeText(GuideData guide) =>
             guide?.ShapeType == GuideShapeType.Roundover
-                ? "That reshape would make the Roundover empty. Use a smaller profile, keep both profile "
-                    + "endpoints away from the sharp corner, give the sweep more room, and do not fold "
+                ? "That reshape would make Fillet empty. Use smaller fillet sides, keep both sides away "
+                    + "from corner, give sweep path more room, and do not fold "
                     + "the path directly back on itself."
                 : "That reshape would leave the guide with no voxels. Move the point back toward a usable shape.";
 
