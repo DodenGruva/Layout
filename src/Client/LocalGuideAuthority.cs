@@ -132,6 +132,23 @@ namespace Layout.Client
                     storagePath, _guides.AllGuides.Count);
         }
 
+        /// <summary>
+        /// Writes private guides out if anything has changed. Driven by the client's flush tick, and called
+        /// on every path that DROPS this authority — leaving a world, a server withdrawing client-only
+        /// permission, or shutdown.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ THE DROP PATHS ARE NOT OPTIONAL. Mutations only mark the registry dirty, and this object is
+        /// discarded by assignment (<c>_local = null</c>) with no disposal, so an unflushed drop silently
+        /// loses every private edit since the last tick. It was safe to drop this way only while every
+        /// mutation wrote to disk immediately — which is the whole thing that changed.
+        ///
+        /// The write itself is three filesystem operations (write temp, copy primary to backup, move temp
+        /// over primary), measured at 1.3–2.9 ms. That is why it no longer runs ten times a second during
+        /// a drag.
+        /// </remarks>
+        public void FlushPersist() => _guides.Persist();
+
         public GuideBulkSyncPacket CreateBulkSyncPacket()
         {
             GuideDataDto[] guides = _guides.AllGuides.Values
@@ -706,22 +723,18 @@ namespace Layout.Client
                 return copy.Guide;
             }
 
-            if (quarterTurns % 4 != 0)
-            {
-                Vec3d rotatePivot = null;
-                GuideOperationResult turned = _guides.RotateGuide(id, rotateAxis, quarterTurns, ref rotatePivot);
-                if (!turned.IsSuccess) { HandleFailure(id, turned); return null; }
-                _undo.Record(PlayerUid, new RotateGuideCommand(id, rotateAxis, quarterTurns, rotatePivot));
-            }
-
             Vec3d pivot = null;
-            GuideOperationResult result = _guides.TransformGuide(id, delta, mirrorAxis, ref pivot);
+            GuideOperationResult result = _guides.TransformGuide(
+                id, delta, mirrorAxis, rotateAxis, quarterTurns,
+                inverseOrder: false, ref pivot);
             if (result.IsSuccess)
             {
-                bool changed = mirrorAxis >= 0 || delta.X != 0 || delta.Y != 0 || delta.Z != 0;
+                bool changed = quarterTurns % 4 != 0 || mirrorAxis >= 0
+                    || delta.X != 0 || delta.Y != 0 || delta.Z != 0;
                 if (changed)
                 {
-                    _undo.Record(PlayerUid, new TransformGuideCommand(id, delta, mirrorAxis, pivot));
+                    _undo.Record(PlayerUid, new TransformGuideCommand(
+                        id, delta, mirrorAxis, rotateAxis, quarterTurns, pivot));
                     StampLastSculptor(result.Guide, publishIncremental: false);
                 }
                 ApplyFull(result.Guide);
@@ -795,9 +808,17 @@ namespace Layout.Client
                 // non-renderable mirror around until another operation happens to refresh it.
                 if (result.Guide != null) ApplyFull(result.Guide);
                 Guid warningId = result.Guide?.Id ?? id;
-                _applyCapWarning(new VoxelCapWarningPacket(warningId, result.VoxelCount, result.CapLimit));
+                // Always HardCeiling here: private guides are deliberately NOT capped (GOTCHAS R1), so the
+                // render ceiling is the only limit a client-only guide can ever hit. Matches the error below.
+                _applyCapWarning(new VoxelCapWarningPacket(
+                    warningId, result.VoxelCount, result.CapLimit, VoxelCapKind.HardCeiling));
                 Error("layout-toolarge",
                     $"That guide is too large to render ({result.VoxelCount:n0} voxels). Make it smaller or use a coarser scale.");
+            }
+            else if (result.Status == GuideOpStatus.RejectedEmpty)
+            {
+                if (result.Guide != null) ApplyFull(result.Guide);
+                Error("layout-emptyguide", EmptyReshapeText(result.Guide));
             }
             else if (result.Status == GuideOpStatus.GuideNotFound)
             {
@@ -808,6 +829,13 @@ namespace Layout.Client
                 ApplyFull(result.Guide);
             }
         }
+
+        private static string EmptyReshapeText(GuideData guide) =>
+            guide?.ShapeType == GuideShapeType.Roundover
+                ? "That reshape would make Fillet empty. Use smaller fillet sides, keep both sides away "
+                    + "from corner, give sweep path more room, and do not fold "
+                    + "the path directly back on itself."
+                : "That reshape would leave the guide with no voxels. Move the point back toward a usable shape.";
 
         private void ApplyFull(GuideData guide) =>
             _applyFull(new GuideCreatePacket(GuideDataDto.From(guide)));

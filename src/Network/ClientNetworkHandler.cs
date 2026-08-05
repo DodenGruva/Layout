@@ -38,6 +38,7 @@ namespace Layout.Network
         private readonly IClientNetworkChannel _channel;
         private LocalGuideAuthority _local;
         private bool _receivedServerBulkSync;
+        private int _serverProtocolVersion;
         private bool _preferClientOnly;
 
         // A "Publish Private Guides" waiting on the server to confirm the switch to public mode.
@@ -75,6 +76,9 @@ namespace Layout.Network
         public ClientAuthorityMode AuthorityMode { get; private set; } = ClientAuthorityMode.Detecting;
         public bool ServerLayoutAvailable => _serverLayoutAvailable;
         public bool ServerAllowsClientOnlyMode => _serverAllowsClientOnlyMode;
+        /// <summary>Profile-first Roundover needs the protocol-28 chain meaning on a public authority.</summary>
+        public bool RoundoverPlacementSupported => AuthorityMode == ClientAuthorityMode.Local
+            || (AuthorityMode == ClientAuthorityMode.Networked && _serverProtocolVersion >= 28);
         public bool PublicGuideAccessJailed { get; private set; }
 
         // -- Read-only views for the renderer / HUD / tool ----------------------------------------
@@ -242,8 +246,11 @@ namespace Layout.Network
         /// <summary>The server's admin settings arrived or changed; redraw the settings page if it is open.</summary>
         public event Action AdminConfigChanged;
 
-        /// <summary>A mutation was refused for exceeding a cap: (guide id, attempted count, cap).</summary>
-        public event Action<Guid, int, int> VoxelCapWarningReceived;
+        /// <summary>
+        /// A mutation was refused for exceeding a cap: (guide id, attempted count, cap, which cap).
+        /// The kind is <see cref="VoxelCapKind.Unspecified"/> from any server older than protocol 25.
+        /// </summary>
+        public event Action<Guid, int, int, VoxelCapKind> VoxelCapWarningReceived;
 
         /// <summary>Raised after the current world's authority becomes known or is reset.</summary>
         public event Action<ClientAuthorityMode> AuthorityModeChanged;
@@ -427,10 +434,14 @@ namespace Layout.Network
         /// <summary>Ends the current world session and drops every local mirror entry.</summary>
         public void EndWorldSession()
         {
+            // BEFORE _local is dropped below. Private guide edits are only marked dirty as they happen;
+            // leaving the world without this loses everything since the last flush tick.
+            FlushLocalGuides();
             ResetAuthorityMode(_preferClientOnly);
             _receivedServerBulkSync = false;
             _serverLayoutAvailable = false;
             _serverAllowsClientOnlyMode = false;
+            _serverProtocolVersion = 0;
             // Dropped with the session: carrying one server's settings into the next world would show the
             // Admin section on a server that never sent one, with somebody else's caps in it.
             AdminConfig = null;
@@ -471,11 +482,20 @@ namespace Layout.Network
 
         private void RemoveLocalOverlay()
         {
+            // Same reason as EndWorldSession: the guides stop being SHOWN here, but they are still the
+            // player's and still on disk, so what is in memory has to reach the file before it is dropped.
+            FlushLocalGuides();
             foreach (Guid id in _localGuideIds) _guides.Remove(id);
             _localGuideIds.Clear();
             _local = null;
             GuidesBulkSynced?.Invoke();
         }
+
+        /// <summary>
+        /// Writes private guides out if there are any and anything changed. Safe to call at any time —
+        /// it is a no-op without a local authority, and Persist itself returns immediately when clean.
+        /// </summary>
+        public void FlushLocalGuides() => _local?.FlushPersist();
 
         // ==========================================================================================
         //  Receive: full-state
@@ -485,6 +505,7 @@ namespace Layout.Network
         {
             _receivedServerBulkSync = true;
             _serverLayoutAvailable = true;
+            _serverProtocolVersion = p?.ProtocolVersion ?? 0;
             bool supportsClientOnlyPolicy = p?.ProtocolVersion >= 2;
             _serverAllowsClientOnlyMode = supportsClientOnlyPolicy && p.AllowClientOnlyMode;
             OnServerBulkSync(p);
@@ -924,8 +945,14 @@ namespace Layout.Network
             if (_remoteDraftAnchors.Remove(p.PlayerUid)) RemoteDraftAnchorRemoved?.Invoke(p.PlayerUid);
         }
 
+        // Normalised HERE so nothing downstream ever holds an enum value that is not a member: a newer
+        // server naming a cap this build has never heard of collapses to Unspecified, which every consumer
+        // already handles because it is what a pre-25 server sends.
         private void OnCapWarning(VoxelCapWarningPacket p)
-            => VoxelCapWarningReceived?.Invoke(p.GuideId(), p.CurrentCount, p.Cap);
+            => VoxelCapWarningReceived?.Invoke(p.GuideId(), p.CurrentCount, p.Cap,
+                Enum.IsDefined(typeof(VoxelCapKind), p.CapKind)
+                    ? (VoxelCapKind)p.CapKind
+                    : VoxelCapKind.Unspecified);
 
         // ==========================================================================================
         //  Send: the requests the held tool makes (Module 7 wires these to clicks / keybinds)

@@ -127,14 +127,14 @@ namespace Layout.UI
             "arch", "halfcircle", "circle", "ellipse",
             "line", "triangle", "righttri", "equilateral",
             "isosceles", "rectangle", "square", "polygon",
-            "freeshape",
+            "freeshape", "roundover",
             "sphere", "dome", "cylinder", "taperedcylinder",
             "polygonalprism", "taperedpolygonalprism", "cone", "box" };
         private static readonly string[] ShapeNames = {
             "Arch", "Half-circle", "Circle", "Ellipse",
             "Line", "Triangle", "Right triangle", "Equilateral",
             "Isosceles", "Rectangle", "Square", "Polygon",
-            "Free-Shape",
+            "Free-Shape", "Fillet",
             "Sphere", "Dome", "Cylinder", "Tapered Cylinder",
             "Polygonal Prism", "Tapered Polygonal Prism", "Cone", "Box" };
 
@@ -164,7 +164,7 @@ namespace Layout.UI
             LayoutToolIcons.Arch, LayoutToolIcons.HalfCircle, LayoutToolIcons.Circle, LayoutToolIcons.Ellipse,
             LayoutToolIcons.Line, LayoutToolIcons.Triangle, LayoutToolIcons.RightTri, LayoutToolIcons.Equilateral,
             LayoutToolIcons.Isosceles, LayoutToolIcons.Rectangle, LayoutToolIcons.Square, LayoutToolIcons.Polygon,
-            LayoutToolIcons.FreeShapeIcon,
+            LayoutToolIcons.FreeShapeIcon, LayoutToolIcons.Roundover,
             LayoutToolIcons.Sphere, LayoutToolIcons.Dome, LayoutToolIcons.Cylinder,
             LayoutToolIcons.TaperedCylinder, LayoutToolIcons.PolygonalPrism,
             LayoutToolIcons.TaperedPolygonalPrism, LayoutToolIcons.Cone, LayoutToolIcons.Box };
@@ -246,7 +246,7 @@ namespace Layout.UI
         private readonly System.Func<bool, bool> _applyOccupancy;
 
         // NOTE: the "Re-read the world" button was removed in v0.4.3 (human-directed). The rebuild it
-        // triggered is still reachable through /layout occupancy refresh; only the button is gone.
+        // triggered is still reachable through /layout built refresh; only the button is gone.
 
         // Settings tab (v0.3.72): when true the panel shows client display settings instead of the tool
         // rows. Session-local like _shapeGridExpanded — the panel always opens on the tool.
@@ -1098,6 +1098,12 @@ namespace Layout.UI
         // facing at all — "anticlockwise from above" is the same turn wherever you stand. The TIP pair is
         // about the horizontal axis running away from you, so it does, and it resolves the same way the
         // move arrows do.
+        //
+        // THE ACTION ROW DOES NOT GATE THESE (human-confirmed 2026-08-01, after a review flagged it as an
+        // inconsistency). The move arrows and send-to-ground do nothing when neither Move nor Copy is lit,
+        // because "travel" with no placement action is meaningless — but a rotation is its own verb, not a
+        // kind of travel, so the four corners always turn the guide. Copy still composes with them (the
+        // four-corner-towers gesture below); Move and Mirror simply have nothing to add.
         private void OnRotateTile(string code)
         {
             GuideData g = ResolveSelectedGuide();
@@ -1652,8 +1658,10 @@ namespace Layout.UI
                 && a.YourTotalVoxelCapOverride == b.YourTotalVoxelCapOverride
                 && a.YourGuideLimitOverride == b.YourGuideLimitOverride
                 // EnableChalkDurability and AdminCanOverrideLocks are deliberately absent: the panel
-                // stopped drawing them (v0.4.17 and v0.4.20), so a change to either — only possible via
-                // layout.json plus a restart — has nothing on screen to redraw.
+                // stopped drawing them — the lock override in v0.4.17, chalk consumption in v0.4.20 — so a
+                // change to either, only possible via layout.json plus a restart, has nothing on screen to
+                // redraw. (Named against their versions rather than listed in order: the pairing was the
+                // wrong way round here until the 2026-08-01 comment sweep checked it against CHANGELOG.)
                 && a.CanEdit == b.CanEdit;
         }
 
@@ -3387,6 +3395,12 @@ namespace Layout.UI
 
         private void RelightRow(string key, string[] codes, int selectedIndex)
         {
+            // A row composed INERT has no lit selection by design — a volume's Projection row, a
+            // Free-Shape's Fill row. Relighting it from a remote update puts a live-looking tile in a
+            // section that is meant to read as dead, which is the one thing the ghosting exists to say.
+            // _inertRows is rebuilt by every compose, so it always describes what is on screen now.
+            if (_inertRows.Contains(key)) return;
+
             int sel = ClampIndex(selectedIndex, codes.Length);
             for (int i = 0; i < codes.Length; i++)
                 SingleComposer?.GetToggleButton(key + ":" + i)?.SetValue(i == sel);
@@ -3518,6 +3532,7 @@ namespace Layout.UI
             "square"      => (GuideShapeType.Rectangle, ShapeConstraint.Square),
             "polygon"     => (GuideShapeType.Polygon,   ShapeConstraint.None),
             "freeshape"   => (GuideShapeType.FreeShape, ShapeConstraint.None),
+            "roundover"   => (GuideShapeType.Roundover, ShapeConstraint.None),
             "sphere"      => (GuideShapeType.Sphere,    ShapeConstraint.None),
             "dome"        => (GuideShapeType.Dome,      ShapeConstraint.None),
             "cylinder"    => (GuideShapeType.Cylinder,  ShapeConstraint.None),
@@ -3545,14 +3560,15 @@ namespace Layout.UI
             GuideShapeType.Rectangle => constraint == ShapeConstraint.Square ? 10 : 9,
             GuideShapeType.Polygon   => 11,
             GuideShapeType.FreeShape => 12,
-            GuideShapeType.Sphere    => 13,
-            GuideShapeType.Dome      => 14,
-            GuideShapeType.Cylinder  => 15,
-            GuideShapeType.TaperedCylinder => 16,
-            GuideShapeType.PolygonalPrism => 17,
-            GuideShapeType.TaperedPolygonalPrism => 18,
-            GuideShapeType.Cone      => 19,
-            GuideShapeType.Box       => 20,
+            GuideShapeType.Roundover => 13,
+            GuideShapeType.Sphere    => 14,
+            GuideShapeType.Dome      => 15,
+            GuideShapeType.Cylinder  => 16,
+            GuideShapeType.TaperedCylinder => 17,
+            GuideShapeType.PolygonalPrism => 18,
+            GuideShapeType.TaperedPolygonalPrism => 19,
+            GuideShapeType.Cone      => 20,
+            GuideShapeType.Box       => 21,
             _ => constraint == ShapeConstraint.SemiCircle ? 1 : 0
         };
 

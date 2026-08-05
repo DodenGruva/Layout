@@ -103,7 +103,13 @@ namespace Layout.Guide
         /// Tapered Polygonal Prism (0.2.38): the four-click polygonal counterpart to Tapered Cylinder.
         /// The final rim click controls the top polygon's circumradius.
         /// </summary>
-        TaperedPolygonalPrism = 14
+        TaperedPolygonalPrism = 14,
+
+        /// <summary>
+        /// Roundover path: the first three clicks describe the sharp corner and two exact profile legs;
+        /// the remaining open chain describes the sweep path.
+        /// </summary>
+        Roundover = 15
 
         // Reserved for future shapes — append only, never renumber: Roof, Tunnel ...
     }
@@ -125,12 +131,20 @@ namespace Layout.Guide
         {
             GuideShapeType.Sphere or GuideShapeType.Dome or GuideShapeType.Cylinder
                 or GuideShapeType.TaperedCylinder or GuideShapeType.PolygonalPrism
-                or GuideShapeType.TaperedPolygonalPrism or GuideShapeType.Cone or GuideShapeType.Box => true,
+                or GuideShapeType.TaperedPolygonalPrism or GuideShapeType.Cone or GuideShapeType.Box
+                or GuideShapeType.Roundover => true,
             _ => false
         };
 
         /// <summary>Shapes whose regular-polygon side count is carried by <see cref="GuideData.Sides"/>.</summary>
         public static bool UsesSides(GuideShapeType t) => t == GuideShapeType.Polygon
             || t == GuideShapeType.PolygonalPrism || t == GuideShapeType.TaperedPolygonalPrism;
+
+        /// <summary>
+        /// Shapes whose body can accept a new editable point. Every other shape is parametric: only its
+        /// existing marker voxels may be grabbed, and an insert request is malformed.
+        /// </summary>
+        public static bool SupportsBodyInsert(GuideShapeType t) =>
+            t == GuideShapeType.Arch || t == GuideShapeType.FreeShape;
     }
 }

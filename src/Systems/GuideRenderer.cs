@@ -57,7 +57,7 @@ namespace Layout.Systems
 
         // Moving drafts keep a normal selected-scale shell while this cheap estimate fits. Expensive poses
         // fall back to a wireframe with its own smaller moving-mesh target.
-        private const int PreviewFullResVoxelCap = 8000;
+        private const int PreviewFullResVoxelCap = GuideManager.BackgroundVolumeVoxelThreshold;
         private const int MovingWireframeVoxelTarget = 1500;
         private const double PrecisionTransitionRadius = 2.0;
         private const int MaterializationTargetVoxelsPerBatch = 750;
@@ -239,6 +239,10 @@ namespace Layout.Systems
         // and rebuilds each once its neighbourhood loads — fixing the "guide sinks behind the face after
         // reload" bug with no wire/persistence change. A guide sits here only while its chunk is unloaded.
         private readonly HashSet<Guid> _deferredSurface = new HashSet<Guid>();
+
+        // Guides whose OCCUPANCY colours were probed against unloaded chunks — the same world-load race as
+        // _deferredSurface above, and drained by the same tick. Populated only while the recolour is on.
+        private readonly HashSet<Guid> _deferredOccupancy = new HashSet<Guid>();
 
         // RETIRED v0.3.70 — `_deferredSolidity`. Volumetric guides used to queue here when their z-fight
         // probe ran against unloaded chunks, so provisional insets could be rebuilt once terrain arrived.
@@ -564,16 +568,25 @@ namespace Layout.Systems
             }
         }
 
-        // ---- Block-occupancy recolour (v0.3.79, PLAN_BLOCK_OCCUPANCY stage 2) ----
+        // ---- Block-occupancy recolour (v0.3.79, PLAN_BLOCK_OCCUPANCY stages 2 AND 3) ----
         //
         // Off by default and, when off, completely inert: OccupancyProbe stays null, so a guide built with
         // the toggle off is byte-identical to one built before the feature existed, and no world reads
         // happen at all. Turning it on rebuilds every guide, because the colour is baked into vertex data.
         //
-        // STATIC BY DESIGN AT THIS STAGE. The colours reflect the world as of the last build; they do not
-        // follow blocks being placed. Live updating is stage 3 and needs either per-batch rebuilds or the
-        // shader-lookup route — the plan keeps both open, and this stage exists to establish whether the
-        // colour is worth either of them.
+        // THE COLOURS FOLLOW THE WORLD (stage 3, v0.3.81-v0.3.82; the per-batch rebuild that made it cheap
+        // enough not to stutter followed in v0.3.83-v0.3.85). A block change inside a guide marks it
+        // dirty; once the player stops changing blocks, only the BATCHES holding those blocks are re-meshed
+        // — see OnWorldBlockChanged, OnOccupancyTick and TryUpdateOccupancyBatches. The plan's other route,
+        // a shader lookup, was rejected: updates happen about twice a second and fragments tens of millions
+        // of times a second, so it would have made updates free by taxing every frame forever.
+        //
+        // Two things still are not live, both reported rather than hidden: a guide over
+        // OccupancyBatchVoxelCeiling can never be serviced (OccupancyStaleGuides), and a guide first meshed
+        // against unloaded terrain re-probes itself as the chunks arrive (_deferredOccupancy, v0.4.42).
+        //
+        // This header read "STATIC BY DESIGN AT THIS STAGE ... live updating is stage 3" until the
+        // 2026-08-01 sweep, three sessions after stage 3 shipped in the same file.
         private BlockOccupancy _occupancy;
         private bool _occupancyEnabled;
 
@@ -605,14 +618,20 @@ namespace Layout.Systems
         }
 
         /// <summary>
-        /// Discards cached occupancy and rebuilds, so the colours re-read the world as it is now. The
-        /// stage-2 stand-in for the live updates stage 3 will bring.
+        /// Discards ALL cached occupancy and rebuilds every guide, so the colours re-read the world as it
+        /// is now. What <c>/layout built refresh</c> runs.
         /// </summary>
+        /// <remarks>
+        /// The blunt instrument, not the normal path — ordinary guides follow block changes by themselves.
+        /// This is for the two cases that cannot: a guide too large to service live, and anything still
+        /// showing colours from before its terrain loaded.
+        /// </remarks>
         public void RefreshOccupancy()
         {
             if (!_occupancyEnabled) return;
             _occupancy?.Clear();
             _occupancyDirty.Clear();          // a full rebuild subsumes every pending one
+            _occupancyPermanentlyStale.Clear();
             _occupancyChangedBlocks.Clear();
             _occBatches = null;               // rebuilt meshes invalidate the recorded batch ranges
             RebuildAllForDiagnostics();
@@ -622,7 +641,14 @@ namespace Layout.Systems
         /// Guides known to be showing stale colours — changed while too large to rebuild live. Lets the UI
         /// say "these need a refresh" instead of leaving the player to wonder.
         /// </summary>
-        public int OccupancyStaleGuides => _occupancyDirty.Count;
+        public int OccupancyStaleGuides => _occupancyDirty.Count + _occupancyPermanentlyStale.Count;
+
+        /// <summary>
+        /// Guides whose colours are waiting on their terrain to load, and will re-probe themselves once it
+        /// does (v0.4.42). Distinct from <see cref="OccupancyStaleGuides"/>: those are guides too large to
+        /// update live, these are guides the world had not streamed in yet.
+        /// </summary>
+        public int OccupancyAwaitingChunks => _deferredOccupancy.Count;
 
         // ---- Stage 3: live occupancy updates ----
         //
@@ -630,6 +656,17 @@ namespace Layout.Systems
         // player stops changing blocks, not per change: a chisel burst is many events a second and each
         // one would otherwise re-mesh the guide.
         private readonly HashSet<Guid> _occupancyDirty = new HashSet<Guid>();
+
+        // Guides that are stale and can NEVER be serviced live, because they are over
+        // OccupancyBatchVoxelCeiling and BeginOccupancyBatchBuild refuses to build them a context.
+        //
+        // ⚠️ THEY ARE HELD SEPARATELY FOR A REASON (A14.5, fixed v0.4.38). They used to sit in
+        // _occupancyDirty, which they could never leave — and _occupancyChangedBlocks is cleared only when
+        // that set EMPTIES. So one >3M-voxel guide near the player meant the changed-block list grew by
+        // every qualifying block change for the rest of the session, and every 50 ms tick re-scanned the
+        // whole accumulated list on behalf of the other dirty guides. The permanent staleness is intended
+        // and still reported; the unbounded list was not.
+        private readonly HashSet<Guid> _occupancyPermanentlyStale = new HashSet<Guid>();
 
         // The blocks behind the pending dirty guides — a per-batch rebuild needs to know WHERE, not just
         // which guide. Copied on arrival: BlockPos is mutable and the caller reuses it.
@@ -716,7 +753,12 @@ namespace Layout.Systems
             foreach (Guid id in _occupancyDirty)
             {
                 _network.Guides.TryGetValue(id, out GuideData g);
-                if (g == null) { (done ??= new List<Guid>()).Add(id); continue; }
+                if (g == null)
+                {
+                    (done ??= new List<Guid>()).Add(id);
+                    _occupancyPermanentlyStale.Remove(id);   // gone entirely — not stale, just absent
+                    continue;
+                }
 
                 // EVERY guide goes through the batch path (v0.3.84), not just large ones. The old
                 // small-guide shortcut re-meshed the whole guide on the render thread, and "sub-frame" was
@@ -726,6 +768,21 @@ namespace Layout.Systems
                 if (TryUpdateOccupancyBatches(id, g, _occupancyChangedBlocks))
                 {
                     (done ??= new List<Guid>()).Add(id);
+                    // It was serviced after all — a guide that has since shrunk under the ceiling, or one
+                    // whose context already existed. It is no longer permanently stale.
+                    _occupancyPermanentlyStale.Remove(id);
+                    continue;
+                }
+
+                // OVER THE BATCH CEILING = no context will ever be built for it (see
+                // BeginOccupancyBatchBuild), so leaving it in the dirty set would pin _occupancyChangedBlocks
+                // open forever. Retire it to the permanently-stale set: still counted and still reported by
+                // OccupancyStaleGuides, but no longer holding the changed-block list hostage. A later block
+                // change near it puts it back in the dirty set, so a shrink still gets picked up.
+                if (g.CachedVoxelCount > OccupancyBatchVoxelCeiling)
+                {
+                    (done ??= new List<Guid>()).Add(id);
+                    _occupancyPermanentlyStale.Add(id);
                     continue;
                 }
 
@@ -750,10 +807,10 @@ namespace Layout.Systems
         //
         // WHY IT IS SAFE, given CLAUDE.md's warning that regrouping primitives changes the picture. The
         // guide's meshes are drawn in list order (primary, then Auxiliary in sequence), and every batch is
-        // a CONTIGUOUS RUN of one X-sorted voxel list. The concatenation of the batches is therefore the
-        // same primitive sequence no matter where the boundaries fall — moving a boundary reorders nothing.
-        // That is what lets this choose its own batching instead of having to reproduce the streaming
-        // pipeline's, and it is why this is not the Session 25-26 spatial-partitioning experiment.
+        // a CONTIGUOUS RUN of the shape's canonical voxel sequence. The concatenation is therefore the same
+        // primitive sequence as the original single mesh. A separate block-X-to-slot index targets updates
+        // without sorting or regrouping that sequence. That is why this is not the Session 25-26 spatial-
+        // partitioning experiment.
         //
         // WHY IT IS CHEAPER THAN THE SHADER ALTERNATIVE (the human's question, 2026-07-26): updates happen
         // about twice a second, fragments tens of millions of times a second. A shader lookup would make
@@ -766,7 +823,12 @@ namespace Layout.Systems
         {
             public Guid GuideId;
             public ulong Fingerprint;                 // invalidates the context when the guide changes
-            public List<VoxelPosition> Sorted;        // X, then Y, then Z — batches are runs of this
+            // Canonical shape/wireframe order. Batches are contiguous runs, so their concatenation keeps
+            // the guide's original primitive order under ordered transparency.
+            public List<VoxelPosition> Ordered;
+            // World block X -> batch slots containing guide voxels in that column. This keeps updates
+            // targeted without sorting the guide into a different visible order.
+            public Dictionary<int, List<int>> SlotsByBlockX;
             public GuideMeshOptions Template;         // carries the cross-batch Occupancy set and MinimumVoxelY
             public Vec3d Origin;
             public readonly List<int> Starts = new List<int>();
@@ -789,7 +851,7 @@ namespace Layout.Systems
         /// </remarks>
         private sealed class OccupancyBatchStaging
         {
-            public OccupancyBatches Ctx;                  // published by the worker once sorting is done
+            public OccupancyBatches Ctx;                  // published once ordering and lookup are ready
             public readonly ConcurrentQueue<MeshData> Ready = new ConcurrentQueue<MeshData>();
             public volatile bool Producing = true;
             public volatile bool Failed;
@@ -818,7 +880,7 @@ namespace Layout.Systems
         // ^ A JUDGEMENT CALL, not a measurement — the same species as SettledStreamingVoxelThreshold, whose
         // guessed value caused the v0.3.83 stutter, so treat it with suspicion. What it costs at the cap:
         // the retained voxel list is 16 bytes each (~48 MB) and its cross-batch lookup set roughly twice
-        // that (~90 MB), so ~140 MB resident for one context, briefly doubled while the pre-sort list is
+        // that (~90 MB), so ~140 MB resident for one context, briefly doubled while the source list is
         // still alive. Since v0.3.85 the mesh data no longer piles up on top of that, which is what made
         // the original number reckless. Only ever one context is held.
 
@@ -850,9 +912,7 @@ namespace Layout.Systems
             {
                 BlockPos p = blocks[i];
                 if (p == null) continue;
-                // Cell-space span of this world block. The sorted list is X-major, so the affected voxels
-                // form one contiguous index range.
-                CollectBatchesForCellRange(ctx, p.X * 16, p.X * 16 + 15, touched);
+                CollectBatchesForBlockX(ctx, p.X, touched);
             }
             if (touched.Count == 0) return true;   // nothing of this guide sits in those blocks
 
@@ -873,9 +933,9 @@ namespace Layout.Systems
                 for (int i = 0; i < slots.Count; i++)
                 {
                     int slot = slots[i];
-                    // Sorted is immutable once the context is built, so reading it here needs no lock.
+                    // Ordered is immutable once the context is built, so reading it here needs no lock.
                     built.Add(GuideMeshBuilder.Build(
-                        ctx.Sorted.GetRange(ctx.Starts[slot], ctx.Counts[slot]), ctx.Template));
+                        ctx.Ordered.GetRange(ctx.Starts[slot], ctx.Counts[slot]), ctx.Template));
                 }
                 return built;
             }, CancellationToken.None, TaskCreationOptions.None, TaskScheduler.Default)
@@ -915,20 +975,11 @@ namespace Layout.Systems
             }
         }
 
-        // Batches are runs of an X-sorted list, so every batch whose X span overlaps [cellX0, cellX1]
-        // is touched. A linear pass over at most 128 batches is cheaper than binary searching for it.
-        private static void CollectBatchesForCellRange(
-            OccupancyBatches ctx, int cellX0, int cellX1, HashSet<int> into)
+        private static void CollectBatchesForBlockX(
+            OccupancyBatches ctx, int blockX, HashSet<int> into)
         {
-            for (int slot = 0; slot < ctx.Starts.Count; slot++)
-            {
-                int start = ctx.Starts[slot], count = ctx.Counts[slot];
-                if (count <= 0) continue;
-                int firstX = ctx.Sorted[start].X;
-                int lastX = ctx.Sorted[start + count - 1].X;
-                if (lastX < cellX0 || firstX > cellX1) continue;
-                into.Add(slot);
-            }
+            if (!ctx.SlotsByBlockX.TryGetValue(blockX, out List<int> slots)) return;
+            for (int i = 0; i < slots.Count; i++) into.Add(slots[i]);
         }
 
         /// <summary>
@@ -940,8 +991,9 @@ namespace Layout.Systems
             if (guide.CachedVoxelCount > OccupancyBatchVoxelCeiling) return;
 
             _occBatchBuilding = true;
-            Guid id = guide.Id;
-            ulong fingerprint = RenderFingerprint(guide);
+            GuideData snapshot = guide.DeepClone();
+            Guid id = snapshot.Id;
+            ulong fingerprint = RenderFingerprint(snapshot);
             bool privateAnchors = _network.ServerLayoutAvailable && _network.IsLocalGuide(id);
             System.Func<int, int, int, bool> probe = OccupancyProbe();
 
@@ -949,7 +1001,7 @@ namespace Layout.Systems
             _occStaging = staging;
 
             Task.Factory.StartNew(
-                    () => BuildOccupancyBatches(guide, id, fingerprint, privateAnchors, probe, staging),
+                    () => BuildOccupancyBatches(snapshot, id, fingerprint, privateAnchors, probe, staging),
                     CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)
                 .ContinueWith(task =>
                 {
@@ -1011,6 +1063,7 @@ namespace Layout.Systems
                 else mesh.Auxiliary.Add(m);
             }
             mesh.Origin = s.Ctx.Origin;
+            mesh.RenderedWireframe = live.IsWireframe;
             _occBatches = s.Ctx;
         }
 
@@ -1036,27 +1089,24 @@ namespace Layout.Systems
             IGuideShape shape = ShapeFactory.Adopt(guide);
             shape.RecalculatePhantomPoints();
             int scale = guide.VoxelScale;
-            List<VoxelPosition> voxels = shape.GetVoxelPositions(scale, guide.IsFilled);
+            List<VoxelPosition> voxels = guide.IsWireframe
+                ? ShapeWireframe.GetVoxelPositions(shape, scale)
+                : shape.GetVoxelPositions(scale, guide.IsFilled);
             if (voxels == null || voxels.Count == 0) { staging.Failed = true; return; }
             if (guide.Divisions > 1)
                 DivisionMarks.Apply(voxels, shape.SampleCurve(128), guide.Divisions, scale);
 
-            // Same ordering the materialization pipeline uses, for the same reason: it makes each batch a
-            // slab of the guide, so a block change lands in one or two of them.
-            var sorted = new List<VoxelPosition>(voxels);
-            sorted.Sort((a, b) =>
-            {
-                int byX = a.X.CompareTo(b.X);
-                if (byX != 0) return byX;
-                int byY = a.Y.CompareTo(b.Y);
-                return byY != 0 ? byY : a.Z.CompareTo(b.Z);
-            });
+            // Preserve the exact sequence RebuildGuide used. Translucent guide faces are order-dependent:
+            // the old X/Y/Z sort made the first occupancy update look like a lighting change even though
+            // it contained the same voxels. The block-column index below provides targeted lookup without
+            // changing this canonical order.
+            var ordered = new List<VoxelPosition>(voxels);
 
-            var occupancy = new HashSet<(int, int, int)>(sorted.Count);
+            var occupancy = new HashSet<(int, int, int)>(ordered.Count);
             int minimumY = int.MaxValue;
-            for (int i = 0; i < sorted.Count; i++)
+            for (int i = 0; i < ordered.Count; i++)
             {
-                VoxelPosition v = sorted[i];
+                VoxelPosition v = ordered[i];
                 occupancy.Add((v.X, v.Y, v.Z));
                 if (v.Y < minimumY) minimumY = v.Y;
             }
@@ -1081,18 +1131,38 @@ namespace Layout.Systems
             {
                 GuideId = id,
                 Fingerprint = fingerprint,
-                Sorted = sorted,
+                Ordered = ordered,
+                SlotsByBlockX = new Dictionary<int, List<int>>(),
                 Template = template,
                 Origin = origin
             };
 
             int batchCount = Math.Max(1, Math.Min(MaterializationMaximumBatches,
-                (sorted.Count + OccupancyBatchTargetVoxels - 1) / OccupancyBatchTargetVoxels));
-            int batchSize = Math.Max(1, (sorted.Count + batchCount - 1) / batchCount);
-            for (int start = 0; start < sorted.Count; start += batchSize)
+                (ordered.Count + OccupancyBatchTargetVoxels - 1) / OccupancyBatchTargetVoxels));
+            int batchSize = Math.Max(1, (ordered.Count + batchCount - 1) / batchCount);
+            for (int start = 0; start < ordered.Count; start += batchSize)
             {
                 ctx.Starts.Add(start);
-                ctx.Counts.Add(Math.Min(batchSize, sorted.Count - start));
+                ctx.Counts.Add(Math.Min(batchSize, ordered.Count - start));
+            }
+
+            static int FloorDiv16(int cellX) =>
+                cellX >= 0 ? cellX / 16 : -((-cellX + 15) / 16);
+            for (int slot = 0; slot < ctx.Starts.Count; slot++)
+            {
+                int start = ctx.Starts[slot], end = start + ctx.Counts[slot];
+                for (int i = start; i < end; i++)
+                {
+                    int blockX = FloorDiv16(ordered[i].X);
+                    if (!ctx.SlotsByBlockX.TryGetValue(blockX, out List<int> slots))
+                    {
+                        slots = new List<int>();
+                        ctx.SlotsByBlockX[blockX] = slots;
+                    }
+                    // Slots are visited in ascending order. Repeated voxels from this same block column
+                    // therefore need only compare with the last appended slot—no per-batch HashSet.
+                    if (slots.Count == 0 || slots[slots.Count - 1] != slot) slots.Add(slot);
+                }
             }
 
             // Published before the first batch is queued, so the drain knows how many to expect and can
@@ -1102,7 +1172,7 @@ namespace Layout.Systems
             for (int i = 0; i < ctx.Starts.Count; i++)
             {
                 staging.Ready.Enqueue(GuideMeshBuilder.Build(
-                    sorted.GetRange(ctx.Starts[i], ctx.Counts[i]), template));
+                    ordered.GetRange(ctx.Starts[i], ctx.Counts[i]), template));
 
                 // Back-pressure: without it the worker races ahead and every batch's mesh data piles up in
                 // the queue, which is the memory spike this rewrite exists to remove. The drain uploads a
@@ -1129,7 +1199,9 @@ namespace Layout.Systems
                 if (_occupancyListenerId != 0) _capi.Event.UnregisterGameTickListener(_occupancyListenerId);
                 _occupancyListenerId = 0;
                 _occupancyDirty.Clear();
+                _occupancyPermanentlyStale.Clear();
                 _occupancyChangedBlocks.Clear();
+                _deferredOccupancy.Clear();   // nothing to re-probe for: the colours are going away
                 _occBatches = null;   // the guide's meshes are about to be rebuilt without occupancy
 
                 // Stop any build in flight. Without this the worker parks forever in its back-pressure
@@ -1538,21 +1610,9 @@ namespace Layout.Systems
 
         private void SetModelMatrix(double dx, double dy, double dz)
         {
-            // ANTI-Z-FIGHT NUDGE (Session-8): volumetric voxels sit flush against block faces and z-fought
-            // slightly, exactly as Surface did. Per-cube shrinking is ruled out (Session-7 finding: all-axis
-            // insets open visible gaps between neighbours), so instead the WHOLE mesh is pulled a hair toward
-            // the camera each frame — the classic decal trick. It is view-dependent on purpose: whichever
-            // face you are looking at is the face that gains depth separation, and glancing angles (where the
-            // pull is least effective) are where z-fighting is least visible anyway. 3 mm is imperceptible as
-            // displacement but far above depth-buffer precision. Applies to guides, ghost, and anchor dots
-            // alike, since (dx,dy,dz) is always meshOrigin − cameraPos.
-            double len = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-            if (len > 0.5) // skip when the camera is essentially inside the mesh origin
-            {
-                double k = CameraNudge / len;
-                dx -= dx * k; dy -= dy * k; dz -= dz * k;
-            }
-
+            // Keep guide geometry registered to Vintage Story's exact 1/16 lattice. A former 0.003-block
+            // whole-mesh pull toward the camera caused the guide cells to visibly miss micro-block edges.
+            // Z-fight clearance belongs on exposed faces in GuideMeshBuilder, never in this transform.
             Mat4f.Identity(_modelMat);
             Mat4f.Translate(_modelMat, _modelMat, (float)dx, (float)dy, (float)dz);
         }
@@ -1621,9 +1681,6 @@ namespace Layout.Systems
             }
         }
 
-        // World-unit pull toward the camera applied to every guide mesh (see SetModelMatrix). Tune by eye.
-        private const double CameraNudge = 0.003;
-
         // -- Network events (main thread) ----------------------------------------------------------
 
         private void OnGuideAddedOrUpdated(GuideData guide)
@@ -1688,6 +1745,12 @@ namespace Layout.Systems
 
         private void OnGuideRemoved(Guid id)
         {
+            // A dispelled guide is not "stale", it is gone. Without this its id stayed in the
+            // permanently-stale set for the rest of the session and OccupancyStaleGuides kept counting it,
+            // because the tick's own cleanup only ever looks at ids still in the DIRTY set.
+            _occupancyPermanentlyStale.Remove(id);
+            _occupancyDirty.Remove(id);
+
             CancelSettledMaterialization(id);
             if (_pendingPlacementVisual != null
                 && _pendingPlacementVisual.AdoptedGuideId == id)
@@ -2016,7 +2079,7 @@ namespace Layout.Systems
 
                 int movingScale = ChooseMovingWireframeScale(
                     curve, Math.Max(selectedScale, adaptiveMinimumScale));
-                List<VoxelPosition> voxels = BuildWireframe(curve, movingScale);
+                List<VoxelPosition> voxels = BuildWireframe(shape, curve, movingScale);
 
                 for (int i = 0; i < shape.ControlPoints.Count; i++)
                 {
@@ -2096,6 +2159,12 @@ namespace Layout.Systems
                 VoxelMarch.MarchSegmentInto(voxels, seen, curve[i - 1], curve[i], scale);
             return voxels;
         }
+
+        private static List<VoxelPosition> BuildWireframe(
+            IGuideShape shape, IReadOnlyList<Vec3d> fallbackCurve, int scale) =>
+            shape is RoundoverShape
+                ? ShapeWireframe.GetVoxelPositions(shape, scale)
+                : BuildWireframe(fallbackCurve, scale);
 
         private void UploadPrecisionLayers(
             IGuideShape shape, IReadOnlyList<Vec3d> curve, DraftPreviewSpec spec, int movingScale)
@@ -2480,13 +2549,12 @@ namespace Layout.Systems
             }
 
             var ordered = new List<VoxelPosition>(voxels);
-            ordered.Sort((a, b) =>
-            {
-                int byX = a.X.CompareTo(b.X);
-                if (byX != 0) return byX;
-                int byY = a.Y.CompareTo(b.Y);
-                return byY != 0 ? byY : a.Z.CompareTo(b.Z);
-            });
+            // Progressive volume generators deliberately visit distant tiles/columns in shuffled order so
+            // the preview appears as organic splotches. That reveal order must never become the settled
+            // translucent shell: restore the ordinary scan's X/Y/Z order before building the hidden clean
+            // meshes. Later RebuildGuide/occupancy passes use that same spatial scan order, so the handoff
+            // and subsequent block updates remain visually stable.
+            ProgressiveVoxelOrder.EnsureSpatialOrder(ordered);
             int cleanCursor = 0;
 
             OrganicVoxelGrowth.GrowBatches(
@@ -2543,13 +2611,7 @@ namespace Layout.Systems
             if (voxels == null || voxels.Count == 0) return;
 
             var ordered = new List<VoxelPosition>(voxels);
-            ordered.Sort((a, b) =>
-            {
-                int byX = a.X.CompareTo(b.X);
-                if (byX != 0) return byX;
-                int byY = a.Y.CompareTo(b.Y);
-                return byY != 0 ? byY : a.Z.CompareTo(b.Z);
-            });
+            // Keep the shape's canonical order; regrouping translucent primitives changes brightness.
 
             var occupancy = new HashSet<(int, int, int)>(ordered.Count);
             int minimumY = int.MaxValue;
@@ -2996,7 +3058,7 @@ namespace Layout.Systems
                 if (estimate <= PreviewFullResVoxelCap) return false;
 
                 int movingScale = ChooseMovingWireframeScale(curve, selectedScale);
-                List<VoxelPosition> voxels = BuildWireframe(curve, movingScale);
+                List<VoxelPosition> voxels = BuildWireframe(shape, curve, movingScale);
                 for (int i = 0; i < shape.ControlPoints.Count; i++)
                 {
                     ControlPoint point = shape.ControlPoints[i];
@@ -3184,6 +3246,21 @@ namespace Layout.Systems
                 && _network.IsLocalGuide(guide.Id);
             if (pending.PrivateAnchors != placedPrivateAnchors) return false;
 
+            // The moving-shell estimate deliberately errs high. Domes in particular can cross the 8k
+            // estimate while their exact authoritative shell remains below it. Do not keep an unnecessary
+            // background handoff in that case: it would replace an already-cheap final mesh later, changing
+            // translucent overlap, and public placement would sound once from the server and once here.
+            if (guide.CachedVoxelCount <= PreviewFullResVoxelCap)
+            {
+                bool localPlacement = _network.IsLocalGuide(guide.Id);
+                DiscardPendingPlacementVisual();
+                RebuildGuide(guide);
+                // Local/private creation deferred its immediate effect when the preview was retained. Public
+                // creation already received the server-owned effect on the immediate path.
+                if (localPlacement) PlacementMaterializationCompleted?.Invoke(guide);
+                return true;
+            }
+
             RemoveGuideMesh(guide.Id);
             var mesh = new GuideMesh
             {
@@ -3217,7 +3294,14 @@ namespace Layout.Systems
                 && guide != null)
             {
                 pending.PlacementEffectsRaised = true;
-                PlacementMaterializationCompleted?.Invoke(guide);
+                // Private guides have no server-visible effect. For public guides the server deliberately
+                // defers feedback only for immense, solid volume placements; every other public creation
+                // already played it on the immediate authority path.
+                bool clientOwnsEffects = _network.IsLocalGuide(guide.Id)
+                    || (GuideShapeTypes.IsVolume(guide.ShapeType)
+                        && !guide.IsWireframe
+                        && guide.CachedVoxelCount > GuideManager.BackgroundVolumeVoxelThreshold);
+                if (clientOwnsEffects) PlacementMaterializationCompleted?.Invoke(guide);
             }
             _pendingPlacementVisual = null;
         }
@@ -3561,7 +3645,8 @@ namespace Layout.Systems
         // rebuild churn — and self-correct the moment you walk into range.
         private void OnReprobeTick(float dt)
         {
-            if (_disposed || _deferredSurface.Count == 0) return;
+            if (_disposed) return;
+            if (_deferredSurface.Count == 0 && _deferredOccupancy.Count == 0) return;
             IBlockAccessor accessor = _capi.World?.BlockAccessor;
             if (accessor == null) return;
 
@@ -3582,12 +3667,45 @@ namespace Layout.Systems
                 if (rebuild) (ready ??= new List<Guid>()).Add(id);
             }
 
+            // The occupancy half (v0.4.42) — same race, same test, same tick. A guide sitting in BOTH sets
+            // is queued once; the rebuild below serves both, since it re-probes everything.
+            foreach (Guid id in _deferredOccupancy)
+            {
+                if (_deferredSurface.Contains(id)) continue;
+                bool rebuild = !_network.Guides.TryGetValue(id, out GuideData g) || g == null
+                    || OccupancyProbeReliable(g);
+                if (rebuild) (ready ??= new List<Guid>()).Add(id);
+            }
+
             if (ready == null) return;
             foreach (Guid id in ready)
             {
                 _deferredSurface.Remove(id);
+                _deferredOccupancy.Remove(id);
                 RebuildGuideById(id);   // re-probes; re-defers itself only if still unreliable
             }
+        }
+
+        /// <summary>
+        /// Whether the occupancy probe can currently see the world where <paramref name="guide"/> stands.
+        /// </summary>
+        /// <remarks>
+        /// ONE CHUNK LOOKUP AT THE FIRST REAL ANCHOR — the same shape of test the Surface decal side uses,
+        /// and deliberately the same one <see cref="OnReprobeTick"/> re-runs, so a guide deferred by this
+        /// is released by the very condition that deferred it. A guide with no anchor to probe reports
+        /// reliable rather than deferring forever: there is nothing here a later rebuild would read
+        /// differently.
+        /// </remarks>
+        private bool OccupancyProbeReliable(GuideData guide)
+        {
+            IBlockAccessor accessor = _capi.World?.BlockAccessor;
+            if (accessor == null) return false;
+
+            Vec3d a = FirstRealAnchor(guide?.ControlPoints);
+            if (a == null) return true;
+
+            return accessor.GetChunkAtBlockPos(new BlockPos(
+                (int)Math.Floor(a.X), (int)Math.Floor(a.Y), (int)Math.Floor(a.Z))) != null;
         }
 
         private static Vec3d FirstRealAnchor(List<ControlPoint> points)
@@ -3651,7 +3769,8 @@ namespace Layout.Systems
             bool privateAnchors = _network.ServerLayoutAvailable
                 && _network.IsLocalGuide(guide.Id);
             // Captured on the main thread, used on the worker: the closure holds the accessor and the
-            // occupancy cache, both of which tolerate that (BlockOccupancy locks).
+            // occupancy cache, both of which tolerate that (BlockOccupancy is lock-free — a
+            // ConcurrentDictionary since v0.3.84, GOTCHAS G30).
             System.Func<int, int, int, bool> occupancyProbe = OccupancyProbe();
 
             Task.Factory.StartNew(
@@ -4029,6 +4148,21 @@ namespace Layout.Systems
             if (isSurface && !probeReliable) _deferredSurface.Add(guide.Id);
             else _deferredSurface.Remove(guide.Id);
 
+            // THE SAME RACE, for the occupancy colours (v0.4.42, human-reported). A guide meshed while its
+            // terrain was still streaming in probes nothing but unloaded chunks, so every body voxel reads
+            // as unbuilt and the chiselling highlight stays dark for the rest of the session. Deferring it
+            // here hands it to the same re-probe tick the Surface decal side already uses — one cheap chunk
+            // lookup every 500 ms, one rebuild when the area arrives, and no rebuild at all for a guide
+            // whose chunks never load.
+            //
+            // Tested at the ANCHOR — cheap, and attributable to THIS guide, which is what a signal from
+            // BlockOccupancy itself could never be (the probe runs on materialization workers too). The
+            // other half of the fix is upstream and does the real work: a read against an unloaded chunk
+            // is no longer CACHED, so when this rebuild comes it reads the world rather than the answer
+            // the first blind pass wrote down. See BlockOccupancy.GetOrBuild.
+            if (_occupancyEnabled && !OccupancyProbeReliable(guide)) _deferredOccupancy.Add(guide.Id);
+            else _deferredOccupancy.Remove(guide.Id);
+
             Vec3d origin = ComputeOrigin(points);
 
             var options = new GuideMeshOptions
@@ -4092,7 +4226,7 @@ namespace Layout.Systems
         {
             List<Vec3d> curve = shape.SampleCurve(128);
             int scaffoldScale = ChooseMovingWireframeScale(curve, guide.VoxelScale);
-            List<VoxelPosition> coarse = BuildWireframe(curve, scaffoldScale);
+            List<VoxelPosition> coarse = BuildWireframe(shape, curve, scaffoldScale);
 
             for (int i = 0; i < points.Count; i++)
             {
@@ -4307,7 +4441,7 @@ namespace Layout.Systems
                 _grabAdaptiveScale > 0 ? _grabAdaptiveScale : selectedScale);
             List<Vec3d> curve = shape.SampleCurve(128);
             int movingScale = ChooseMovingWireframeScale(curve, minimumScale);
-            List<VoxelPosition> coarse = BuildWireframe(curve, movingScale);
+            List<VoxelPosition> coarse = BuildWireframe(shape, curve, movingScale);
 
             for (int i = 0; i < points.Count; i++)
             {
@@ -4570,13 +4704,7 @@ namespace Layout.Systems
             }
 
             var ordered = new List<VoxelPosition>(voxels);
-            ordered.Sort((a, b) =>
-            {
-                int byX = a.X.CompareTo(b.X);
-                if (byX != 0) return byX;
-                int byY = a.Y.CompareTo(b.Y);
-                return byY != 0 ? byY : a.Z.CompareTo(b.Z);
-            });
+            // Keep the shape's canonical order so a later settled/occupancy rebuild is pixel-consistent.
             int cleanCursor = 0;
 
             OrganicVoxelGrowth.GrowBatches(
@@ -5094,6 +5222,7 @@ namespace Layout.Systems
         private void RemoveGuideMesh(Guid id)
         {
             _deferredSurface.Remove(id);
+            _deferredOccupancy.Remove(id);
             if (_settledMaterializations.TryGetValue(id, out SettledMaterializationBuild build))
             {
                 build.Cancellation?.Cancel();
@@ -5285,6 +5414,7 @@ namespace Layout.Systems
             _guideShader?.Dispose();
             _guideShader = null;
             _deferredSurface.Clear();
+            _deferredOccupancy.Clear();
 
             if (!_whiteTexBorrowed) _whiteTex?.Dispose();   // engine-cached fallback textures stay alive
             _whiteTex = null;

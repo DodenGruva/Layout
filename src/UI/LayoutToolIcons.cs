@@ -39,6 +39,7 @@ namespace Layout.UI
         public const string Square = "layout-square";
         public const string Polygon = "layout-polygon";
         public const string FreeShapeIcon = "layout-freeshape";
+        public const string Roundover = "layout-roundover";
         public const string Sphere = "layout-sphere";
         public const string Dome = "layout-dome";
         public const string Cylinder = "layout-cylinder";
@@ -157,6 +158,7 @@ namespace Layout.UI
             reg[Square] = DrawSquare;
             reg[Polygon] = DrawPolygon;
             reg[FreeShapeIcon] = DrawFreeShape;
+            reg[Roundover] = DrawRoundover;
             reg[Sphere] = DrawSphere;
             reg[Dome] = DrawDome;
             reg[Cylinder] = DrawCylinder;
@@ -174,7 +176,7 @@ namespace Layout.UI
             foreach (string shapeName in new[]
             {
                 Arch, HalfCircle, Circle, Ellipse, Line, Triangle, RightTri, Equilateral,
-                Isosceles, Rectangle, Square, Polygon, FreeShapeIcon, Sphere, Dome, Cylinder,
+                Isosceles, Rectangle, Square, Polygon, FreeShapeIcon, Roundover, Sphere, Dome, Cylinder,
                 TaperedCylinder, PolygonalPrism, TaperedPolygonalPrism, Cone, Box
             })
             {
@@ -602,6 +604,27 @@ namespace Layout.UI
                 ctx.Arc(c.X(uv[i]), c.Y(uv[i + 1]), c.L(3.0), 0, 2 * Math.PI);
                 ctx.Fill();
             }
+        }
+
+        // The conventional CAD fillet cue: solid square edges lead into a large dotted upper-left fillet.
+        // Widely separated round dots isolate the operation at even the smallest tile size.
+        private static void DrawRoundover(Context ctx, int x, int y, float w, float h, double[] rgba)
+        {
+            var c = new Canvas(x, y, w, h, 76);
+            Pen(ctx, rgba, c.L(3.0));
+            ctx.MoveTo(c.X(12), c.Y(40));
+            ctx.LineTo(c.X(12), c.Y(64));
+            ctx.LineTo(c.X(64), c.Y(64));
+            ctx.LineTo(c.X(64), c.Y(12));
+            ctx.LineTo(c.X(40), c.Y(12));
+            ctx.Stroke();
+
+            double dashUnit = Math.Max(1.4, c.L(3.0));
+            ctx.SetDash(new[] { dashUnit * 0.2, dashUnit * 2.2 }, 0);
+            ctx.MoveTo(c.X(40), c.Y(12));
+            ctx.CurveTo(c.X(24.536), c.Y(12), c.X(12), c.Y(24.536), c.X(12), c.Y(40));
+            ctx.Stroke();
+            ctx.SetDash(Array.Empty<double>(), 0);
         }
 
         // The sphere (0.1.20, the first 3D volume): a circle with an equatorial ellipse — the classic

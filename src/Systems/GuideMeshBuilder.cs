@@ -107,7 +107,9 @@ namespace Layout.Systems
         /// </summary>
         /// <remarks>
         /// Called once per body voxel during the build, including on background materialization threads, so
-        /// whatever backs it must tolerate concurrent calls. <see cref="BlockOccupancy"/> locks for this.
+        /// whatever backs it must tolerate concurrent calls. <see cref="BlockOccupancy"/> is safe for this
+        /// and takes NO lock — its cache has been a <c>ConcurrentDictionary</c> since v0.3.84. This remark
+        /// claimed a lock for three sessions after it was gone; see `GOTCHAS` G30 for what that cost.
         ///
         /// This is NOT a return of the retired z-fight probe. That one asked about a voxel's NEIGHBOUR and
         /// fed geometry, which is exactly why it had to go (v0.3.70): a rebuild after the player filled the
@@ -268,11 +270,14 @@ namespace Layout.Systems
         // Anti-z-fight face clearance, in world blocks. SINCE v0.3.70 THIS IS AN OUTSET, not an inset: it
         // is applied outward to every exposed face of a volumetric guide (the name is kept so `/layout
         // inset`, the client config key, and the playtest history all still line up). Magnitude semantics
-        // are unchanged, so the value below is still the one three rounds of playtest settled on.
+        // are unchanged. The current value was settled after removing the renderer's separate whole-mesh
+        // camera translation, which had shifted the guide off Vintage Story's exact 1/16 lattice.
         //
         // Tuned by playtest twice, once per direction. As an INSET: 0.004 was safe but seamy; 0.001
         // shimmered when moving toward/away from the guide (depth precision falls with distance); 0.003 was
-        // the human's call (0.2.14). As an OUTSET: 0.0006, confirmed in play (v0.3.71) — five times smaller.
+        // the human's call (0.2.14). As an OUTSET: 0.0006 was initially confirmed in play (v0.3.71).
+        // With the off-grid 0.003 camera translation removed, 0.0001 was stable and 0.0002 was selected as
+        // the extra-buffer default. At scale 1 it is only 0.32% of one micro-block.
         //
         // The drop is the expected consequence of the flip, not a re-tune of the same problem. An inset had
         // to open a gap WIDE ENOUGH TO SEE PAST the world surface sitting in front of it, so it paid for
@@ -285,8 +290,8 @@ namespace Layout.Systems
         /// <remarks>
         /// TUNABLE SINCE v0.3.65 — a field, not a const, so <c>/layout inset</c> can dial it in play. A
         /// reported ground z-fight cannot be reproduced or judged from outside the game, and this value was
-        /// settled by three rounds of playtest; guessing at a new one blind is how the Session 25–26
-        /// regressions happened.
+        /// settled by direct playtest; guessing at a new one blind is how the Session 25–26 regressions
+        /// happened. Do not compensate for z-fighting by translating the whole mesh off the voxel lattice.
         ///
         /// Worth knowing before raising it: the reason 0.004 was rejected as "seamy" no longer applies. That
         /// seam was between two guide voxels meeting across a block boundary, and exposed-face meshing means
@@ -294,7 +299,7 @@ namespace Layout.Systems
         /// separates a guide face from a WORLD BLOCK face, so the old ceiling on it is obsolete and larger
         /// values are safer than they were when this was tuned.
         /// </remarks>
-        private static float BlockPlaneInset = 0.0006f;
+        private static float BlockPlaneInset = 0.0002f;
 
         /// <summary>Sets the anti-z-fight inset, in world blocks. Meshes must be rebuilt to take effect.</summary>
         public static void ConfigureBlockPlaneInset(float inset) => BlockPlaneInset = inset;
@@ -306,6 +311,11 @@ namespace Layout.Systems
         // land on exact grid coordinates, so an effectively-exact epsilon is right: a clean foot reads clean, a
         // deliberately raised or angled one reads off.
         private const double CoplanarEpsilon = 1e-6;
+
+        // Occupied control markers keep their role colour, but move visibly toward the configured built
+        // cyan. A full replacement would make locked/apex/anchor cells indistinguishable from ordinary
+        // built body cells; this partial shift communicates both facts at once.
+        private const float OccupiedMarkerCyanShift = 0.35f;
 
         // Outward-facing (CCW) triangle winding for the 8 cube corners laid out in <see cref="AddBox"/>.
         private static readonly int[] CubeIndices =
@@ -449,17 +459,21 @@ namespace Layout.Systems
                     if (options.Hidden) a = pal.HiddenAnchorAlpha; // only anchors reach here when hidden
 
                     // BLOCK-OCCUPANCY RECOLOUR (v0.3.79, PLAN_BLOCK_OCCUPANCY stage 2). A voxel whose own
-                    // cell already holds world material is drawn in the "built" colour instead of its role
-                    // colour, so the player can see at a glance which parts of the plan exist.
+                    // cell already holds world material communicates that state through the built cyan.
+                    // Ordinary body voxels become cyan; locked, primary and anchor markers shift part-way
+                    // toward cyan so their structural role remains recognisable too.
                     //
                     // Alpha is deliberately kept from the role colour: the guide's transparency is a
                     // separate, player-tuned setting, and changing it here would read as the guide fading
                     // rather than as a state change. Only the hue moves.
                     //
-                    // The probe is skipped for anchors and the grabbed point — those mark the GUIDE's own
-                    // structure, not the world's, and recolouring them would lose information the player
-                    // needs while placing. Body voxels are the ones this is about.
-                    if (options.OccupancyProbe != null && v.Type == VoxelRenderType.Normal)
+                    // The grabbed point stays white: it is a momentary interaction override, not a role
+                    // colour. Division marks stay magenta because their equal-part cue was not requested.
+                    if (options.OccupancyProbe != null
+                        && (v.Type == VoxelRenderType.Normal
+                            || v.Type == VoxelRenderType.Locked
+                            || v.Type == VoxelRenderType.Primary
+                            || v.Type == VoxelRenderType.Anchor))
                     {
                         // Sample the CENTRE cell of the voxel. At scale 1 that is the voxel itself and the
                         // correspondence with a chisel voxel is exact; at coarser scales one guide voxel
@@ -468,7 +482,16 @@ namespace Layout.Systems
                         int mid = scale >> 1;
                         if (options.OccupancyProbe(v.X + mid, v.Y + mid, v.Z + mid))
                         {
-                            r = pal.Built[0]; g = pal.Built[1]; b = pal.Built[2];
+                            if (v.Type == VoxelRenderType.Normal)
+                            {
+                                r = pal.Built[0]; g = pal.Built[1]; b = pal.Built[2];
+                            }
+                            else
+                            {
+                                r += (pal.Built[0] - r) * OccupiedMarkerCyanShift;
+                                g += (pal.Built[1] - g) * OccupiedMarkerCyanShift;
+                                b += (pal.Built[2] - b) * OccupiedMarkerCyanShift;
+                            }
                         }
                     }
                 }

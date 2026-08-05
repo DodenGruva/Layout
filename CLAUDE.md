@@ -19,13 +19,30 @@ of that here; it goes stale the moment it is copied.
 
 | …doing this | …read this FIRST |
 |---|---|
-| touching the renderer | `dev/GOTCHAS.md` **G2** (order-dependent geometry) + **R2/R4/R5/R8**, then `dev/plans/PLAN_RENDER_PERFORMANCE.md` |
+| touching the renderer or progressive finalisation | `dev/GOTCHAS.md` **G2** and **G53** (order-dependent geometry/reveal order), **G55** (one completion owner) + **R2/R4/R5/R8**, then `dev/plans/PLAN_RENDER_PERFORMANCE.md` |
 | adding or changing a packet | `dev/GOTCHAS.md` **G1** (append-only, never renumber), `dev/WIRE_HISTORY.md` |
+| accepting ANY value from a client OR a file | `dev/GOTCHAS.md` **G31** — `Guide/GuideBounds.cs` is the one range check; call it — and **G32**, client conventions are not server invariants |
+| adding a shape, or touching a voxel counter | `dev/GOTCHAS.md` **G31** (the scan guards bound a shape's SIZE, never its POSITION) and **G34** (a shape that fails its frame check reports ZERO, and zero passes every cap) |
+| adding a rate limit, throttle or drop rule | `dev/GOTCHAS.md` **G35** — never drop the packet that RELEASES a resource |
+| saving state from anywhere that is not a lifecycle point | `dev/GOTCHAS.md` **G39** — `Persist()` re-serialises the WHOLE registry; mutations call `MarkDirty()`, and deferring a write obliges every drop path to flush |
+| deferring a `StoreData` call to a worker or a later moment | `dev/GOTCHAS.md` **G44** — it reaches disk at the game's NEXT save, and after the last save there is no next one |
+| treating a null, false or empty return as "nothing to do" | `dev/GOTCHAS.md` **G43** — it may equally mean "I tried and failed"; skipping a fallback on that reading silently loses the work |
+| short-circuiting, caching or pre-filtering ANY access/claim/privilege check | `dev/GOTCHAS.md` **G40** and **R12** — `TestAccess` has seven denial reasons and only one is land claims; **G47** permits bounds to scope staleness snapshots, never to replace the exact check |
+| calling `GetPointAt` or any shape accessor more than once | `dev/GOTCHAS.md` **G41** — it may rebuild the entire geometry per call; hoist it, and keep the parameter types identical |
+| writing a debounce or "already queued" guard | `dev/GOTCHAS.md` **G36** — the pending flag must never outlive its callback — and **R11**, which is what happened when it did |
+| caching any world read that can FAIL | `dev/GOTCHAS.md` **G37** — "cannot see" is not "empty", and a chunk load is not a block change |
+| validating a value against a pinned enum | `dev/GOTCHAS.md` **G38** — never bound it with a hand-written member name; config is rewritten on load, so a wrong bound DESTROYS the setting |
+| writing a "when did this last happen" field | `dev/GOTCHAS.md` **G33** — `long.MinValue` is not a safe "never"; it overflows the subtraction |
+| adding a packet that REFUSES something | `dev/GOTCHAS.md` **G27** — check a subscriber exists, or the player is told nothing |
+| writing anything that runs on a worker thread | `dev/GOTCHAS.md` **G30** (`BlockOccupancy` is lock-free) and **G29** (check identity before removing by key) |
+| adding cancellation to long-running worker work | `dev/GOTCHAS.md` **G45** — checks between stages do not cancel the scan/materialisation inside them; carry the probe into the deepest loop and never publish a partial result |
+| adding a no-op/idempotent early return at an untrusted seam | `dev/GOTCHAS.md` **G46** — validate the request's domain first, then decide whether its valid meaning changes state |
 | adding any player-facing text | `dev/GOTCHAS.md` **G11** — `SendIngameError`'s parameter is a LANG KEY |
 | adding text to a dialog | `dev/GOTCHAS.md` **G13** — a static text wraps, but its bounds never grow |
+| laying out multi-line HUD state text | `dev/GOTCHAS.md` **G54** — blank labels still reserve unequal widths; isolate same-bound overlays |
 | adding a custom GUI element | `dev/GOTCHAS.md` **G6** — allocate the `LoadedTexture` first, or the client dies |
 | adding a setting that can gate itself | `dev/GOTCHAS.md` **G9** — disable, never block |
-| changing caps or limits | `dev/GOTCHAS.md` **R1** — private guides are deliberately NOT capped |
+| changing caps or limits | `dev/GOTCHAS.md` **R1** — private guides are deliberately NOT capped — and **G28**, the three caps are not symmetrical |
 | touching colours or the palette | `dev/GOTCHAS.md` **G8** — read the palette once per mesh build |
 | adding an optional command argument | `dev/GOTCHAS.md` **G3** — optional parsers return their DEFAULT, not null |
 | debugging "X doesn't work" | `dev/GOTCHAS.md` **G12** — run the existing diagnostic before writing a fix |
@@ -89,6 +106,10 @@ personal paths, no personal usernames, in any tracked file. **Commit and push ON
   says "update the documents" or "finalize the session".
   **Exception:** if the conversation is nearing a context trim while docs are stale, **warn the human first**
   so nothing is lost unrecorded.
+  ⚠️ **That warning belongs at the END of a session or before a context trim — NOT after every revision.**
+  Track the doc debt silently and present it once, complete, when the moment comes. *(Human-set 2026-08-01,
+  after three consecutive iterations ended with a stale-docs note: "Any reminders more frequent than that
+  become too frequent, though I appreciate the notice.")*
 
 ### When the human says "update the documents"
 

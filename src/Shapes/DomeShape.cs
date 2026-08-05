@@ -22,8 +22,8 @@ namespace Layout.Shapes
     /// filled domes retain the bounding-lattice scan guard. Dragging the apex is absorbed (it snaps back to
     /// the derived position — no break target in v1).
     /// </remarks>
-    public sealed class DomeShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape,
-        IIntrinsicGuideExtent
+    public sealed class DomeShape : IGuideShape, ICancellableThresholdVoxelCounter,
+        ICancellableVoxelGenerator, IProgressiveVoxelShape, IIntrinsicGuideExtent
     {
         private const double MinRadius = 0.05;
         private const long MaxScanCells = 4_000_000;
@@ -112,15 +112,21 @@ namespace Layout.Shapes
         // --- IGuideShape: voxels ---------------------------------------------------------------------
 
         public List<VoxelPosition> GetVoxelPositions(int scale, bool filled = false)
+            => GetVoxelPositions(scale, filled, null);
+
+        public List<VoxelPosition> GetVoxelPositions(
+            int scale, bool filled, Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             var result = new List<VoxelPosition>();
             if (!TryGetFrame(out Vec3d c, out double r, out _, out _, out Vec3d n)) return result;
 
             if (!filled)
             {
-                SphericalShellScan.Scan(c, r, scale, n, int.MaxValue, result);
-                ClaimHandleMarkers(result, scale);
+                SphericalShellScan.Scan(
+                    c, r, scale, n, int.MaxValue, result, cancellationRequested);
+                ClaimHandleMarkers(result, scale, cancellationRequested);
                 return result;
             }
 
@@ -136,6 +142,7 @@ namespace Layout.Shapes
             int min16Y = AlignDown(c.Y - r, scale), max16Y = AlignDown(c.Y + r, scale);
             int min16Z = AlignDown(c.Z - r, scale), max16Z = AlignDown(c.Z + r, scale);
 
+            int work = 0;
             for (int ix = min16X; ix <= max16X; ix += scale)
             {
                 double lox = ix / 16.0;
@@ -150,6 +157,7 @@ namespace Layout.Shapes
                     double ccy = loy + cell * 0.5 - c.Y;
                     for (int iz = min16Z; iz <= max16Z; iz += scale)
                     {
+                        VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                         double loz = iz / 16.0;
                         double nz = Nearest(c.Z, loz, loz + cell);
                         double dmin2 = nxy2 + nz * nz;
@@ -165,7 +173,7 @@ namespace Layout.Shapes
                 }
             }
 
-            ClaimHandleMarkers(result, scale);
+            ClaimHandleMarkers(result, scale, cancellationRequested);
             return result;
         }
 
@@ -179,6 +187,10 @@ namespace Layout.Shapes
                 return collector.Result;
             SphericalShellScan.ScanProgressively(c, r, scale, n, collector);
             collector.Flush();
+            // The progressive scan deliberately shuffles columns. Marker claiming resolves exact distance
+            // ties by first occurrence, so claim only after restoring the settled scan order; otherwise a
+            // few blue/green cells can jump to their tied neighbour when the clean shell takes over.
+            ProgressiveVoxelOrder.EnsureSpatialOrder(collector.Result);
             ClaimHandleMarkers(collector.Result, scale);
             return collector.Result;
         }
@@ -187,12 +199,18 @@ namespace Layout.Shapes
             => GetVoxelCountUpTo(scale, filled, int.MaxValue);
 
         public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter)
+            => GetVoxelCountUpTo(scale, filled, stopAfter, null);
+
+        public int GetVoxelCountUpTo(
+            int scale, bool filled, int stopAfter, Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             if (!TryGetFrame(out Vec3d c, out double r, out _, out _, out Vec3d n)) return 0;
 
             if (!filled)
-                return SphericalShellScan.Scan(c, r, scale, n, stopAfter, null);
+                return SphericalShellScan.Scan(
+                    c, r, scale, n, stopAfter, null, cancellationRequested);
 
             long cellsPerAxis = (long)(2.0 * r * 16.0 / scale) + 3;
             if (cellsPerAxis * cellsPerAxis * cellsPerAxis > MaxScanCells)
@@ -203,6 +221,7 @@ namespace Layout.Shapes
             double r2 = r * r;
             double spread = (Math.Abs(n.X) + Math.Abs(n.Y) + Math.Abs(n.Z)) * cell * 0.5;
             int count = 0;
+            int work = 0;
 
             int min16X = AlignDown(c.X - r, scale), max16X = AlignDown(c.X + r, scale);
             int min16Y = AlignDown(c.Y - r, scale), max16Y = AlignDown(c.Y + r, scale);
@@ -222,6 +241,7 @@ namespace Layout.Shapes
                     double ccy = loy + cell * 0.5 - c.Y;
                     for (int iz = min16Z; iz <= max16Z; iz += scale)
                     {
+                        VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                         double loz = iz / 16.0;
                         double nz = Nearest(c.Z, loz, loz + cell);
                         if (nxy2 + nz * nz > r2) continue;
@@ -237,14 +257,16 @@ namespace Layout.Shapes
             return count;
         }
 
-        private void ClaimHandleMarkers(List<VoxelPosition> cells, int scale)
+        private void ClaimHandleMarkers(
+            List<VoxelPosition> cells, int scale, Func<bool> cancellationRequested = null)
         {
             for (int i = 0; i < 3 && i < _controlPoints.Count; i++)
             {
                 ControlPoint cp = _controlPoints[i];
                 VoxelRenderType t = cp.IsLocked ? VoxelRenderType.Locked
                     : cp.IsPrimary ? VoxelRenderType.Primary : VoxelRenderType.Anchor;
-                ShapeGeometry.ClaimMarker(cells, scale, cp.WorldPosition, t);
+                ShapeGeometry.ClaimMarker(
+                    cells, scale, cp.WorldPosition, t, cancellationRequested);
             }
         }
 

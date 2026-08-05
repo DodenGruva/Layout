@@ -42,7 +42,23 @@ namespace Layout.Systems
         /// Rejected because the resulting public guide would occupy a block where the acting player does
         /// not have build permission. The attempted mutation has already been rolled back.
         /// </summary>
-        RejectedClaimAccess
+        RejectedClaimAccess,
+        /// <summary>
+        /// Rejected because the guide voxelises to NOTHING — no voxels at all, so there would be nothing to
+        /// see and nothing to build against.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ APPENDED LAST ON PURPOSE (<c>GOTCHAS</c> G1). This enum's integer value crosses the wire in
+        /// <c>GuidePlacementRejectedPacket</c>; inserting a member anywhere else would renumber every
+        /// status after it for older clients. (Today's client ignores the field, but that is not a licence
+        /// to renumber — it is only the reason this is safe to add at all.)
+        ///
+        /// Added v0.4.37 after a playtest found the hole: a shape whose frame check fails returns a count
+        /// of zero and an empty voxel set, and zero passes EVERY cap — so the guide was created, persisted,
+        /// listed at 0 voxels, and drawn as nothing, with no message. It is also the vector A14.8 names,
+        /// where a degenerate pushed guide costs zero voxels and evades the whole budget.
+        /// </remarks>
+        RejectedEmpty
     }
 
     /// <summary>
@@ -118,6 +134,10 @@ namespace Layout.Systems
             new GuideOperationResult(GuideOpStatus.RejectedClaimAccess, guide, 0, 0, -1,
                 position);
 
+        /// <summary>The guide contains no voxels at all — nothing to draw, nothing to build against.</summary>
+        public static GuideOperationResult Empty(GuideData guide) =>
+            new GuideOperationResult(GuideOpStatus.RejectedEmpty, guide, 0, 0, -1);
+
         public override string ToString() =>
             $"GuideOperationResult({Status}, guide={(Guide != null ? Guide.Id.ToString() : "none")}, " +
             $"voxels={VoxelCount}, cap={CapLimit}, cpIndex={ControlPointIndex}, denied={DeniedPosition})";
@@ -158,10 +178,20 @@ namespace Layout.Systems
             Shape = shape ?? throw new ArgumentNullException(nameof(shape));
         }
 
-        public int CountUpTo(int stopAfter) => Guide.IsWireframe
-            ? ShapeWireframe.GetVoxelCount(Shape, Guide.VoxelScale)
-            : GuideShapeVoxelCounting.CountUpTo(
-                Shape, Guide.VoxelScale, Guide.IsFilled, stopAfter);
+        public int CountUpTo(int stopAfter) => CountUpTo(stopAfter, null);
+
+        public int CountUpTo(int stopAfter, Func<bool> cancellationRequested)
+        {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
+            if (!Guide.IsWireframe)
+                return GuideShapeVoxelCounting.CountUpTo(
+                    Shape, Guide.VoxelScale, Guide.IsFilled, stopAfter,
+                    cancellationRequested);
+
+            int count = ShapeWireframe.GetVoxelCount(Shape, Guide.VoxelScale);
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
+            return count;
+        }
     }
 
     /// <summary>
@@ -216,6 +246,13 @@ namespace Layout.Systems
         /// </summary>
         public const int HardVoxelCeiling = 10_000_000;
 
+        /// <summary>
+        /// Exact volume size above which creation/refinement crosses to the shared background pipeline.
+        /// The server and client must use one value: the server owns public placement feedback below this
+        /// line, while the client owns it after a streamed placement finishes above it.
+        /// </summary>
+        public const int BackgroundVolumeVoxelThreshold = 8000;
+
         private readonly IGuidePersistence _persistence;
         private readonly IGuideBlockProbe _blockProbe;
         private readonly ILogger _logger;
@@ -232,6 +269,14 @@ namespace Layout.Systems
         // so a personal per-guide cap can replace the server default without contaminating client authority.
         private int? _operationPerGuideVoxelCap;
         private GuideMutationAccessValidator _operationAccessValidator;
+        // Something has changed since the last successful write. Set by MarkDirty on every mutation,
+        // cleared by Persist. Server main thread only, like every field above. See MarkDirty's remarks.
+        private bool _persistDirty;
+        // The background serialisation currently running on a worker, or null. Main thread only — a worker
+        // NEVER touches this field, it only reads its own job. Two things depend on it, both load-bearing:
+        // it stops a second worker starting, and it is the identity a completing job must match before it
+        // is allowed to store anything (GOTCHAS G29). See BeginBackgroundPersist.
+        private GuidePersistJob _persistInFlight;
 
         private readonly Dictionary<Guid, GuideData> _guides = new Dictionary<Guid, GuideData>();
         private readonly Dictionary<Guid, IGuideShape> _shapes = new Dictionary<Guid, IGuideShape>();
@@ -367,6 +412,26 @@ namespace Layout.Systems
             return new ActionOnDispose(() => _operationAccessValidator = previous);
         }
 
+        /// <summary>
+        /// Records that the registry has changed and owes a save. **This is what every mutation calls.**
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ MUTATIONS MUST NEVER CALL <see cref="Persist"/> DIRECTLY. Persist re-serialises the WHOLE
+        /// registry — every guide in the world, not the one that changed — so its cost tracks world size
+        /// and not edit size. Calling it per mutation made a reshape drag, which sends about ten updates a
+        /// second, re-serialise everything ten times a second: measured at ~4 ms per megabyte of guide
+        /// data, that is ~20 ms of server main thread per drag update at a thousand guides, when a whole
+        /// server tick is 20 ms. It was invisible on a small test world and crippling on a large one.
+        ///
+        /// Setting a bool instead costs nothing, and the actual write happens at the points that need it:
+        /// the world save (where the data is about to hit disk anyway), a periodic flush, and shutdown.
+        ///
+        /// This also subsumes the old <c>BatchPersist</c> scope, which existed solely to stop the
+        /// client-only push writing the registry once per guide (A14.8). A bulk operation now marks the
+        /// same bool repeatedly and writes once, without needing a scope to say so.
+        /// </remarks>
+        private void MarkDirty() => _persistDirty = true;
+
         private int EffectivePerGuideVoxelCap => _operationPerGuideVoxelCap ?? _perGuideVoxelCap;
 
         /// <summary>
@@ -439,7 +504,9 @@ namespace Layout.Systems
             bool flatSideAligned = false)
         {
             if (start == null || end == null) return GuideOperationResult.Invalid();
-            if (!GuideData.IsValidVoxelScale(settings.Scale)) return GuideOperationResult.Invalid();
+            if (!GuideData.IsValidVoxelScale(settings.Scale)
+                || !GuideBounds.IsUsableProjection(settings.Mode, settings.Plane))
+                return GuideOperationResult.Invalid();
 
             // 3D volumes are always Volumetric, carry no division marks (0.1.20/0.1.21), and are always
             // HOLLOW shells (0.2.17 — exposed-face meshing made filled interiors emit no geometry, so fill
@@ -489,6 +556,12 @@ namespace Layout.Systems
 
             int count = CountForCaps(
                 data.Id, shape, data.VoxelScale, data.IsFilled, data.IsWireframe, creatorUid);
+            // A GUIDE MADE OF NOTHING IS NOT A GUIDE. Every shape's counter returns 0 when its frame check
+            // fails (BoxShape's MinSide, and the same idiom in its siblings), and its voxel set comes back
+            // empty to match — so zero sailed through every cap, including a per-guide cap of 5,000, and
+            // the player got an invisible guide listed at 0 voxels with no message at all. Refuse it here,
+            // where the count is first known, rather than storing it and puzzling everyone later.
+            if (count <= 0) return GuideOperationResult.Empty(data);
             if (count > HardVoxelCeiling)                        // scan-guard sentinel — too big to render
                 return GuideOperationResult.OverCap(data, count, HardVoxelCeiling);
             int perGuideCap = EffectivePerGuideVoxelCap;
@@ -506,7 +579,7 @@ namespace Layout.Systems
             _guides[data.Id] = data;
             _shapes[data.Id] = shape;
             StoreCount(data.Id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(data, count);
         }
 
@@ -524,7 +597,8 @@ namespace Layout.Systems
         {
             prepared = null;
             failure = default;
-            if (start == null || end == null || !GuideData.IsValidVoxelScale(settings.Scale))
+            if (start == null || end == null || !GuideData.IsValidVoxelScale(settings.Scale)
+                || !GuideBounds.IsUsableProjection(settings.Mode, settings.Plane))
             {
                 failure = GuideOperationResult.Invalid();
                 return false;
@@ -595,10 +669,14 @@ namespace Layout.Systems
 
             GuideData data = prepared.Guide;
             if (_guides.ContainsKey(data.Id)) return GuideOperationResult.Invalid(data);
+            if (!GuideBounds.IsUsableProjection(data.Projection, data.Plane))
+                return GuideOperationResult.Invalid(data);
 
             GuideOperationResult countLimit = CheckCreateGuideCountLimits(data.CreatorUid);
             if (countLimit.Status == GuideOpStatus.RejectedOverGuideCount) return countLimit;
 
+            // Nothing to draw — same rule as CreateGuide, applied to the immense path's committed count.
+            if (exactCount <= 0) return GuideOperationResult.Empty(data);
             if (exactCount > HardVoxelCeiling)
                 return GuideOperationResult.OverCap(data, exactCount, HardVoxelCeiling);
             int perGuideCap = EffectivePerGuideVoxelCap;
@@ -618,7 +696,7 @@ namespace Layout.Systems
             _guides[data.Id] = data;
             _shapes[data.Id] = prepared.Shape;
             StoreCount(data.Id, exactCount);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(data, exactCount);
         }
 
@@ -650,7 +728,7 @@ namespace Layout.Systems
             guide.LastSculptorUid = playerUid;
             guide.LastSculptorName = cleanName;
             guide.DataVersion = GuideData.CurrentDataVersion;
-            if (changed) Persist();
+            if (changed) MarkDirty();
             return true;
         }
 
@@ -676,6 +754,13 @@ namespace Layout.Systems
             // arithmetic with it. Normal guides and every internal undo snapshot already use these values.
             if (!GuideData.IsValidVoxelScale(live.VoxelScale))
                 return GuideOperationResult.Invalid(live);
+            // Range check BEFORE the shape is adopted and counted (GOTCHAS G31). This is the seam the
+            // client-only "push" import comes through, and CountForCaps below is exactly the scan that
+            // never terminates on an out-of-world coordinate.
+            if (!GuideBounds.AllUsable(live.ControlPoints)
+                || !GuideBounds.AllUsable(live.OriginalControlPoints)
+                || !GuideBounds.IsUsableProjection(live.Projection, live.Plane))
+                return GuideOperationResult.Invalid(live);
             IGuideShape shape = ShapeFactory.Adopt(live);
             shape.RecalculatePhantomPoints();
 
@@ -690,6 +775,10 @@ namespace Layout.Systems
             int count = CountForCaps(
                 live.Id, shape, live.VoxelScale, live.IsFilled, live.IsWireframe,
                 live.CreatorUid);
+            // Zero voxels — nothing to render. This is also the import seam for the client-only "push", and
+            // a degenerate pushed guide costs zero voxels, so without this it evades every voxel budget
+            // outright (A14.8's stated vector) while still consuming a registry slot and a save entry.
+            if (count <= 0) return GuideOperationResult.Empty(live);
             // Restore is also the import seam used by client-only "push". Keep the absolute rendering
             // safeguard identical to normal creation even when an administrator disables configurable
             // per-guide, creator-total, and world caps; otherwise a client-supplied snapshot could bypass
@@ -711,7 +800,7 @@ namespace Layout.Systems
             _guides[live.Id] = live;
             _shapes[live.Id] = shape;
             StoreCount(live.Id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(live, count);
         }
 
@@ -749,6 +838,11 @@ namespace Layout.Systems
                 shape.MoveControlPoint(edits[i].Index, edits[i].Position);
 
             int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled);
+            if (count <= 0)
+            {
+                RestorePoints(id, snapshot);
+                return GuideOperationResult.Empty(g);
+            }
             if (WouldExceedCaps(id, count, out int cap))
             {
                 RestorePoints(id, snapshot);
@@ -761,7 +855,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -781,6 +875,8 @@ namespace Layout.Systems
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             if (position == null) return GuideOperationResult.Invalid(g);
+            if (!GuideShapeTypes.SupportsBodyInsert(g.ShapeType))
+                return GuideOperationResult.Invalid(g);
             var shape = _shapes[id];
             GuideData accessBefore = AccessSnapshot(g);
 
@@ -807,7 +903,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count, insertedIndex);
         }
 
@@ -852,7 +948,7 @@ namespace Layout.Systems
                 return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -871,7 +967,7 @@ namespace Layout.Systems
             if (cp.IsPhantom) return GuideOperationResult.Invalid(g);
 
             cp.IsLocked = locked;
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var c) ? c : 0);
         }
 
@@ -888,7 +984,7 @@ namespace Layout.Systems
             _guides.Remove(id);
             _shapes.Remove(id);
             RemoveCount(id);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, 0);
         }
 
@@ -898,8 +994,13 @@ namespace Layout.Systems
         public GuideOperationResult SetHidden(Guid id, bool hidden)
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
+            // NO-OP GUARD. Persist() re-serialises the WHOLE registry, so setting hidden to the value it
+            // already has was a full save per packet — and nothing rate-limits packets. Success either way;
+            // the caller decides whether anything is worth broadcasting.
+            if (g.IsHidden == hidden)
+                return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var same) ? same : 0);
             g.IsHidden = hidden;
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var c) ? c : 0);
         }
 
@@ -911,6 +1012,8 @@ namespace Layout.Systems
         public GuideOperationResult SetProjection(Guid id, ProjectionMode mode, ProjectionPlane plane)
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
+            if (!GuideBounds.IsUsableProjection(mode, plane))
+                return GuideOperationResult.Invalid(g);
             // A 3D volume cannot go Surface (0.1.20/0.1.21) — the GUI greys the row; server-side gate.
             if (GuideShapeTypes.IsVolume(g.ShapeType) && mode == ProjectionMode.Surface)
                 return GuideOperationResult.Invalid(g);
@@ -975,7 +1078,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1056,7 +1159,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1108,7 +1211,7 @@ namespace Layout.Systems
                 return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1145,9 +1248,22 @@ namespace Layout.Systems
             GuideData accessBefore = AccessSnapshot(g);
             ProjectionPlane planeBefore = g.Plane;
 
+            if (!TryOffsetPlane(g.Plane, sx, sy, sz, out ProjectionPlane movedPlane))
+                return GuideOperationResult.Invalid(g);
+
             OffsetPoints(g.ControlPoints, delta);
             OffsetPoints(g.OriginalControlPoints, delta);
-            g.Plane = OffsetPlane(g.Plane, sx, sy, sz);
+            g.Plane = movedPlane;
+            if (!GuideBounds.AllUsable(g.ControlPoints)
+                || !GuideBounds.AllUsable(g.OriginalControlPoints)
+                || !GuideBounds.IsUsableProjection(g.Projection, g.Plane))
+            {
+                var back = new Vec3d(-delta.X, -delta.Y, -delta.Z);
+                OffsetPoints(g.ControlPoints, back);
+                OffsetPoints(g.OriginalControlPoints, back);
+                g.Plane = planeBefore;
+                return GuideOperationResult.Invalid(g);
+            }
             shape.RecalculatePhantomPoints();
 
             // No cap check: the count is unchanged by construction (see remarks), so a move can never push a
@@ -1166,7 +1282,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, cached);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, cached);
         }
 
@@ -1183,8 +1299,15 @@ namespace Layout.Systems
             static bool TryAxis(double world, int scale, out int sixteenths)
             {
                 double exact = world * 16.0;
-                sixteenths = (int)Math.Round(exact);
-                return Math.Abs(exact - sixteenths) <= 1e-6 && sixteenths % scale == 0;
+                double rounded = Math.Round(exact);
+                if (double.IsNaN(rounded) || double.IsInfinity(rounded)
+                    || rounded < int.MinValue || rounded > int.MaxValue)
+                {
+                    sixteenths = 0;
+                    return false;
+                }
+                sixteenths = (int)rounded;
+                return Math.Abs(exact - rounded) <= 1e-6 && sixteenths % scale == 0;
             }
         }
 
@@ -1199,7 +1322,8 @@ namespace Layout.Systems
             }
         }
 
-        private static ProjectionPlane OffsetPlane(ProjectionPlane plane, int sx, int sy, int sz)
+        private static bool TryOffsetPlane(
+            ProjectionPlane plane, int sx, int sy, int sz, out ProjectionPlane moved)
         {
             int along = plane.FlattenedAxis switch
             {
@@ -1207,7 +1331,16 @@ namespace Layout.Systems
                 PlaneAxis.Z => sz,
                 _ => sy
             };
-            return along == 0 ? plane : new ProjectionPlane(plane.FlattenedAxis, plane.PlaneOffset + along);
+            long offset = (long)plane.PlaneOffset + along;
+            if (offset < int.MinValue || offset > int.MaxValue)
+            {
+                moved = plane;
+                return false;
+            }
+            moved = along == 0
+                ? plane
+                : new ProjectionPlane(plane.FlattenedAxis, (int)offset);
+            return true;
         }
 
         /// <summary>
@@ -1247,6 +1380,8 @@ namespace Layout.Systems
             int turns = ((quarterTurns % 4) + 4) % 4;
             if (turns == 0)
                 return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out int same) ? same : 0);
+            if (!Enum.IsDefined(typeof(PlaneAxis), axis))
+                return GuideOperationResult.Invalid(g);
 
             IGuideShape shape = _shapes[id];
             GuideData accessBefore = AccessSnapshot(g);
@@ -1260,14 +1395,21 @@ namespace Layout.Systems
             RotatePoints(g.OriginalControlPoints, axis, turns, pivot);
             g.ShapePlaneAxis = RotateAxis(g.ShapePlaneAxis, axis, turns);
 
+            if (g.Projection == ProjectionMode.Surface)
+                g.Plane = RotateProjectionPlane(g, planeBefore, axis, turns);
+            if (!GuideBounds.AllUsable(g.ControlPoints)
+                || !GuideBounds.AllUsable(g.OriginalControlPoints)
+                || !GuideBounds.IsUsableProjection(g.Projection, g.Plane))
+            {
+                RestoreRotation(id, g, before, originalBefore, shapeAxisBefore, planeBefore);
+                return GuideOperationResult.Invalid(g);
+            }
+
             // Re-adopt: the shape captured its preferred axis at construction, so a changed ShapePlaneAxis
             // only takes effect through a fresh adoption.
             shape = ShapeFactory.Adopt(g);
             _shapes[id] = shape;
             shape.RecalculatePhantomPoints();
-
-            if (g.Projection == ProjectionMode.Surface)
-                g.Plane = RotateProjectionPlane(g, planeBefore, axis, turns);
 
             int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled, g.IsWireframe);
             if (WouldExceedCaps(id, count, out int cap))
@@ -1282,7 +1424,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1413,11 +1555,28 @@ namespace Layout.Systems
         /// </remarks>
         public GuideOperationResult TransformGuide(
             Guid id, Vec3d delta, int mirrorAxis, ref Vec3d pivot)
+            => TransformGuide(
+                id, delta, mirrorAxis, PlaneAxis.Y, 0, inverseOrder: false, ref pivot);
+
+        /// <summary>
+        /// Applies one complete in-place Transform-pad action transactionally. Forward order preserves the
+        /// shipped behaviour: rotate, mirror, translate. <paramref name="inverseOrder"/> reverses that order
+        /// for undo: translate back, mirror back, rotate back. Either order validates and commits once.
+        /// </summary>
+        public GuideOperationResult TransformGuide(
+            Guid id, Vec3d delta, int mirrorAxis, PlaneAxis rotateAxis, int quarterTurns,
+            bool inverseOrder, ref Vec3d pivot)
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             bool mirroring = mirrorAxis >= 0;
+            int turns = ((quarterTurns % 4) + 4) % 4;
+            bool rotating = turns != 0;
             bool translating = delta != null && (delta.X != 0 || delta.Y != 0 || delta.Z != 0);
-            if (!mirroring && !translating)
+            if (mirrorAxis < -1
+                || (mirroring && !Enum.IsDefined(typeof(PlaneAxis), (PlaneAxis)mirrorAxis))
+                || (rotating && !Enum.IsDefined(typeof(PlaneAxis), rotateAxis)))
+                return GuideOperationResult.Invalid(g);
+            if (!mirroring && !rotating && !translating)
                 return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out int same) ? same : 0);
             if (translating && !TryQuantiseTranslation(delta, g.VoxelScale, out _, out _, out _))
                 return GuideOperationResult.Invalid(g);
@@ -1425,25 +1584,66 @@ namespace Layout.Systems
             GuideData accessBefore = AccessSnapshot(g);
             List<ControlPoint> before = SnapshotPoints(g);
             List<ControlPoint> originalBefore = SnapshotOriginalPoints(g);
+            PlaneAxis shapeAxisBefore = g.ShapePlaneAxis;
             ProjectionPlane planeBefore = g.Plane;
 
             pivot ??= RotationPivot(g);
-            if (mirroring)
+            if (!GuideBounds.IsUsable(pivot)) return GuideOperationResult.Invalid(g);
+            Vec3d appliedPivot = pivot;
+
+            void ApplyRotation()
             {
-                MirrorPoints(g.ControlPoints, (PlaneAxis)mirrorAxis, pivot);
-                MirrorPoints(g.OriginalControlPoints, (PlaneAxis)mirrorAxis, pivot);
+                if (!rotating) return;
+                RotatePoints(g.ControlPoints, rotateAxis, turns, appliedPivot);
+                RotatePoints(g.OriginalControlPoints, rotateAxis, turns, appliedPivot);
+                g.ShapePlaneAxis = RotateAxis(g.ShapePlaneAxis, rotateAxis, turns);
             }
-            if (translating)
+
+            void ApplyMirror()
             {
+                if (!mirroring) return;
+                MirrorPoints(g.ControlPoints, (PlaneAxis)mirrorAxis, appliedPivot);
+                MirrorPoints(g.OriginalControlPoints, (PlaneAxis)mirrorAxis, appliedPivot);
+            }
+
+            void ApplyTranslation()
+            {
+                if (!translating) return;
                 OffsetPoints(g.ControlPoints, delta);
                 OffsetPoints(g.OriginalControlPoints, delta);
+            }
+
+            if (inverseOrder)
+            {
+                ApplyTranslation();
+                ApplyMirror();
+                ApplyRotation();
+            }
+            else
+            {
+                ApplyRotation();
+                ApplyMirror();
+                ApplyTranslation();
+            }
+
+            if (g.Projection == ProjectionMode.Surface)
+            {
+                PlaneAxis flattened = rotating
+                    ? RotateAxis(planeBefore.FlattenedAxis, rotateAxis, turns)
+                    : planeBefore.FlattenedAxis;
+                g.Plane = RederiveSurfacePlane(g, flattened, planeBefore);
+            }
+            if (!GuideBounds.AllUsable(g.ControlPoints)
+                || !GuideBounds.AllUsable(g.OriginalControlPoints)
+                || !GuideBounds.IsUsableProjection(g.Projection, g.Plane))
+            {
+                RestoreRotation(id, g, before, originalBefore, shapeAxisBefore, planeBefore);
+                return GuideOperationResult.Invalid(g);
             }
 
             IGuideShape shape = ShapeFactory.Adopt(g);
             _shapes[id] = shape;
             shape.RecalculatePhantomPoints();
-            if (g.Projection == ProjectionMode.Surface)
-                g.Plane = RederiveSurfacePlane(g, planeBefore.FlattenedAxis, planeBefore);
 
             // A mirror can re-phase a polygon exactly as a rotation can (the in-plane frame sign-normalises
             // toward world up), so this recounts rather than reusing the cached figure the way a pure
@@ -1451,17 +1651,17 @@ namespace Layout.Systems
             int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled, g.IsWireframe);
             if (WouldExceedCaps(id, count, out int cap))
             {
-                RestoreRotation(id, g, before, originalBefore, g.ShapePlaneAxis, planeBefore);
+                RestoreRotation(id, g, before, originalBefore, shapeAxisBefore, planeBefore);
                 return GuideOperationResult.OverCap(g, count, cap);
             }
             if (AccessDenied(accessBefore, g, _shapes[id], out BlockPos deniedPosition))
             {
-                RestoreRotation(id, g, before, originalBefore, g.ShapePlaneAxis, planeBefore);
+                RestoreRotation(id, g, before, originalBefore, shapeAxisBefore, planeBefore);
                 return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1477,6 +1677,14 @@ namespace Layout.Systems
         {
             if (!_guides.TryGetValue(id, out var source)) return GuideOperationResult.NotFound();
 
+            int turns = ((quarterTurns % 4) + 4) % 4;
+            if (mirrorAxis < -1
+                || (mirrorAxis >= 0 && !Enum.IsDefined(typeof(PlaneAxis), (PlaneAxis)mirrorAxis))
+                || (turns != 0 && !Enum.IsDefined(typeof(PlaneAxis), rotateAxis))
+                || (delta != null
+                    && !TryQuantiseTranslation(delta, source.VoxelScale, out _, out _, out _)))
+                return GuideOperationResult.Invalid(source);
+
             GuideData clone = source.DeepClone();
             clone.Id = Guid.NewGuid();
             clone.CreatorUid = creatorUid;
@@ -1490,7 +1698,6 @@ namespace Layout.Systems
                 MirrorPoints(clone.ControlPoints, (PlaneAxis)mirrorAxis, pivot);
                 MirrorPoints(clone.OriginalControlPoints, (PlaneAxis)mirrorAxis, pivot);
             }
-            int turns = ((quarterTurns % 4) + 4) % 4;
             if (turns != 0)
             {
                 RotatePoints(clone.ControlPoints, rotateAxis, turns, pivot);
@@ -1610,7 +1817,7 @@ namespace Layout.Systems
                 return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1661,7 +1868,7 @@ namespace Layout.Systems
                 return GuideOperationResult.ClaimDenied(g, deniedPosition);
             }
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1677,8 +1884,12 @@ namespace Layout.Systems
             if (GuideShapeTypes.IsVolume(g.ShapeType)) return GuideOperationResult.Invalid(g);
             int clamped = divisions < 0 ? 0 : divisions > Shapes.DivisionMarks.MaxDivisions
                 ? Shapes.DivisionMarks.MaxDivisions : divisions;
+            // NO-OP GUARD — see SetHidden. Note the comparison is against the CLAMPED value, so spamming
+            // any out-of-range number repeats as a no-op too, not just the exact current one.
+            if (g.Divisions == clamped)
+                return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var same) ? same : 0);
             g.Divisions = clamped;
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, _voxelCounts.TryGetValue(id, out var c0) ? c0 : 0);
         }
 
@@ -1707,7 +1918,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1736,7 +1947,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1754,13 +1965,14 @@ namespace Layout.Systems
             if (!ReferenceEquals(live, expectedLive) || candidate == null
                 || candidateShape == null || candidate.Id != id || exactVoxelCount < 0)
                 return GuideOperationResult.Invalid(live);
+            if (exactVoxelCount == 0) return GuideOperationResult.Empty(live);
             if (WouldExceedCaps(id, exactVoxelCount, out int cap))
                 return GuideOperationResult.OverCap(live, exactVoxelCount, cap);
 
             _guides[id] = candidate;
             _shapes[id] = candidateShape;
             StoreCount(id, exactVoxelCount);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(candidate, exactVoxelCount);
         }
 
@@ -1791,7 +2003,7 @@ namespace Layout.Systems
             }
 
             StoreCount(id, count);
-            Persist();
+            MarkDirty();
             return GuideOperationResult.Success(g, count);
         }
 
@@ -1836,7 +2048,11 @@ namespace Layout.Systems
                 }
             }
 
-            if (_totalVoxelCap > 0)
+            // Same shrink escape as the creator-total branch above, and for the same reason: if the world
+            // is ALREADY over a newly-lowered totalVoxelCap, clamping here would stop the scan at zero and
+            // hand back the Exceeded(0) sentinel — 1 — instead of a real count, so the shrink that would
+            // bring the world back under budget could never even be measured. Count exactly in that case.
+            if (_totalVoxelCap > 0 && _totalVoxels <= _totalVoxelCap)
             {
                 int currentForId = _voxelCounts.TryGetValue(id, out int current) ? current : 0;
                 long totalWithoutGuide = _totalVoxels - currentForId;
@@ -1879,8 +2095,16 @@ namespace Layout.Systems
                 cap = playerTotalCap;
                 return true;
             }
+            // GROWTH ONLY, like both siblings above (G28). Without the second clause, setting
+            // totalVoxelCap below current world usage refused EVERY edit on EVERY guide — including the
+            // shrinks and dispels that would bring the world back under the new budget — which directly
+            // contradicts ApplyCaps' promise that lowering a cap only stops guides from growing.
             long projectedTotal = _totalVoxels - currentForId + newCount;
-            if (_totalVoxelCap > 0 && projectedTotal > _totalVoxelCap) { cap = _totalVoxelCap; return true; }
+            if (_totalVoxelCap > 0 && projectedTotal > _totalVoxelCap && projectedTotal > _totalVoxels)
+            {
+                cap = _totalVoxelCap;
+                return true;
+            }
             cap = 0;
             return false;
         }
@@ -1898,6 +2122,38 @@ namespace Layout.Systems
             foreach (var g in _guides.Values)
                 if (g.CreatorUid == playerUid) n++;
             return n;
+        }
+
+        /// <summary>
+        /// Guide count and voxel total for EVERY creator at once, in a single pass over the registry.
+        /// </summary>
+        /// <remarks>
+        /// For a per-player figure, <see cref="CountGuidesBy"/> and <see cref="VoxelCountBy"/> are the right
+        /// tools — one scan is nothing next to the cap check that asked. **This exists for the case that
+        /// wants all of them**, which was building the admin roster: one row per player, each row calling
+        /// both of those, so the work was (players × guides) × 2 and grew with the product. With a couple of
+        /// hundred known players and a few thousand guides that is over a million passes to open one dialog.
+        ///
+        /// Creators are keyed by UID; guides with no creator (pre-attribution saves) belong to nobody and
+        /// are counted for nobody, matching the two single-player methods exactly.
+        /// </remarks>
+        public Dictionary<string, (int Guides, long Voxels)> TallyByCreator()
+        {
+            var tally = new Dictionary<string, (int Guides, long Voxels)>(StringComparer.Ordinal);
+            foreach (KeyValuePair<Guid, GuideData> entry in _guides)
+            {
+                string uid = entry.Value?.CreatorUid;
+                if (string.IsNullOrEmpty(uid)) continue;
+
+                // _voxelCounts, NOT GuideData.CachedVoxelCount — VoxelCountBy reads the live count map and
+                // this must agree with it exactly, or the roster and the cap checks would report different
+                // totals for the same player. A guide missing from the map contributes nothing, as there.
+                long voxels = _voxelCounts.TryGetValue(entry.Key, out int count) ? Math.Max(0, count) : 0;
+
+                tally.TryGetValue(uid, out (int Guides, long Voxels) current);
+                tally[uid] = (current.Guides + 1, current.Voxels + voxels);
+            }
+            return tally;
         }
 
         /// <summary>
@@ -1990,24 +2246,212 @@ namespace Layout.Systems
 
         // --- Persistence --------------------------------------------------------------------------
 
-        // Serializes all guides into the save blob. Cheap (in-memory); the actual disk write happens on world
-        // save. Never throws out of here — a serialization fault must not crash the server.
+        /// <summary>
+        /// Writes the registry out, if anything has changed since the last write. **Call this from
+        /// lifecycle points, never from a mutation** — mutations call <see cref="MarkDirty"/>.
+        /// </summary>
+        /// <remarks>
+        /// WIRED TO: the world save (server), a periodic flush on both sides, and shutdown. Together those
+        /// bound how much can be lost to the flush interval, and the world-save hook guarantees the blob is
+        /// current at the moment the game writes it to disk.
+        ///
+        /// ⚠️ THE DIRTY FLAG IS RESTORED IF THE WRITE FAILS. Clearing it first and leaving it clear would
+        /// turn one transient serialisation fault into permanent data loss: the next flush would see
+        /// nothing owed and skip, and every later flush would too. Never throws out of here either — a
+        /// serialization fault must not crash the server.
+        ///
+        /// ⚠️ THIS IS ALSO THE OVERRIDE FOR A BACKGROUND PASS, and that is why "nothing owed" is not just
+        /// the dirty flag. A worker started by <see cref="BeginBackgroundPersist"/> has ALREADY cleared the
+        /// flag, against a snapshot whose bytes are not stored yet — so a clean flag with a job in flight
+        /// still owes a write, and reading only the flag here would skip it and lose everything since that
+        /// snapshot. This writes the LIVE registry (always the newer answer) and drops the job, whose
+        /// completion then finds itself superseded and discards its older bytes.
+        /// </remarks>
+        /// <summary>
+        /// Whether the registry holds anything not yet handed to storage. **Main thread only.**
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ A CLEAN DIRTY FLAG IS NOT THE SAME AS NOTHING OWED, which is the whole reason this exists as
+        /// one named answer rather than a condition written out at each site. A background pass clears the
+        /// flag when it takes its snapshot, long before those bytes are stored — so between those two
+        /// moments the flag says "clean" while a write is still owed. Both <see cref="Persist"/> and the
+        /// background scheduler's decision to fall back to a synchronous write read this, and they must
+        /// read the same thing: a site that checked only the flag would skip a write that was still due.
+        /// </remarks>
+        public bool HasUnsavedChanges => _persistDirty || _persistInFlight != null;
+
         public void Persist()
         {
+            if (!HasUnsavedChanges) return;
+            _persistDirty = false;
+            // Dropping the reference IS the cancellation: the worker runs to completion on its own
+            // snapshot and CompleteBackgroundPersist throws the result away (GOTCHAS G29). There is
+            // deliberately nothing to join — a shutdown must not wait on a serialisation it is about to
+            // redo, and a background task thread never holds the process open.
+            _persistInFlight = null;
             try
             {
-                var root = new PersistedRoot
-                {
-                    Version = GuideData.CurrentDataVersion,
-                    Guides = _guides.Values.ToList()
-                };
-                string json = JsonConvert.SerializeObject(root, _jsonSettings);
-                byte[] bytes = Encoding.UTF8.GetBytes(json);
+                byte[] bytes = SerializeRegistry(_guides.Values.ToList());
                 _persistence.Store(StorageKey, bytes);
             }
             catch (Exception e)
             {
+                _persistDirty = true;
                 _logger.Error("[Layout] Failed to persist guides: {0}", e);
+            }
+        }
+
+        /// <summary>
+        /// Takes a private snapshot of the registry so the expensive half of a write — turning it into
+        /// text — can happen on a worker thread. Returns null when there is nothing to do. **Main thread
+        /// only.** The caller must run <see cref="GuidePersistJob.Run"/> off-thread and then hand the job
+        /// back to <see cref="CompleteBackgroundPersist"/> on the main thread.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ THE SNAPSHOT IS NOT AN OPTIMISATION, IT IS THE WHOLE REASON THIS IS SAFE, and nothing at the
+        /// call site says so. <see cref="GuideData.ControlPoints"/> is the SAME list instance the guide's
+        /// shape mutates (see that type's remarks): a worker walking the live records while a player drags
+        /// would read a half-applied reshape, or throw outright when <c>RestorePoints</c> clears and refills
+        /// the list under it. Deep-copying every record first is what makes the worker's view immutable.
+        ///
+        /// It is affordable because copying is ~80× cheaper than serialising — measured 2026-08-01 at
+        /// 0.52 ms versus 42 ms for three thousand guides. The main thread pays the copy; the 42 ms leaves
+        /// the tick entirely.
+        ///
+        /// ONE AT A TIME. A job already in flight means this returns null and the registry stays dirty, so
+        /// the next attempt picks the change up — the flag is never latched (GOTCHAS G36): every path out
+        /// of here either leaves work owed or has a job that will clear itself.
+        /// </remarks>
+        public GuidePersistJob BeginBackgroundPersist()
+        {
+            if (_persistInFlight != null || !_persistDirty) return null;
+
+            List<GuideData> snapshot;
+            try
+            {
+                snapshot = new List<GuideData>(_guides.Count);
+                foreach (GuideData g in _guides.Values)
+                    snapshot.Add(g.DeepClone());
+            }
+            catch (Exception e)
+            {
+                // Left dirty on purpose: the next pass, or the next world save, tries again.
+                _logger.Error("[Layout] Failed to snapshot guides for background save: {0}", e);
+                return null;
+            }
+
+            _persistDirty = false;
+            _persistInFlight = new GuidePersistJob(this, snapshot);
+            return _persistInFlight;
+        }
+
+        /// <summary>
+        /// Stores the bytes a finished <see cref="GuidePersistJob"/> produced. **Main thread only**, and
+        /// safe to call for a job that has been superseded — it checks first. Returns whether THIS job's
+        /// bytes reached storage.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ THE IDENTITY CHECK IS NOT DEFENSIVE, IT PREVENTS A ROLLBACK. Between a snapshot and its
+        /// completion, a synchronous <see cref="Persist"/> (shutdown, or a drop path) can have written the
+        /// LIVE registry. Storing this job's older bytes on top of that would silently undo everything
+        /// edited since the snapshot. Same shape as GOTCHAS G29: async work must prove it is still the
+        /// current work before acting on a shared slot.
+        ///
+        /// ⚠️ THE RETURN VALUE IS NOT <see cref="HasUnsavedChanges"/> INVERTED, and must not be simplified
+        /// into it. This answers "did this pass do its job", which stays true when an edit lands after the
+        /// snapshot — that edit belongs to the next cycle, and is the whole point of preparing bytes early.
+        /// Asking the registry instead would report every such edit as a failed pass and drive the caller
+        /// into a synchronous write, which on a world with several people building is most saves: the exact
+        /// on-tick cost this machinery exists to remove.
+        /// </remarks>
+        public bool CompleteBackgroundPersist(GuidePersistJob job)
+        {
+            if (job == null || !ReferenceEquals(_persistInFlight, job)) return false;
+            _persistInFlight = null;
+
+            if (job.Bytes == null)
+            {
+                // Serialisation faulted on the worker. Re-arm exactly as the synchronous path does, so the
+                // next pass retries rather than the failure becoming permanent.
+                _persistDirty = true;
+                _logger.Error("[Layout] Background guide serialisation failed: {0}", job.Error);
+                return false;
+            }
+
+            try
+            {
+                _persistence.Store(StorageKey, job.Bytes);
+                return true;
+            }
+            catch (Exception e)
+            {
+                _persistDirty = true;
+                _logger.Error("[Layout] Failed to store background-serialised guides: {0}", e);
+                return false;
+            }
+        }
+
+        // The one place the on-disk shape is built, shared by the synchronous and background paths so the
+        // two can never drift into writing different formats.
+        //
+        // ⚠️ CALLED FROM TWO THREADS, and possibly at the same instant (a shutdown flush while a worker is
+        // still running). That is safe only because everything it touches is immutable after construction:
+        // _jsonSettings is never mutated, and Vec3dJsonConverter holds no state. Adding a stateful
+        // converter, or reconfiguring the settings in play, would make this a race with no symptom until a
+        // save came out malformed.
+        private byte[] SerializeRegistry(List<GuideData> guides)
+        {
+            var root = new PersistedRoot
+            {
+                Version = GuideData.CurrentDataVersion,
+                Guides = guides
+            };
+            return Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(root, _jsonSettings));
+        }
+
+        /// <summary>
+        /// One background serialisation: a private snapshot of the registry, and the bytes it turns into.
+        /// Created by <see cref="BeginBackgroundPersist"/>, run on a worker, completed on the main thread.
+        /// </summary>
+        /// <remarks>
+        /// The snapshot is touched by exactly one thread at a time and handed over by the task boundary,
+        /// which is its own memory barrier — so no locking is needed here, and none should be added. What
+        /// makes that true is that the snapshot is PRIVATE (see <see cref="BeginBackgroundPersist"/>);
+        /// nothing else in the mod holds a reference to these records.
+        /// </remarks>
+        public sealed class GuidePersistJob
+        {
+            private readonly GuideManager _owner;
+            private readonly List<GuideData> _snapshot;
+
+            /// <summary>The serialised payload, or null if <see cref="Run"/> faulted.</summary>
+            public byte[] Bytes { get; private set; }
+
+            /// <summary>Why <see cref="Run"/> produced no bytes, or null on success.</summary>
+            public Exception Error { get; private set; }
+
+            internal GuidePersistJob(GuideManager owner, List<GuideData> snapshot)
+            {
+                _owner = owner;
+                _snapshot = snapshot;
+            }
+
+            /// <summary>
+            /// The expensive part — JSON plus UTF8, ~42 ms at three thousand guides. **Call this on a
+            /// worker thread; it must never run on the tick.** Never throws: a fault is recorded and dealt
+            /// with by <see cref="CompleteBackgroundPersist"/> back on the main thread.
+            /// </summary>
+            public void Run()
+            {
+                try
+                {
+                    Bytes = _owner.SerializeRegistry(_snapshot);
+                }
+                catch (Exception e)
+                {
+                    Bytes = null;
+                    Error = e;
+                }
             }
         }
 
@@ -2077,6 +2521,24 @@ namespace Layout.Systems
                 if (g == null) continue;
                 if (g.ControlPoints == null) g.ControlPoints = new List<ControlPoint>();
                 RemoveInactiveLockMarkers(g.ControlPoints);
+
+                // A guide whose coordinates or Surface plane are outside the world is DROPPED, not loaded
+                // (GOTCHAS G31). Undefined projection/axis values are rejected at this same untrusted seam.
+                // ExactVoxelCount below is the scan that hangs on one, and this method is reached both
+                // from the world save (a corrupted blob would hang the server at start) and from
+                // Layout/ClientOnlyGuides/*.json (a hand-edited private file would hang the player's own
+                // client on world load). Neither needs an attacker. Logged per guide because silently
+                // losing someone's work would be the worse surprise.
+                if (!GuideBounds.AllUsable(g.ControlPoints)
+                    || !GuideBounds.AllUsable(g.OriginalControlPoints)
+                    || !GuideBounds.IsUsableProjection(g.Projection, g.Plane))
+                {
+                    _logger?.Warning(
+                        "[Layout] Skipped guide {0}: coordinates or projection are invalid or outside the "
+                        + "world. The record is corrupt or hand-edited and is unsafe to load.", g.Id);
+                    continue;
+                }
+
                 g.DataVersion = GuideData.CurrentDataVersion; // normalize after default-driven migration
 
                 IGuideShape shape = ShapeFactory.Adopt(g);
@@ -2086,6 +2548,14 @@ namespace Layout.Systems
                 _shapes[g.Id] = shape;
                 StoreCount(g.Id, ExactVoxelCount(g.Id, shape, g.VoxelScale, g.IsFilled));
             }
+
+            // ⚠️ A LOAD OWES A WRITE, even though nobody edited anything. What is now in memory is not
+            // necessarily what is on disk: records migrate by deserialization default, DataVersion is
+            // re-stamped above, inactive lock markers are dropped, out-of-world guides are skipped
+            // entirely, and a backup recovery has just replaced a quarantined primary. Persist used to
+            // write unconditionally on every world save, so all of that reached disk by accident of the
+            // old design; now that a clean flag skips the write, the load has to declare it.
+            MarkDirty();
         }
 
         private void ClearLoadedState()

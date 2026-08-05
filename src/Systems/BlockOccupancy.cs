@@ -50,12 +50,20 @@ namespace Layout.Systems
     /// on blocks people actually build with (plan §7.2) — <see cref="HasMicroBlockEntity"/> exists so the
     /// diagnostic can flag exactly those blocks for comparison.
     ///
-    /// THREAD SAFE, by one lock around the cache. Guide meshing runs on background materialization threads
-    /// and calls this once per body voxel, so it has to be. The lock is uncontended in practice — the world
-    /// read only happens on a miss, and a large guide's voxels cluster into few blocks — but on a guide with
-    /// millions of voxels it is still millions of acquisitions, which is why the cost is deliberately paid
-    /// on the background thread rather than the render thread. <c>Block.GetCollisionBoxes</c> is documented
-    /// as thread-safe, so the world read inside the lock is legitimate.
+    /// THREAD SAFE, AND LOCK-FREE. Guide meshing runs on background materialization threads and calls this
+    /// once per body voxel, so it has to be safe; the cache is a <c>ConcurrentDictionary</c> and reads take
+    /// no lock at all. <c>Block.GetCollisionBoxes</c> is documented as thread-safe, so the world read on a
+    /// miss is legitimate off the main thread, and the cost is deliberately paid there rather than on the
+    /// render thread.
+    ///
+    /// ⚠️ THIS REMARK USED TO SAY "thread safe, by one lock around the cache", and described the cost of
+    /// "millions of acquisitions". **The lock was removed in v0.3.84** and only the field comment recorded
+    /// it, so for three sessions the class documentation described a lock that was not there — which is
+    /// exactly why nobody looked hard at <see cref="GetOrBuild"/>'s race until a review did (`GOTCHAS` G30).
+    /// Two more comments elsewhere still claim the lock; they are `TODO` A13's to sweep.
+    ///
+    /// The one race that did exist — the <c>TryAdd</c> loser re-reading the dictionary after
+    /// <c>Invalidate</c> had emptied it — was fixed in v0.4.36; see <see cref="GetOrBuild"/>.
     /// </remarks>
     public sealed class BlockOccupancy
     {
@@ -86,6 +94,12 @@ namespace Layout.Systems
         // Running totals, for the diagnostic command. Not load-bearing, hence plain interlocked counters.
         private int _solid, _empty, _partial;
 
+        // NO "SAW AN UNLOADED CHUNK" LATCH, deliberately (considered and dropped, v0.4.42). The probe also
+        // runs on materialization workers, so a latch cannot say WHICH guide was reading when it tripped —
+        // and the only thing to do with an unattributable one is re-probe everything, which never settles:
+        // a guide whose anchor is loaded but whose far end is not would set it on every rebuild and so
+        // queue its own next rebuild forever. GuideRenderer attributes the race per guide instead, with a
+        // chunk lookup at the anchor. See its _deferredOccupancy.
         public int CachedBlocks => _blocks.Count;
         public int SolidBlocks => _solid;
         public int EmptyBlocks => _empty;
@@ -171,8 +185,24 @@ namespace Layout.Systems
             long key = Key(bx, by, bz);
             if (_blocks.TryGetValue(key, out Entry cached)) return cached;   // the overwhelmingly common path
 
-            Entry built = Read(accessor, bx, by, bz);
-            if (!_blocks.TryAdd(key, built)) return _blocks[key];            // lost a race; same answer
+            // NOT LOADED IS NOT AN ANSWER. The block reads as empty for THIS build — a mesh has to draw
+            // something — but it is deliberately NOT cached, because it is not a fact about the world,
+            // only about what happened to be resident when we looked.
+            //
+            // ⚠️ CACHING IT WAS THE BUG (v0.3.79 to v0.4.41, human-reported). Nothing invalidates a cache
+            // entry when a chunk LOADS — Invalidate runs off block CHANGES — so a guide meshed while the
+            // world was still streaming in recorded "no material anywhere" and kept that answer for the
+            // rest of the session. The chiselling highlight simply never lit after a world load, and only
+            // a manual /layout built refresh brought it back, because that clears the whole cache.
+            if (!TryRead(accessor, bx, by, bz, out Entry built)) return EmptyEntry;
+
+            // LOST THE RACE — return OUR OWN read, never re-read the dictionary. `_blocks[key]` threw
+            // KeyNotFoundException on a mesh worker thread whenever Invalidate removed the entry between
+            // the failed TryAdd and the indexer (GOTCHAS G30: this cache is lock-free, and Invalidate runs
+            // on the main thread). Our read answers the same question the winner's did — and if a newer
+            // world state has since replaced it, one mesh build in slightly stale colours is nothing beside
+            // an abandoned materialization and a visible rebuild hitch.
+            if (!_blocks.TryAdd(key, built)) return built;
             switch (built.Fill)
             {
                 case BlockFill.Solid: System.Threading.Interlocked.Increment(ref _solid); break;
@@ -185,13 +215,27 @@ namespace Layout.Systems
         private static readonly Entry EmptyEntry = new Entry(BlockFill.Empty, null);
         private static readonly Entry SolidEntry = new Entry(BlockFill.Solid, null);
 
-        private static Entry Read(IBlockAccessor accessor, int bx, int by, int bz)
+        /// <summary>
+        /// Reads and classifies one world block. FALSE means the chunk holding it is not loaded.
+        /// </summary>
+        /// <remarks>
+        /// "CANNOT SEE" IS NOT <see cref="BlockFill.Empty"/>, and keeping the two apart is the whole of the
+        /// v0.4.42 fix — see <see cref="GetOrBuild"/> for what conflating them cost. The out value is still
+        /// empty on a false return, because the build in hand has to draw something; the caller's job is
+        /// simply not to write it down.
+        /// </remarks>
+        private static bool TryRead(IBlockAccessor accessor, int bx, int by, int bz, out Entry entry)
         {
             var pos = new BlockPos(bx, by, bz);
+            if (accessor.GetChunkAtBlockPos(pos) == null) { entry = EmptyEntry; return false; }
 
-            // An unloaded chunk reads as empty, not as material — see the class remarks.
-            if (accessor.GetChunkAtBlockPos(pos) == null) return EmptyEntry;
+            entry = ReadLoaded(accessor, pos);
+            return true;
+        }
 
+        /// <summary>Classifies a block whose chunk is known to be present.</summary>
+        private static Entry ReadLoaded(IBlockAccessor accessor, BlockPos pos)
+        {
             Block block = accessor.GetBlock(pos);
             if (block == null || block.Id == 0) return EmptyEntry;
 

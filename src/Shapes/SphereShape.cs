@@ -33,8 +33,8 @@ namespace Layout.Shapes
     /// policy). No inserts, no constraints in v1, no phantoms; Surface projection and Divisions do not
     /// apply (the GUI greys them).
     /// </remarks>
-    public sealed class SphereShape : IGuideShape, IThresholdVoxelCounter, IProgressiveVoxelShape,
-        IIntrinsicGuideExtent
+    public sealed class SphereShape : IGuideShape, ICancellableThresholdVoxelCounter,
+        ICancellableVoxelGenerator, IProgressiveVoxelShape, IIntrinsicGuideExtent
     {
         private const double MinRadius = 0.05;
 
@@ -93,15 +93,21 @@ namespace Layout.Shapes
         // --- IGuideShape: voxels ---------------------------------------------------------------------
 
         public List<VoxelPosition> GetVoxelPositions(int scale, bool filled = false)
+            => GetVoxelPositions(scale, filled, null);
+
+        public List<VoxelPosition> GetVoxelPositions(
+            int scale, bool filled, Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             var result = new List<VoxelPosition>();
             if (!TryGetBall(out Vec3d c, out double r)) return result;
 
             if (!filled)
             {
-                SphericalShellScan.Scan(c, r, scale, null, int.MaxValue, result);
-                ClaimHandleMarkers(result, scale);
+                SphericalShellScan.Scan(
+                    c, r, scale, null, int.MaxValue, result, cancellationRequested);
+                ClaimHandleMarkers(result, scale, cancellationRequested);
                 return result;
             }
 
@@ -115,6 +121,7 @@ namespace Layout.Shapes
             int min16Y = AlignDown(c.Y - r, scale), max16Y = AlignDown(c.Y + r, scale);
             int min16Z = AlignDown(c.Z - r, scale), max16Z = AlignDown(c.Z + r, scale);
 
+            int work = 0;
             for (int ix = min16X; ix <= max16X; ix += scale)
             {
                 double lox = ix / 16.0;
@@ -127,6 +134,7 @@ namespace Layout.Shapes
                     if (nxy2 > r2) continue;                     // whole row is outside the ball
                     for (int iz = min16Z; iz <= max16Z; iz += scale)
                     {
+                        VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                         double loz = iz / 16.0;
                         double nz = Nearest(c.Z, loz, loz + cell);
                         double dmin2 = nxy2 + nz * nz;
@@ -137,7 +145,7 @@ namespace Layout.Shapes
                 }
             }
 
-            ClaimHandleMarkers(result, scale);
+            ClaimHandleMarkers(result, scale, cancellationRequested);
             return result;
         }
 
@@ -158,12 +166,18 @@ namespace Layout.Shapes
             => GetVoxelCountUpTo(scale, filled, int.MaxValue);
 
         public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter)
+            => GetVoxelCountUpTo(scale, filled, stopAfter, null);
+
+        public int GetVoxelCountUpTo(
+            int scale, bool filled, int stopAfter, Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             if (!TryGetBall(out Vec3d c, out double r)) return 0;
 
             if (!filled)
-                return SphericalShellScan.Scan(c, r, scale, null, stopAfter, null);
+                return SphericalShellScan.Scan(
+                    c, r, scale, null, stopAfter, null, cancellationRequested);
 
             // The short-circuit: report "far too many" without scanning, so cap checks reject instantly
             // and the ghost's scale-coarsening steps past this scale for filled volumes.
@@ -173,6 +187,7 @@ namespace Layout.Shapes
             double cell = scale / 16.0;
             double r2 = r * r;
             int count = 0;
+            int work = 0;
 
             int min16X = AlignDown(c.X - r, scale), max16X = AlignDown(c.X + r, scale);
             int min16Y = AlignDown(c.Y - r, scale), max16Y = AlignDown(c.Y + r, scale);
@@ -190,6 +205,7 @@ namespace Layout.Shapes
                     if (nxy2 > r2) continue;
                     for (int iz = min16Z; iz <= max16Z; iz += scale)
                     {
+                        VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                         double loz = iz / 16.0;
                         double nz = Nearest(c.Z, loz, loz + cell);
                         if (nxy2 + nz * nz > r2) continue;
@@ -201,13 +217,15 @@ namespace Layout.Shapes
             return count;
         }
 
-        private void ClaimHandleMarkers(List<VoxelPosition> cells, int scale)
+        private void ClaimHandleMarkers(
+            List<VoxelPosition> cells, int scale, Func<bool> cancellationRequested = null)
         {
             for (int i = 0; i < 2 && i < _controlPoints.Count; i++)
             {
                 ControlPoint cp = _controlPoints[i];
                 ShapeGeometry.ClaimMarker(cells, scale, cp.WorldPosition,
-                    cp.IsLocked ? VoxelRenderType.Locked : VoxelRenderType.Anchor);
+                    cp.IsLocked ? VoxelRenderType.Locked : VoxelRenderType.Anchor,
+                    cancellationRequested);
             }
         }
 

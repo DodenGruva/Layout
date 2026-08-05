@@ -42,6 +42,16 @@ namespace Layout.Shapes
                 case GuideShapeType.FreeShape:
                     return new FreeShape(chain != null && chain.Count >= 2 ? chain : new[] { start, end },
                         closed && chain != null && chain.Count >= 3);
+                case GuideShapeType.Roundover:
+                    // Roundover is always an open sweep. At this create-only seam `closed` is the protocol-28
+                    // discriminator for two terminal profile handles; persisted guides identify that form
+                    // from the two Primary roles because GuideData.IsClosed belongs only to Free-Shape.
+                    IReadOnlyList<Vec3d> roundoverPoints = chain != null
+                        && chain.Count >= (closed ? 4 : 3)
+                        ? chain
+                        : closed ? new[] { start, end, start, start }
+                        : new[] { start, end, start };
+                    return new RoundoverShape(roundoverPoints, hasTwoProfileHandles: closed);
                 case GuideShapeType.Sphere:
                     return new SphereShape(start, end);
                 case GuideShapeType.Dome:
@@ -85,6 +95,8 @@ namespace Layout.Shapes
                     return new PolygonShape(g.ControlPoints, g.ShapePlaneAxis, g.Sides, g.FlatSideAligned);
                 case GuideShapeType.FreeShape:
                     return new FreeShape(g.ControlPoints, g.IsClosed);
+                case GuideShapeType.Roundover:
+                    return new RoundoverShape(g.ControlPoints);
                 case GuideShapeType.Sphere:
                     return new SphereShape(g.ControlPoints);
                 case GuideShapeType.Dome:
@@ -127,6 +139,8 @@ namespace Layout.Shapes
                     return new PolygonShape(points, shapePlaneAxis, sides, flatSideAligned);
                 case GuideShapeType.FreeShape:
                     return new FreeShape(points, closed);
+                case GuideShapeType.Roundover:
+                    return new RoundoverShape(points);
                 case GuideShapeType.Sphere:
                     return new SphereShape(points);
                 case GuideShapeType.Dome:

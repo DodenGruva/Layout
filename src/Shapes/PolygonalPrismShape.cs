@@ -11,8 +11,8 @@ namespace Layout.Shapes
     /// The base gesture is identical to <see cref="PolygonShape"/>: the first click is a vertex and the
     /// second is the opposite vertex (even N) or opposite edge midpoint (odd N).
     /// </summary>
-    public sealed class PolygonalPrismShape : IGuideShape, IThresholdVoxelCounter,
-        IProgressiveVoxelShape, IIntrinsicGuideExtent
+    public sealed class PolygonalPrismShape : IGuideShape, ICancellableThresholdVoxelCounter,
+        ICancellableVoxelGenerator, IProgressiveVoxelShape, IIntrinsicGuideExtent
     {
         private const double MinRadius = 0.05;
         private const double MinHeight = 0.05;
@@ -194,7 +194,12 @@ namespace Layout.Shapes
         }
 
         public List<VoxelPosition> GetVoxelPositions(int scale, bool filled = false)
+            => GetVoxelPositions(scale, filled, null);
+
+        public List<VoxelPosition> GetVoxelPositions(
+            int scale, bool filled, Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             var result = new List<VoxelPosition>();
             if (!TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n,
                 out double h, out double rTop)) return result;
@@ -204,6 +209,7 @@ namespace Layout.Shapes
             GetAabb(c, n, r, rTop, h, cell, out double x0, out double y0, out double z0,
                 out double x1, out double y1, out double z1);
 
+            int work = 0;
             for (int ix = AlignDown(x0, scale); ix <= AlignDown(x1, scale); ix += scale)
             {
                 double px = ix / 16.0 + cell * 0.5 - c.X;
@@ -212,6 +218,7 @@ namespace Layout.Shapes
                     double py = iy / 16.0 + cell * 0.5 - c.Y;
                     for (int iz = AlignDown(z0, scale); iz <= AlignDown(z1, scale); iz += scale)
                     {
+                        VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                         double pz = iz / 16.0 + cell * 0.5 - c.Z;
                         double axial = px * n.X + py * n.Y + pz * n.Z;
                         if (axial < lo || axial > hi) continue;
@@ -225,7 +232,7 @@ namespace Layout.Shapes
                 }
             }
 
-            ClaimMarkers(result, scale);
+            ClaimMarkers(result, scale, cancellationRequested);
             return result;
         }
 
@@ -291,12 +298,18 @@ namespace Layout.Shapes
             GetVoxelCountUpTo(scale, filled, int.MaxValue);
 
         public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter)
+            => GetVoxelCountUpTo(scale, filled, stopAfter, null);
+
+        public int GetVoxelCountUpTo(
+            int scale, bool filled, int stopAfter, Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             if (!TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n,
                 out double h, out double rTop)) return 0;
 
             stopAfter = Math.Max(0, stopAfter);
             int count = 0;
+            int work = 0;
             double cell = scale / 16.0, hd = cell * 0.866;
             double lo = Math.Min(0, h), hi = Math.Max(0, h);
             GetAabb(c, n, r, rTop, h, cell, out double x0, out double y0, out double z0,
@@ -310,6 +323,7 @@ namespace Layout.Shapes
                     double py = iy / 16.0 + cell * 0.5 - c.Y;
                     for (int iz = AlignDown(z0, scale); iz <= AlignDown(z1, scale); iz += scale)
                     {
+                        VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                         double pz = iz / 16.0 + cell * 0.5 - c.Z;
                         double axial = px * n.X + py * n.Y + pz * n.Z;
                         if (axial < lo || axial > hi) continue;
@@ -339,14 +353,16 @@ namespace Layout.Shapes
         private static int AlignDown(double world, int scale) =>
             (int)Math.Floor(world * 16.0 / scale) * scale;
 
-        private void ClaimMarkers(List<VoxelPosition> cells, int scale)
+        private void ClaimMarkers(
+            List<VoxelPosition> cells, int scale, Func<bool> cancellationRequested = null)
         {
             for (int i = 0; i < _controlPoints.Count; i++)
             {
                 ControlPoint point = _controlPoints[i];
                 VoxelRenderType type = point.IsLocked ? VoxelRenderType.Locked
                     : point.IsPrimary ? VoxelRenderType.Primary : VoxelRenderType.Anchor;
-                ShapeGeometry.ClaimMarker(cells, scale, point.WorldPosition, type);
+                ShapeGeometry.ClaimMarker(
+                    cells, scale, point.WorldPosition, type, cancellationRequested);
             }
         }
 

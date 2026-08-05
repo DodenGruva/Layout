@@ -2,6 +2,469 @@
 
 All notable changes to Layout will be recorded in this file going forward.
 
+## 0.4.81 - 2026-08-05
+
+### Fixed
+
+- **Fillet's final multi-line HUD instruction now shares one left edge.** Dedicated Fillet-only overlay rows
+  avoid the unequal label widths used by other modes, so their HUD layouts are unchanged.
+
+## 0.4.80 - 2026-08-05
+
+### Changed
+
+- **Fillet placement shows only the numbered stage instruction.** Redundant side measurements and SHIFT
+  reminders were removed from stages 2–4.
+
+## 0.4.79 - 2026-08-05
+
+### Changed
+
+- **Roundover is now called Fillet everywhere players see it.** Internal save and network identifiers remain
+  unchanged for compatibility.
+- **Fillet placement has five explicit HUD stages:** select the corner, set both sides, set the sweep path,
+  then continue or click the last point again to finish.
+
+## 0.4.78 - 2026-08-05
+
+### Fixed
+
+- **Progressive Dome completion now preserves ordinary marker roles.** Canonical spatial order is restored
+  before first-occurrence marker ties are decided; a 465-check orientation/scale harness passes.
+
+### Changed
+
+- **The Fillet curve uses widely spaced round dots.** The broken construction edge remains readable at small
+  picker-tile sizes.
+
+## 0.4.77 - 2026-08-05
+
+### Fixed
+
+- **New Domes no longer retain the splotchy materialisation order as their final appearance.** Settled output
+  is restored to the ordinary spatial order.
+- **A Dome can again be dragged from any exact visible cell on its base circumference.** The hit maps to the
+  nearer diameter anchor; upper-shell cells and empty space remain non-grabbable.
+
+## 0.4.76 - 2026-08-05
+
+### Fixed
+
+- **Nearby world edits no longer turn wireframe guides solid or change their shading once.** Occupancy refresh
+  snapshots retain wireframe form and preserve the shape's canonical primitive order.
+- **Dome placement no longer plays duplicate feedback or completes visually twice.** Exact authority counts
+  cancel conservative client false positives, and one path owns placement effects.
+
+## 0.4.75 - 2026-08-05
+
+### Changed
+
+- **The Roundover glyph now shows the requested corner with a larger-radius broken curve.** The filleted edge
+  reads as the construction feature rather than an ordinary rounded rectangle.
+
+## 0.4.74 - 2026-08-05
+
+### Changed
+
+- **Roundover received a CAD-style rounded-corner picker icon.**
+- **Occupied red, green and blue guide voxels shift toward cyan.** Material-filled control cells are easier
+  to distinguish without losing their role colours.
+
+## 0.4.73 - 2026-08-04
+
+### Fixed
+
+- **The HUD no longer targets empty space around a fine guide.** Its hover envelope now scales with the
+  physical guide-cell size instead of using fixed 0.10/0.18-block minimums. At the finest scale the body
+  radius falls from 0.18 blocks to about 0.054; clicks still require an exact rendered-voxel hit.
+
+## 0.4.72 - 2026-08-04
+
+### Changed
+
+- **Grabbing no longer snaps a parametric guide's body to its nearest handle.** Arch and Free-Shape insert and
+  grab the exact clicked body voxel. Other shapes begin a grab only from the exact coloured control voxel;
+  clicking an unrelated body cell does nothing.
+- The held-help label now reads **“Bypass Existing Guides.”**
+
+### Fixed
+
+- **A reshape that makes a guide voxelise to nothing is rejected and rolled back.** Roundover explains how
+  to recover instead of disappearing as an invisible zero-voxel guide. Ordinary, immense, public and private
+  mutation paths share the guard.
+- Unsupported body-insertion requests are rejected before taking a guide lock or broadcasting state. A
+  modified client can no longer make remote clients insert a point that the authoritative parametric shape
+  ignored.
+- Clarified Roundover's create-time use of the shared `closed` argument and removed an unreachable claim-
+  snapshot initialization branch.
+
+## 0.4.71 - 2026-08-04
+
+### Added
+
+- **SHIFT on the first click embeds any new guide into the material.** The whole draft remembers that choice,
+  so later points stay on the same material side without holding SHIFT again. Roundover still allows SHIFT on
+  individual later points when the draft did not begin embedded.
+
+### Changed
+
+- The placement tooltip now says **“Embed Guide.”** Existing later-stage SHIFT controls, including vertical,
+  inverted and flat-side placement, keep their prior meanings.
+
+## 0.4.70 - 2026-08-04
+
+### Added
+
+- **CTRL+Left-click can start a new guide through an existing guide.** In idle Create mode it bypasses grabbing
+  and ignores Layout guide targeting, using the real block behind the translucent guide. Active draft and grab
+  controls are unchanged. The held-help tooltip reads “Bypass Grab and Ignore Existing Guides.”
+
+## 0.4.69 - 2026-08-03
+
+### Changed
+
+- **Roundover's wireframe preview now shows three construction rails:** both clicked profile edges swept along
+  the route, plus the sharp-corner route itself. This replaces the floating midpoint wire and makes interior
+  sweep placement readable against the corner being followed.
+
+## 0.4.68 - 2026-08-03
+
+### Added
+
+- **SHIFT places a Roundover point inside the targeted material** by one guide cell, allowing exterior-corner
+  profiles to occupy the block instead of landing outside its face.
+
+### Changed
+
+- The live Roundover sweep preview uses wireframe after the profile is established, keeping the corner under
+  the crosshair visible.
+
+## 0.4.67 - 2026-08-03
+
+### Changed
+
+- **Roundover placement is now profile-first.** Click the sharp corner, click the two exact profile endpoints,
+  then click the sweep path; click the final path point again to place. Neither profile nor path points snap.
+- Both profile legs remain editable. Older one-handle Roundovers retain their original geometry. Public
+  profile-first placement requires protocol 28; private placement remains local.
+- Removed the Radius-field and automatic corner-probing experiments from 0.4.65–0.4.66.
+
+## 0.4.66 - 2026-08-03
+
+### Added
+
+- Tried automatic interior/exterior Roundover selection by probing material around the first guide point.
+  **Withdrawn in 0.4.67:** partial and chiselled block layouts made inference less useful than exact player
+  input.
+
+## 0.4.65 - 2026-08-03
+
+### Added
+
+- Tried a GUI Radius field with spinner controls for Roundover. **Withdrawn in 0.4.67:** the number exposed the
+  setting but did not make the spatial construction more intuitive.
+
+## 0.4.64 - 2026-08-02
+
+### Added
+
+- **Roundover Path**, a constant-radius sculpted corner that follows an open route through arbitrary turns.
+  Corners use smooth rolling-ball transitions rather than mitres; a final perpendicular handle selects the
+  radius and quadrant. Public placement is gated to protocol-27 servers while private placement remains local.
+
+### Fixed
+
+- **Guide voxels now register exactly with Vintage Story's 1/16 micro-block lattice.** Removed a legacy
+  0.003-block camera-relative translation that shifted the entire rendered guide off its mathematically exact
+  coordinates and made the apparent error change with view angle.
+- The anti-z-fight face outset now defaults to the playtest-confirmed `0.0002` blocks. `0.0001` was already
+  stable after removing the whole-mesh shift; the extra `0.0001` is a small safety buffer. `/layout inset`
+  help now reports the real default.
+
+## 0.4.59 - 2026-08-02
+
+### Changed
+
+- **Very large guide claim snapshots now track only claims that can touch the guide.** Layout still examines
+  each claim's bounds because the game exposes no regional claim query, but distant claims are no longer
+  copied, permission-tested, compared, or allowed to restart an operation. Exact per-block access checks are
+  unchanged, so other mods and every non-claim refusal still apply.
+- On a focused 10,000-claim benchmark with one relevant claim, the bounded snapshot took about 0.10-0.14 ms
+  and allocated about 820 bytes, versus 2.50-3.10 ms and 4.28 MB for the global snapshot introduced in
+  0.4.58.
+
+## 0.4.58 - 2026-08-02
+
+### Fixed
+
+- **A very large guide can no longer commit against a stale claim layout merely because the number of claims
+  stayed the same.** Equal-count claim replacement, in-place resizing, and relevant player authorization
+  changes now restart validation. Changes are checked before every slice and once more before commit.
+- After three claim-state restarts, continued churn now refuses the operation as temporarily busy instead of
+  eventually accepting a result validated against changing permissions.
+- Very large reshapes re-check build privilege and jail state immediately before committing.
+
+## 0.4.57 - 2026-08-02
+
+### Fixed
+
+- **Cancelling a very large guide now stops the geometry work already running for it.** Previously a cancelled
+  placement or reshape was discarded safely, but its counting and voxel generation could continue in the
+  background and keep Layout's single large-guide validation lane occupied. Cancellation now reaches every
+  3D volume scan, its large-shape fallback, marker work and land-claim footprint preparation.
+
+## 0.4.56 - 2026-08-02
+
+### Fixed
+
+- Malformed Transform requests are now rejected even when their valid parts would amount to no movement.
+  This only affects invalid data from a modified client; normal no-op Transform actions behave as before.
+
+## 0.4.55 - 2026-08-01
+
+### Fixed
+
+- **Move and Transform can no longer carry an otherwise valid guide outside the safe world-coordinate range.**
+  The resulting guide and projection plane are checked before any voxel scan, claim check, save or broadcast.
+- **A combined rotate, mirror and move is now genuinely one operation.** It validates once, either commits
+  completely or changes nothing, broadcasts one consistent result, and takes one Undo/Redo step for both public
+  and private guides. A refusal can no longer leave only the rotation committed or other players seeing stale
+  geometry.
+- Undefined projection modes/axes and unsafe plane offsets are rejected at packet, restore, load and mutation
+  boundaries instead of entering live or saved guide state.
+
+## 0.4.54 - 2026-08-01
+
+### Added
+
+- **`/layout info` now reports how guide saving is behaving** — how many world saves had their guide data
+  prepared in the background, how many had to do the work on the spot, and the save rhythm it has settled
+  into. The improvement below is invisible when it works, so this is how you can tell that it is.
+
+## 0.4.53 - 2026-08-01
+
+### Fixed
+
+- A background guide save that could not start, or that failed partway, no longer counts as having saved.
+  Previously the next world save would skip its own write in that case, and the affected edits waited for
+  the save after it.
+
+## 0.4.52 - 2026-08-01
+
+### Fixed
+
+- **A world save with no guide data prepared for it now writes that data immediately.** Without this, a
+  background save that got stuck could have stopped guide edits reaching the disk for the rest of a server
+  session, with nothing to show for it. Also covers the first saves after a server starts, which happen
+  before the mod has worked out the save rhythm.
+
+## 0.4.51 - 2026-08-01
+
+### Changed
+
+- Guide data is now prepared about 3 seconds before a world save rather than 10, so less recent building is
+  left waiting for the following save. If a server needs more time than that, the mod notices and gives
+  itself more, rather than the figure being a fixed guess.
+
+## 0.4.50 - 2026-08-01
+
+### Changed
+
+- **The server no longer pauses to write guide data when the world saves.** Converting every guide in the
+  world into saveable text took 42 milliseconds on a world with 3,000 guides — more than two server ticks,
+  felt by everyone as a stutter — and it happened on every autosave. That work now happens on a separate
+  thread, a few seconds ahead of the save, so the data is already waiting when the world writes itself. The
+  server keeps a copy of the guides for the background thread to work from, which costs about half a
+  millisecond.
+- **One deliberate trade:** a guide edit made in the last few seconds before an autosave now waits for the
+  next one instead of catching that save. Anything older is saved exactly as promptly as before. Shutdown is
+  unaffected — the server always writes guide data properly on its way out.
+
+## 0.4.49 - 2026-08-01
+
+### Reverted
+
+- **The land-claim shortcut added in 0.4.48 has been removed.** It skipped the full permission check when a
+  guide was nowhere near a land claim — but the game refuses building for several reasons besides claims
+  (a missing privilege, a dead player, another mod protecting the area), and the shortcut only understood
+  claims. Claim protection is back to checking every block, exactly as it did up to 0.4.47.
+
+## 0.4.48 - 2026-08-01
+
+### Changed
+
+- Faster land-claim checking while dragging a guide. **Withdrawn in 0.4.49 — do not use this build.**
+
+## 0.4.47 - 2026-08-01
+
+### Fixed
+
+- **Filled arches are much cheaper to edit.** Working out how many voxels a filled arch contains rebuilt the
+  arch's curve from scratch thousands of times over, every time — and that happens about ten times a second
+  while you drag one. The curve is now built once. The resulting count is unchanged: verified identical
+  across 576 arch shapes and every other shape in the mod.
+
+## 0.4.46 - 2026-08-01
+
+### Fixed
+
+- **Hitting a guide-count limit now shows on the HUD**, not only in chat. The limits on how many guides you
+  or the world may have took a different route from the voxel limits and never told the HUD anything, so the
+  cap row sat unchanged while chat explained the refusal.
+
+### Changed
+
+- **Guides are now saved when the world saves**, rather than on a timer of their own. Guide data is worth
+  what the rest of the world is worth — if a crash costs you five minutes of building, it costs you the same
+  five minutes of guides, and nothing more.
+- Private (F4) guides are written at most once a minute while you edit, and always when you leave a world,
+  quit, or switch modes.
+
+## 0.4.45 - 2026-08-01
+
+### Fixed
+
+- **Editing guides no longer gets slower as your world fills up.** Every single edit re-saved *every guide
+  in the world*, and dragging a control point does that about ten times a second. On a world with a thousand
+  guides one drag update took longer than the server's entire time budget for a tick. Saving now happens at
+  the points that need it, coalesced — about twenty times less work while dragging, and none at all when
+  nothing has changed.
+- **Opening the Players dialog no longer stalls on a busy server.** It walked the whole guide list twice for
+  every player listed; it now counts everyone in a single pass.
+- Removed two guide-size thresholds in the drag code that could never be reached.
+
+### Changed
+
+- Cap refusal wording on the HUD is now in Title Case — `REFUSED — Guide Cap`, `REFUSED — Too Large`.
+
+## 0.4.44 - 2026-08-01
+
+### Fixed
+
+- **The HUD now says which limit refused you.** The cap row could only ever say "over cap" while the chat
+  message named the actual limit. It now reads `REFUSED — Guide Cap`, `Your Total`, `World Full` or
+  `Too Large`, matching what chat says. Older servers, which cannot say which limit fired, still get the
+  general wording.
+
+## 0.4.43 - 2026-08-01
+
+### Fixed
+
+- **The tool remembers every shape again.** Seven of the fifteen — Dome, Cylinder, Cone, Box, Tapered
+  Cylinder, Polygonal Prism and Tapered Polygonal Prism — were reset to Arch every time the game started,
+  and the saved setting was overwritten as it happened, so the choice was gone rather than just ignored.
+
+## 0.4.42 - 2026-08-01
+
+### Fixed
+
+- **Chiseling highlights now light up by themselves after loading into a world**, instead of staying dark
+  until you refreshed them by hand. A guide built while the ground around it was still loading recorded
+  "nothing is built here" and kept that answer for the rest of the session; it now looks again as the
+  ground arrives.
+- `/layout built refresh` says when guides are still waiting for their terrain, rather than staying silent
+  about it.
+
+## 0.4.41 - 2026-08-01
+
+### Fixed
+
+- **The Players dialog worked once and then went dead** — tabs stayed pressed in and did nothing, and no
+  player could be selected. Introduced in 0.4.40 and reverted. Clicking still no longer pulls your typing
+  cursor back to the filter box, which was the part of that change worth keeping.
+
+## 0.4.40 - 2026-08-01
+
+### Fixed
+
+- **The Players list no longer looks empty after you filter a long roster.** It kept your scroll position
+  without checking the shorter list still reached that far, so the rows were drawn above the window and it
+  read as though the filter had matched nobody.
+- **Aiming is cheaper in worlds with many guides.** Every guide anywhere in the world was being tested
+  against your crosshair thirty-three times a second, however far away it was.
+- A greyed-out row could light up one of its buttons when another player changed the selected guide.
+- A long player name no longer runs through the numbers next to it in the Players list.
+
+## 0.4.39 - 2026-08-01
+
+### Fixed
+
+- **The cap readout in the HUD no longer says "REFUSED — over cap" when nothing was refused.** It said so
+  from the moment the HUD opened, in every version from 0.4.34 to 0.4.38.
+- **A refused edit that lands outside the world now corrects your screen.** Previously the guide could stay
+  where you dragged it even though the server had rejected the move.
+- **Releasing a guide can no longer be dropped when you are editing very fast**, which could have left a
+  guide locked until you disconnected.
+
+## 0.4.38 - 2026-08-01
+
+### Added
+
+- **A limit on how fast Layout will accept edits from one player.** Set far above anything you can do by
+  hand — dragging sends about ten edits a second and the allowance is 120 — so ordinary play never meets it.
+
+### Fixed
+
+- **Publishing private guides no longer re-saves every guide in the world once per guide.** Publishing 100
+  guides wrote the world's guide data 100 times; it now writes once.
+- **Publishing is limited to one batch at a time**, and a server that has private guides turned off no
+  longer accepts them.
+- **A very large guide no longer makes the chiselling colour update slow down over time.** Blocks you
+  changed were being remembered forever and re-checked several times a second.
+- **A guide can no longer settle across land that became protected while it was being checked.** Large
+  guides are checked a piece at a time; if the claims change mid-check, it now checks again.
+- **The two retired admin settings no longer report a change that never happened.** Asking for one used to
+  rewrite `layout.json` and announce "EnableChalkDurability is now unlimited". It now ignores the request
+  and tells you the truth.
+
+## 0.4.37 - 2026-08-01
+
+### Fixed
+
+- **A guide placed with its two clicks too close together is now refused, with a message saying so.**
+  Before, it was accepted as a guide with no voxels at all: invisible, listed at 0 voxels, and completely
+  silent — and because zero is under every limit, it passed even a very small voxel cap.
+- **Being refused twice in a row now tells you twice.** A second refusal within a few seconds was being
+  suppressed. Repeated refusals while *dragging* are still grouped, since those arrive ten times a second.
+
+## 0.4.36 - 2026-08-01
+
+### Changed
+
+- **Grabbing a guide now releases the one you had grabbed before.** In normal play you never notice — the
+  game already only lets you grab one at a time. A guide you are still having validated is left alone.
+
+### Fixed
+
+- **Cancelling a reshape of a very large guide now actually stops the work.** It used to run to completion
+  in the background, holding up everyone else's large guides.
+- **Cancelling a large reshape and immediately reshaping again no longer loses the second reshape.** It
+  used to snap back with no explanation.
+- **A rare graphical hiccup when chiselling near a guide.** A background rebuild could fail and fall back
+  to a slower one, which showed as a stutter.
+- **Hiding a guide that is already hidden, or setting divisions to what they already are, no longer saves
+  and re-broadcasts to everyone.**
+
+## 0.4.35 - 2026-07-31
+
+### Fixed
+
+- **Guide positions are now checked before anything is drawn from them.** A guide file edited by hand, or a
+  damaged world save, could previously lock up the game while loading. A guide with an impossible position
+  is now skipped, and a note is written to the log so you know one was.
+
+## 0.4.34 - 2026-07-31
+
+### Fixed
+
+- **Being refused because of a voxel limit now tells you which limit you hit.** Reshaping, rescaling,
+  hiding, filling, rotating, moving and a dozen other actions used to just spring back in silence. Repeated
+  refusals from a single drag are grouped so they cannot flood the chat.
+- **The cap readout in the HUD now flashes when something is refused**, instead of sitting unchanged.
+- **Lowering the world voxel limit below what the world is already using no longer freezes every guide.**
+  It used to refuse every edit, including the shrinking and dispelling that would have brought the world
+  back under the limit.
+
 ## 0.4.33 - 2026-07-29
 
 ### Changed

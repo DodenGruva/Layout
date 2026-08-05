@@ -25,7 +25,10 @@ namespace Layout.Client
         ShiftRestore = 1 << 5,
         ShiftFlatSide = 1 << 6,
         CtrlShiftDiagonal = 1 << 7,
-        ShiftAllowFlare = 1 << 8
+        ShiftAllowFlare = 1 << 8,
+        RoundoverRoute = 1 << 9,
+        ShiftEmbedGuide = 1 << 10,
+        CtrlBypassGrab = 1 << 11
     }
 
     /// <summary>
@@ -181,8 +184,15 @@ namespace Layout.Client
                 if (_draft.HasActiveDraft)
                 {
                     if (DraftManager.IsChainShape(_draft.Shape))
-                        return ShapeModifierHelp.CtrlCardinal | ShapeModifierHelp.ShiftVertical
-                            | ShapeModifierHelp.CtrlShiftDiagonal;
+                    {
+                        if (_draft.Shape == GuideShapeType.Roundover)
+                            return ShapeModifierHelp.RoundoverRoute
+                                | (_draft.DraftEmbedded
+                                    ? ShapeModifierHelp.None : ShapeModifierHelp.ShiftEmbedGuide);
+                        ShapeModifierHelp chainHelp = ShapeModifierHelp.CtrlCardinal
+                            | ShapeModifierHelp.ShiftVertical | ShapeModifierHelp.CtrlShiftDiagonal;
+                        return chainHelp;
+                    }
                     if (_draft.AwaitingRim)
                         return DraftManager.IsTaperedRimStage(_draft.Shape)
                             ? ShapeModifierHelp.CtrlCloseRim | ShapeModifierHelp.ShiftAllowFlare
@@ -215,9 +225,15 @@ namespace Layout.Client
                         return ShapeModifierHelp.CtrlCloseRim | ShapeModifierHelp.ShiftAllowFlare;
                     if (guide.ControlPoints[_grab.PointIndex].IsAnchor)
                         return ShapeModifierHelp.CtrlCardinal;
+                    return _springBackAvailable ? ShapeModifierHelp.ShiftRestore : ShapeModifierHelp.None;
                 }
 
-                return _springBackAvailable ? ShapeModifierHelp.ShiftRestore : ShapeModifierHelp.None;
+                ShapeModifierHelp idleHelp = ShapeModifierHelp.CtrlBypassGrab;
+                if (_springBackAvailable && !CtrlHeld())
+                    idleHelp |= ShapeModifierHelp.ShiftRestore;
+                else
+                    idleHelp |= ShapeModifierHelp.ShiftEmbedGuide;
+                return idleHelp;
             }
         }
 
@@ -972,15 +988,50 @@ namespace Layout.Client
                 // none the height handle follows the view ray. Every other stage still needs a block.
                 if (blockSel != null || AwaitingVolumeHeight)
                 {
-                    Vec3d aim = blockSel != null ? ResolveAnchorPoint(blockSel) : FreeAirAim();
+                    bool embedAim = _draft.DraftEmbedded
+                        || (_draft.Shape == GuideShapeType.Roundover && ShiftHeld());
+                    Vec3d aim = blockSel != null
+                        ? ResolveGuidePoint(blockSel, embedAim) : FreeAirAim();
                     if (DraftManager.IsChainShape(_draft.Shape))
                     {
+                        if (_draft.Shape == GuideShapeType.Roundover)
+                        {
+                            ObserveDraftMotion(aim, flatSideAligned: false);
+                            if (_draft.AwaitingRoundoverProfileFirst)
+                            {
+                                PresentDraft(new DraftPreviewSpec(
+                                    0, BuildSettings(blockSel, aim), _draft.DraftChain, aim, false),
+                                    aim, false);
+                            }
+                            else if (_draft.AwaitingRoundoverProfileSecond)
+                            {
+                                var profileLegs = new List<Vec3d>
+                                {
+                                    _draft.RoundoverProfileFirst,
+                                    _draft.DraftStart
+                                };
+                                PresentDraft(new DraftPreviewSpec(
+                                    0, BuildSettings(blockSel, aim), profileLegs, aim, false),
+                                    aim, false);
+                            }
+                            else
+                            {
+                                Vec3d routeAim = Dist(aim, _draft.ChainLast) > 1e-7 ? aim : null;
+                                PresentDraft(new DraftPreviewSpec(
+                                    0, RoundoverSweepPreviewSettings(blockSel, aim), _draft.DraftChain,
+                                    _draft.RoundoverProfileFirst, _draft.RoundoverProfileSecond,
+                                    routeAim, _draft.DraftPlaneAxis), aim, false);
+                            }
+                            return;
+                        }
+
                         // Free-Shape (0.1.15): the ghost is the placed chain + a live segment to the
                         // crosshair. CTRL snaps the segment level-and-cardinal off the LAST placed corner;
                         // SHIFT (0.1.16) snaps it VERTICAL (straight up/down from that corner). Aiming
                         // near the first corner (with ≥3 placed) snaps onto it and previews the CLOSED loop.
                         aim = ConstrainChainAim(aim);
-                        bool closing = _draft.ChainCount >= 3
+                        bool closing = _draft.Shape == GuideShapeType.FreeShape
+                            && _draft.ChainCount >= 3
                             && Dist(aim, _draft.ChainFirst) <= ChainSnapRadius();
                         if (closing) aim = _draft.ChainFirst;
                         ObserveDraftMotion(aim, flatSideAligned: false);
@@ -1145,10 +1196,14 @@ namespace Layout.Client
             // the authority recount every historical size and can leave a costly packet backlog behind a
             // cancel. Only FinishRelease sends its final pose; cancellation sends no geometry at all.
             if (g.CachedVoxelCount > PreviewFullResVoxelThreshold) return;
-            int sendInterval = g.CachedVoxelCount > 20_000 ? 500
-                : g.CachedVoxelCount > 8_000 ? 250
-                : MoveSendIntervalMs;
-            if (now - _grab.LastSendMs >= sendInterval &&
+
+            // ⚠️ NO TIERED INTERVAL HERE, deliberately. Two slower tiers used to be written just below this
+            // line — 500 ms over 20,000 voxels, 250 ms over 8,000 — and BOTH WERE UNREACHABLE, because the
+            // return above already sends nothing at all past 8,000 (PreviewFullResVoxelThreshold). Every
+            // guide that reaches this line is under that, so the interval was always MoveSendIntervalMs and
+            // the tiers were describing behaviour the code did not have. If graduated throttling is ever
+            // wanted, it has to go ABOVE the early return, not below it.
+            if (now - _grab.LastSendMs >= MoveSendIntervalMs &&
                 (_grab.LastSentPos == null || !NearlySame(_grab.LastSentPos, target)))
             {
                 _net.SendMovePoint(_grab.GuideId, _grab.PointIndex, target);
@@ -1682,8 +1737,31 @@ namespace Layout.Client
                 return;
             }
 
+            // Idle CTRL+click is an explicit placement override. Layout's guides have no engine selection
+            // boxes, so the block selection still names the real block behind the translucent guide; skip
+            // only our own guide hit-test and feed that block directly into first-anchor placement.
+            if (CtrlHeld())
+            {
+                _draft.ClearSelection();
+                HandleCreateClick(blockSel);
+                return;
+            }
+
             // 3./4. A guide under the crosshair outranks anchor placement.
             TargetHit hit = FindTarget(includeLockedPoints: false); // locked points are not grabbable
+            if (hit.Found)
+            {
+                // The sampled curve is only a cheap candidate finder. A grab exists only when the view ray
+                // actually enters a rendered guide voxel; this removes both point-radius forgiveness and
+                // invisible parametric body-to-nearest-handle snapping from the left-click gesture. The
+                // exact visible Dome base-rim exception is routed below.
+                if (!_net.Guides.TryGetValue(hit.GuideId, out GuideData exactGuide)
+                    || !TryFindFirstGuideVoxelHit(
+                        exactGuide, out Vec3d exactCell, out int exactPoint))
+                    hit = TargetHit.None;
+                else
+                    hit = new TargetHit(true, hit.GuideId, exactPoint, exactCell);
+            }
             if (hit.Found)
             {
                 _draft.SelectGuide(hit.GuideId);                    // GUI's per-guide controls act on this
@@ -1708,16 +1786,16 @@ namespace Layout.Client
                     StartGrab(hit.GuideId, hit.PointIndex);
                 }
                 else if (_net.Guides.TryGetValue(hit.GuideId, out GuideData bodyG)
-                         && !TakesBodyInserts(bodyG.ShapeType))
+                         && !GuideShapeTypes.SupportsBodyInsert(bodyG.ShapeType))
                 {
-                    // DECISION (Session 8, generalised in Session 9): a body grab on a PARAMETRIC shape
-                    // (ellipse family, line, triangle, rectangle, polygon) grabs the NEAREST HANDLE —
-                    // pulling the outline stretches it, which is the natural feel; arbitrary interpolation
-                    // points have no meaning on these shapes, so there is nothing to insert. The arch
-                    // family (free splines) and the Free-Shape (hand-placed polyline; 0.1.15) DO take
-                    // body inserts — see TakesBodyInserts.
-                    int handle = NearestHandleIndex(bodyG, hit.BodyPos);
-                    if (handle >= 0 && !bodyG.ControlPoints[handle].IsLocked) StartGrab(hit.GuideId, handle);
+                    // A parametric body voxel has no independent point to move. It must not silently grab
+                    // some other handle. The Dome's base rim is the one intentional exception: historically
+                    // its complete circumference acted as the diameter grip, which is essential when its two
+                    // marker voxels are hidden behind the shell. The click is still required to hit an exact
+                    // rendered voxel above, and the plane check below limits the mapping to the visible rim.
+                    int handle = DomeBaseHandleAt(bodyG, hit.BodyPos);
+                    if (handle >= 0 && !bodyG.ControlPoints[handle].IsLocked)
+                        StartGrab(hit.GuideId, handle);
                 }
                 else
                 {
@@ -1799,7 +1877,7 @@ namespace Layout.Client
             if (!hit.Found) return;
             if (!_net.Guides.TryGetValue(hit.GuideId, out GuideData g)) return;
 
-            if (TakesBodyInserts(g.ShapeType))
+            if (GuideShapeTypes.SupportsBodyInsert(g.ShapeType))
             {
                 // B-S9-1 (v0.2.36): the rendered voxel actually entered by the ray is authoritative.
                 // The old 2x point-radius + 1.5-voxel fallback made a neighboring body voxel lose to a
@@ -1831,11 +1909,9 @@ namespace Layout.Client
 
         // Which shape families take BODY INSERTS (clicking between points creates a new point there):
         // the arch (free spline) and, since 0.1.15, the Free-Shape (hand-placed polyline — inserting a
-        // corner mid-segment is exactly how you refine one). Every other shape is parametric: body
-        // clicks map to the nearest handle instead.
-        private static bool TakesBodyInserts(GuideShapeType t) =>
-            t == GuideShapeType.Arch || t == GuideShapeType.FreeShape;
-
+        // corner mid-segment is exactly how you refine one). Every other shape is parametric: left-click
+        // body grabs do nothing except on the Dome's base rim, while right-click lock intent maps to the
+        // nearest existing handle.
         // Nearest real (non-phantom) control point to a world position — the ellipse family's body-hit →
         // handle mapping.
         private static int NearestHandleIndex(GuideData g, Vec3d pos)
@@ -1851,6 +1927,47 @@ namespace Layout.Client
                 if (d2 < bestD2) { bestD2 = d2; best = i; }
             }
             return best;
+        }
+
+        // Maps an exact Dome base-rim voxel to one of its two diameter anchors. The tolerance covers the
+        // centre of a voxel intersecting the mathematical base plane, including diagonally oriented domes;
+        // curved-shell/rib voxels farther up the hemisphere remain ordinary non-grabbable body voxels.
+        private static int DomeBaseHandleAt(GuideData g, Vec3d pos)
+        {
+            if (g == null || g.ShapeType != GuideShapeType.Dome || pos == null
+                || g.ControlPoints == null || g.ControlPoints.Count < 3)
+                return -1;
+
+            if (g.ControlPoints[0]?.WorldPosition == null
+                || g.ControlPoints[1]?.WorldPosition == null
+                || g.ControlPoints[2]?.WorldPosition == null)
+                return -1;
+
+            Vec3d a = g.ControlPoints[0].WorldPosition;
+            Vec3d b = g.ControlPoints[1].WorldPosition;
+            Vec3d apex = g.ControlPoints[2].WorldPosition;
+            var centre = new Vec3d(
+                (a.X + b.X) * 0.5,
+                (a.Y + b.Y) * 0.5,
+                (a.Z + b.Z) * 0.5);
+            double nx = apex.X - centre.X;
+            double ny = apex.Y - centre.Y;
+            double nz = apex.Z - centre.Z;
+            double normalLength = Math.Sqrt(nx * nx + ny * ny + nz * nz);
+            if (normalLength < 1e-9) return -1;
+
+            double px = pos.X - centre.X;
+            double py = pos.Y - centre.Y;
+            double pz = pos.Z - centre.Z;
+            double planeDistance = Math.Abs(px * nx + py * ny + pz * nz) / normalLength;
+            double cell = Math.Max(1, g.VoxelScale) / 16.0;
+            if (planeDistance > cell * 1.5) return -1;
+
+            double daX = pos.X - a.X, daY = pos.Y - a.Y, daZ = pos.Z - a.Z;
+            double dbX = pos.X - b.X, dbY = pos.Y - b.Y, dbZ = pos.Z - b.Z;
+            double da2 = daX * daX + daY * daY + daZ * daZ;
+            double db2 = dbX * dbX + dbY * dbY + dbZ * dbZ;
+            return da2 <= db2 ? 0 : 1;
         }
 
         // Body hit in Create: insert a new control point there and adopt it as a grab, one gesture. The
@@ -1897,7 +2014,12 @@ namespace Layout.Client
             // it may complete in free air (0.1.23), the view ray standing in for the click point.
             if (blockSel == null && !AwaitingVolumeHeight) return;
 
-            Vec3d anchor = blockSel != null ? ResolveAnchorPoint(blockSel) : FreeAirAim();
+            bool embedPoint = !_draft.HasActiveDraft
+                ? ShiftHeld()
+                : _draft.DraftEmbedded
+                    || (_draft.Shape == GuideShapeType.Roundover && ShiftHeld());
+            Vec3d anchor = blockSel != null
+                ? ResolveGuidePoint(blockSel, embedPoint) : FreeAirAim();
             // Base-stage modifiers: SHIFT makes a Line vertical; CTRL supplies the normal cardinal snap.
             // SHIFT wins if both are held. Multi-corner Free-Shape segments use their own equivalent helper.
             if (_draft.HasActiveDraft && !_draft.AwaitingApex
@@ -1906,6 +2028,13 @@ namespace Layout.Client
 
             if (!_draft.HasActiveDraft)
             {
+                if (_draft.Shape == GuideShapeType.Roundover && !_net.RoundoverPlacementSupported)
+                {
+                    Error("layout-roundoverprotocol",
+                        "Fillet placement requires Layout 0.4.67 or newer on the server. Private placement remains available where the server permits it.");
+                    return;
+                }
+
                 if (_renderer.PlacementMaterializationBusy || _renderer.SculptMaterializationBusy)
                 {
                     Error("layout-guide-materializing",
@@ -1927,7 +2056,8 @@ namespace Layout.Client
                 // The first click also fixes the INTRINSIC plane for the ellipse family (Session 8): click
                 // the ground → a flat ring (normal Y); click a wall → a ring on the wall (normal X/Z). The
                 // arch family carries it unused.
-                _draft.StartDraft(anchor, AxisFromFace(blockSel), FaceIsNegative(blockSel));
+                _draft.StartDraft(anchor, AxisFromFace(blockSel), FaceIsNegative(blockSel),
+                    embedded: embedPoint);
                 _rimAimArmed = false;
                 _rimAwaitingRelease = false;
                 ResetDraftVisualState();
@@ -1942,13 +2072,53 @@ namespace Layout.Client
             // finishes it open. CTRL snaps each new segment relative to the PREVIOUS corner.
             if (DraftManager.IsChainShape(_draft.Shape))
             {
-                Vec3d corner = ConstrainChainAim(ResolveAnchorPoint(blockSel));
+                Vec3d corner = _draft.Shape == GuideShapeType.Roundover
+                    ? ResolveGuidePoint(blockSel, _draft.DraftEmbedded || ShiftHeld())
+                    : ResolveGuidePoint(blockSel, _draft.DraftEmbedded);
+
+                if (_draft.Shape == GuideShapeType.Roundover)
+                {
+                    if (_draft.AwaitingRoundoverProfileFirst || _draft.AwaitingRoundoverProfileSecond)
+                    {
+                        if (Dist(corner, _draft.DraftStart) < 1e-7)
+                        {
+                            Error("layout-roundoverprofile",
+                                "Set each fillet side away from corner.");
+                            return;
+                        }
+                        if (_draft.AwaitingRoundoverProfileSecond
+                            && Dist(corner, _draft.RoundoverProfileFirst) < 1e-7)
+                        {
+                            Error("layout-roundoverprofile",
+                                "Set second fillet side at a different point from first.");
+                            return;
+                        }
+                        _draft.PlaceRoundoverProfilePoint(corner);
+                        ResetDraftVisualState();
+                        return;
+                    }
+
+                    if (Dist(corner, _draft.ChainLast) < 1e-7)
+                    {
+                        if (_draft.ChainCount >= 2) CompleteRoundover(blockSel);
+                        return;
+                    }
+
+                    if (!_draft.AppendChainPoint(corner))
+                    {
+                        Error("layout-chaincap",
+                            $"Route corner limit reached ({Shapes.RoundoverShape.MaxRoutePoints}). Finish or step back.");
+                    }
+                    return;
+                }
+
+                corner = ConstrainChainAim(corner);
 
                 double snap = ChainSnapRadius();
                 bool onFirst = _draft.ChainFirst != null && Dist(corner, _draft.ChainFirst) <= snap;
                 bool onLast = _draft.ChainLast != null && Dist(corner, _draft.ChainLast) <= snap;
 
-                if (onFirst && _draft.ChainCount >= 3)
+                if (_draft.Shape == GuideShapeType.FreeShape && onFirst && _draft.ChainCount >= 3)
                 {
                     CompleteChain(closed: true, blockSel, corner);
                 }
@@ -1963,8 +2133,9 @@ namespace Layout.Client
                 }
                 else if (!_draft.AppendChainPoint(corner))
                 {
-                    Error("layout-freeshapecap",
-                        $"Free-Shape corner limit reached ({Shapes.FreeShape.MaxCorners}). Finish or step back.");
+                    int maximum = Shapes.FreeShape.MaxCorners;
+                    Error("layout-chaincap",
+                        $"Route corner limit reached ({maximum}). Finish or step back.");
                 }
                 return;
             }
@@ -2102,6 +2273,52 @@ namespace Layout.Client
             {
                 Error("layout-overcap",
                     $"Too large: {completion.VoxelCount:n0} voxels (cap {completion.CapLimit:n0}). Step back or coarsen the scale.");
+            }
+        }
+
+        private void CompleteRoundover(BlockSelection blockSel)
+        {
+            List<Vec3d> chain = _draft.DraftChain;
+            chain.Add(_draft.RoundoverProfileFirst);
+            chain.Add(_draft.RoundoverProfileSecond);
+            var shape = new Shapes.RoundoverShape(chain, hasTwoProfileHandles: true);
+            if (GuideShapeVoxelCounting.CountUpTo(shape, _draft.Scale, false, 0) == 0)
+            {
+                Error("layout-roundoverradius",
+                    "Fillet sides must stay away from corner, and sweep path cannot reverse directly back on itself.");
+                return;
+            }
+
+            Vec3d lastAim = _draft.ChainLast;
+            GuideRenderSettings settings = BuildSettings(blockSel, lastAim);
+            var candidateSpec = new DraftPreviewSpec(
+                _draftGeneration, settings, _draft.DraftChain,
+                _draft.RoundoverProfileFirst, _draft.RoundoverProfileSecond,
+                null, _draft.DraftPlaneAxis);
+            bool candidateMatchesPreview = candidateSpec.Fingerprint() == _draftPoseFingerprint;
+            int knownVoxelCount = candidateMatchesPreview
+                && _acceptedDraftScale == settings.Scale ? _acceptedDraftVoxelCount : -1;
+            bool deferCapCheck = knownVoxelCount < 0
+                && _net.AuthorityMode == ClientAuthorityMode.Networked
+                && !_draft.Wireframe;
+            DraftCompletion completion = _draft.TryCompleteRoundover(knownVoxelCount, deferCapCheck);
+            if (completion.IsReady)
+            {
+                bool retainedExactPreview = _renderer.RetainExactDraftForPlacement(candidateSpec);
+                _net.SendCreateRequest(completion.Start, completion.End, settings,
+                    GuideShapeType.Roundover, ShapeConstraint.None, _draft.DraftPlaneAxis,
+                    inverted: false, sides: 0, apex: null,
+                    chain: chain, closed: true,
+                    deferPlacementEffects: retainedExactPreview);
+                _draft.ClearDraft();
+                ResetDraftVisualState();
+                _hud.ClearDraftAim();
+                if (!retainedExactPreview) _renderer.ClearDraftPreview();
+            }
+            else if (completion.Status == DraftCompletionStatus.RejectedOverCap)
+            {
+                Error("layout-overcap",
+                    $"Too large: {completion.VoxelCount:n0} voxels (cap {completion.CapLimit:n0}). Choose a smaller radius, shorten the route, or coarsen the scale.");
             }
         }
 
@@ -2631,14 +2848,16 @@ namespace Layout.Client
             foreach (GuideData g in _net.Guides.Values)
             {
                 double voxel = g.VoxelScale / 16.0;
-                // Session-8 finding: the old max(0.30, voxel*1.75) radius cast a ~⅓-block shadow around
-                // every control point in which body clicks were swallowed by the point — a dead zone for
-                // body grabs near the anchors, and a snap radius the control scheme explicitly doesn't
-                // want. The point pick radius now matches the single-voxel marker you can actually SEE
-                // (with a small floor for the finest scale): hit the voxel to grab the point; everywhere
-                // else on the guide — everywhere — is a body hit.
-                double pointRadius = Math.Max(0.10, voxel) * pointRadiusScale;
-                double bodyRadius = Math.Max(0.18, voxel);
+                // This is a cheap candidate test for the 33 Hz HUD loop, not permission to grab. Bound its
+                // halo to one physical guide cell: a cube's centre-to-corner distance is sqrt(3)/2 of its
+                // edge. The exact click path still ray-tests the rendered voxel before acting. Fixed 0.10 /
+                // 0.18-block floors made a scale-1 guide targetable several cells outside what was visible.
+                double cellRadius = voxel * 0.8660254037844386;
+                double pointRadius = cellRadius * pointRadiusScale;
+                double bodyRadius = cellRadius;
+
+                // BROAD PHASE, before any per-point or per-segment work (v0.4.40).
+                if (!WithinTargetingReach(g, origin, dir, Math.Max(pointRadius, bodyRadius))) continue;
 
                 for (int i = 0; i < g.ControlPoints.Count; i++)
                 {
@@ -2684,9 +2903,58 @@ namespace Layout.Client
             return bestHit;
         }
 
-        // Exact lock-in-place picker for B-S9-1. It intentionally samples the outline even when the guide
-        // is filled: body targeting means the defining curve, not arbitrary interior fill cells. This work
-        // happens only on a right-click, never in the per-tick targeting loop.
+        /// <summary>
+        /// Cheap rejection for a guide the view ray cannot possibly hit within <see cref="MaxReach"/>.
+        /// </summary>
+        /// <remarks>
+        /// THE MIRROR HOLDS EVERY GUIDE IN THE WORLD, and on a settled server that is most of them —
+        /// but nothing past twelve blocks is targetable at all. Without this, <see cref="FindTarget"/>
+        /// paid the full price for every one of them, 33 times a second: a fingerprint hash over each
+        /// guide's control points, a resample on any miss, and a ray test against up to 512 curve
+        /// segments. That cost grew with the WORLD rather than with what is in front of the player, which
+        /// is the shape of thing that is fine on the machine it was written on and miserable on a server
+        /// two months old.
+        ///
+        /// The box is built from the control points — phantoms INCLUDED, since they steer the curve's
+        /// ends and an arch's sit below its feet — and then grown generously before it is trusted to
+        /// reject anything. A Catmull-Rom spline bows outside the hull of its own control points, so the
+        /// padding carries a quarter of the guide's largest dimension on top of the pick radius. That is
+        /// far looser than the real overshoot; it still rejects everything that is merely far away, and
+        /// this must never make a guide the player can SEE unclickable. Rejecting nothing costs one pass
+        /// over the points, which is cheaper than the fingerprint hash it saves.
+        /// </remarks>
+        private bool WithinTargetingReach(GuideData g, Vec3d origin, Vec3d dir, double margin)
+        {
+            List<ControlPoint> points = g.ControlPoints;
+            if (points == null || points.Count == 0) return false;
+
+            double minX = double.MaxValue, minY = double.MaxValue, minZ = double.MaxValue;
+            double maxX = double.MinValue, maxY = double.MinValue, maxZ = double.MinValue;
+            for (int i = 0; i < points.Count; i++)
+            {
+                Vec3d p = points[i]?.WorldPosition;
+                if (p == null) continue;
+                if (p.X < minX) minX = p.X;
+                if (p.X > maxX) maxX = p.X;
+                if (p.Y < minY) minY = p.Y;
+                if (p.Y > maxY) maxY = p.Y;
+                if (p.Z < minZ) minZ = p.Z;
+                if (p.Z > maxZ) maxZ = p.Z;
+            }
+            if (minX > maxX) return false;      // no usable points at all
+
+            double span = Math.Max(maxX - minX, Math.Max(maxY - minY, maxZ - minZ));
+            double pad = margin + Math.Max(1.0, span * 0.25);
+
+            return RayAabbEntry(origin, dir,
+                       minX - pad, minY - pad, minZ - pad,
+                       maxX + pad, maxY + pad, maxZ + pad, out double entry)
+                   && entry <= MaxReach;
+        }
+
+        // Exact guide-voxel picker for grabs and B-S9-1 lock-in-place. It intentionally samples the outline
+        // even when the guide is filled: body targeting means the defining curve, not arbitrary interior
+        // fill cells. This work happens only on a click, never in the per-tick targeting loop.
         private bool TryFindFirstGuideVoxelHit(GuideData guide, out Vec3d cellCentre, out int pointIndex)
         {
             cellCentre = null;
@@ -2775,6 +3043,29 @@ namespace Layout.Client
         private static int FindPointOwningVoxel(GuideData guide, List<VoxelPosition> voxels,
             VoxelPosition clicked, bool surface, PlaneAxis flatAxis, double plane)
         {
+            if (guide.ShapeType == GuideShapeType.Roundover && !guide.IsWireframe)
+            {
+                // Roundover routes may combine a large shell with many route controls. The generic
+                // nearest-cell ownership below is O(points × voxels) per crosshair hit. This shape exposes
+                // exact sampled marker positions, keeping the work bounded by the small route itself.
+                var roundover = ShapeFactory.Adopt(guide) as RoundoverShape;
+                int fastOwner = -1, fastOwnerRole = -1;
+                for (int i = 0; i < guide.ControlPoints.Count; i++)
+                {
+                    ControlPoint point = guide.ControlPoints[i];
+                    if (point == null || point.IsPhantom
+                        || !roundover.TryGetMarkerPosition(i, guide.VoxelScale, out Vec3d marker))
+                        continue;
+                    int x = (int)Math.Floor(marker.X * 16.0 / guide.VoxelScale) * guide.VoxelScale;
+                    int y = (int)Math.Floor(marker.Y * 16.0 / guide.VoxelScale) * guide.VoxelScale;
+                    int z = (int)Math.Floor(marker.Z * 16.0 / guide.VoxelScale) * guide.VoxelScale;
+                    if (x != clicked.X || y != clicked.Y || z != clicked.Z) continue;
+                    int role = point.IsLocked ? 3 : point.IsPrimary ? 2 : point.IsAnchor ? 1 : 0;
+                    if (role > fastOwnerRole) { fastOwner = i; fastOwnerRole = role; }
+                }
+                return fastOwner;
+            }
+
             double edge = guide.VoxelScale / 16.0;
             double half = edge * 0.5;
             int owner = -1;
@@ -2985,6 +3276,23 @@ namespace Layout.Client
             if (n.Z != 0) z = PlaneCoord(blockSel.Position.Z, n.Z) + (surface ? 0 : n.Z * s * 0.5);
 
             return new Vec3d(x, y, z);
+        }
+
+        // Embedded placement chooses the material-side voxel without changing either tangential coordinate.
+        // Volumetric anchors move exactly one selected-scale cell from the ordinary outside-cell centre to
+        // the matching centre inside the targeted block. Surface mode starts on the face plane, so half a
+        // cell reaches that same material-side centre.
+        private Vec3d ResolveGuidePoint(BlockSelection blockSel, bool embed)
+        {
+            Vec3d point = ResolveAnchorPoint(blockSel);
+            if (!embed || blockSel?.Face == null) return point;
+
+            Vec3i normal = blockSel.Face.Normali;
+            double cell = _draft.Scale / 16.0;
+            double inward = _draft.Projection == ProjectionMode.Surface ? cell * 0.5 : cell;
+            return new Vec3d(point.X - normal.X * inward,
+                point.Y - normal.Y * inward,
+                point.Z - normal.Z * inward);
         }
 
         // True when the active draft is on a free-air-capable stage of a 3D volume: the HEIGHT stage
@@ -3220,6 +3528,14 @@ namespace Layout.Client
                     settings.Plane, settings.Filled, 0, settings.Wireframe);
 
             return settings;
+        }
+
+        private GuideRenderSettings RoundoverSweepPreviewSettings(
+            BlockSelection blockSel, Vec3d anchor)
+        {
+            GuideRenderSettings settings = BuildSettings(blockSel, anchor);
+            return new GuideRenderSettings(settings.Scale, settings.Mode, settings.Plane,
+                settings.Filled, settings.Divisions, wireframe: true);
         }
 
         // ==========================================================================================

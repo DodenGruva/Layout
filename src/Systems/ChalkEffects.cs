@@ -130,6 +130,9 @@ namespace Layout.Systems
 
         private static List<Vec3d> BaseRingPoints(GuideData guide)
         {
+            // A Roundover has no base ring: its meaningful placement trace is the sculpted route itself.
+            if (guide.ShapeType == GuideShapeType.Roundover) return CurveEmitPoints(guide);
+
             Vec3d a = null, b = null;
             foreach (ControlPoint cp in guide.ControlPoints)
             {

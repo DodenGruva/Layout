@@ -54,9 +54,16 @@ namespace Layout.Systems
     /// caller needs the returned list of freed guides to broadcast their now-free state (and the editor's last
     /// known point position). All access is on the server's main thread, so there is no locking.
     ///
-    /// "ONE LOCK PER GUIDE", NOT "ONE PER PLAYER". The constraint enforced here is per-guide: each guide has at
-    /// most one holder. A single player holding locks on two guides at once is not prevented here (the client
-    /// only ever grabs one at a time); <see cref="ReleaseAllLocksForPlayer"/> cleans up however many they hold.
+    /// ONE LOCK PER GUIDE **AND** ONE PER PLAYER (the second half added v0.4.36). Each guide has at most one
+    /// holder, and each player holds at most one guide.
+    ///
+    /// ⚠️ This class used to enforce only the per-guide half, and documented the other as unnecessary
+    /// because "the client only ever grabs one at a time". THAT IS A CLIENT CONVENTION, NOT A SERVER
+    /// INVARIANT (<c>GOTCHAS</c> G32) — a modified client simply grabbed everything and held it until
+    /// disconnect, blocking every other player's edits, and the admin lock override does not cover geometry
+    /// edits so there was no full remedy. <see cref="ReleaseOtherLocksForPlayer"/> is the enforcement; the
+    /// network handler calls it on every grab and broadcasts whatever came free.
+    /// <see cref="ReleaseAllLocksForPlayer"/> remains the disconnect path.
     ///
     /// VALIDATION ROLE. Beyond granting/refusing grabs, this is the gate the network handler consults before
     /// applying any mid-edit change: an incoming move / insert / release for a guide is honoured only if it
@@ -124,6 +131,39 @@ namespace Layout.Systems
             foreach (var pair in _locks)
                 if (pair.Value == playerUid)
                     freed.Add(pair.Key);
+
+            for (int i = 0; i < freed.Count; i++)
+                _locks.Remove(freed[i]);
+
+            return freed;
+        }
+
+        /// <summary>
+        /// Enforces "one guide per player": releases every lock this player holds EXCEPT the one they are
+        /// grabbing now, and except one optional guide the caller needs kept. Returns the guides freed, so
+        /// the caller can broadcast each as now-free.
+        /// </summary>
+        /// <param name="keeping">The guide just grabbed — never released.</param>
+        /// <param name="retain">
+        /// One further guide to leave locked. The network handler passes the player's in-flight immense
+        /// reshape here: that lock is held by WORK ALREADY UNDERWAY, not by a player sitting on a guide, and
+        /// it ends by itself when the validator finishes. Yanking it would abandon a reshape the player
+        /// legitimately started and already released.
+        /// </param>
+        public IReadOnlyList<Guid> ReleaseOtherLocksForPlayer(
+            string playerUid, Guid keeping, Guid? retain = null)
+        {
+            var freed = new List<Guid>();
+            if (string.IsNullOrEmpty(playerUid)) return freed;
+
+            // Collect first, then remove — never mutate the dictionary while enumerating it.
+            foreach (var pair in _locks)
+            {
+                if (pair.Value != playerUid) continue;
+                if (pair.Key == keeping) continue;
+                if (retain.HasValue && pair.Key == retain.Value) continue;
+                freed.Add(pair.Key);
+            }
 
             for (int i = 0; i < freed.Count; i++)
                 _locks.Remove(freed[i]);

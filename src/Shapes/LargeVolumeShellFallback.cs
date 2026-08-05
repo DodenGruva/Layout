@@ -34,9 +34,19 @@ namespace Layout.Shapes
         public static List<VoxelPosition> RadialShell(
             Vec3d centre, double baseRadius, Vec3d u, Vec3d m, Vec3d axis, double height,
             bool taperedToPoint, int scale, int stopAfter, out bool exceeded)
+            => RadialShell(
+                centre, baseRadius, u, m, axis, height, taperedToPoint,
+                scale, stopAfter, out exceeded, null);
+
+        public static List<VoxelPosition> RadialShell(
+            Vec3d centre, double baseRadius, Vec3d u, Vec3d m, Vec3d axis, double height,
+            bool taperedToPoint, int scale, int stopAfter, out bool exceeded,
+            Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             var result = new List<VoxelPosition>();
             var seen = new HashSet<(int, int, int)>();
+            int work = 0;
             exceeded = false;
             if (centre == null || u == null || m == null || axis == null || scale <= 0) return result;
 
@@ -56,7 +66,9 @@ namespace Layout.Shapes
                     double a1 = 2.0 * Math.PI * (segment + 1) / around;
                     Vec3d p0 = RingPoint(ringCentre, u, m, radius, a0);
                     Vec3d p1 = RingPoint(ringCentre, u, m, radius, a1);
-                    if (!MarchSegment(result, seen, p0, p1, scale, stopAfter))
+                    if (!MarchSegment(
+                        result, seen, p0, p1, scale, stopAfter,
+                        ref work, cancellationRequested))
                     {
                         exceeded = true;
                         return result;
@@ -107,19 +119,30 @@ namespace Layout.Shapes
             Vec3d origin, Vec3d u, Vec3d v, Vec3d axis,
             double uLength, double vLength, double height,
             int scale, int stopAfter, out bool exceeded)
+            => BoxShell(
+                origin, u, v, axis, uLength, vLength, height,
+                scale, stopAfter, out exceeded, null);
+
+        public static List<VoxelPosition> BoxShell(
+            Vec3d origin, Vec3d u, Vec3d v, Vec3d axis,
+            double uLength, double vLength, double height,
+            int scale, int stopAfter, out bool exceeded,
+            Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             var result = new List<VoxelPosition>();
             var seen = new HashSet<(int, int, int)>();
+            int work = 0;
             exceeded = false;
             if (origin == null || u == null || v == null || axis == null || scale <= 0) return result;
 
             Vec3d du = Scale(u, uLength), dv = Scale(v, vLength), dh = Scale(axis, height);
-            if (!Face(result, seen, origin, du, dv, scale, stopAfter)
-                || !Face(result, seen, Add(origin, dh), du, dv, scale, stopAfter)
-                || !Face(result, seen, origin, du, dh, scale, stopAfter)
-                || !Face(result, seen, Add(origin, dv), du, dh, scale, stopAfter)
-                || !Face(result, seen, origin, dv, dh, scale, stopAfter)
-                || !Face(result, seen, Add(origin, du), dv, dh, scale, stopAfter))
+            if (!Face(result, seen, origin, du, dv, scale, stopAfter, ref work, cancellationRequested)
+                || !Face(result, seen, Add(origin, dh), du, dv, scale, stopAfter, ref work, cancellationRequested)
+                || !Face(result, seen, origin, du, dh, scale, stopAfter, ref work, cancellationRequested)
+                || !Face(result, seen, Add(origin, dv), du, dh, scale, stopAfter, ref work, cancellationRequested)
+                || !Face(result, seen, origin, dv, dh, scale, stopAfter, ref work, cancellationRequested)
+                || !Face(result, seen, Add(origin, du), dv, dh, scale, stopAfter, ref work, cancellationRequested))
             {
                 exceeded = true;
             }
@@ -193,20 +216,24 @@ namespace Layout.Shapes
         }
 
         private static bool Face(List<VoxelPosition> result, HashSet<(int, int, int)> seen,
-            Vec3d origin, Vec3d across, Vec3d down, int scale, int stopAfter)
+            Vec3d origin, Vec3d across, Vec3d down, int scale, int stopAfter,
+            ref int work, Func<bool> cancellationRequested)
         {
             double cell = scale / 16.0;
             int rows = Math.Max(1, (int)Math.Ceiling(Length(down) / (cell * 0.5)));
             for (int row = 0; row <= rows; row++)
             {
                 Vec3d start = Add(origin, down, (double)row / rows);
-                if (!MarchSegment(result, seen, start, Add(start, across), scale, stopAfter)) return false;
+                if (!MarchSegment(
+                    result, seen, start, Add(start, across), scale, stopAfter,
+                    ref work, cancellationRequested)) return false;
             }
             return true;
         }
 
         private static bool MarchSegment(List<VoxelPosition> result, HashSet<(int, int, int)> seen,
-            Vec3d a, Vec3d b, int scale, int stopAfter)
+            Vec3d a, Vec3d b, int scale, int stopAfter,
+            ref int work, Func<bool> cancellationRequested)
         {
             double dx = b.X - a.X, dy = b.Y - a.Y, dz = b.Z - a.Z;
             double length = Math.Sqrt(dx * dx + dy * dy + dz * dz);
@@ -214,6 +241,7 @@ namespace Layout.Shapes
             int steps = Math.Max(1, (int)Math.Ceiling(length / (cell * 0.5)));
             for (int step = 0; step <= steps; step++)
             {
+                VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                 double f = (double)step / steps;
                 int x = (int)Math.Floor((a.X + dx * f) * 16.0 / scale) * scale;
                 int y = (int)Math.Floor((a.Y + dy * f) * 16.0 / scale) * scale;

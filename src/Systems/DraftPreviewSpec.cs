@@ -28,6 +28,9 @@ namespace Layout.Systems
         public Vec3d Apex { get; }
         public Vec3d Rim { get; }
         public IReadOnlyList<Vec3d> Chain { get; }
+        public int RoundoverRouteCount { get; }
+        public Vec3d RoundoverProfileFirst { get; }
+        public Vec3d RoundoverProfileSecond { get; }
 
         /// <summary>The placement point currently controlled by the crosshair for this draft stage.</summary>
         public Vec3d ActiveAim { get; }
@@ -68,36 +71,98 @@ namespace Layout.Systems
             IReadOnlyList<Vec3d> chain,
             Vec3d aim,
             bool closing)
+            : this(generation, settings, GuideShapeType.FreeShape, chain, aim, closing)
+        {
+        }
+
+        /// <summary>
+        /// Chained-shape draft. Free-Shape appends the live aim as its next route corner. This overload
+        /// remains the legacy one-handle Roundover path; profile-first Roundovers use the overload below.
+        /// </summary>
+        public DraftPreviewSpec(
+            int generation,
+            GuideRenderSettings settings,
+            GuideShapeType shapeType,
+            IReadOnlyList<Vec3d> chain,
+            Vec3d aim,
+            bool closing,
+            PlaneAxis planeAxis = PlaneAxis.Y)
         {
             Generation = generation;
             Settings = settings;
-            ShapeType = GuideShapeType.FreeShape;
+            ShapeType = shapeType;
             Constraint = ShapeConstraint.None;
-            PlaneAxis = PlaneAxis.Y;
+            PlaneAxis = planeAxis;
             IsChain = true;
-            ChainClosing = closing;
+            ChainClosing = shapeType == GuideShapeType.FreeShape && closing;
 
-            var copy = new List<Vec3d>((chain?.Count ?? 0) + (closing || aim == null ? 0 : 1));
+            bool appendAim = aim != null && (shapeType == GuideShapeType.Roundover || !closing);
+            var copy = new List<Vec3d>((chain?.Count ?? 0) + (appendAim ? 1 : 0));
             if (chain != null)
                 for (int i = 0; i < chain.Count; i++) copy.Add(Copy(chain[i]));
-            if (!closing && aim != null) copy.Add(Copy(aim));
+            if (appendAim) copy.Add(Copy(aim));
             Chain = copy;
             Start = copy.Count > 0 ? Copy(copy[0]) : null;
-            End = copy.Count > 1 ? Copy(copy[copy.Count - 1]) : null;
+            int endIndex = shapeType == GuideShapeType.Roundover ? copy.Count - 2 : copy.Count - 1;
+            End = endIndex >= 1 ? Copy(copy[endIndex]) : null;
             ActiveAim = Copy(closing && copy.Count > 0 ? copy[0] : End);
+            if (shapeType == GuideShapeType.Roundover) ActiveAim = Copy(aim ?? (copy.Count > 0 ? copy[copy.Count - 1] : null));
+        }
+
+        public DraftPreviewSpec(
+            int generation,
+            GuideRenderSettings settings,
+            IReadOnlyList<Vec3d> roundoverRoute,
+            Vec3d profileFirst,
+            Vec3d profileSecond,
+            Vec3d routeAim,
+            PlaneAxis planeAxis)
+        {
+            Generation = generation;
+            Settings = settings;
+            ShapeType = GuideShapeType.Roundover;
+            Constraint = ShapeConstraint.None;
+            PlaneAxis = planeAxis;
+            IsChain = true;
+
+            var copy = new List<Vec3d>((roundoverRoute?.Count ?? 0) + 3);
+            if (roundoverRoute != null)
+                for (int i = 0; i < roundoverRoute.Count; i++) copy.Add(Copy(roundoverRoute[i]));
+            if (routeAim != null) copy.Add(Copy(routeAim));
+            RoundoverRouteCount = copy.Count;
+            RoundoverProfileFirst = Copy(profileFirst);
+            RoundoverProfileSecond = Copy(profileSecond);
+            if (profileFirst != null) copy.Add(Copy(profileFirst));
+            if (profileSecond != null) copy.Add(Copy(profileSecond));
+            Chain = copy;
+            Start = copy.Count > 0 ? Copy(copy[0]) : null;
+            End = RoundoverRouteCount > 1 ? Copy(copy[RoundoverRouteCount - 1]) : null;
+            ActiveAim = Copy(routeAim ?? profileSecond ?? profileFirst);
         }
 
         public DraftPreviewSpec WithGeneration(int generation)
         {
+            if (ShapeType == GuideShapeType.Roundover && RoundoverProfileFirst != null)
+            {
+                var route = new List<Vec3d>(RoundoverRouteCount);
+                for (int i = 0; i < RoundoverRouteCount; i++) route.Add(Copy(Chain[i]));
+                return new DraftPreviewSpec(generation, Settings, route,
+                    RoundoverProfileFirst, RoundoverProfileSecond, null, PlaneAxis);
+            }
             if (IsChain)
-                return new DraftPreviewSpec(generation, Settings, Chain, null, ChainClosing);
+                return new DraftPreviewSpec(
+                    generation, Settings, ShapeType, Chain, null, ChainClosing, PlaneAxis);
             return new DraftPreviewSpec(generation, Settings, ShapeType, Constraint, PlaneAxis,
                 Start, End, Sides, Inverted, Apex, Rim, FlatSideAligned);
         }
 
         public IGuideShape CreateShape()
         {
-            if (IsChain) return new FreeShape(new List<Vec3d>(Chain), ChainClosing);
+            if (IsChain)
+                return ShapeType == GuideShapeType.Roundover
+                    ? new RoundoverShape(new List<Vec3d>(Chain),
+                        hasTwoProfileHandles: RoundoverProfileSecond != null)
+                    : new FreeShape(new List<Vec3d>(Chain), ChainClosing);
 
             IGuideShape shape = ShapeFactory.Create(ShapeType, Constraint, PlaneAxis, Start, End,
                 Inverted, Sides, flatSideAligned: FlatSideAligned);

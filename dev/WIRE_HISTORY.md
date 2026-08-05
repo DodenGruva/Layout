@@ -11,7 +11,7 @@
 > the current number. This ledger was built by reading that list, not by reassembling prose. **If the two
 > ever disagree, the source is right and this file is wrong.**
 
-**Current: DataVersion 13, protocol 24.**
+**Current: DataVersion 13, protocol 28.**
 
 ---
 
@@ -44,6 +44,10 @@ One row per bump. "Packets added" is the exact set appended to `RegistrationOrde
 | 22 | — | 33 | *(none)* | Field/semantic change only |
 | 23 | v0.4.26 | 33 | `PlayerRosterRequestPacket`, `PlayerRosterPacket`, `PlayerGuidesRequestPacket`, `PlayerGuidesPacket` | The **Players dialog** (read-only) |
 | 24 | v0.4.31 | 34 | `PlayerPolicyEditPacket`, `PlayerJailPacket` | The Players dialog **became editable**. Jail is a separate, confirmed packet — not folded into the policy edit |
+| 25 | v0.4.44 | 39 | *(none)* | **`VoxelCapWarningPacket` gained `CapKind`** (`[ProtoMember(4)]`), so the HUD can name WHICH of the four caps refused an edit instead of saying "over cap". Field append; an older server leaves it 0 and the client shows the old wording |
+| 26 | v0.4.46 | 39 | *(none)* | **`VoxelCapKind` gained `GuideCount = 5`** — the guide-COUNT caps reach the HUD now. Enum append, but the *meaning set* of a field clients read grew, so the number moved |
+| 27 | v0.4.60 | 41 | *(none)* | **`GuideShapeType` gained `Roundover = 15`** — a new meaning carried by existing guide/create DTO fields. The client records the server protocol and blocks public Roundover placement against older servers; private placement remains local |
+| 28 | v0.4.67 | 42 | *(none)* | **Roundover's shared chain gained the profile-first meaning.** New creates carry the open sweep route followed by two terminal Primary profile handles; `GuideCreateRequestPacket.Closed = true` selects that constructor on authority but does not make the stored Roundover closed. Public placement is gated to protocol 28; legacy one-handle guides remain readable |
 
 **Rows marked *(none)*** bumped the protocol without appending a packet — a field was added to an existing
 packet, or a meaning changed. The version still moved because both sides must agree.
@@ -66,6 +70,32 @@ The two `LayoutAdminSetting` values are **still declared** (`EnableChalkDurabili
 server restart. What was withdrawn is the *wire path*: the panel no longer offers either and **the server no
 longer accepts them here, so a request naming one changes nothing.** That is deliberate — an inert slot is
 safe, a renumbered one is not.
+
+⚠️ **That last sentence was true of STATE and false of the REPLY until v0.4.38.** A request naming 6 or 7
+passed `Enum.IsDefined`, fell into the switch's `default:`, and then ran the whole tail: `layout.json`
+rewritten, the change logged, and the admin told *"EnableChalkDurability is now unlimited"* — for a setting
+that had not changed and is not a number. Both slots are now answered before the switch, with the truth and
+nothing else. **A retired wire slot has to be inert in what it says as well as in what it does.**
+
+---
+
+## Pinned enum values carried as packet payload
+
+Not every wire-pinned number is a packet position. These enums cross the wire **as integer fields**, so G1's
+append-only rule governs them too — a renumbering here is as breaking as one in `RegistrationOrder()`, and
+far easier to do by accident because the enum looks like ordinary code.
+
+| Enum | Carried by | Rule |
+|---|---|---|
+| `LayoutAdminSetting` | `LayoutAdminConfigRequestPacket.Setting` | Slots 6 and 7 retired but declared — see above |
+| `GuideOpStatus` | `GuidePlacementRejectedPacket.Reason` | **Append only.** `RejectedEmpty` was appended last at v0.4.37 |
+| `VoxelCapKind` | `VoxelCapWarningPacket.CapKind` | **Append only.** `GuideCount` appended last at v0.4.46 (protocol 26). ⚠️ **This one IS read by the client**, unlike `GuideOpStatus` below — `GuideHud` switches on it — so an insertion would silently re-label every value after it. `0` is `Unspecified` on purpose: it is what a pre-25 server sends AND what the client normalises any unrecognised value to, so both collapse to the old generic wording |
+| `GuideShapeType` | guide state and create/update DTO fields | **Append only.** `Roundover = 15` was appended at v0.4.60 (protocol 27). Its chain gained the two-profile-handle meaning at v0.4.67 (protocol 28). Public creation is protocol-gated client-side; older one-handle Roundovers remain readable |
+
+⚠️ **Today's client ignores `GuidePlacementRejectedPacket.Reason` entirely** — it fires a parameterless event
+and never reads the int. That is *why* appending to `GuideOpStatus` is safe without a protocol bump. **It is
+not a licence to renumber:** the moment any client reads that field, every value behind an inserted member
+means something else. Append, always.
 
 ---
 

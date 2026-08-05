@@ -512,16 +512,29 @@ namespace Layout.Shapes
 
             if (filled && TryGetAnchors(out Vec3d footA, out Vec3d footB))
             {
+                // ⚠️ THE SPLINE IS BUILT ONCE HERE, NOT ONCE PER RULE. This loop runs up to 8,193 times and
+                // used to call GetPointAt, which rebuilds the spline on EVERY call — two Lists plus a
+                // CatmullRomSpline that deep-copies its points. Counting one filled arch therefore
+                // allocated tens of megabytes to produce a few hundred voxels, and a drag re-counts about
+                // ten times a second for the cap check. Measured 2026-08-01 on a 32-block span: 5.4 ms and
+                // 21 MB per count, against 513 voxels of output.
+                //
+                // The spline is CONSTANT for the whole loop — nothing inside it touches the control points
+                // — so hoisting is behaviour-preserving, not an approximation.
+                CatmullRomSpline ruleSpline = arc ? null : BuildSpline();
+
                 double cell = scale / 16.0;
                 // Rule density along t: at least one rule per half-cell of the LONGER of curve/chord.
                 double chordLen = Dist(footA, footB);
-                double curveLen = arc ? Math.PI * Dist(footA, footB) * 0.5 : BuildSpline().GetArcLength();
+                double curveLen = arc
+                    ? Math.PI * Dist(footA, footB) * 0.5
+                    : ruleSpline.GetArcLength();
                 int rules = Math.Max(16, Math.Min(8192,
                     (int)Math.Ceiling(Math.Max(chordLen, curveLen) / (cell * 0.5))));
                 for (int i = 0; i <= rules; i++)
                 {
                     double t = (double)i / rules;
-                    Vec3d onCurve = GetPointAt((float)t);
+                    Vec3d onCurve = RulePointAt(ruleSpline, (float)t);
                     var onChord = new Vec3d(
                         footA.X + (footB.X - footA.X) * t,
                         footA.Y + (footB.Y - footA.Y) * t,
@@ -638,6 +651,33 @@ namespace Layout.Shapes
         {
             double dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
             return Math.Sqrt(dx * dx + dy * dy + dz * dz);
+        }
+
+        /// <summary>
+        /// <see cref="GetPointAt"/> against an ALREADY-BUILT spline, for callers evaluating many points in
+        /// a row. Pass null for the arc path, which builds no spline and is delegated unchanged.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ THIS MUST STAY BIT-IDENTICAL TO <see cref="GetPointAt"/>, including taking <c>t</c> as a
+        /// FLOAT. The caller computes t as a double and casts; evaluating the double directly would shift
+        /// sampled positions in the last bits, which can move a voxel across a cell boundary — and this
+        /// feeds the cap count, which `IGuideShape.GetVoxelCount` requires to agree exactly with what
+        /// renders. The clamp and the fresh-Vec3d return are copied for the same reason.
+        /// </remarks>
+        private Vec3d RulePointAt(CatmullRomSpline spline, float t)
+        {
+            if (spline == null) return GetPointAt(t);
+
+            if (!spline.HasCurve)
+            {
+                ControlPoint first = _controlPoints.Count > 0 ? _controlPoints[0] : null;
+                return first != null
+                    ? new Vec3d(first.WorldPosition.X, first.WorldPosition.Y, first.WorldPosition.Z)
+                    : new Vec3d();
+            }
+            double tt = t < 0f ? 0.0 : t > 1f ? 1.0 : t;
+            Vec3d p = spline.Evaluate(tt);
+            return new Vec3d(p.X, p.Y, p.Z);    // fresh instance per the Vec3d ownership contract
         }
 
         private CatmullRomSpline BuildSpline()

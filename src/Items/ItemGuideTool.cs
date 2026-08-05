@@ -210,7 +210,13 @@ namespace Layout.Items
                 ModifierInteraction(ShapeModifierHelp.CtrlShiftDiagonal, new[] { "ctrl", "shift" },
                     "heldhelp-layout-diagonal"),
                 ModifierInteraction(ShapeModifierHelp.ShiftAllowFlare, "shift",
-                    "heldhelp-layout-flare")
+                    "heldhelp-layout-flare"),
+                ModifierInteraction(ShapeModifierHelp.ShiftEmbedGuide, "shift",
+                    "heldhelp-layout-guideembed"),
+                ModifierInteraction(ShapeModifierHelp.CtrlBypassGrab, "ctrl",
+                    "heldhelp-layout-bypassgrab"),
+                StageInteraction(ShapeModifierHelp.RoundoverRoute,
+                    "heldhelp-layout-roundoverroute")
             };
 
             WorldInteraction[] inherited = Controller?.SuppressStandardHeldHelp == true
@@ -253,6 +259,14 @@ namespace Layout.Items
             {
                 MouseButton = EnumMouseButton.Left,
                 HotKeyCodes = hotKeys,
+                ActionLangCode = "layout:" + langCode,
+                ShouldApply = (_, _, _) => (Controller?.ModifierHelp & flag) != 0
+            };
+
+        private WorldInteraction StageInteraction(ShapeModifierHelp flag, string langCode) =>
+            new WorldInteraction
+            {
+                MouseButton = EnumMouseButton.Left,
                 ActionLangCode = "layout:" + langCode,
                 ShouldApply = (_, _, _) => (Controller?.ModifierHelp & flag) != 0
             };

@@ -144,6 +144,19 @@ namespace Layout.UI
 
         // Never recompose from inside a composer callback — the same rule and the same delay the tool
         // panel follows, so a click that changes tabs is not rebuilding elements the click is still in.
+        //
+        // ⚠ THE FLAG MUST NEVER OUTLIVE ITS CALLBACK. v0.4.40 replaced the guard below with an
+        // "earliest request wins" deadline, so a click would not have to wait out the filter's 350 ms
+        // debounce. Its callback returned early when it found the deadline had moved — WITHOUT clearing
+        // the flag and WITHOUT rescheduling. One early return and `_recomposePending` was latched true
+        // with nothing in flight, so every later request took the "already pending" path and the dialog
+        // never redrew again: tabs stayed pressed in, rows would not select, the whole panel dead.
+        // (Human-reported; reverted in v0.4.41.)
+        //
+        // The latency it was chasing is a third of a second on one uncommon interleaving. This guard is
+        // simple, has shipped since v0.4.26, and cannot deadlock — the one-shot callback ALWAYS clears
+        // the flag, and its IsOpened() check neutralises a late fire. The focus half of that fix was the
+        // half that mattered and it is unaffected: see _restoreFilterFocus, cleared by every click path.
         private void DeferRecompose(int delayMs = 30)
         {
             if (_recomposePending) return;
@@ -178,6 +191,12 @@ namespace Layout.UI
         private const double ColGuidesRight = 200;
         private const double ColVoxelsRight = ListW - 6;
 
+        // How much room the name is allowed before the Guides column starts. A name is player-supplied and
+        // has no length this table can rely on, so it is CLIPPED — drawn unclipped it runs straight through
+        // the numbers to its right, which leaves the sortable headers above lining up with nothing.
+        private const double ColGuidesWidest = 44;      // "999 *" at detail size, with room to spare
+        private const double ColNameWidth = ColGuidesRight - ColNameX - ColGuidesWidest;
+
         private void Compose()
         {
             ElementBounds bg = ElementBounds.Fill.WithFixedPadding(GuiStyle.ElementToDialogPadding);
@@ -205,6 +224,7 @@ namespace Layout.UI
                         _tab = tab;
                         _editing = false;
                         _confirmUid = null;
+                        _restoreFilterFocus = false;   // a click's redraw, not the filter's
                         DeferRecompose();
                     },
                     ElementBounds.Fixed(i * (TabW + 4), y, TabW, TabH), "tab" + i);
@@ -298,9 +318,18 @@ namespace Layout.UI
             GuiElementScrollbar bar = SingleComposer.GetScrollbar("scrollbar");
             if (bar != null && _rows != null)
             {
-                bar.SetHeights((float)ListH, (float)Math.Max(ListH, _rows.Bounds.fixedHeight));
-                // Restore the scroll position across the recompose a selection click causes, then move the
-                // container to match: setting the bar alone would leave the two disagreeing.
+                double content = Math.Max(ListH, _rows.Bounds.fixedHeight);
+                bar.SetHeights((float)ListH, (float)content);
+
+                // CLAMPED FIRST, and that is the whole point. The scroll position deliberately survives a
+                // recompose so a selection click keeps your place — but the list it was measured against
+                // may have got SHORTER in between: a filter narrowing the roster, or a refresh that lost a
+                // player. Re-applying a stale offset parks the container above the window and the tab shows
+                // an empty list, which reads as "the filter matched nobody" rather than as a scroll bug.
+                _scroll = (float)Math.Max(0, Math.Min(_scroll, content - ListH));
+
+                // Restore the scroll position, then move the container to match: setting the bar alone
+                // would leave the two disagreeing.
                 bar.CurrentYPosition = _scroll;
                 OnListScroll(_scroll);
             }
@@ -414,6 +443,7 @@ namespace Layout.UI
                     if (_sort == key) _descending = !_descending;
                     else { _sort = key; _descending = key != SortKey.Name; }
                     _scroll = 0;
+                    _restoreFilterFocus = false;   // a click's redraw, not the filter's
                     DeferRecompose();
                 }),
                 "sort" + (int)key);
@@ -466,6 +496,9 @@ namespace Layout.UI
             _selectedUid = uid;
             _editing = false;
             _confirmUid = null;
+            // Cancel any focus hand-back a half-finished keystroke left armed: this redraw was caused by
+            // a CLICK, and focus belongs where the click put it. See _restoreFilterFocus.
+            _restoreFilterFocus = false;
             _net.RequestPlayerGuides(uid);
             DeferRecompose();
         }
@@ -952,7 +985,14 @@ namespace Layout.UI
                 FontExtents fe = ctx.FontExtents;
                 double baseline = y + (h - fe.Height) / 2 + fe.Ascent;
 
+                // Clipped to its column — see ColNameWidth. Save/Restore around it so the two right-aligned
+                // numbers below are drawn against the row's own bounds, not through this clip.
+                ctx.Save();
+                ctx.Rectangle(x + ColNameX, y, ColNameWidth, h);
+                ctx.Clip();
                 Left(ctx, _p.Name ?? "Unknown", x + ColNameX, baseline, nameColor);
+                ctx.Restore();
+
                 // An override is marked in the list too: it is the reason a player's numbers may not match
                 // the server settings an admin is looking at on the other panel.
                 Right(ctx, _p.GuideCount.ToString("N0") + (_p.HasOverride ? " *" : ""),

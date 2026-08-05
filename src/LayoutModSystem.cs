@@ -52,6 +52,9 @@ namespace Layout
         public LayoutServerConfig ServerConfig { get; private set; }
         public GuideManager Guides { get; private set; }
         public LayoutAdminPolicyManager AdminPolicies { get; private set; }
+        // Keeps the guide blob current without serialising it on the tick (TODO A18). Private: nothing else
+        // should reach for it — the only correct way to force a write is still Guides.Persist().
+        private BackgroundGuidePersist BackgroundSave;
         public GuideLockManager Locks { get; private set; }
         public UndoManager Undo { get; private set; }
         public ServerNetworkHandler ServerNet { get; private set; }
@@ -96,6 +99,24 @@ namespace Layout
         private float _modeDetectionElapsedSeconds;
         private const float ModeDetectionGraceSeconds = 3f;
 
+        /// <summary>
+        /// How often PRIVATE (F4) guides are written out when something has changed. **Client-side only.**
+        /// </summary>
+        /// <remarks>
+        /// The server has no equivalent and deliberately runs no timer: it flushes on the world's own save
+        /// (see StartServerSide), which is the frequency the human asked for — guide data should be exactly
+        /// as durable as the world it describes, no more.
+        ///
+        /// ⚠️ THE CLIENT CANNOT DO THAT, because there is no client-side world-save event to hook — and in
+        /// client-only mode against a REMOTE server there is no local server whose save could stand in.
+        /// A timer is the only option here, so it is set long rather than eager: every ordinary way of
+        /// ending a session (leaving the world, quitting, the server withdrawing client-only permission)
+        /// already flushes explicitly, so this only covers a hard crash.
+        /// </remarks>
+        private const int ClientPersistFlushIntervalMs = 60_000;
+
+        private long _clientPersistFlushTickId;
+
         // ==========================================================================================
         //  Common (both sides)
         // ==========================================================================================
@@ -130,25 +151,53 @@ namespace Layout
             var serverPersistence = new ServerGuidePersistence(sapi);
             AdminPolicies = new LayoutAdminPolicyManager(serverPersistence, sapi.Logger);
 
+            // NAMED ARGUMENTS, not positional. Five consecutive ints of the same type, in an order nothing
+            // enforces — this was the last positional cap set in the tree, and it is the same seam R1's
+            // silent 1,000,000 default came through. LocalGuideAuthority was converted; this had not been.
             Guides = new GuideManager(
                 serverPersistence,
                 new BlockAccessorGuideProbe(() => sapi.World?.BlockAccessor),
                 sapi.Logger,
-                ServerConfig.PerGuideVoxelCap,
-                ServerConfig.TotalVoxelCap,
-                ServerConfig.PerPlayerTotalVoxelCap,
-                ServerConfig.MaxGuidesPerPlayer,
-                ServerConfig.MaxGuidesWorldWide,
-                uid => AdminPolicies.EffectiveGuideLimit(uid, ServerConfig.MaxGuidesPerPlayer),
-                uid => AdminPolicies.EffectivePlayerTotalVoxelCap(
-                    uid, ServerConfig.PerPlayerTotalVoxelCap));
+                perGuideVoxelCap: ServerConfig.PerGuideVoxelCap,
+                totalVoxelCap: ServerConfig.TotalVoxelCap,
+                perPlayerTotalVoxelCap: ServerConfig.PerPlayerTotalVoxelCap,
+                maxGuidesPerPlayer: ServerConfig.MaxGuidesPerPlayer,
+                maxGuidesWorldWide: ServerConfig.MaxGuidesWorldWide,
+                playerGuideLimitResolver:
+                    uid => AdminPolicies.EffectiveGuideLimit(uid, ServerConfig.MaxGuidesPerPlayer),
+                playerTotalVoxelCapResolver:
+                    uid => AdminPolicies.EffectivePlayerTotalVoxelCap(
+                        uid, ServerConfig.PerPlayerTotalVoxelCap));
 
             // Server save/load event ownership stays in the server composition root. GuideManager itself is
             // now side-neutral and can also back an intentionally transient client-only authority.
+            // FIRST in the chain, deliberately: Guides.Load scans every persisted guide, and a corrupted
+            // save with an absurd coordinate hangs that scan outright (GOTCHAS G31). The hard backstop in
+            // GuideBounds already applies without this call — this only narrows it to the real world.
+            sapi.Event.SaveGameLoaded += () => GuideBounds.UseWorldSize(sapi.World?.BlockAccessor);
             sapi.Event.SaveGameLoaded += AdminPolicies.Load;
             sapi.Event.SaveGameLoaded += Guides.Load;
             sapi.Event.GameWorldSave += AdminPolicies.Persist;
-            sapi.Event.GameWorldSave += Guides.Persist;
+
+            // GUIDES NO LONGER SERIALISE ON THE SAVE TICK (TODO A18). The admin policies above still do —
+            // they are a handful of records against the guide registry's megabytes, and threading them
+            // would add a second set of lifecycle obligations to save nothing measurable.
+            //
+            // BackgroundGuidePersist still hangs off GameWorldSave, but it uses the event as a CLOCK rather
+            // than as a deadline: it measures the autosave period and prepares the bytes ~10 s before the
+            // NEXT save, on a worker. See that class for why aiming works and why every way it can miss is
+            // harmless. It falls back to a synchronous write until it has a period to aim at.
+            BackgroundSave = new BackgroundGuidePersist(sapi, Guides);
+            sapi.Event.GameWorldSave += BackgroundSave.OnWorldSave;
+
+            // NO PERIODIC FLUSH ON THE SERVER, deliberately (human-decided 2026-08-01). Guide data is worth
+            // exactly what the rest of the world is worth: if a crash costs the world five minutes of
+            // blocks, costing it the same five minutes of guides is correct and consistent, and a separate
+            // cadence would only make Layout's data MORE durable than the world it describes.
+            // ⚠️ THE TIMER IN BackgroundGuidePersist IS NOT THAT, and the distinction is the whole reason
+            // it is allowed: it never writes to disk and never causes a save. It only decides WHEN the
+            // bytes are built, ahead of the world's own write, so the tick is not the thing building them.
+            // Guide data still reaches disk on the world's cadence and no other. Shutdown flushes in Dispose.
 
             Locks = new GuideLockManager();
             Undo = new UndoManager(Guides, ServerConfig.UndoHistoryDepth, Locks);
@@ -156,10 +205,13 @@ namespace Layout
             // The handler takes the config OBJECT, not a copy of four values: since v0.4.16 the settings
             // page's Admin section changes these in play, and the change has to reach both the live
             // managers and layout.json or it would silently revert on the next restart.
+            // backgroundSave is NAMED, for the reason R1 was: an optional argument on a long positional
+            // list is invisible at the call site. It is read only for the /layout info status line.
             ServerNet = new ServerNetworkHandler(
                 sapi, Guides, Locks, Undo, AdminPolicies,
                 ServerConfig,
-                cfg => StoreServerConfig(sapi, cfg));
+                cfg => StoreServerConfig(sapi, cfg),
+                backgroundSave: BackgroundSave);
 
             // The VERSION is logged first and deliberately (v0.4.23). Vintage Story loads exactly ONE mod
             // per modid, so leaving several Layout zips in the Mods folder means the build that runs is not
@@ -311,6 +363,13 @@ namespace Layout
             capi.Input.RegisterHotKey("layoutredo", "Layout: redo", GlKeys.Y, HotkeyType.CharacterControls, ctrlPressed: true);
             capi.Input.SetHotKeyHandler("layoutredo", _ => Controller.OnRedoHotkey());
 
+            // The client half of the persist flush — private (F4) guides write to a real file, so this is
+            // what stops a drag doing three filesystem operations ten times a second. Registered for the
+            // mod's whole client life rather than per authority: LocalGuideAuthority is replaced by plain
+            // assignment on every world change, so a listener owned by it would outlive it.
+            _clientPersistFlushTickId = capi.Event.RegisterGameTickListener(
+                _ => ClientNet?.FlushLocalGuides(), ClientPersistFlushIntervalMs);
+
             capi.Logger.Notification("[Layout] Client started. Tool defaults: scale {0}, {1}, {2}.",
                 Draft.Scale, Draft.Projection, Draft.Filled ? "filled" : "hollow");
         }
@@ -319,6 +378,11 @@ namespace Layout
         {
             StopModeDetection();
             _modeDetectionElapsedSeconds = 0f;
+
+            // The client half of the same range check the server does (GOTCHAS G31). This side matters for
+            // the PRIVATE guide files: a hand-edited Layout/ClientOnlyGuides/*.json with an absurd
+            // coordinate would hang this client's own world load, with no attacker anywhere in the picture.
+            GuideBounds.UseWorldSize(_capi.World?.BlockAccessor);
 
             if (Renderer?.RenderingEnabled == false)
                 _capi.ShowChatMessage(
@@ -375,7 +439,7 @@ namespace Layout
                 .EndSubCommand()
                 .BeginSubCommand("inset")
                     .WithDescription(
-                        "Set the anti-z-fight inset in blocks (0-0.05, default 0.003). Raise it if guides "
+                        "Set the anti-z-fight inset in blocks (0-0.05, default 0.0002). Raise it if guides "
                         + "resting on the ground shimmer. No argument reports the current value.")
                     .WithArgs(parsers.OptionalFloat("blocks", float.NaN))   // NaN = "not supplied"; see Supplied()
                     .HandleWith(OnClientInsetCommand)
@@ -783,11 +847,20 @@ namespace Layout
                     if (!ClientConfig.OccupancyRecolour)
                         return TextCommandResult.Error("Turn it on first: /layout built on.");
                     int stale = Renderer.OccupancyStaleGuides;
+                    int waiting = Renderer.OccupancyAwaitingChunks;
                     Renderer.RefreshOccupancy();
-                    return TextCommandResult.Success(stale > 0
-                        ? $"Re-read the world and rebuilt, including {stale} guide(s) too large to update live."
-                        : "Re-read the world and rebuilt. (Ordinary guides update by themselves as you "
-                          + "build — refresh is only needed for very large ones.)");
+                    if (stale > 0)
+                        return TextCommandResult.Success(
+                            $"Re-read the world and rebuilt, including {stale} guide(s) too large to update live.");
+                    // Named separately from the "too large" case: a guide waiting on terrain is not stale,
+                    // it simply has not been able to look yet, and it re-probes itself without this command.
+                    if (waiting > 0)
+                        return TextCommandResult.Success(
+                            $"Re-read the world and rebuilt. {waiting} guide(s) are still waiting for their "
+                            + "terrain to load and will colour themselves in as it arrives.");
+                    return TextCommandResult.Success(
+                        "Re-read the world and rebuilt. (Ordinary guides update by themselves as you "
+                        + "build — refresh is only needed for very large ones.)");
 
                 default:
                     return TextCommandResult.Error("Use /layout built on, off, or refresh.");
@@ -1055,6 +1128,16 @@ namespace Layout
             {
                 SaveClientConfig();
 
+                // LAST CHANCE for private guides. Ordinarily EndWorldSession has already flushed on the
+                // way out of a world; this covers a shutdown that never went through it.
+                try { ClientNet?.FlushLocalGuides(); }
+                catch (Exception e) { _capi.Logger.Error("[Layout] Final private-guide save failed: {0}", e); }
+                if (_clientPersistFlushTickId != 0)
+                {
+                    _capi.Event.UnregisterGameTickListener(_clientPersistFlushTickId);
+                    _clientPersistFlushTickId = 0;
+                }
+
                 StopModeDetection();
                 _capi.Event.LevelFinalize -= OnLevelFinalize;
                 _capi.Event.LeftWorld -= OnLeftWorld;
@@ -1089,6 +1172,26 @@ namespace Layout
 
             if (_sapi != null)
             {
+                // FIRST: stop aiming. Any pass scheduled for a save that will never come is now pointless,
+                // and one already running is about to be superseded by the flush below.
+                try { BackgroundSave?.Dispose(); }
+                catch (Exception e) { _sapi.Logger.Warning("[Layout] Background save dispose: {0}", e.Message); }
+                BackgroundSave = null;
+
+                // LAST CHANCE for public guides. On a clean shutdown GameWorldSave has already run and
+                // recognised itself as the final save, so this finds nothing owed and returns at once. It
+                // matters when that recognition fails — a shutdown the run-phase event and IsShuttingDown
+                // both missed — and for a teardown that never reached a save at all.
+                //
+                // ⚠️ AND IT IS THE JOIN THIS PATH WOULD OTHERWISE NEED, discharged without waiting on
+                // anything. Persist writes the LIVE registry and drops any background job still running, so
+                // that job finds itself superseded and throws its older bytes away instead of writing them
+                // over the top. Deferred writes oblige every drop path to flush (GOTCHAS G39); moving the
+                // write to a worker would have obliged them to wait as well, and supersession is how that
+                // second obligation is paid for nothing.
+                try { Guides?.Persist(); }
+                catch (Exception e) { _sapi.Logger.Error("[Layout] Final guide save failed: {0}", e); }
+
                 try { ServerNet?.Dispose(); }
                 catch (Exception e) { _sapi.Logger.Warning("[Layout] Server network dispose: {0}", e.Message); }
                 ServerNet = null;

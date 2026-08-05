@@ -49,10 +49,12 @@ namespace Layout.Network
         public const string Name = "layout";
 
         /// <summary>
-        /// Bumped if the packet set or field meanings change incompatibly. Carried in the bulk sync so a
-        /// future client can detect a mismatch; informational for now (there is only one version).
+        /// Bumped when the packet set or a field's meaning changes. Carried in the bulk sync so a client
+        /// can detect a mismatch; still INFORMATIONAL — nothing refuses to talk on a version difference,
+        /// because every change so far has been append-only and therefore back-compatible by construction.
+        /// <c>dev/WIRE_HISTORY.md</c> records what each number added.
         /// </summary>
-        public const int ProtocolVersion = 24;
+        public const int ProtocolVersion = 28;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -474,6 +476,47 @@ namespace Layout.Network
         public DraftAnchorRemovePacket(string playerUid) { PlayerUid = playerUid; }
     }
 
+    /// <summary>
+    /// WHICH of the four caps refused a mutation. Carried as an int on <see cref="VoxelCapWarningPacket"/>,
+    /// so G1's append-only rule governs it — never renumber, never reclaim.
+    ///
+    /// <para><see cref="Unspecified"/> is 0 ON PURPOSE: it is what a pre-protocol-25 server leaves in the
+    /// field, and what any value this client does not recognise is treated as. Both mean "say the generic
+    /// thing", which is exactly the wording that shipped before this enum existed.</para>
+    /// </summary>
+    public enum VoxelCapKind
+    {
+        /// <summary>Not said — an older server, or a cap this client has no name for.</summary>
+        Unspecified = 0,
+
+        /// <summary>The per-guide cap, possibly a per-player override of it.</summary>
+        PerGuide = 1,
+
+        /// <summary>The player's own total across all their guides.</summary>
+        PerPlayer = 2,
+
+        /// <summary>The world-wide voxel budget.</summary>
+        World = 3,
+
+        /// <summary>The hard ceiling — the guide is simply too large to render.</summary>
+        HardCeiling = 4,
+
+        /// <summary>
+        /// A guide COUNT cap, not a voxel one: too many guides for this player or for the world.
+        /// </summary>
+        /// <remarks>
+        /// ⚠️ THE NUMBERS ON THIS PACKET ARE GUIDES, NOT VOXELS, for this kind alone. That is tolerable
+        /// only because the HUD deliberately ignores them and uses the kind by itself — see GuideHud's
+        /// OnVoxelCapWarning. **Do not start reading CurrentCount/Cap without handling this case**, or a
+        /// guide-count refusal will report "3 of 10 voxels".
+        ///
+        /// It rides this packet rather than a new one because it is the same event to the player — a cap
+        /// said no — and the HUD row it lights up is the same row. Found in play 2026-08-01: the count caps
+        /// showed their chat error and left the HUD cap row untouched, because nothing was sent at all.
+        /// </remarks>
+        GuideCount = 5
+    }
+
     /// <summary>S→C. A mutation the player attempted would exceed a voxel cap; here are the figures.</summary>
     [ProtoContract]
     public class VoxelCapWarningPacket
@@ -482,13 +525,18 @@ namespace Layout.Network
         [ProtoMember(2)] public int CurrentCount;
         [ProtoMember(3)] public int Cap;
 
+        /// <summary>A <see cref="VoxelCapKind"/>. Appended at protocol 25; 0 from any older server.</summary>
+        [ProtoMember(4)] public int CapKind;
+
         public VoxelCapWarningPacket() { }
 
-        public VoxelCapWarningPacket(Guid guideId, int currentCount, int cap)
+        public VoxelCapWarningPacket(Guid guideId, int currentCount, int cap,
+            VoxelCapKind capKind = VoxelCapKind.Unspecified)
         {
             GuideIdBytes = NetIds.ToBytes(guideId);
             CurrentCount = currentCount;
             Cap = cap;
+            CapKind = (int)capKind;
         }
 
         public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);

@@ -30,8 +30,8 @@ namespace Layout.Shapes
     /// anchor preserves the taper RATIO (top/base), not the absolute top radius — resizing the base of a
     /// windmill tower should scale the whole silhouette, not just its foot. (Decide-and-flag.)
     /// </remarks>
-    public sealed class TaperedCylinderShape : IGuideShape, IThresholdVoxelCounter,
-        IProgressiveVoxelShape, IIntrinsicGuideExtent
+    public sealed class TaperedCylinderShape : IGuideShape, ICancellableThresholdVoxelCounter,
+        ICancellableVoxelGenerator, IProgressiveVoxelShape, IIntrinsicGuideExtent
     {
         private const double MinRadius = 0.05;
         private const double MinHeight = 0.05;
@@ -141,7 +141,12 @@ namespace Layout.Shapes
         // --- IGuideShape: voxels ---------------------------------------------------------------------
 
         public List<VoxelPosition> GetVoxelPositions(int scale, bool filled = false)
+            => GetVoxelPositions(scale, filled, null);
+
+        public List<VoxelPosition> GetVoxelPositions(
+            int scale, bool filled, Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             var result = new List<VoxelPosition>();
             if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h, out double rTop))
@@ -154,6 +159,7 @@ namespace Layout.Shapes
             GetAabb(c, n, r, rTop, h, cell, out double ax0, out double ay0, out double az0,
                 out double ax1, out double ay1, out double az1);
 
+            int work = 0;
             for (int ix = AlignDown(ax0, scale); ix <= AlignDown(ax1, scale); ix += scale)
             {
                 double px = ix / 16.0 + cell * 0.5 - c.X;
@@ -162,6 +168,7 @@ namespace Layout.Shapes
                     double py = iy / 16.0 + cell * 0.5 - c.Y;
                     for (int iz = AlignDown(az0, scale); iz <= AlignDown(az1, scale); iz += scale)
                     {
+                        VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                         double pz = iz / 16.0 + cell * 0.5 - c.Z;
                         double a = px * n.X + py * n.Y + pz * n.Z;
                         if (a < lo || a > hi) continue;
@@ -174,7 +181,7 @@ namespace Layout.Shapes
                 }
             }
 
-            ClaimHandleMarkers(result, scale);
+            ClaimHandleMarkers(result, scale, cancellationRequested);
             return result;
         }
 
@@ -240,7 +247,12 @@ namespace Layout.Shapes
             => GetVoxelCountUpTo(scale, filled, int.MaxValue);
 
         public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter)
+            => GetVoxelCountUpTo(scale, filled, stopAfter, null);
+
+        public int GetVoxelCountUpTo(
+            int scale, bool filled, int stopAfter, Func<bool> cancellationRequested)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             filled = false;   // 0.2.17: 3D volumes are always hollow shells (see GuideShapeTypes.IsVolume)
             if (!TryGetFull(out Vec3d c, out double r, out _, out _, out Vec3d n, out double h, out double rTop))
                 return 0;
@@ -250,6 +262,7 @@ namespace Layout.Shapes
             double hd = cell * 0.866;
             double lo = Math.Min(0, h), hi = Math.Max(0, h);
             int count = 0;
+            int work = 0;
 
             GetAabb(c, n, r, rTop, h, cell, out double ax0, out double ay0, out double az0,
                 out double ax1, out double ay1, out double az1);
@@ -262,6 +275,7 @@ namespace Layout.Shapes
                     double py = iy / 16.0 + cell * 0.5 - c.Y;
                     for (int iz = AlignDown(az0, scale); iz <= AlignDown(az1, scale); iz += scale)
                     {
+                        VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                         double pz = iz / 16.0 + cell * 0.5 - c.Z;
                         double a = px * n.X + py * n.Y + pz * n.Z;
                         if (a < lo || a > hi) continue;
@@ -288,14 +302,16 @@ namespace Layout.Shapes
             z0 = Math.Min(c.Z, ez) - pad; z1 = Math.Max(c.Z, ez) + pad;
         }
 
-        private void ClaimHandleMarkers(List<VoxelPosition> cells, int scale)
+        private void ClaimHandleMarkers(
+            List<VoxelPosition> cells, int scale, Func<bool> cancellationRequested = null)
         {
             for (int i = 0; i < 4 && i < _controlPoints.Count; i++)
             {
                 ControlPoint cp = _controlPoints[i];
                 VoxelRenderType t = cp.IsLocked ? VoxelRenderType.Locked
                     : cp.IsPrimary ? VoxelRenderType.Primary : VoxelRenderType.Anchor;
-                ShapeGeometry.ClaimMarker(cells, scale, cp.WorldPosition, t);
+                ShapeGeometry.ClaimMarker(
+                    cells, scale, cp.WorldPosition, t, cancellationRequested);
             }
         }
 

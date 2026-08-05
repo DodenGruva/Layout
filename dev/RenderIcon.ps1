@@ -44,7 +44,7 @@
 param(
     [ValidateSet('gear', 'revealnear', 'revealall',
                  'rotatespin', 'rotatetip', 'rotatespinleft', 'rotatetipleft',
-                 'mirror', 'moveground', 'movedown')]
+                 'mirror', 'moveground', 'movedown', 'roundover')]
     [string]$Glyph = 'gear',
 
     [int[]]$Sizes = @(18, 22, 28, 42),
@@ -77,6 +77,30 @@ function New-Canvas {
 #  Glyphs
 # ------------------------------------------------------------------------------------------------
 $Glyphs = @{
+
+    # Mirrors LayoutToolIcons.DrawRoundover. Coordinates are scaled from its 76-unit shape canvas into
+    # this harness's 60-unit canvas so the final pixels match the real mapping.
+    roundover = {
+        param($g, $c)
+        $f = 60.0 / 76.0
+        $solid = & $Script:NewPen $c (3.0 * $f)
+        $dashed = & $Script:NewPen $c (3.0 * $f)
+        $dashed.DashStyle = [System.Drawing.Drawing2D.DashStyle]::Custom
+        $dashed.DashCap = [System.Drawing.Drawing2D.DashCap]::Round
+        $dashed.DashPattern = [single[]]@(0.2, 2.2)
+        $pt = { param($u, $v) New-Object System.Drawing.PointF(
+            [float](& $c.X ($u * $f)), [float](& $c.Y ($v * $f))) }
+
+        $g.DrawLines($solid, @(
+            (& $pt 12 40), (& $pt 12 64), (& $pt 64 64), (& $pt 64 12), (& $pt 40 12)))
+
+        $arc = New-Object System.Drawing.Drawing2D.GraphicsPath
+        $arc.AddBezier((& $pt 40 12), (& $pt 24.536 12), (& $pt 12 24.536), (& $pt 12 40))
+        $g.DrawPath($dashed, $arc)
+        $arc.Dispose()
+        $dashed.Dispose()
+        $solid.Dispose()
+    }
 
     # Mirrors LayoutToolIcons.DrawGear as shipped in v0.4.11: a spoked wheel-gear in THREE separate fill
     # passes. Rim, spokes and hub overlap, and under one even-odd path every overlap cancels - the spokes

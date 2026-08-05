@@ -82,6 +82,20 @@ namespace Layout.UI
         private bool _comatoseDraft;
         private bool _renderingEnabled = true;
 
+        // v0.4.34: the cap row briefly reports a REFUSAL instead of the percentage gauge. The gauge is
+        // passive — it shows how full the per-guide cap is and reacts to nothing — so a refused edit used
+        // to leave it completely unchanged. The 150 ms tick clears the flash on its own.
+        // The packet now names WHICH cap fired (protocol 25); before that it carried a count and a limit
+        // only and this row could not say more than "over cap". An older server still says exactly that.
+        // ⚠️ 0 means "never refused", NOT long.MinValue. Seeding this with long.MinValue looked like the
+        // obvious "infinitely long ago" and was a bug: `ElapsedMilliseconds - long.MinValue` OVERFLOWS
+        // long and wraps to a large NEGATIVE number, which is less than the window, so the row read
+        // "REFUSED" from the moment the HUD opened and never stopped. Fixed v0.4.39; shipped wrong in
+        // 0.4.34–0.4.38. ElapsedMilliseconds only ever counts up from 0, so 0 is a safe "never".
+        private const long CapRefusalFlashMilliseconds = 2500;
+        private long _capRefusedAtMs;
+        private VoxelCapKind _capRefusedKind;
+
         // The HUD's copy of the Current Shape chip (0.1.16): which "-current" glyph is composed right
         // now, or null when hidden (non-Create modes). A change recomposes the HUD (rare — shape picks).
         private enum HudVisualState
@@ -311,24 +325,32 @@ namespace Layout.UI
                 ElementBounds.Fixed(0, y, dimensionLabelW, lineH), "ctx1label");
             c.AddDynamicText("", font, ElementBounds.Fixed(dimensionLabelW, y,
                 panelW - dimensionLabelW, lineH), "ctx1");
+            c.AddDynamicText("", font, ElementBounds.Fixed(dimensionLabelW, y,
+                panelW - dimensionLabelW, lineH), "filletctx1");
             y += lineH + gap;
 
             c.AddDynamicText("", dimensionLabelFont,
                 ElementBounds.Fixed(0, y, dimensionLabelW, lineH), "ctx2label");
             c.AddDynamicText("", font, ElementBounds.Fixed(dimensionLabelW, y,
                 panelW - dimensionLabelW, lineH), "ctx2");
+            c.AddDynamicText("", font, ElementBounds.Fixed(dimensionLabelW, y,
+                panelW - dimensionLabelW, lineH), "filletctx2");
             y += lineH + gap;
 
             const double totalLabelW = 100;
             c.AddDynamicText("", labelFont, ElementBounds.Fixed(0, y, totalLabelW, lineH), "ctx3label");
             c.AddDynamicText("", font, ElementBounds.Fixed(totalLabelW + 4, y,
                 panelW - totalLabelW - 4, lineH), "ctx3");
+            c.AddDynamicText("", font, ElementBounds.Fixed(dimensionLabelW, y,
+                panelW - dimensionLabelW, lineH), "filletctx3");
             y += lineH + gap;
 
             const double capLabelW = 34;
             c.AddDynamicText("", labelFont, ElementBounds.Fixed(0, y, capLabelW, lineH), "ctx4label");
             c.AddDynamicText("", font, ElementBounds.Fixed(capLabelW + 4, y,
                 panelW - capLabelW - 4, lineH), "ctx4");
+            c.AddDynamicText("", font, ElementBounds.Fixed(dimensionLabelW, y,
+                panelW - dimensionLabelW, lineH), "filletctx4");
             y += lineH + gap;
 
             SingleComposer = c.EndChildElements().Compose();
@@ -412,6 +434,15 @@ namespace Layout.UI
 
             ClearContextRows();
 
+            // Fillet placement is a five-stage construction gesture. Keep its current instruction visible
+            // even before the first click; otherwise the most important "where do I begin?" stage would be
+            // the only one absent from the HUD.
+            if (_tool.Mode == ToolMode.Create && _tool.Shape == GuideShapeType.Roundover)
+            {
+                ShowFilletDraftContext();
+                return;
+            }
+
             if (_tool.HasActiveDraft && _tool.DraftStart != null)
             {
                 ShowContextLabels();
@@ -420,7 +451,7 @@ namespace Layout.UI
                     SetText("ctx1", HorizontalDimensionsText(_draftExtent));
                     SetText("ctx2", VerticalDimensionsText(_draftExtent));
                     SetText("ctx3", TotalVoxelsText(_draftVoxelCount));
-                    SetText("ctx4", CapText(_draftVoxelCount, _net.PerGuideVoxelCap));
+                    SetText("ctx4", CapRowText(_draftVoxelCount, _net.PerGuideVoxelCap));
                 }
                 else
                 {
@@ -447,8 +478,45 @@ namespace Layout.UI
                 SetText("ctx1", HorizontalDimensionsText(extent));
                 SetText("ctx2", VerticalDimensionsText(extent));
                 SetText("ctx3", TotalVoxelsText(contextGuide.CachedVoxelCount));
-                SetText("ctx4", CapText(contextGuide.CachedVoxelCount, _net.PerGuideVoxelCap));
+                SetText("ctx4", CapRowText(contextGuide.CachedVoxelCount, _net.PerGuideVoxelCap));
             }
+        }
+
+        private void ShowFilletDraftContext()
+        {
+            ClearContextRows();
+            if (!_tool.HasActiveDraft || _tool.DraftStart == null)
+            {
+                SetText("filletctx1", "Fillet 1/5");
+                SetText("filletctx2", "Select corner to fillet.");
+                return;
+            }
+
+            if (_tool.AwaitingRoundoverProfileFirst)
+            {
+                SetText("filletctx1", "Fillet 2/5");
+                SetText("filletctx2", "Set first fillet side.");
+                return;
+            }
+
+            if (_tool.AwaitingRoundoverProfileSecond)
+            {
+                SetText("filletctx1", "Fillet 3/5");
+                SetText("filletctx2", "Set second fillet side.");
+                return;
+            }
+
+            if (_tool.ChainCount < 2)
+            {
+                SetText("filletctx1", "Fillet 4/5");
+                SetText("filletctx2", "Set first sweep-path point.");
+                return;
+            }
+
+            SetText("filletctx1", "Fillet 5/5");
+            SetText("filletctx2", "Continue sweep path, or");
+            SetText("filletctx3", "left-click last point again");
+            SetText("filletctx4", "to finish.");
         }
 
         private void ClearContextRows()
@@ -457,6 +525,7 @@ namespace Layout.UI
             {
                 SetText("ctx" + i + "label", "");
                 SetText("ctx" + i, "");
+                SetText("filletctx" + i, "");
             }
         }
 
@@ -618,6 +687,7 @@ namespace Layout.UI
             if (_subscribed) return;
             _net.GuideAddedOrUpdated     += OnGuideAddedOrUpdated;
             _net.GuideHudMetadataChanged += OnGuideHudMetadataChanged;
+            _net.VoxelCapWarningReceived += OnVoxelCapWarning;
             _subscribed = true;
         }
 
@@ -626,7 +696,19 @@ namespace Layout.UI
             if (!_subscribed) return;
             _net.GuideAddedOrUpdated     -= OnGuideAddedOrUpdated;
             _net.GuideHudMetadataChanged -= OnGuideHudMetadataChanged;
+            _net.VoxelCapWarningReceived -= OnVoxelCapWarning;
             _subscribed = false;
+        }
+
+        // Fires for public guides (server) and private ones (LocalGuideAuthority) alike. The guide id and
+        // the numbers are deliberately unused: a placement refusal names a guide that does not exist yet,
+        // and the cap row is about the player's current context either way. The KIND is used — it is the
+        // one thing here that the row cannot work out for itself.
+        private void OnVoxelCapWarning(Guid guideId, int currentCount, int cap, VoxelCapKind capKind)
+        {
+            _capRefusedAtMs = capi.World.ElapsedMilliseconds;
+            _capRefusedKind = capKind;
+            RefreshText();
         }
 
         private void OnGuideHudMetadataChanged(Guid guideId)
@@ -657,6 +739,29 @@ namespace Layout.UI
 
         private static string TotalVoxelsText(int count) =>
             Math.Max(0, count).ToString("N0");
+
+        // The cap row: normally the passive gauge, but a recent refusal takes the line over.
+        private string CapRowText(int count, int cap)
+        {
+            if (_capRefusedAtMs > 0
+                && capi.World.ElapsedMilliseconds - _capRefusedAtMs < CapRefusalFlashMilliseconds)
+                return CapRefusalText(_capRefusedKind);
+            return CapText(count, cap);
+        }
+
+        // ⚠️ THIS ROW CANNOT WRAP AND CANNOT GROW (GOTCHAS G13). Its box is one line of
+        // panelW - capLabelW - 4 px, so every arm here is kept to roughly the length of the generic
+        // wording it replaces. A longer phrase is not "slightly tight" — it is clipped.
+        // Unspecified is the pre-25 server AND anything unrecognised, and says what shipped before.
+        private static string CapRefusalText(VoxelCapKind kind) => kind switch
+        {
+            VoxelCapKind.PerGuide    => "REFUSED — Guide Cap",
+            VoxelCapKind.PerPlayer   => "REFUSED — Your Total",
+            VoxelCapKind.World       => "REFUSED — World Full",
+            VoxelCapKind.HardCeiling => "REFUSED — Too Large",
+            VoxelCapKind.GuideCount  => "REFUSED — Too Many",
+            _                        => "REFUSED — Over Cap"
+        };
 
         private static string CapText(int count, int cap)
         {
