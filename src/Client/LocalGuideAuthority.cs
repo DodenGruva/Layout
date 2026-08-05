@@ -815,6 +815,11 @@ namespace Layout.Client
                 Error("layout-toolarge",
                     $"That guide is too large to render ({result.VoxelCount:n0} voxels). Make it smaller or use a coarser scale.");
             }
+            else if (result.Status == GuideOpStatus.RejectedEmpty)
+            {
+                if (result.Guide != null) ApplyFull(result.Guide);
+                Error("layout-emptyguide", EmptyReshapeText(result.Guide));
+            }
             else if (result.Status == GuideOpStatus.GuideNotFound)
             {
                 _applyDelete(new GuideDeletePacket(id));
@@ -824,6 +829,13 @@ namespace Layout.Client
                 ApplyFull(result.Guide);
             }
         }
+
+        private static string EmptyReshapeText(GuideData guide) =>
+            guide?.ShapeType == GuideShapeType.Roundover
+                ? "That reshape would make the Roundover empty. Use a smaller profile, keep both profile "
+                    + "endpoints away from the sharp corner, give the sweep more room, and do not fold "
+                    + "the path directly back on itself."
+                : "That reshape would leave the guide with no voxels. Move the point back toward a usable shape.";
 
         private void ApplyFull(GuideData guide) =>
             _applyFull(new GuideCreatePacket(GuideDataDto.From(guide)));

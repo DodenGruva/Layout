@@ -20,6 +20,26 @@
 
 ---
 
+## A22. Exact guide targeting and review follow-up — ✅ DELIVERED v0.4.72–v0.4.73
+
+An external review was re-verified against the source, exposing two authority defects beneath observations
+that had described them as smaller UI/performance issues. Full reasoning: `dev/sessions/SESSION_43.md`.
+
+1. **Zero-voxel mutation rejection.** Ordinary and immense reshapes now reject zero and retain the valid live
+   guide. Public and private Roundovers give shape-specific recovery guidance.
+2. **Authority-enforced body insertion.** Arch and Free-Shape are the only shapes allowed to accept arbitrary
+   body points. Unsupported packets are rejected before lock/sampling and every manager caller shares the
+   same rule, preventing remote-mirror divergence from a parametric no-op.
+3. **Exact grab selection.** A sampled curve only nominates a candidate. Create-mode grabbing confirms the
+   actual rendered cell; parametric body clicks no longer jump to a nearby handle, while Arch/Free-Shape use
+   the exact clicked cell.
+4. **Honest HUD envelope.** The 33 Hz hover test uses the guide cell's physical half-diagonal rather than
+   fixed block-sized floors. Exact action confirmation remains separate. The human reported v0.4.73 excellent.
+5. **Release.** Both 42-entry archives contain 39/39 assets and matching Release DLLs. Final
+   `Layout0.4.73.zip` SHA-256 is `AA1A410F1AB35988D4BADC21D15D5888F0ECE58975B7EC538B994384C907FE45`.
+
+---
+
 ## A21. Roundover control redesign and universal placement modifiers — ✅ DELIVERED v0.4.65–v0.4.71
 
 The Roundover's original route-first/radius-handle gesture was replaced through successive in-game control

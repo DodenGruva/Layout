@@ -2,6 +2,34 @@
 
 All notable changes to Layout will be recorded in this file going forward.
 
+## 0.4.73 - 2026-08-04
+
+### Fixed
+
+- **The HUD no longer targets empty space around a fine guide.** Its hover envelope now scales with the
+  physical guide-cell size instead of using fixed 0.10/0.18-block minimums. At the finest scale the body
+  radius falls from 0.18 blocks to about 0.054; clicks still require an exact rendered-voxel hit.
+
+## 0.4.72 - 2026-08-04
+
+### Changed
+
+- **Grabbing no longer snaps a parametric guide's body to its nearest handle.** Arch and Free-Shape insert and
+  grab the exact clicked body voxel. Other shapes begin a grab only from the exact coloured control voxel;
+  clicking an unrelated body cell does nothing.
+- The held-help label now reads **“Bypass Existing Guides.”**
+
+### Fixed
+
+- **A reshape that makes a guide voxelise to nothing is rejected and rolled back.** Roundover explains how
+  to recover instead of disappearing as an invisible zero-voxel guide. Ordinary, immense, public and private
+  mutation paths share the guard.
+- Unsupported body-insertion requests are rejected before taking a guide lock or broadcasting state. A
+  modified client can no longer make remote clients insert a point that the authoritative parametric shape
+  ignored.
+- Clarified Roundover's create-time use of the shared `closed` argument and removed an unreachable claim-
+  snapshot initialization branch.
+
 ## 0.4.71 - 2026-08-04
 
 ### Added

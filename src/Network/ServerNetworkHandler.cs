@@ -1556,12 +1556,6 @@ namespace Layout.Network
             ref int restarts, ref int claimIndex)
         {
             ClaimAccessSnapshot now = CaptureClaimAccessSnapshot(player, bounds);
-            if (snapshot == null)
-            {
-                snapshot = now;
-                claimIndex = 0;
-                return ClaimRevalidationResult.Restarted;
-            }
             if (snapshot.Equals(now)) return ClaimRevalidationResult.Stable;
             if (restarts >= MaxClaimRevalidations) return ClaimRevalidationResult.TooMuchChurn;
 
@@ -2058,6 +2052,12 @@ namespace Layout.Network
                     ResyncOrDrop(fromPlayer, id);
                     break;
 
+                case GuideOpStatus.RejectedEmpty:
+                    fromPlayer.SendIngameError(
+                        "layout-emptyguide", EmptyReshapeText(g));
+                    SendResync(fromPlayer, g);
+                    break;
+
                 case GuideOpStatus.RejectedPointLocked:
                 case GuideOpStatus.InvalidArgument:
                     SendResync(fromPlayer, g);
@@ -2410,6 +2410,9 @@ namespace Layout.Network
             {
                 if (committed.Status == GuideOpStatus.RejectedOverCap)
                     SendCapRefusal(player, pending.GuideId, committed.VoxelCount, committed.CapLimit);
+                else if (committed.Status == GuideOpStatus.RejectedEmpty)
+                    player.SendIngameError(
+                        "layout-emptyguide", EmptyReshapeText(pending.ExpectedLive));
                 FinishRejectedImmenseSculpt(player, pending);
             }
             CompleteActiveImmenseSculpt();
@@ -2458,6 +2461,16 @@ namespace Layout.Network
                 return;
             }
             if (p.Position == null) return;
+
+            if (!_guides.TryGetGuide(id, out GuideData insertTarget)
+                || !GuideShapeTypes.SupportsBodyInsert(insertTarget.ShapeType))
+            {
+                // Stock clients never ask parametric shapes to accept arbitrary body points. Reject the
+                // packet before taking a lock or sampling a curve so a modified client cannot make remote
+                // mirrors insert a point the authoritative shape deliberately ignored.
+                ResyncOrDrop(fromPlayer, id);
+                return;
+            }
 
             // Inserting on the body is also a grab: take the lock first.
             LockAcquireOutcome lockOutcome = _locks.TryAcquireLock(id, uid);
@@ -3607,6 +3620,13 @@ namespace Layout.Network
         private static string EmptyGuideText() =>
             "That guide came out empty — the two points are too close together to make a shape. "
             + "Place it again with more distance between the clicks.";
+
+        private static string EmptyReshapeText(GuideData guide) =>
+            guide?.ShapeType == GuideShapeType.Roundover
+                ? "That reshape would make the Roundover empty. Use a smaller profile, keep both profile "
+                    + "endpoints away from the sharp corner, give the sweep more room, and do not fold "
+                    + "the path directly back on itself."
+                : "That reshape would leave the guide with no voxels. Move the point back toward a usable shape.";
 
         private static string GuideCountCapText(GuideOperationResult result) =>
             "Guide limit reached (" + result.VoxelCount.ToString("N0") + " of "

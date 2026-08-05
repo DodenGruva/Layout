@@ -43,6 +43,9 @@ namespace Layout.Shapes
                     return new FreeShape(chain != null && chain.Count >= 2 ? chain : new[] { start, end },
                         closed && chain != null && chain.Count >= 3);
                 case GuideShapeType.Roundover:
+                    // Roundover is always an open sweep. At this create-only seam `closed` is the protocol-28
+                    // discriminator for two terminal profile handles; persisted guides identify that form
+                    // from the two Primary roles because GuideData.IsClosed belongs only to Free-Shape.
                     IReadOnlyList<Vec3d> roundoverPoints = chain != null
                         && chain.Count >= (closed ? 4 : 3)
                         ? chain

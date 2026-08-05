@@ -706,6 +706,39 @@ control points. Treat `closed` only as the create-seam discriminator. Never rewr
 representation from `GuideData.IsClosed`.
 **Introduced v0.4.67, Session 42 §2.**
 
+### G50 — Zero-voxel rejection applies to every recounting mutation, not only creation.
+**Trigger:** after moving/replacing control points, committing isolated geometry, changing scale/fill, or any
+other operation that recounts an existing guide.
+**Trap:** zero passes every upper cap. Creation rejected empty guides, but ordinary and immense reshape paths
+stored count zero as success. An invalid Roundover therefore disappeared while remaining in the registry,
+instead of retaining its valid prior form.
+**Do:** immediately after counting, reject `count <= 0` before cap/access checks or adoption. An in-place
+mutation must restore its complete pre-edit snapshot; an isolated candidate must retain the live object.
+Return `RejectedEmpty`, resynchronize optimistic mirrors, and give shape-appropriate recovery guidance.
+**Found and fixed v0.4.72, Session 43 §1.**
+
+### G51 — A client gesture rule is not an authority capability check.
+**Trigger:** before accepting an insert/update/toggle packet whose operation is implemented only by some
+shapes or modes.
+**Trap:** the stock controller sent body inserts only for Arch and Free-Shape, but authority accepted the
+packet for every shape. Parametric `InsertControlPoint` methods were intentionally no-ops; the manager then
+picked an existing nearest point, reported success, and the server broadcast an insertion that its own shape
+did not contain. Remote mirrors could diverge from authority.
+**Do:** define the capability once in the shape catalog and enforce it in the manager as well as the network
+handler. Reject before locks or expensive accessors, and resynchronize instead of broadcasting. Never infer
+authority safety from what today's stock client happens to send (`G32`).
+**Found and fixed v0.4.72, Session 43 §1.**
+
+### G52 — Hover candidates and click authority must not describe different targets.
+**Trigger:** before changing `GuideToolController.FindTarget`, its 33 Hz HUD caller, or exact click targeting.
+**Trap:** a click required an exact rendered voxel, but the HUD still used fixed 0.10/0.18-block proximity
+floors around the sampled curve. A scale-1 cell is only 0.0625 blocks wide, so the HUD named a guide while the
+crosshair sat several cells into empty space. Running full exact voxel generation every 30 ms would fix the
+picture by creating a worse immense-guide cost.
+**Do:** keep the per-tick pass a cheap candidate, but derive its radius from the physical guide cell
+(`sqrt(3)/2 × edge`) with no block-sized floor. Every mutating action retains exact rendered-cell confirmation.
+**Found and confirmed in play v0.4.73, Session 43 §3.**
+
 ---
 
 ## Reversals and disproved claims
@@ -882,6 +915,22 @@ better.” SHIFT material-side placement and the three-rail wireframe solve the 
 problems without changing that explicit geometry.
 
 **Detail:** `SESSION_42.md` §§1–3.
+
+### R14 — Parametric body grabs do NOT snap to the nearest handle. Retired v0.4.72.
+The former Session-8/9 decision treated a parametric outline click as intent to move whichever existing
+handle was nearest. It made otherwise rigid shapes easy to reshape, but the player clicked one visible guide
+cell and a different coloured control point moved. In the exact-input control scheme that is snapping, not
+convenience.
+
+Create-mode grab now requires the view ray to enter the rendered cell. Arch and Free-Shape can insert that
+exact body cell because their geometry supports arbitrary points. A parametric body cell has no independent
+control, so it does nothing; only an exact hit on one of its coloured marker cells grabs that handle. Do not
+restore nearest-handle grab mapping as a fallback. Right-click locking retains its separate forgiving intent.
+
+The HUD's candidate envelope was tightened in v0.4.73 to match this precision without regenerating immense
+voxel sets every tick. The human reported the final result excellent.
+
+**Detail:** `SESSION_43.md` §§2–3.
 
 ---
 

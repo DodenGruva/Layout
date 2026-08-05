@@ -1751,6 +1751,18 @@ namespace Layout.Client
             TargetHit hit = FindTarget(includeLockedPoints: false); // locked points are not grabbable
             if (hit.Found)
             {
+                // The sampled curve is only a cheap candidate finder. A grab exists only when the view ray
+                // actually enters a rendered guide voxel; this removes both point-radius forgiveness and
+                // parametric body-to-nearest-handle snapping from the left-click gesture.
+                if (!_net.Guides.TryGetValue(hit.GuideId, out GuideData exactGuide)
+                    || !TryFindFirstGuideVoxelHit(
+                        exactGuide, out Vec3d exactCell, out int exactPoint))
+                    hit = TargetHit.None;
+                else
+                    hit = new TargetHit(true, hit.GuideId, exactPoint, exactCell);
+            }
+            if (hit.Found)
+            {
                 _draft.SelectGuide(hit.GuideId);                    // GUI's per-guide controls act on this
 
                 if (LockedByOther(hit.GuideId))
@@ -1773,16 +1785,10 @@ namespace Layout.Client
                     StartGrab(hit.GuideId, hit.PointIndex);
                 }
                 else if (_net.Guides.TryGetValue(hit.GuideId, out GuideData bodyG)
-                         && !TakesBodyInserts(bodyG.ShapeType))
+                         && !GuideShapeTypes.SupportsBodyInsert(bodyG.ShapeType))
                 {
-                    // DECISION (Session 8, generalised in Session 9): a body grab on a PARAMETRIC shape
-                    // (ellipse family, line, triangle, rectangle, polygon) grabs the NEAREST HANDLE —
-                    // pulling the outline stretches it, which is the natural feel; arbitrary interpolation
-                    // points have no meaning on these shapes, so there is nothing to insert. The arch
-                    // family (free splines) and the Free-Shape (hand-placed polyline; 0.1.15) DO take
-                    // body inserts — see TakesBodyInserts.
-                    int handle = NearestHandleIndex(bodyG, hit.BodyPos);
-                    if (handle >= 0 && !bodyG.ControlPoints[handle].IsLocked) StartGrab(hit.GuideId, handle);
+                    // A parametric body voxel has no independent point to move. It must not silently grab
+                    // some other handle: the player can grab only the exact coloured marker voxel they hit.
                 }
                 else
                 {
@@ -1864,7 +1870,7 @@ namespace Layout.Client
             if (!hit.Found) return;
             if (!_net.Guides.TryGetValue(hit.GuideId, out GuideData g)) return;
 
-            if (TakesBodyInserts(g.ShapeType))
+            if (GuideShapeTypes.SupportsBodyInsert(g.ShapeType))
             {
                 // B-S9-1 (v0.2.36): the rendered voxel actually entered by the ray is authoritative.
                 // The old 2x point-radius + 1.5-voxel fallback made a neighboring body voxel lose to a
@@ -1896,11 +1902,8 @@ namespace Layout.Client
 
         // Which shape families take BODY INSERTS (clicking between points creates a new point there):
         // the arch (free spline) and, since 0.1.15, the Free-Shape (hand-placed polyline — inserting a
-        // corner mid-segment is exactly how you refine one). Every other shape is parametric: body
-        // clicks map to the nearest handle instead.
-        private static bool TakesBodyInserts(GuideShapeType t) =>
-            t == GuideShapeType.Arch || t == GuideShapeType.FreeShape;
-
+        // corner mid-segment is exactly how you refine one). Every other shape is parametric: left-click
+        // body grabs do nothing, while right-click lock intent maps to the nearest existing handle.
         // Nearest real (non-phantom) control point to a world position — the ellipse family's body-hit →
         // handle mapping.
         private static int NearestHandleIndex(GuideData g, Vec3d pos)
@@ -2796,14 +2799,13 @@ namespace Layout.Client
             foreach (GuideData g in _net.Guides.Values)
             {
                 double voxel = g.VoxelScale / 16.0;
-                // Session-8 finding: the old max(0.30, voxel*1.75) radius cast a ~⅓-block shadow around
-                // every control point in which body clicks were swallowed by the point — a dead zone for
-                // body grabs near the anchors, and a snap radius the control scheme explicitly doesn't
-                // want. The point pick radius now matches the single-voxel marker you can actually SEE
-                // (with a small floor for the finest scale): hit the voxel to grab the point; everywhere
-                // else on the guide — everywhere — is a body hit.
-                double pointRadius = Math.Max(0.10, voxel) * pointRadiusScale;
-                double bodyRadius = Math.Max(0.18, voxel);
+                // This is a cheap candidate test for the 33 Hz HUD loop, not permission to grab. Bound its
+                // halo to one physical guide cell: a cube's centre-to-corner distance is sqrt(3)/2 of its
+                // edge. The exact click path still ray-tests the rendered voxel before acting. Fixed 0.10 /
+                // 0.18-block floors made a scale-1 guide targetable several cells outside what was visible.
+                double cellRadius = voxel * 0.8660254037844386;
+                double pointRadius = cellRadius * pointRadiusScale;
+                double bodyRadius = cellRadius;
 
                 // BROAD PHASE, before any per-point or per-segment work (v0.4.40).
                 if (!WithinTargetingReach(g, origin, dir, Math.Max(pointRadius, bodyRadius))) continue;
@@ -2901,9 +2903,9 @@ namespace Layout.Client
                    && entry <= MaxReach;
         }
 
-        // Exact lock-in-place picker for B-S9-1. It intentionally samples the outline even when the guide
-        // is filled: body targeting means the defining curve, not arbitrary interior fill cells. This work
-        // happens only on a right-click, never in the per-tick targeting loop.
+        // Exact guide-voxel picker for grabs and B-S9-1 lock-in-place. It intentionally samples the outline
+        // even when the guide is filled: body targeting means the defining curve, not arbitrary interior
+        // fill cells. This work happens only on a click, never in the per-tick targeting loop.
         private bool TryFindFirstGuideVoxelHit(GuideData guide, out Vec3d cellCentre, out int pointIndex)
         {
             cellCentre = null;

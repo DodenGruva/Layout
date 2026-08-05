@@ -831,6 +831,11 @@ namespace Layout.Systems
                 shape.MoveControlPoint(edits[i].Index, edits[i].Position);
 
             int count = CountForCaps(id, shape, g.VoxelScale, g.IsFilled);
+            if (count <= 0)
+            {
+                RestorePoints(id, snapshot);
+                return GuideOperationResult.Empty(g);
+            }
             if (WouldExceedCaps(id, count, out int cap))
             {
                 RestorePoints(id, snapshot);
@@ -863,6 +868,8 @@ namespace Layout.Systems
         {
             if (!_guides.TryGetValue(id, out var g)) return GuideOperationResult.NotFound();
             if (position == null) return GuideOperationResult.Invalid(g);
+            if (!GuideShapeTypes.SupportsBodyInsert(g.ShapeType))
+                return GuideOperationResult.Invalid(g);
             var shape = _shapes[id];
             GuideData accessBefore = AccessSnapshot(g);
 
@@ -1951,6 +1958,7 @@ namespace Layout.Systems
             if (!ReferenceEquals(live, expectedLive) || candidate == null
                 || candidateShape == null || candidate.Id != id || exactVoxelCount < 0)
                 return GuideOperationResult.Invalid(live);
+            if (exactVoxelCount == 0) return GuideOperationResult.Empty(live);
             if (WouldExceedCaps(id, exactVoxelCount, out int cap))
                 return GuideOperationResult.OverCap(live, exactVoxelCount, cap);
 

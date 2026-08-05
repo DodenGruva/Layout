@@ -139,5 +139,12 @@ namespace Layout.Guide
         /// <summary>Shapes whose regular-polygon side count is carried by <see cref="GuideData.Sides"/>.</summary>
         public static bool UsesSides(GuideShapeType t) => t == GuideShapeType.Polygon
             || t == GuideShapeType.PolygonalPrism || t == GuideShapeType.TaperedPolygonalPrism;
+
+        /// <summary>
+        /// Shapes whose body can accept a new editable point. Every other shape is parametric: only its
+        /// existing marker voxels may be grabbed, and an insert request is malformed.
+        /// </summary>
+        public static bool SupportsBodyInsert(GuideShapeType t) =>
+            t == GuideShapeType.Arch || t == GuideShapeType.FreeShape;
     }
 }
