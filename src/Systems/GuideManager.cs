@@ -549,6 +549,7 @@ namespace Layout.Systems
                 shape is Shapes.FreeShape fs && fs.IsClosed,
                 GuideShapeTypes.UsesSides(shapeType) && flatSideAligned,
                 GuideShapeTypes.IsVolume(shapeType) && settings.Wireframe);
+            data.ArchUsesShapePlaneAxis = shape is ArchShape;
             data.CreatorUid = creatorUid;
             data.CreatorName = CleanPlayerName(creatorName);
             data.LastSculptorUid = creatorUid;
@@ -648,6 +649,7 @@ namespace Layout.Systems
                 shape is Shapes.FreeShape fs && fs.IsClosed,
                 GuideShapeTypes.UsesSides(shapeType) && flatSideAligned,
                 volume && settings.Wireframe);
+            data.ArchUsesShapePlaneAxis = shape is ArchShape;
             data.CreatorUid = creatorUid;
             data.CreatorName = CleanPlayerName(creatorName);
             data.LastSculptorUid = creatorUid;

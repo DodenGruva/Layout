@@ -6,7 +6,7 @@
 > `dev/GOTCHAS.md`, open work in `dev/TODO.md`, wire history in `dev/WIRE_HISTORY.md`, and full narrative in
 > `dev/sessions/`.
 
-**Regenerated at:** v0.4.81, 2026-08-05 (Session 44 — stable rendering and the Fillet workflow).
+**Regenerated at:** v0.4.82, 2026-08-14 (Session 45 — plane-aware Arch/Half-circle geometry).
 
 ---
 
@@ -19,17 +19,15 @@ private client-authoritative guides.
 
 | | |
 |---|---|
-| **Current build** | **v0.4.81** on `Codex`, tracking `origin/Codex` |
-| **Last `main` release** | **v0.4.33**; Sessions 37–44 have not been merged to `main` |
+| **Current build** | **v0.4.82** on `main`, tracking `origin/main` |
+| **Last `main` release** | **v0.4.82** (Session 45) |
 | **Published repository** | `github.com/DodenGruva/Layout` — public; tracked files must contain no personal paths or usernames |
 | **Do not use** | **v0.4.48** (unsafe claim shortcut, reverted in v0.4.49) or **v0.4.50–v0.4.52** (background-save defects corrected by v0.4.53–v0.4.54) |
 | **Superseded controls** | **v0.4.65–v0.4.66** Fillet experiments (`dev/GOTCHAS.md` R13); general nearest-handle body grabs retired in v0.4.72 (R14) |
-| **Release artifact** | `Layout0.4.81.zip`, 42 entries / 375,333 bytes; 39/39 assets; archive SHA-256 `ACDC5D2463A38247AE00DB54D34C3A641BE07E5757FA3207A9D1C253201A91FD` |
+| **Release artifact** | `Layout0.4.82.zip`, 42 entries / 376,160 bytes; 39/39 assets; archive SHA-256 `8FD7AFB99583594DD1B59BD11CB409B7B7DAE2282DCFD37E779EF92AA00D4F1B` |
 
-The human validates primarily by playing. Profile-first placement and exact targeting were already reported
-excellent. Session 44's icon, Fillet terminology, five instructions and reduced HUD content were iterated with
-the human; the final combined v0.4.81 build has not yet been reported from a fresh multiplayer play session.
-Treat shipped iterations as played unless the human says otherwise (`dev/GOTCHAS.md` R7).
+The human validates primarily by playing. Profile-first Fillet placement and exact targeting were reported
+excellent. Treat shipped iterations as played unless the human says otherwise (`dev/GOTCHAS.md` R7).
 
 ⚠️ **Claim protection cannot be meaningfully tested from singleplayer.** The host holds `controlserver`, and
 Layout deliberately exempts that privilege from claim validation. Use a non-admin account on a dedicated
@@ -48,18 +46,21 @@ trusted client conventions: arbitrary body insertion is accepted only for Arch a
 
 | | |
 |---|---|
-| **DataVersion** | **13** |
-| **Wire protocol** | **28** |
+| **DataVersion** | **14** |
+| **Wire protocol** | **29** |
 | **Source files** | **87** |
 | **Shape catalog** | **16 types / 22 picker tiles** |
 
-Packet registration and wire enum values are append-only. Protocol 27 introduced internal
-`Roundover = 15`; protocol 28 gives its existing chain field the profile-first meaning. New Fillets carry the
-open route followed by two terminal Primary profile handles. `Closed = true` selects that constructor only at
-creation; persisted closed state remains a Free-Shape property. Legacy Roundovers have one terminal Primary
-handle and keep their original geometry (`dev/GOTCHAS.md` G49). Public profile-first creation is gated to
-protocol-28 servers; private placement remains local. **Fillet is a display-name change only:** Session 44
-changed no wire, DataVersion or saved representation.
+Protocol 29 appends `GuideDataDto.ArchUsesShapePlaneAxis` at protobuf field 26. For Arch/Half-circle, true
+makes the already-stored `ShapePlaneAxis` define the guide's curve plane. Absent/false retains the legacy
+world-vertical interpretation. DataVersion 14 records the same saved-geometry distinction. This explicit bit
+prevents old guides from silently changing shape and keeps legacy data read in place on renderer workers.
+
+Protocol 27 introduced internal `Roundover = 15`; protocol 28 gives its existing chain field the
+profile-first meaning. New Fillets carry the open route followed by two terminal Primary profile handles.
+`Closed = true` selects that constructor only at creation; persisted closed state remains a Free-Shape
+property. Legacy one-handle Roundovers keep their original geometry (`dev/GOTCHAS.md` G49). Fillet remains a
+display name; save and wire identifiers are still Roundover.
 
 Public guides persist with the world save. The server snapshots the registry on the main thread, serializes
 the private copy on a worker, and prepares bytes ahead of the next save; missing prepared bytes and shutdown
@@ -68,7 +69,18 @@ Private F4 guides remain in their atomic client file with backup and corrupt-fil
 
 ---
 
-## 3. Current control and renderer behavior
+## 3. Current control, geometry and renderer behavior
+
+### Plane-aware Arch and Half-circle
+
+- New Arch/Half-circle guides use the plane captured by the first click. Ground placement curves across the
+  ground plane, and wall placement curves within the selected wall plane instead of always standing world-up.
+- Free-arch apex placement, endpoint tangents, half-circle phantom points, sampled arc voxels, filled output,
+  and voxel counts share the same deterministic in-plane frame.
+- Half-circle captures its previous opening sign before a chord-defining anchor moves. A 90-degree chord turn
+  therefore preserves inversion instead of losing the side encoded by the old phantoms (`dev/GOTCHAS.md` G56).
+- Existing records without the compatibility bit deliberately retain the old geometry. Re-place an affected
+  legacy guide for the corrected form; an explicit future conversion action is flagged for human review.
 
 ### Fillet placement
 
@@ -77,42 +89,32 @@ Private F4 guides remain in their atomic client file with backup and corrupt-fil
 - The HUD shows one instruction per state: **Fillet 1/5** select corner; **2/5** set first side; **3/5** set
   second side; **4/5** set the first sweep-path point; **5/5** continue or left-click the last point again to
   finish.
-- Stages 2–4 omit side measurements and SHIFT reminders. Fillet-only same-bound overlay rows align the final
-  multi-line instruction without changing other modes' context rows (`dev/GOTCHAS.md` G54).
 - SHIFT can place individual Fillet points inside material. First-click SHIFT embeds every guide and keeps
   the whole draft material-side. CTRL+Left-click from idle Create bypasses existing guides.
 - The sweep preview uses three construction rails: both profile edges and the sharp-corner route. The picker
   glyph is a CAD-style square with a large, widely dotted rounded corner.
 
-### Exact targeting and Dome behavior
+### Exact targeting, Dome and settled rendering
 
 - A sampled curve nominates a cheap target candidate, but a Create-mode grab acts only after the ray enters a
   rendered guide cell. Arch/Free-Shape insert the exact body cell; most parametric guides require an exact
   coloured marker (`dev/GOTCHAS.md` R14).
-- Dome has one narrow exact-cell exception: any visible base-circumference cell maps to the nearer diameter
-  anchor. Upper-shell cells and empty space do nothing; this does not reinstate general nearest-handle snapping.
-- The 33 Hz HUD candidate envelope is the physical cell half-diagonal (`sqrt(3)/2 × edge`) with no fixed
-  block-size floor. Exact action confirmation remains separate (`dev/GOTCHAS.md` G52).
+- Dome's narrow exception maps a visible base-circumference cell to the nearer diameter anchor. Upper-shell
+  cells and empty space do nothing; this does not reinstate general nearest-handle snapping.
 - Any ordinary or immense reshape that voxelises to zero rejects and retains the valid prior guide. Arbitrary
   body insertion remains an authority-enforced Arch/Free-Shape capability (G50, G51).
-
-### Settled rendering and placement feedback
-
-- Occupancy refresh deep-clones guide state, preserves `IsWireframe`/rendered form, and keeps the shape's
-  canonical primitive order. Nearby world edits no longer turn a wireframe guide solid or cause a one-time
-  lighting/shadowing change.
-- Progressive volume reveal order is transient. Dome finalisation restores ordinary spatial order **before**
-  marker-role ties, then publishes the settled mesh (`dev/GOTCHAS.md` G53).
-- Exact authority completion cancels a conservative client false-positive pending handoff. Materialisation,
-  sound and completion effects have one owner, preventing double Dome feedback (`dev/GOTCHAS.md` G55).
-- Occupied red, green and blue control voxels shift toward cyan to distinguish material-filled cells while
-  preserving their roles. The exposed-face geometry and exact world translation remain unchanged.
+- Occupancy refresh deep-clones guide state, preserves wireframe/rendered form, and keeps canonical primitive
+  order. Progressive volume reveal order is transient and is restored before settled marker-role ties (G53).
+- Exact authority completion cancels conservative pending handoff. Materialisation, sound and completion
+  effects have one owner, preventing double Dome feedback (`dev/GOTCHAS.md` G55).
+- Model matrices remain exact world translations. Anti-z-fight clearance is an exposed-face outset rather
+  than a camera-relative whole-mesh displacement (`dev/GOTCHAS.md` G48).
 
 ---
 
 ## 4. Open work
 
-`dev/TODO.md` is the open-item authority. The review backlog is empty. Sessions 40–44 are delivered; no
+`dev/TODO.md` is the open-item authority. The review backlog is empty. Sessions 40–45 are delivered; no
 implementation is queued behind them and the next feature is the human's choice.
 
 The largest remaining work is verification rather than a known code defect:
@@ -148,32 +150,33 @@ without reading `dev/GOTCHAS.md` G42; the save API is one blob with no key enume
 - Renderer primitive ordering is semantic. Progressive animation order must be restored before role ties and
   settled emission; occupancy refresh cannot reconstruct or reorder it (`dev/GOTCHAS.md` G2, G53).
 - Conservative estimates cannot establish a second completion/effect path beside exact authority (G55).
-- Guide model matrices are exact world translations. Anti-z-fight clearance is an exposed-face outset; never
-  reintroduce a camera-relative whole-mesh displacement (`dev/GOTCHAS.md` G48).
-- Profile-first Fillet compatibility depends on two terminal Primary roles, not stored closed state (G49).
+- Frame-relative opening intent must be captured before moving an anchor that defines the frame (G56).
+- Legacy encodings are read in place. Do not rewrite shared guide control points while a renderer worker
+  adopts a shape.
 
 ---
 
 ## 6. Verification evidence and debts
 
-### Evidence through v0.4.81
+### Evidence through v0.4.82
 
-- Final Release build: **0 warnings, 0 errors**.
+- Final Debug and Release builds: **0 warnings, 0 errors**.
 - `git diff --check`: pass before documentation.
+- Disposable Arch geometry/wire harness passed across X/Y/Z planes, both Arch constraints, inversion,
+  filled/hollow output, count equivalence, 90-degree anchor turns, legacy stability, protobuf round-trip, and
+  the reported ground-plane case.
 - Final archive: 42 entries, root metadata/icon/DLL first, 39/39 assets, no directory or backslash-path
-  entries, embedded v0.4.81 metadata, and packaged DLL matching Release.
-- Final archive SHA-256:
-  `ACDC5D2463A38247AE00DB54D34C3A641BE07E5757FA3207A9D1C253201A91FD`.
-- Disposable Dome harness: **465 checks passed** across X/Y/Z orientations and scales 1/4/16, comparing
-  progressive final voxel positions/roles to ordinary output and checking rim acceptance/shell rejection.
-- Fillet glyph rendered and visually inspected at 18, 22 and 42 pixels.
+  entries, embedded v0.4.82 metadata, and packaged DLL matching Release.
+- Release DLL SHA-256:
+  `33E81B34AD84801025F3B5995F72A79D4FED7E6142B13268E6D987BB22B6FA61`.
+- Archive SHA-256:
+  `8FD7AFB99583594DD1B59BD11CB409B7B7DAE2282DCFD37E779EF92AA00D4F1B`.
+- Session 44's Dome harness remains: **465 checks passed** across X/Y/Z orientations and scales 1/4/16.
 - Session 41's disposable harness results remain: 29/29 authority/claim groups and 52/52 Fillet geometry
   groups. No permanent test project was added.
 
-### Still needs play
+### Known unverified claims
 
-- Fresh combined v0.4.81 multiplayer pass: nearby-block refresh of solid/wireframe guides; Dome placement
-  sound/final lighting; Dome final appearance and full base-rim dragging; five Fillet HUD stages.
 - Dedicated-server claim refusal and mid-validation change handling; singleplayer cannot prove this path.
 - Compound Transform's public/private one-step Undo/Redo and connected-client rollback on refusal.
 - Live cancellation from cancel/disconnect/shutdown during immense geometry.

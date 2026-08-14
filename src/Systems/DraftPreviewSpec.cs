@@ -201,6 +201,7 @@ namespace Layout.Systems
             if (guide == null || guide.IsHidden || guide.ShapeType != ShapeType
                 || guide.ShapePlaneAxis != PlaneAxis || guide.VoxelScale != Settings.Scale)
                 return false;
+            if (ShapeType == GuideShapeType.Arch && !guide.ArchUsesShapePlaneAxis) return false;
 
             bool volume = GuideShapeTypes.IsVolume(ShapeType);
             ProjectionMode expectedMode = volume ? ProjectionMode.Volumetric : Settings.Mode;

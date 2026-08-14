@@ -68,7 +68,10 @@ namespace Layout.Guide
         /// reproduce it to the voxel (see RectangleShape's remarks). The bump exists so the change is
         /// visible, and because a record written here WOULD be misread by an older build, which would take
         /// the new edge anchor for the old diagonal corner.
-        public const int CurrentDataVersion = 13;
+        /// Version 14 makes the Arch family consume its stored <see cref="ShapePlaneAxis"/>. The
+        /// <see cref="ArchUsesShapePlaneAxis"/> bit preserves older arches without reinterpreting their
+        /// stored, possibly hand-edited control points.
+        public const int CurrentDataVersion = 14;
 
         /// <summary>The voxel edge lengths a guide may use, in 1/16-block units (1 → 1/16 block, 16 → 1 block).</summary>
         public static readonly int[] ValidVoxelScales = { 1, 2, 4, 8, 16 };
@@ -119,12 +122,19 @@ namespace Layout.Guide
         public ShapeConstraint OriginalConstraint { get; set; }
 
         /// <summary>
-        /// The INTRINSIC geometry plane of planar closed shapes (the ellipse family): the axis normal to
+        /// The INTRINSIC geometry plane of planar shapes: the axis normal to
         /// the plane the shape is drawn in, captured from the first click's block face at creation. Not to
         /// be confused with <see cref="Plane"/>, which is the user-set Surface PROJECTION plane. Carried
-        /// (defaulted to Y) but ignored by shapes that don't need it (the arch family derives its own).
+        /// (defaulted to Y) but ignored by shapes that don't need it.
         /// </summary>
         public PlaneAxis ShapePlaneAxis { get; set; }
+
+        /// <summary>
+        /// Version 14 compatibility bit for the Arch family. New arches use <see cref="ShapePlaneAxis"/>
+        /// for their apex, foot tangents and half-circle arc. False preserves the world-vertical geometry
+        /// of existing arches and guides received from an older server. Ignored by every other shape.
+        /// </summary>
+        public bool ArchUsesShapePlaneAxis { get; set; }
 
         /// <summary>
         /// UID of the player who created this guide, or null when unknown (guides from saves that predate the
@@ -197,6 +207,7 @@ namespace Layout.Guide
             ShapeType = GuideShapeType.Arch;
             Constraint = ShapeConstraint.None;
             ShapePlaneAxis = PlaneAxis.Y;
+            ArchUsesShapePlaneAxis = false;
             Divisions = 0;
             Sides = 0;
             FlatSideAligned = false;
@@ -265,6 +276,7 @@ namespace Layout.Guide
                 ShapeType = shapeType,
                 Constraint = constraint,
                 ShapePlaneAxis = shapePlaneAxis,
+                ArchUsesShapePlaneAxis = shapeType == GuideShapeType.Arch,
                 Divisions = divisions,
                 Sides = sides,
                 FlatSideAligned = flatSideAligned,
@@ -318,6 +330,7 @@ namespace Layout.Guide
                 ShapeType = ShapeType,
                 Constraint = Constraint,
                 ShapePlaneAxis = ShapePlaneAxis,
+                ArchUsesShapePlaneAxis = ArchUsesShapePlaneAxis,
                 Divisions = Divisions,
                 Sides = Sides,
                 FlatSideAligned = FlatSideAligned,

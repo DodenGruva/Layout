@@ -11,7 +11,7 @@
 > the current number. This ledger was built by reading that list, not by reassembling prose. **If the two
 > ever disagree, the source is right and this file is wrong.**
 
-**Current: DataVersion 13, protocol 28.**
+**Current: DataVersion 14, protocol 29.**
 
 ---
 
@@ -48,6 +48,7 @@ One row per bump. "Packets added" is the exact set appended to `RegistrationOrde
 | 26 | v0.4.46 | 39 | *(none)* | **`VoxelCapKind` gained `GuideCount = 5`** — the guide-COUNT caps reach the HUD now. Enum append, but the *meaning set* of a field clients read grew, so the number moved |
 | 27 | v0.4.60 | 41 | *(none)* | **`GuideShapeType` gained `Roundover = 15`** — a new meaning carried by existing guide/create DTO fields. The client records the server protocol and blocks public Roundover placement against older servers; private placement remains local |
 | 28 | v0.4.67 | 42 | *(none)* | **Roundover's shared chain gained the profile-first meaning.** New creates carry the open sweep route followed by two terminal Primary profile handles; `GuideCreateRequestPacket.Closed = true` selects that constructor on authority but does not make the stored Roundover closed. Public placement is gated to protocol 28; legacy one-handle guides remain readable |
+| 29 | v0.4.82 | 45 | *(none)* | **`GuideDataDto` appended `ArchUsesShapePlaneAxis` at field 26.** For Arch/Half-circle only, true makes the existing `ShapePlaneAxis` define the curve plane; absent/false preserves the legacy world-vertical interpretation. This is a field and geometry-semantic change, so both sides must agree even though no packet type was added |
 
 **Rows marked *(none)*** bumped the protocol without appending a packet — a field was added to an existing
 packet, or a meaning changed. The version still moved because both sides must agree.
@@ -113,15 +114,18 @@ DataVersion stamps the **saved guide record**, not the wire. `GuideData.CurrentD
 | 11 | 21 | Adaptive large-guide / structural wireframe persistence |
 | 12 | 22 | — |
 | **13** | 33 | **The Rectangle/Box re-gesture** — Rectangle became 3 clicks, Box 4, Square stayed 2 |
+| **14** | 45 | **Plane-aware Arch/Half-circle encoding.** New records set `ArchUsesShapePlaneAxis`; false or absent records retain legacy world-vertical geometry |
 
 **The ledger starts at DV 5**, which is as far back as the session records reach. What DataVersions 2–4
 added is recorded in `dev/ARCHITECTURE.md` → *Data & wire* (v4 `Constraint` + `ShapePlaneAxis`, v3
 `CreatorUid`, v2 `Projection`/`Plane`/`IsFilled`); no session is claimed for them here rather than guessed.
 
 ⚠️ **Legacy encodings are READ IN PLACE, never migrated.** Two-point rectangles and three-point boxes
-reproduce to the voxel from their old encoding. This is not laziness: **shapes are adopted on renderer worker
-threads**, so rewriting the shared control-point list from a shape would be a data race. Reading the old form
-is the safe design, not a temporary accommodation.
+reproduce to the voxel from their old encoding. Arch/Half-circle records without
+`ArchUsesShapePlaneAxis = true` likewise keep their former world-vertical geometry rather than being silently
+reinterpreted from an old `ShapePlaneAxis` value. This is not laziness: **shapes are adopted on renderer
+worker threads**, so rewriting the shared control-point list from a shape would be a data race. Reading the
+old form is the safe design, not a temporary accommodation.
 
 ---
 

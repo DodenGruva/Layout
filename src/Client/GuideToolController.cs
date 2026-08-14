@@ -1365,7 +1365,7 @@ namespace Layout.Client
 
             IGuideShape shape = ShapeFactory.Adopt(
                 guide.ShapeType, guide.Constraint, guide.ShapePlaneAxis, points,
-                guide.Sides, guide.IsClosed, guide.FlatSideAligned);
+                guide.Sides, guide.IsClosed, guide.FlatSideAligned, guide.ArchUsesShapePlaneAxis);
 
             if (guide.Constraint != ShapeConstraint.None && shape.WouldBreakOnMove(_grab.PointIndex))
                 shape.BreakConstraint();
@@ -2053,9 +2053,8 @@ namespace Layout.Client
                     return;
                 }
 
-                // The first click also fixes the INTRINSIC plane for the ellipse family (Session 8): click
-                // the ground → a flat ring (normal Y); click a wall → a ring on the wall (normal X/Z). The
-                // arch family carries it unused.
+                // The first click also fixes the INTRINSIC plane for planar shapes: click the ground for a
+                // horizontal guide (normal Y), or click a wall for a guide on that wall (normal X/Z).
                 _draft.StartDraft(anchor, AxisFromFace(blockSel), FaceIsNegative(blockSel),
                     embedded: embedPoint);
                 _rimAimArmed = false;

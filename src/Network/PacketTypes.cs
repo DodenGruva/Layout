@@ -54,7 +54,7 @@ namespace Layout.Network
         /// because every change so far has been append-only and therefore back-compatible by construction.
         /// <c>dev/WIRE_HISTORY.md</c> records what each number added.
         /// </summary>
-        public const int ProtocolVersion = 28;
+        public const int ProtocolVersion = 29;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -154,6 +154,7 @@ namespace Layout.Network
         [ProtoMember(23)] public bool IsWireframe;
         [ProtoMember(24)] public string CreatorName;
         [ProtoMember(25)] public string LastSculptorName;
+        [ProtoMember(26)] public bool ArchUsesShapePlaneAxis; // protocol 29 / DataVersion 14
         // (The as-placed spring-back snapshot deliberately does NOT cross the wire: the server executes
         //  spring-back; clients only ever request it by guide id.)
 
@@ -191,7 +192,8 @@ namespace Layout.Network
                 CachedBlockHeight = g.CachedBlockHeight,
                 IsWireframe = g.IsWireframe,
                 CreatorName = g.CreatorName,
-                LastSculptorName = g.LastSculptorName
+                LastSculptorName = g.LastSculptorName,
+                ArchUsesShapePlaneAxis = g.ArchUsesShapePlaneAxis
             };
         }
 
@@ -236,7 +238,8 @@ namespace Layout.Network
                 CachedBlockHeight = CachedBlockHeight,
                 IsWireframe = IsWireframe,
                 CreatorName = CreatorName,
-                LastSculptorName = LastSculptorName
+                LastSculptorName = LastSculptorName,
+                ArchUsesShapePlaneAxis = ArchUsesShapePlaneAxis
             };
         }
     }

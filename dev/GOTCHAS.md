@@ -771,6 +771,17 @@ placement effects to one explicit owner. Estimates may choose a provisional UX p
 second completion contract.
 **Found and fixed v0.4.76, Session 44 §2.**
 
+### G56 — Capture frame-relative intent before moving the anchors that define the frame.
+**Trigger:** before recalculating constrained geometry after an anchor move, especially when opening,
+inversion, handedness, or side is represented only by derived points.
+**Trap:** Half-circle stores its two chord feet but carries the chosen opening side in derived phantom points.
+Moving a foot first and then inferring the old side against the new perpendicular loses that intent when the
+chord turns 90 degrees: the relevant dot product becomes zero and the opening can silently flip.
+**Do:** read the old frame-relative sign before mutating a frame-defining anchor, then pass that sign into the
+derived-point rebuild. Whole-guide transforms that rotate both anchors and derived state together are a
+different path and may derive from their already-transformed geometry.
+**Found during the v0.4.82 implementation review and fixed before release, Session 45 §2.**
+
 ---
 
 ## Reversals and disproved claims

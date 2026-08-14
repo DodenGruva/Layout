@@ -765,6 +765,7 @@ namespace Layout.Network
                 void Mix(long value) { h ^= (ulong)value; h *= 1099511628211UL; }
 
                 Mix((long)guide.ShapeType); Mix((long)guide.Constraint); Mix((long)guide.ShapePlaneAxis);
+                Mix(guide.ArchUsesShapePlaneAxis ? 1 : 0);
                 Mix(guide.VoxelScale); Mix(guide.IsHidden ? 1 : 0); Mix((long)guide.Projection);
                 Mix((long)guide.Plane.FlattenedAxis); Mix(guide.Plane.PlaneOffset);
                 Mix(guide.IsFilled ? 1 : 0); Mix(guide.Divisions); Mix(guide.Sides);

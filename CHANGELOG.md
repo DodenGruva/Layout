@@ -2,6 +2,21 @@
 
 All notable changes to Layout will be recorded in this file going forward.
 
+## 0.4.82 - 2026-08-14
+
+### Fixed
+
+- **Arch and Half-circle guides placed on the ground now lie in the ground plane.** Their height and curve
+  follow the plane captured by the first click instead of always using world-up, so the guide no longer
+  collapses into a line when viewed in 2D mode. The same plane-aware construction also applies on walls.
+- **Half-circle opening direction now survives a 90-degree anchor move.** Reshaping a constrained arch no
+  longer flips its opening merely because the chord changed orientation.
+
+### Compatibility
+
+- New guides record that Arch/Half-circle geometry uses the captured shape plane. Existing saved and received
+  guides retain their legacy world-vertical interpretation, avoiding a silent change to established builds.
+
 ## 0.4.81 - 2026-08-05
 
 ### Fixed

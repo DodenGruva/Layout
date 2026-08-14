@@ -146,6 +146,7 @@ unfindable.
 | **Session 40** | **four.** The background save's tunable numbers — the lead's 3 s start, its doubling, and the 60 s cap; and the 20 s–30 min band outside which a save-to-save gap is not treated as the autosave rhythm. Plus two things deliberately left synchronous: the **admin policies** (a handful of records against the registry's megabytes) and the **client's private F4 guides** (a small file write, and file I/O on a worker is a nastier risk than text conversion) | `sessions/SESSION_40.md` → *Flagged and unverified* |
 | Session 39 | **four.** The client's 60 s private-guide flush interval (the server's is the world's own cadence, human-set; the client has none to borrow); `VoxelCapKind.GuideCount` riding `VoxelCapWarningPacket` with numbers that are guides rather than voxels; the five costs measured and deliberately NOT fixed (§6); and the long-standing **admin bypass of claim validation**, surfaced here and left unchanged | `sessions/SESSION_39.md` → *Flagged and unverified* |
 | **Session 41** | **three.** Preserve successful in-place Transform order as rotate → mirror → translate; drop malformed legacy projection records instead of normalising them; and allow three relevant claim-state restarts before the fourth change fails closed as temporarily busy | `sessions/SESSION_41.md` → *Flagged and unverified* |
+| **Session 45** | **one.** Existing Arch/Half-circle records retain their legacy world-vertical interpretation; only newly placed guides opt into the captured shape plane. Re-place an old affected guide to obtain the corrected form. Review whether a future explicit conversion action is wanted | `sessions/SESSION_45.md` → *Flagged and unverified* |
 
 **The most substantive still-unreviewed calls**, if you only want to look at a few:
 
@@ -159,6 +160,9 @@ unfindable.
 - **Session-38 #1. The broad-phase padding.** If a guide you can plainly see ever refuses to be clicked —
   a long deeply-curved arch, a Free-Shape with corners spread wide — this is why, and the fix is more
   padding.
+- **Session-45 #1. Legacy arches are preserved rather than silently corrected.** This protects established
+  guides from changing shape after an update, but an old ground arch must be re-placed to use the new plane.
+  If that proves too awkward, add an explicit conversion action rather than changing it during load/render.
 - **0f. Edit mode is SELECT-ONLY** — clicking a guide in Edit selects it for the settings rows but does not
   grab, insert or lock, so a select-click cannot accidentally reshape. All geometry editing stays in Create.
   *Alternative if wanted:* allow grabbing in Edit, with body-click = select and point-click = grab.

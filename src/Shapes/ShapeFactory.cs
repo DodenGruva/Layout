@@ -71,7 +71,8 @@ namespace Layout.Shapes
                 case GuideShapeType.Box:
                     return new BoxShape(start, end, shapePlaneAxis, inverted);
                 default:
-                    return new ArchShape(start, end, constraint: constraint, inverted: inverted);
+                    return new ArchShape(start, end, constraint: constraint, inverted: inverted,
+                        planeAxis: shapePlaneAxis, usesShapePlaneAxis: true);
             }
         }
 
@@ -116,14 +117,16 @@ namespace Layout.Shapes
                 case GuideShapeType.Box:
                     return new BoxShape(g.ControlPoints, g.ShapePlaneAxis);
                 default:
-                    return new ArchShape(g.ControlPoints, constraint: g.Constraint);
+                    return new ArchShape(g.ControlPoints, constraint: g.Constraint,
+                        planeAxis: g.ShapePlaneAxis, usesShapePlaneAxis: g.ArchUsesShapePlaneAxis);
             }
         }
 
         /// <summary>Adopt for transient lists that have no GuideData (the renderer's draft ghost).</summary>
         public static IGuideShape Adopt(
             GuideShapeType type, ShapeConstraint constraint, PlaneAxis shapePlaneAxis, List<ControlPoint> points,
-            int sides = 0, bool closed = false, bool flatSideAligned = false)
+            int sides = 0, bool closed = false, bool flatSideAligned = false,
+            bool archUsesShapePlaneAxis = true)
         {
             switch (type)
             {
@@ -160,7 +163,8 @@ namespace Layout.Shapes
                 case GuideShapeType.Box:
                     return new BoxShape(points, shapePlaneAxis);
                 default:
-                    return new ArchShape(points, constraint: constraint);
+                    return new ArchShape(points, constraint: constraint,
+                        planeAxis: shapePlaneAxis, usesShapePlaneAxis: archUsesShapePlaneAxis);
             }
         }
     }
