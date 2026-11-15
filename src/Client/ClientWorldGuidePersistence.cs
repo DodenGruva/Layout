@@ -15,6 +15,7 @@ namespace Layout.Client
     {
         private readonly string _filePath;
         private readonly string _backupPath;
+        private readonly string _legacyFilePath;
         private bool _primaryRejected;
 
         public string FilePath => _filePath;
@@ -36,25 +37,33 @@ namespace Layout.Client
             string playerKey = CreateStableKey(playerUid);
             string layoutDataPath = capi.GetOrCreateDataPath("Layout");
             string guideFolder = Path.Combine(layoutDataPath, "ClientOnlyGuides");
+            string fileName = worldKey + "-" + playerKey + ".json";
+            string legacyFolder = guideFolder;
+            _legacyFilePath = Path.Combine(legacyFolder, fileName);
+            guideFolder = Path.Combine(layoutDataPath, "ClientOnlyGuidesGrid64");
             Directory.CreateDirectory(guideFolder);
-            _filePath = Path.Combine(guideFolder, worldKey + "-" + playerKey + ".json");
+            _filePath = Path.Combine(guideFolder, fileName);
             _backupPath = _filePath + ".bak";
 
             // One-time migration from the earlier world-only filename. Move only after the player UID is
             // known so private guides on a shared computer do not remain visible to every account.
-            string legacyPath = Path.Combine(guideFolder, worldKey + ".json");
-            if (!File.Exists(_filePath) && File.Exists(legacyPath))
-                File.Move(legacyPath, _filePath);
+            string legacyPath = Path.Combine(legacyFolder, worldKey + ".json");
+            if (!File.Exists(_filePath) && !File.Exists(_backupPath)
+                && !File.Exists(_legacyFilePath) && File.Exists(legacyPath))
+                File.Move(legacyPath, _legacyFilePath);
         }
 
         public byte[] Load(string key)
         {
-            return File.Exists(_filePath) ? File.ReadAllBytes(_filePath) : null;
+            string path = _filePath;
+            if (key == GuideManager.LegacyStorageKey) path = _legacyFilePath;
+            return File.Exists(path) ? File.ReadAllBytes(path) : null;
         }
 
         public byte[] LoadBackup(string key)
         {
-            return File.Exists(_backupPath) ? File.ReadAllBytes(_backupPath) : null;
+            string path = key == GuideManager.LegacyStorageKey ? _legacyFilePath + ".bak" : _backupPath;
+            return File.Exists(path) ? File.ReadAllBytes(path) : null;
         }
 
         public void RejectPrimary(string key)

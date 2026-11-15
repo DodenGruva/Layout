@@ -241,9 +241,9 @@ namespace Layout.Shapes
             }
 
             private static (int, int, int) Quantize(Vec3d point, int scale) => (
-                (int)Math.Floor(point.X * 16.0 / scale) * scale,
-                (int)Math.Floor(point.Y * 16.0 / scale) * scale,
-                (int)Math.Floor(point.Z * 16.0 / scale) * scale);
+                (int)Math.Floor(point.X * VoxelGrid.UnitsPerBlock / scale) * scale,
+                (int)Math.Floor(point.Y * VoxelGrid.UnitsPerBlock / scale) * scale,
+                (int)Math.Floor(point.Z * VoxelGrid.UnitsPerBlock / scale) * scale);
         }
 
         public List<VoxelPosition> GetVoxelPositions(int scale, bool filled = false) =>
@@ -300,7 +300,7 @@ namespace Layout.Shapes
                 || !TryBuildFillets(profileExtent, tangents, out CornerFillet[] fillets))
                 return;
 
-            double halfCell = scale / 32.0;
+            double halfCell = scale / (2 * VoxelGrid.UnitsPerBlock);
             int profileSteps = StepCount(QuarterTurn * profileExtent, halfCell, minimum: 4);
             for (int profileIndex = 0; profileIndex <= profileSteps && !sink.Exceeded; profileIndex++)
             {
@@ -398,7 +398,7 @@ namespace Layout.Shapes
                 v = Rotate(v, preceding.Axis, preceding.Angle);
             }
 
-            int profileSteps = StepCount(QuarterTurn * profileExtent, scale / 32.0, minimum: 4);
+            int profileSteps = StepCount(QuarterTurn * profileExtent, scale / (2 * VoxelGrid.UnitsPerBlock), minimum: 4);
             int nearestProfileIndex = (int)Math.Round(profileSteps * 0.5);
             double theta = QuarterTurn * nearestProfileIndex / profileSteps;
             double cos = nearestProfileIndex == profileSteps ? 0.0 : Math.Cos(theta);
@@ -410,7 +410,7 @@ namespace Layout.Shapes
             {
                 int joinSteps = StepCount(
                     (ownFillet.Radius + profileExtent) * ownFillet.Angle,
-                    scale / 32.0, minimum: 2);
+                    scale / (2 * VoxelGrid.UnitsPerBlock), minimum: 2);
                 int middleStep = Math.Max(1, (int)Math.Round(joinSteps * 0.5));
                 double turn = ownFillet.Angle * middleStep / joinSteps;
                 routePoint = Add(ownFillet.Center,

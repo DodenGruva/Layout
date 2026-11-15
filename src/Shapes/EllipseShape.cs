@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Vintagestory.API.MathTools;
 using Layout.Guide;
+using Layout.Systems;
 
 namespace Layout.Shapes
 {
@@ -29,22 +30,27 @@ namespace Layout.Shapes
     /// centre to a dense perimeter (segment and angular steps both ≤ half a cell, so no holes), voxelised
     /// with the exact spline cell convention via <see cref="VoxelMarch"/>.
     /// </remarks>
-    public sealed class EllipseShape : IGuideShape
+    public sealed class EllipseShape : IGuideShape, ICancellableThresholdVoxelCounter, ICancellableVoxelGenerator
     {
         private const double MinRadius = 0.05;          // degenerate-geometry guard, world blocks
 
         private readonly List<ControlPoint> _controlPoints;
         private readonly PlaneAxis _preferredAxis;
+        private readonly bool _symmetricCircleRaster;
         private ShapeConstraint _constraint;
+
+        internal OutlineStyle Outline { get; set; }
 
         public List<ControlPoint> ControlPoints => _controlPoints;
 
         public ShapeConstraint Constraint => _constraint;
 
         /// <summary>Creates a fresh ellipse from the two draft clicks (a diameter).</summary>
-        public EllipseShape(Vec3d a, Vec3d b, PlaneAxis planeAxis, ShapeConstraint constraint)
+        public EllipseShape(Vec3d a, Vec3d b, PlaneAxis planeAxis, ShapeConstraint constraint,
+            bool symmetricCircleRaster = true)
         {
             _preferredAxis = planeAxis;
+            _symmetricCircleRaster = symmetricCircleRaster;
             _constraint = constraint == ShapeConstraint.Circle ? ShapeConstraint.Circle : ShapeConstraint.None;
             _controlPoints = new List<ControlPoint>
             {
@@ -56,10 +62,12 @@ namespace Layout.Shapes
         }
 
         /// <summary>Adopts an existing list (load/wire path). List is shared by reference, never copied.</summary>
-        public EllipseShape(List<ControlPoint> controlPoints, PlaneAxis planeAxis, ShapeConstraint constraint)
+        public EllipseShape(List<ControlPoint> controlPoints, PlaneAxis planeAxis, ShapeConstraint constraint,
+            bool symmetricCircleRaster = false)
         {
             _controlPoints = controlPoints ?? throw new ArgumentNullException(nameof(controlPoints));
             _preferredAxis = planeAxis;
+            _symmetricCircleRaster = symmetricCircleRaster;
             _constraint = constraint == ShapeConstraint.Circle ? ShapeConstraint.Circle : ShapeConstraint.None;
         }
 
@@ -108,40 +116,150 @@ namespace Layout.Shapes
 
         // --- IGuideShape: voxels ----------------------------------------------------------------
 
-        public List<VoxelPosition> GetVoxelPositions(int scale, bool filled = false)
+        public List<VoxelPosition> GetVoxelPositions(int scale, bool filled = false) =>
+            GetVoxelPositions(scale, filled, null);
+
+        public List<VoxelPosition> GetVoxelPositions(int scale, bool filled, Func<bool> cancelled)
         {
+            VoxelScanCancellation.ThrowIfRequested(cancelled);
             var result = new List<VoxelPosition>();
-            if (!TryGetFrame(out Vec3d c, out Vec3d u, out Vec3d m, out double rMaj, out double rMin))
+            if (scale <= 0 || !TryGetFrame(out Vec3d c, out Vec3d u, out Vec3d m, out double rMaj, out double rMin))
                 return result;
 
+            if (TryRaster(c, u, m, rMaj, scale, out CircleRaster raster))
+            {
+                if (!filled && Outline != OutlineStyle.Legacy)
+                {
+                    if (CircleOutsideOutlineBudget(rMaj, scale)) return result;
+                    result = OutlineVoxelizer.Circle(c, rMaj, raster.Axis, scale, Outline, cancelled);
+                    ClaimMarkers(result, scale, raster.Axis, cancelled);
+                    return result;
+                }
+                int count = raster.CountUpTo(filled, GuideManager.HardVoxelCeiling, cancelled);
+                if (count > GuideManager.HardVoxelCeiling) return result;
+                result.Capacity = count;
+                raster.Append(result, scale, interior: false, cancelled);
+                ClaimMarkers(result, scale, raster.Axis, cancelled);
+                if (filled) raster.Append(result, scale, interior: true, cancelled);
+                VoxelScanCancellation.ThrowIfRequested(cancelled);
+                return result;
+            }
+
             var seen = new HashSet<(int, int, int)>();
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             double rBig = Math.Max(rMaj, rMin);
             int thetaSteps = Clamp((int)Math.Ceiling(2.0 * Math.PI * rBig / (cell * 0.5)), 64, 8192);
 
             var perimeter = new List<Vec3d>(thetaSteps + 1);
             for (int i = 0; i <= thetaSteps; i++)
                 perimeter.Add(PointAtTheta(c, u, m, rMin, 2.0 * Math.PI * i / thetaSteps));
-            VoxelMarch.MarchInto(result, seen, perimeter, scale);
+            if (filled || Outline == OutlineStyle.Legacy) VoxelMarch.MarchInto(result, seen, perimeter, scale);
+            else OutlineVoxelizer.Path(result, seen, perimeter, scale, Outline, closed: true,
+                center: c, cancelled: cancelled);
 
             if (filled)
             {
                 // Radial fan centre→perimeter; both the angular and radial steps are ≤ half a cell.
                 for (int i = 0; i < thetaSteps; i++)
-                    VoxelMarch.MarchSegmentInto(result, seen, c, perimeter[i], scale);
+                    VoxelMarch.MarchSegmentInto(result, seen, c, perimeter[i], scale, cancelled);
             }
 
-            ClaimMarkers(result, scale);
+            ClaimMarkers(result, scale, null, cancelled);
+            VoxelScanCancellation.ThrowIfRequested(cancelled);
             return result;
         }
 
-        public int GetVoxelCount(int scale, bool filled = false) => GetVoxelPositions(scale, filled).Count;
+        public int GetVoxelCount(int scale, bool filled = false) =>
+            GetVoxelCountUpTo(scale, filled, int.MaxValue);
 
-        // Single-voxel nearest-claim markers, mirroring ArchShape: anchors A/B, Primary M.
-        private void ClaimMarkers(List<VoxelPosition> cells, int scale)
+        public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter) =>
+            GetVoxelCountUpTo(scale, filled, stopAfter, null);
+
+        public int GetVoxelCountUpTo(int scale, bool filled, int stopAfter, Func<bool> cancelled)
         {
-            if (cells.Count == 0) return;
+            VoxelScanCancellation.ThrowIfRequested(cancelled);
+            if (scale <= 0 || !TryGetFrame(out Vec3d c, out Vec3d u, out Vec3d m, out double radius, out _))
+                return 0;
+            int count;
+            if (TryRaster(c, u, m, radius, scale, out CircleRaster raster))
+            {
+                if (filled || Outline == OutlineStyle.Legacy)
+                    return raster.CountUpTo(filled, Math.Min(stopAfter, GuideManager.HardVoxelCeiling), cancelled);
+                int limit = Math.Min(stopAfter, GuideManager.HardVoxelCeiling);
+                // The connected rim must cover every column of its span. This rejects
+                // oversized requests before allocating the outline.
+                double span = 2 * radius / (scale / VoxelGrid.UnitsPerBlock);
+                if (CircleOutsideOutlineBudget(radius, scale) || span - 2 > limit)
+                    return GuideShapeVoxelCounting.Exceeded(limit);
+                count = OutlineVoxelizer.Circle(c, radius, raster.Axis, scale, Outline, cancelled).Count;
+            }
+            else count = GetVoxelPositions(scale, filled, cancelled).Count;
+            return count > stopAfter ? GuideShapeVoxelCounting.Exceeded(stopAfter) : count;
+        }
+
+        private static bool CircleOutsideOutlineBudget(double radius, int scale) =>
+            radius / (scale / VoxelGrid.UnitsPerBlock) > GuideManager.HardVoxelCeiling / 4.0;
+
+        internal bool CanCountCircleByRows(int scale, int maxDiameterInCells) =>
+            TryGetFrame(out Vec3d c, out Vec3d u, out Vec3d m, out double radius, out _)
+            && 2 * radius <= maxDiameterInCells * (scale / VoxelGrid.UnitsPerBlock)
+            && TryRaster(c, u, m, radius, scale, out _);
+
+        private bool TryRaster(Vec3d c, Vec3d u, Vec3d m, double radius, int scale, out CircleRaster raster)
+        {
+            raster = default;
+            if (!_symmetricCircleRaster || _constraint != ShapeConstraint.Circle) return false;
+
+            Vec3d normal = Cross(u, m);
+            double tolerance = radius * 1e-9;
+            PlaneAxis axis;
+            if (Math.Abs(normal.Y) <= tolerance && Math.Abs(normal.Z) <= tolerance) axis = PlaneAxis.X;
+            else if (Math.Abs(normal.X) <= tolerance && Math.Abs(normal.Z) <= tolerance) axis = PlaneAxis.Y;
+            else if (Math.Abs(normal.X) <= tolerance && Math.Abs(normal.Y) <= tolerance) axis = PlaneAxis.Z;
+            else return false;
+
+            raster = new CircleRaster(axis, c, u, scale / VoxelGrid.UnitsPerBlock);
+            return true;
+        }
+
+        private void ClaimMarkers(List<VoxelPosition> cells, int scale, PlaneAxis? circleAxis, Func<bool> cancelled)
+        {
+            foreach (var entry in MarkerClaims(cells, scale, circleAxis, cancelled))
+                cells[entry.Key] = cells[entry.Key].WithType(entry.Value.Type);
+        }
+
+        // Shares ownership with click targeting, including both cells of a paired handle.
+        internal bool TryGetCircleMarkerOwner(List<VoxelPosition> cells, int scale,
+            Func<VoxelPosition, bool> matches, out int owner)
+        {
+            owner = -1;
+            if (!TryGetFrame(out Vec3d c, out Vec3d u, out Vec3d m, out double radius, out _)
+                || !TryRaster(c, u, m, radius, scale, out CircleRaster raster)) return false;
+            int bestRole = -1;
+            int bestIndex = int.MaxValue;
+            foreach (var entry in MarkerClaims(cells, scale, raster.Axis, null))
+            {
+                int role = Precedence(entry.Value.Type);
+                if (entry.Value.Point >= 0 && (role > bestRole || (role == bestRole && entry.Key < bestIndex))
+                    && matches(cells[entry.Key]))
+                {
+                    bestRole = role;
+                    bestIndex = entry.Key;
+                    owner = entry.Value.Point;
+                }
+            }
+            return true;
+        }
+
+        private Dictionary<int, (int Point, VoxelRenderType Type)> MarkerClaims(
+            List<VoxelPosition> cells, int scale, PlaneAxis? circleAxis, Func<bool> cancelled)
+        {
+            var claims = new Dictionary<int, (int Point, VoxelRenderType Type)>();
+            if (cells.Count == 0) return claims;
             double half = scale * 0.5;
+            int work = 0;
+            var (anchorSeam, midpointSeam) = circleAxis.HasValue
+                ? RimSeams(circleAxis.Value, scale) : default;
             for (int p = 0; p < _controlPoints.Count && p < 3; p++)
             {
                 ControlPoint cp = _controlPoints[p];
@@ -151,20 +269,82 @@ namespace Layout.Shapes
                     : VoxelRenderType.Normal;
                 if (t == VoxelRenderType.Normal) continue;
 
-                int best = -1; double bestD2 = double.MaxValue;
+                bool circleMidpoint = p == 2 && _constraint == ShapeConstraint.Circle;
                 Vec3d w = cp.WorldPosition;
+                ClaimMarker(w, p, t, cp.IsAnchor ? anchorSeam : circleMidpoint ? midpointSeam : null);
+                if (circleMidpoint)
+                {
+                    Vec3d a = _controlPoints[0].WorldPosition;
+                    Vec3d b = _controlPoints[1].WorldPosition;
+                    // Reflect the minor handle through the centre for a visual marker on the opposite rim.
+                    var opposite = new Vec3d(a.X + b.X - w.X, a.Y + b.Y - w.Y, a.Z + b.Z - w.Z);
+                    ClaimMarker(opposite, -1, VoxelRenderType.Primary, midpointSeam);
+                }
+            }
+            return claims;
+
+            void ClaimMarker(Vec3d w, int point, VoxelRenderType type, (PlaneAxis Axis, long Coordinate)? seam)
+            {
+                int best = -1; double bestD2 = double.MaxValue;
                 for (int i = 0; i < cells.Count; i++)
                 {
-                    double dx = (cells[i].X + half) / 16.0 - w.X;
-                    double dy = (cells[i].Y + half) / 16.0 - w.Y;
-                    double dz = (cells[i].Z + half) / 16.0 - w.Z;
+                    VoxelScanCancellation.Checkpoint(ref work, cancelled);
+                    double dx = (cells[i].X + half) / VoxelGrid.UnitsPerBlock - w.X;
+                    double dy = (cells[i].Y + half) / VoxelGrid.UnitsPerBlock - w.Y;
+                    double dz = (cells[i].Z + half) / VoxelGrid.UnitsPerBlock - w.Z;
                     double d2 = dx * dx + dy * dy + dz * dz;
                     if (d2 < bestD2) { bestD2 = d2; best = i; }
                 }
-                if (best >= 0 &&
-                    (cells[best].Type == VoxelRenderType.Normal || Precedence(t) > Precedence(cells[best].Type)))
-                    cells[best] = cells[best].WithType(t);
+                if (best < 0) return;
+                Claim(best, point, type);
+                if (!seam.HasValue) return;
+
+                VoxelPosition nearest = cells[best];
+                (PlaneAxis axis, long seamCoordinate) = seam.Value;
+                int transverse = axis == PlaneAxis.X ? nearest.X : axis == PlaneAxis.Y ? nearest.Y : nearest.Z;
+                if (transverse != seamCoordinate && transverse != seamCoordinate - scale) return;
+                int partner = (int)(2 * seamCoordinate - transverse - scale);
+                int x = axis == PlaneAxis.X ? partner : nearest.X;
+                int y = axis == PlaneAxis.Y ? partner : nearest.Y;
+                int z = axis == PlaneAxis.Z ? partner : nearest.Z;
+                for (int i = 0; i < cells.Count; i++)
+                {
+                    VoxelScanCancellation.Checkpoint(ref work, cancelled);
+                    if (cells[i].X != x || cells[i].Y != y || cells[i].Z != z) continue;
+                    Claim(i, point, type);
+                    break;
+                }
             }
+
+            void Claim(int index, int point, VoxelRenderType type)
+            {
+                if (!claims.TryGetValue(index, out var current)
+                    || (point >= 0 && Precedence(type) > Precedence(current.Type)))
+                    claims[index] = (point, type);
+            }
+        }
+
+        private ((PlaneAxis Axis, long Coordinate)? Anchor, (PlaneAxis Axis, long Coordinate)? Midpoint)
+            RimSeams(PlaneAxis circleAxis, int scale)
+        {
+            const double tolerance = 1e-8;
+            Vec3d start = _controlPoints[0].WorldPosition;
+            Vec3d end = _controlPoints[1].WorldPosition;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
+            PlaneAxis u = circleAxis == PlaneAxis.X ? PlaneAxis.Y : PlaneAxis.X;
+            PlaneAxis v = circleAxis == PlaneAxis.Z ? PlaneAxis.Y : PlaneAxis.Z;
+            double du = Math.Abs(CircleRaster.Coordinate(end, u) - CircleRaster.Coordinate(start, u)) / cell;
+            double dv = Math.Abs(CircleRaster.Coordinate(end, v) - CircleRaster.Coordinate(start, v)) / cell;
+            double cu = (CircleRaster.Coordinate(start, u) + CircleRaster.Coordinate(end, u)) / (2 * cell);
+            double cv = (CircleRaster.Coordinate(start, v) + CircleRaster.Coordinate(end, v)) / (2 * cell);
+            double seamU = Math.Round(cu), seamV = Math.Round(cv);
+            bool onU = Math.Abs(cu - seamU) <= tolerance;
+            bool onV = Math.Abs(cv - seamV) <= tolerance;
+            // For diagonal anchors, pair markers only when the circle is centered on both seams.
+            if (Math.Min(du, dv) > tolerance && !(onU && onV)) return default;
+            (PlaneAxis, long)? uSeam = onU ? (u, (long)seamU * scale) : null;
+            (PlaneAxis, long)? vSeam = onV ? (v, (long)seamV * scale) : null;
+            return du >= dv ? (vSeam, uSeam) : (uSeam, vSeam);
         }
 
         private static int Precedence(VoxelRenderType t) => t switch

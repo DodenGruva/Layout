@@ -63,7 +63,7 @@ namespace Layout.Shapes
         {
             VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
             stopAfter = Math.Max(0, stopAfter);
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             double r2 = radius * radius;
             bool clipped = halfSpaceNormal != null;
             double spread = clipped
@@ -96,11 +96,11 @@ namespace Layout.Shapes
                 int yi = column % yCount;
                 int ix = min16X + xi * scale;
                 int iy = min16Y + yi * scale;
-                double lox = ix / 16.0;
+                double lox = ix / VoxelGrid.UnitsPerBlock;
                 double nx = Nearest(centre.X, lox, lox + cell);
                 double fx = Farthest(centre.X, lox, lox + cell);
                 double ccx = lox + cell * 0.5 - centre.X;
-                double loy = iy / 16.0;
+                double loy = iy / VoxelGrid.UnitsPerBlock;
                 double ny = Nearest(centre.Y, loy, loy + cell);
                 double fy = Farthest(centre.Y, loy, loy + cell);
                 double nxy2 = nx * nx + ny * ny;
@@ -186,13 +186,13 @@ namespace Layout.Shapes
             Func<bool> cancellationRequested)
         {
             if (first16Z > last16Z) return false;
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
 
             for (int iz = first16Z; iz <= last16Z; iz += scale)
             {
                 if (collector == null)
                     VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
-                double loz = iz / 16.0;
+                double loz = iz / VoxelGrid.UnitsPerBlock;
                 double nz = Nearest(centre.Z, loz, loz + cell);
                 if (nxy2 + nz * nz > r2) continue;
 
@@ -224,7 +224,7 @@ namespace Layout.Shapes
             stopAfter == int.MaxValue ? int.MaxValue : stopAfter + 1;
 
         private static int AlignDown(double world, int scale) =>
-            (int)Math.Floor(world * 16.0 / scale) * scale;
+            (int)Math.Floor(world * VoxelGrid.UnitsPerBlock / scale) * scale;
 
         private static double Nearest(double centre, double lo, double hi) =>
             centre < lo ? lo - centre : centre > hi ? centre - hi : 0.0;

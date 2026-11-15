@@ -20,8 +20,8 @@ namespace Layout.Systems
     /// </remarks>
     public sealed class GuideMeshOptions
     {
-        /// <summary>Voxel edge length in 1/16-block units (1, 2, 4, 8, 16). Must match the voxels' own scale.</summary>
-        public int Scale = 1;
+        /// <summary>Voxel edge length in guide grid units. Must match the voxels' own scale.</summary>
+        public int Scale = VoxelGrid.ChiselScale;
 
         /// <summary>Volumetric → solid cubes; Surface → flat tiles on <see cref="Plane"/> (see class remarks).</summary>
         public ProjectionMode Mode = ProjectionMode.Volumetric;
@@ -100,7 +100,7 @@ namespace Layout.Systems
         public bool Hidden = false;
 
         /// <summary>
-        /// Block-occupancy recolour probe (v0.3.79): given CELL-space (1/16) coordinates, returns whether
+        /// Block-occupancy recolour probe (v0.3.79): given guide grid coordinates, returns whether
         /// world material occupies that cell. Body voxels that come back true are drawn in the "built"
         /// colour. Null disables the feature entirely, which is what the player's toggle does — so a guide
         /// built with the toggle off is byte-identical to one built before the feature existed.
@@ -344,8 +344,8 @@ namespace Layout.Systems
             double oz = options.Origin?.Z ?? 0.0;
 
             bool surface = options.Mode == ProjectionMode.Surface;
-            float edge = scale / 16f;      // cube / tile edge, world blocks
-            double half = scale / 2.0;     // half a voxel, 1/16 units (for the voxel centre)
+            float edge = scale / (float)VoxelGrid.CellsPerBlock;      // cube / tile edge, world blocks
+            double half = scale / 2.0;     // half a voxel, in grid units (for the voxel centre)
 
             // Anchor split.
             Vec3d start = options.StartAnchor;
@@ -363,13 +363,13 @@ namespace Layout.Systems
             int grabbedIdx = -1;
             if (grab != null)
             {
-                double gate = 1.5 * scale / 16.0;          // world blocks; ~1.5 cells
+                double gate = 1.5 * scale / VoxelGrid.UnitsPerBlock;          // world blocks; ~1.5 cells
                 double bestD2 = gate * gate;
                 for (int i = 0; i < voxels.Count; i++)
                 {
                     VoxelPosition v = voxels[i];
                     if (options.Hidden && v.Type != VoxelRenderType.Anchor) continue;
-                    double d2 = Dist2((v.X + half) / 16.0, (v.Y + half) / 16.0, (v.Z + half) / 16.0, grab);
+                    double d2 = Dist2((v.X + half) / VoxelGrid.UnitsPerBlock, (v.Y + half) / VoxelGrid.UnitsPerBlock, (v.Z + half) / VoxelGrid.UnitsPerBlock, grab);
                     if (d2 < bestD2) { bestD2 = d2; grabbedIdx = i; }
                 }
             }
@@ -442,9 +442,9 @@ namespace Layout.Systems
                 if (options.Hidden && v.Type != VoxelRenderType.Anchor) continue;
 
                 // Voxel centre in world blocks — the same reference ArchShape uses for its markers.
-                double cx = (v.X + half) / 16.0;
-                double cy = (v.Y + half) / 16.0;
-                double cz = (v.Z + half) / 16.0;
+                double cx = (v.X + half) / VoxelGrid.UnitsPerBlock;
+                double cy = (v.Y + half) / VoxelGrid.UnitsPerBlock;
+                double cz = (v.Z + half) / VoxelGrid.UnitsPerBlock;
 
                 float r, g, b, a;
                 if (vi == grabbedIdx)
@@ -475,10 +475,7 @@ namespace Layout.Systems
                             || v.Type == VoxelRenderType.Primary
                             || v.Type == VoxelRenderType.Anchor))
                     {
-                        // Sample the CENTRE cell of the voxel. At scale 1 that is the voxel itself and the
-                        // correspondence with a chisel voxel is exact; at coarser scales one guide voxel
-                        // spans many world cells and the centre is the cheapest defensible verdict (plan
-                        // §2.1 — revisit if it reads badly at scale 16).
+                        // Sample the material cell containing the voxel centre.
                         int mid = scale >> 1;
                         if (options.OccupancyProbe(v.X + mid, v.Y + mid, v.Z + mid))
                         {
@@ -509,15 +506,27 @@ namespace Layout.Systems
                     // front of the wall. So along the plane axis only, emit a thin slab that hugs the
                     // wall-side face of the cell (side −1 = min face, +1 = max face, 0 = centred), pulled
                     // off the wall by PlaneInset so it never z-fights. Tangential axes stay full-size.
-                    float lx = (float)(v.X / 16.0 - ox);
-                    float ly = (float)(v.Y / 16.0 - oy);
-                    float lz = (float)(v.Z / 16.0 - oz);
+                    float lx = (float)(v.X / VoxelGrid.UnitsPerBlock - ox);
+                    float ly = (float)(v.Y / VoxelGrid.UnitsPerBlock - oy);
+                    float lz = (float)(v.Z / VoxelGrid.UnitsPerBlock - oz);
 
                     float inset = options.PlaneInset;
                     float t = Math.Min(options.SurfaceSlabThickness, edge - 2f * inset); // sanity at tiny scales
                     float axisOffset = options.SurfaceSlabSide < 0 ? inset
                                      : options.SurfaceSlabSide > 0 ? edge - inset - t
                                      : (edge - t) * 0.5f;
+
+                    // An internal chisel face may split a coarser guide cell. Draw at the plane
+                    // in that case, even though the flattened voxels belong to the coarser grid.
+                    int cellStart = options.Plane.FlattenedAxis switch
+                    {
+                        PlaneAxis.X => v.X,
+                        PlaneAxis.Y => v.Y,
+                        _ => v.Z
+                    };
+                    int planeInCell = options.Plane.PlaneOffset - cellStart;
+                    if (planeInCell > 0 && planeInCell < scale)
+                        axisOffset = (float)(planeInCell / VoxelGrid.UnitsPerBlock) - t * 0.5f;
 
                     float ex = edge, ey = edge, ez = edge;
                     switch (options.Plane.FlattenedAxis)
@@ -602,12 +611,12 @@ namespace Layout.Systems
                     // not, and the welder matches bit-exactly — the old form would have blocked nearly every
                     // cross-voxel weld. Insets still apply per face, so faces that genuinely sit at
                     // different positions correctly refuse to share.
-                    float x0 = (float)(v.X / 16.0 - ox) + ix + fx0;
-                    float y0 = (float)(v.Y / 16.0 - oy) + iy + fy0;
-                    float z0 = (float)(v.Z / 16.0 - oz) + iz + fz0;
-                    float x1 = (float)((v.X + scale) / 16.0 - ox) - ix - fx1;
-                    float y1 = (float)((v.Y + scale) / 16.0 - oy) - iy - fy1;
-                    float z1 = (float)((v.Z + scale) / 16.0 - oz) - iz - fz1;
+                    float x0 = (float)(v.X / VoxelGrid.UnitsPerBlock - ox) + ix + fx0;
+                    float y0 = (float)(v.Y / VoxelGrid.UnitsPerBlock - oy) + iy + fy0;
+                    float z0 = (float)(v.Z / VoxelGrid.UnitsPerBlock - oz) + iz + fz0;
+                    float x1 = (float)((v.X + scale) / VoxelGrid.UnitsPerBlock - ox) - ix - fx1;
+                    float y1 = (float)((v.Y + scale) / VoxelGrid.UnitsPerBlock - oy) - iy - fy1;
+                    float z1 = (float)((v.Z + scale) / VoxelGrid.UnitsPerBlock - oz) - iz - fz1;
 
                     // Emit only the exposed faces, wound to match the outward (CCW) orientation the old
                     // cube path used.
@@ -649,15 +658,15 @@ namespace Layout.Systems
                 if (v.Z > maxZ) maxZ = v.Z;
             }
 
-            int spanX = maxX - minX, spanY = maxY - minY, spanZ = maxZ - minZ; // 1/16 units, multiples of scale
+            int spanX = maxX - minX, spanY = maxY - minY, spanZ = maxZ - minZ; // grid units, multiples of scale
             double hSpan = Math.Sqrt((double)spanX * spanX + (double)spanZ * spanZ);
 
             // +1 → inclusive voxel COUNT across the span (a single voxel is 1 wide and 1 tall).
             int voxelWidth = (int)Math.Round(hSpan / scale) + 1;
             int voxelHeight = spanY / scale + 1;
 
-            int blockWidth = CeilDiv(voxelWidth * scale, 16);
-            int blockHeight = CeilDiv(voxelHeight * scale, 16);
+            int blockWidth = CeilDiv(voxelWidth * scale, VoxelGrid.CellsPerBlock);
+            int blockHeight = CeilDiv(voxelHeight * scale, VoxelGrid.CellsPerBlock);
 
             return new GuideExtent(voxelWidth, voxelHeight, blockWidth, blockHeight);
         }
@@ -683,9 +692,9 @@ namespace Layout.Systems
             void Include(Vec3d point)
             {
                 if (point == null) return;
-                int x = (int)Math.Floor(point.X * 16.0 / scale) * scale;
-                int y = (int)Math.Floor(point.Y * 16.0 / scale) * scale;
-                int z = (int)Math.Floor(point.Z * 16.0 / scale) * scale;
+                int x = (int)Math.Floor(point.X * VoxelGrid.UnitsPerBlock / scale) * scale;
+                int y = (int)Math.Floor(point.Y * VoxelGrid.UnitsPerBlock / scale) * scale;
+                int z = (int)Math.Floor(point.Z * VoxelGrid.UnitsPerBlock / scale) * scale;
                 minX = Math.Min(minX, x); maxX = Math.Max(maxX, x);
                 minY = Math.Min(minY, y); maxY = Math.Max(maxY, y);
                 minZ = Math.Min(minZ, z); maxZ = Math.Max(maxZ, z);
@@ -704,7 +713,8 @@ namespace Layout.Systems
             int voxelWidth = (int)Math.Round(horizontal / scale) + 1;
             int voxelHeight = (maxY - minY) / scale + 1;
             return new GuideExtent(voxelWidth, voxelHeight,
-                CeilDiv(voxelWidth * scale, 16), CeilDiv(voxelHeight * scale, 16));
+                CeilDiv(voxelWidth * scale, VoxelGrid.CellsPerBlock),
+                CeilDiv(voxelHeight * scale, VoxelGrid.CellsPerBlock));
         }
 
         private static GuideExtent ExtentFromWorldDimensions(
@@ -712,10 +722,10 @@ namespace Layout.Systems
         {
             const double roundingEpsilon = 1e-9;
             int voxelWidth = Math.Max(1,
-                (int)Math.Ceiling(Math.Max(0.0, width) * 16.0 / scale
+                (int)Math.Ceiling(Math.Max(0.0, width) * VoxelGrid.UnitsPerBlock / scale
                     - roundingEpsilon));
             int voxelHeight = Math.Max(1,
-                (int)Math.Ceiling(Math.Max(0.0, height) * 16.0 / scale
+                (int)Math.Ceiling(Math.Max(0.0, height) * VoxelGrid.UnitsPerBlock / scale
                     - roundingEpsilon));
             int blockWidth = Math.Max(1,
                 (int)Math.Ceiling(Math.Max(0.0, width) - roundingEpsilon));
@@ -793,30 +803,30 @@ namespace Layout.Systems
         private static void AddTile(MeshData mesh, ProjectionPlane plane, VoxelPosition v, float e,
                                     double ox, double oy, double oz, int color)
         {
-            float planeW = (float)(plane.PlaneOffset / 16.0);
+            float planeW = (float)(plane.PlaneOffset / VoxelGrid.UnitsPerBlock);
             switch (plane.FlattenedAxis)
             {
                 case PlaneAxis.Y: // horizontal: vary X/Z at y = offset
                 {
                     float y = (float)(planeW - oy);
-                    float x0 = (float)(v.X / 16.0 - ox), x1 = x0 + e;
-                    float z0 = (float)(v.Z / 16.0 - oz), z1 = z0 + e;
+                    float x0 = (float)(v.X / VoxelGrid.UnitsPerBlock - ox), x1 = x0 + e;
+                    float z0 = (float)(v.Z / VoxelGrid.UnitsPerBlock - oz), z1 = z0 + e;
                     AddQuad(mesh, null, x0, y, z0, x1, y, z0, x1, y, z1, x0, y, z1, color);
                     break;
                 }
                 case PlaneAxis.Z: // vertical N–S: vary X/Y at z = offset
                 {
                     float z = (float)(planeW - oz);
-                    float x0 = (float)(v.X / 16.0 - ox), x1 = x0 + e;
-                    float y0 = (float)(v.Y / 16.0 - oy), y1 = y0 + e;
+                    float x0 = (float)(v.X / VoxelGrid.UnitsPerBlock - ox), x1 = x0 + e;
+                    float y0 = (float)(v.Y / VoxelGrid.UnitsPerBlock - oy), y1 = y0 + e;
                     AddQuad(mesh, null, x0, y0, z, x1, y0, z, x1, y1, z, x0, y1, z, color);
                     break;
                 }
                 default: // PlaneAxis.X — vertical E–W: vary Z/Y at x = offset
                 {
                     float x = (float)(planeW - ox);
-                    float z0 = (float)(v.Z / 16.0 - oz), z1 = z0 + e;
-                    float y0 = (float)(v.Y / 16.0 - oy), y1 = y0 + e;
+                    float z0 = (float)(v.Z / VoxelGrid.UnitsPerBlock - oz), z1 = z0 + e;
+                    float y0 = (float)(v.Y / VoxelGrid.UnitsPerBlock - oy), y1 = y0 + e;
                     AddQuad(mesh, null, x, y0, z0, x, y0, z1, x, y1, z1, x, y1, z0, color);
                     break;
                 }

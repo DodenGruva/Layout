@@ -195,6 +195,8 @@ namespace Layout.Items
             {
                 ModifierInteraction(ShapeModifierHelp.CtrlCardinal, "ctrl",
                     "heldhelp-layout-cardinal"),
+                ModifierInteraction(ShapeModifierHelp.CtrlCircleDiameter, "ctrl",
+                    "heldhelp-layout-circlediameter"),
                 ModifierInteraction(ShapeModifierHelp.ShiftVertical, "shift",
                     "heldhelp-layout-vertical"),
                 ModifierInteraction(ShapeModifierHelp.ShiftCenterApex, "shift",

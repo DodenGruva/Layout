@@ -784,6 +784,23 @@ different path and may derive from their already-transformed geometry.
 
 ---
 
+### G57 — Convert saved voxel units once at the storage boundary.
+
+**Trigger:** loading saved guides, changing voxel grid precision, or configuring the Layout network channel.
+Voxel scale, plane offsets and movement deltas are integer grid units. Control points are world-space coordinates.
+The 0.5.0 release reads a 16-cell store only when its own store is absent. Multiply the stored steps and plane
+offsets by four during import. Preserve the old payload and treat an existing empty registry as authoritative.
+The release channel identifies the coordinate units so an older peer cannot interpret finer units as 16-cell values.
+**Found:** Session 46.
+
+### G58 — Check for a deferred draft cap before chasing frame drops.
+
+**Trigger:** the guide holds an old aim and catches up after a short pause while the world continues moving.
+A settled cap check can leave a known safe size. If the scheduler defers every count during movement, the
+preview can hold that size even far below the limit. Give bounded outlines a live budget and let expensive
+fill counts settle. Verify the sequence after a safe pose is already known.
+**Found:** Session 46.
+
 ## Reversals and disproved claims
 
 **This section prevents the most expensive failure mode there is: re-implementing something that was removed

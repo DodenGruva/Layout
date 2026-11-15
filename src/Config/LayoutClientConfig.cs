@@ -31,6 +31,14 @@ namespace Layout.Config
         [JsonProperty("guideRenderingEnabled")]
         public bool GuideRenderingEnabled { get; set; } = true;
 
+        [JsonProperty("displayVoxelGrid")]
+        public bool DisplayVoxelGrid { get; set; }
+
+        public bool EnableThinShapes { get; set; }
+
+        [JsonProperty("outlineTargetedVoxel")]
+        public bool OutlineTargetedVoxel { get; set; } = true;
+
         // ------------------------------------------------------------------------------------------
         //  Chalk refill channels (v0.2.22 — moved here from the SERVER config, human-directed). These are
         //  player CONVENIENCE toggles, not server policy: refilling always costs the same powder wherever
@@ -56,9 +64,25 @@ namespace Layout.Config
             "Convenience only. Setting a kit on the ground and Shift+right-clicking it with powder always "
             + "works regardless of these two settings.";
 
-        /// <summary>Voxel scale the tool starts with (one of 1/2/4/8/16). Default 1 — chisel resolution.</summary>
+        /// <summary>Voxel scale the tool starts with. Defaults to chisel resolution.</summary>
         [JsonProperty("defaultScale")]
-        public int DefaultScale { get; set; } = 1;
+        public int DefaultScale { get; set; } = VoxelGrid.ChiselScale;
+
+        [JsonProperty("enableHighResolution")]
+        public bool EnableHighResolution { get; set; }
+
+        internal void UpgradeLegacyScale()
+        {
+            DefaultScale = DefaultScale is 1 or 2 or 4 or 8 or 16
+                ? DefaultScale * VoxelGrid.ChiselScale : VoxelGrid.ChiselScale;
+        }
+
+        internal int NormalizeToolScale(int scale)
+        {
+            if (!EnableHighResolution && scale < VoxelGrid.ChiselScale)
+                return VoxelGrid.ChiselScale;
+            return GuideData.IsValidVoxelScale(scale) ? scale : VoxelGrid.ChiselScale;
+        }
 
         /// <summary>
         /// Projection mode the tool starts with, stored as the pinned enum value so a hand-edited file stays
@@ -272,7 +296,7 @@ namespace Layout.Config
         /// <summary>Folds out-of-range values (e.g. from a hand-edited file) back to safe defaults.</summary>
         public void Normalize()
         {
-            if (!GuideData.IsValidVoxelScale(DefaultScale)) DefaultScale = 1;
+            DefaultScale = NormalizeToolScale(DefaultScale);
             if (DefaultProjection != (int)ProjectionMode.Volumetric &&
                 DefaultProjection != (int)ProjectionMode.Surface)
                 DefaultProjection = (int)ProjectionMode.Volumetric;

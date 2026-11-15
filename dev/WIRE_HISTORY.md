@@ -11,7 +11,7 @@
 > the current number. This ledger was built by reading that list, not by reassembling prose. **If the two
 > ever disagree, the source is right and this file is wrong.**
 
-**Current: DataVersion 14, protocol 29.**
+**Current: DataVersion 18, protocol 33.**
 
 ---
 
@@ -49,6 +49,11 @@ One row per bump. "Packets added" is the exact set appended to `RegistrationOrde
 | 27 | v0.4.60 | 41 | *(none)* | **`GuideShapeType` gained `Roundover = 15`** — a new meaning carried by existing guide/create DTO fields. The client records the server protocol and blocks public Roundover placement against older servers; private placement remains local |
 | 28 | v0.4.67 | 42 | *(none)* | **Roundover's shared chain gained the profile-first meaning.** New creates carry the open sweep route followed by two terminal Primary profile handles; `GuideCreateRequestPacket.Closed = true` selects that constructor on authority but does not make the stored Roundover closed. Public placement is gated to protocol 28; legacy one-handle guides remain readable |
 | 29 | v0.4.82 | 45 | *(none)* | **`GuideDataDto` appended `ArchUsesShapePlaneAxis` at field 26.** For Arch/Half-circle only, true makes the existing `ShapePlaneAxis` define the curve plane; absent/false preserves the legacy world-vertical interpretation. This is a field and geometry-semantic change, so both sides must agree even though no packet type was added |
+
+| 30 | v0.4.83 | 46 | *(none)* | Experimental 64-cell coordinate grid used a separate channel and stores |
+| 31 | v0.4.87 | 46 | *(none)* | `GuideDataDto.CircleUsesSymmetricRaster` field 27 preserves legacy circles and enables symmetric coverage for new supported placements |
+| 32 | v0.4.95 | 46 | *(none)* | `GuideDataDto.Outline` field 28 and `RenderSettingsDto.Outline` field 8 carry per-guide outline style |
+| 33 | v0.5.0 | 46 | *(none)* | Release adopts the 64-cell grid on `layout-grid64`. Scale, plane offsets and translations use 64-cell units |
 
 **Rows marked *(none)*** bumped the protocol without appending a packet — a field was added to an existing
 packet, or a meaning changed. The version still moved because both sides must agree.
@@ -91,6 +96,7 @@ far easier to do by accident because the enum looks like ordinary code.
 | `LayoutAdminSetting` | `LayoutAdminConfigRequestPacket.Setting` | Slots 6 and 7 retired but declared — see above |
 | `GuideOpStatus` | `GuidePlacementRejectedPacket.Reason` | **Append only.** `RejectedEmpty` was appended last at v0.4.37 |
 | `VoxelCapKind` | `VoxelCapWarningPacket.CapKind` | **Append only.** `GuideCount` appended last at v0.4.46 (protocol 26). ⚠️ **This one IS read by the client**, unlike `GuideOpStatus` below — `GuideHud` switches on it — so an insertion would silently re-label every value after it. `0` is `Unspecified` on purpose: it is what a pre-25 server sends AND what the client normalises any unrecognised value to, so both collapse to the old generic wording |
+| `OutlineStyle` | guide state and create settings | `0` Legacy, `1` shared-side connections, `2` thin. Unknown values fall back to Legacy |
 | `GuideShapeType` | guide state and create/update DTO fields | **Append only.** `Roundover = 15` was appended at v0.4.60 (protocol 27). Its chain gained the two-profile-handle meaning at v0.4.67 (protocol 28). Public creation is protocol-gated client-side; older one-handle Roundovers remain readable |
 
 ⚠️ **Today's client ignores `GuidePlacementRejectedPacket.Reason` entirely** — it fires a parameterless event
@@ -116,11 +122,16 @@ DataVersion stamps the **saved guide record**, not the wire. `GuideData.CurrentD
 | **13** | 33 | **The Rectangle/Box re-gesture** — Rectangle became 3 clicks, Box 4, Square stayed 2 |
 | **14** | 45 | **Plane-aware Arch/Half-circle encoding.** New records set `ArchUsesShapePlaneAxis`; false or absent records retain legacy world-vertical geometry |
 
+| **15** | 46 | Experimental 64-cell storage and grid conversion for older regular saves |
+| **16** | 46 | Symmetric circle raster flag |
+| **17** | 46 | Per-guide outline style |
+| **18** | 46 | Separate regular 64-cell storage and one-time import of earlier regular guides |
+
 **The ledger starts at DV 5**, which is as far back as the session records reach. What DataVersions 2–4
 added is recorded in `dev/ARCHITECTURE.md` → *Data & wire* (v4 `Constraint` + `ShapePlaneAxis`, v3
 `CreatorUid`, v2 `Projection`/`Plane`/`IsFilled`); no session is claimed for them here rather than guessed.
 
-⚠️ **Legacy encodings are READ IN PLACE, never migrated.** Two-point rectangles and three-point boxes
+⚠️ **Legacy shape encodings are read in place.** Numeric grid units convert during 16-cell import. Two-point rectangles and three-point boxes
 reproduce to the voxel from their old encoding. Arch/Half-circle records without
 `ArchUsesShapePlaneAxis = true` likewise keep their former world-vertical geometry rather than being silently
 reinterpreted from an old `ShapePlaneAxis` value. This is not laziness: **shapes are adopted on renderer

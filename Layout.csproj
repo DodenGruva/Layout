@@ -7,7 +7,6 @@
     <AssemblyName>Layout</AssemblyName>
     <RootNamespace>Layout</RootNamespace>
     <Nullable>disable</Nullable>
-    <!-- This is a compile-check only: we are not packaging a runnable mod yet. -->
   </PropertyGroup>
 
   <!-- =============================================================== -->

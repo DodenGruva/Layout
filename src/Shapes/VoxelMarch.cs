@@ -7,7 +7,7 @@ namespace Layout.Shapes
 {
     /// <summary>
     /// Shared point-sequence → voxel-cell marching (Session 8). The same convention CatmullRomSpline uses
-    /// internally: world position → 1/16-unit grid → snap DOWN to the scale-aligned lower corner; a shared
+    /// internally: world position → guide grid → snap DOWN to the scale-aligned lower corner; a shared
     /// seen-set gives first-claim dedupe while preserving discovery order. Extracted so the arc, ellipse,
     /// and fill samplers voxelise identically to the spline (Module-1 invariant: same cell math everywhere,
     /// or the cap check and the visible guide disagree at the boundary).
@@ -30,14 +30,15 @@ namespace Layout.Shapes
         /// </summary>
         public static void MarchSegmentInto(
             List<VoxelPosition> into, HashSet<(int, int, int)> seen,
-            Vec3d a, Vec3d b, int scale)
+            Vec3d a, Vec3d b, int scale, Func<bool> cancellationRequested = null)
         {
             double dx = b.X - a.X, dy = b.Y - a.Y, dz = b.Z - a.Z;
             double len = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             int steps = Math.Max(1, (int)Math.Ceiling(len / (cell * 0.5)));
             for (int i = 0; i <= steps; i++)
             {
+                if ((i & 2047) == 0) VoxelScanCancellation.ThrowIfRequested(cancellationRequested);
                 double f = (double)i / steps;
                 Claim(into, seen,
                     new Vec3d(a.X + dx * f, a.Y + dy * f, a.Z + dz * f), scale);
@@ -46,11 +47,11 @@ namespace Layout.Shapes
 
         private static void Claim(List<VoxelPosition> into, HashSet<(int, int, int)> seen, Vec3d p, int scale)
         {
-            // EXACTLY CatmullRomSpline.Quantize: lower-corner 1/16-unit cell snapped to a multiple of
+            // EXACTLY CatmullRomSpline.Quantize: lower-corner guide grid cell snapped to a multiple of
             // scale, Math.Floor (not truncation) so negative coordinates stay correct.
-            int x = (int)Math.Floor(p.X * 16.0 / scale) * scale;
-            int y = (int)Math.Floor(p.Y * 16.0 / scale) * scale;
-            int z = (int)Math.Floor(p.Z * 16.0 / scale) * scale;
+            int x = (int)Math.Floor(p.X * VoxelGrid.UnitsPerBlock / scale) * scale;
+            int y = (int)Math.Floor(p.Y * VoxelGrid.UnitsPerBlock / scale) * scale;
+            int z = (int)Math.Floor(p.Z * VoxelGrid.UnitsPerBlock / scale) * scale;
             if (seen.Add((x, y, z)))
                 into.Add(new VoxelPosition(x, y, z, VoxelRenderType.Normal));
         }

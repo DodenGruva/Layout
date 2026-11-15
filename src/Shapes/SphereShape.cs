@@ -86,7 +86,7 @@ namespace Layout.Shapes
         // Bounding-box cell count at this scale, for the scan guard.
         private bool ScanTooBig(int scale, Vec3d c, double r)
         {
-            long cellsPerAxis = (long)(2.0 * r * 16.0 / scale) + 3;
+            long cellsPerAxis = (long)(2.0 * r * VoxelGrid.UnitsPerBlock / scale) + 3;
             return cellsPerAxis * cellsPerAxis * cellsPerAxis > MaxScanCells;
         }
 
@@ -113,10 +113,10 @@ namespace Layout.Shapes
 
             if (ScanTooBig(scale, c, r)) return result;          // filled-volume scan guard
 
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             double r2 = r * r;
 
-            // Cell-index range on each axis (indices in 1/16 units, aligned to the scale grid).
+            // Cell-index range on each axis (indices in guide grid units, aligned to the scale grid).
             int min16X = AlignDown(c.X - r, scale), max16X = AlignDown(c.X + r, scale);
             int min16Y = AlignDown(c.Y - r, scale), max16Y = AlignDown(c.Y + r, scale);
             int min16Z = AlignDown(c.Z - r, scale), max16Z = AlignDown(c.Z + r, scale);
@@ -124,18 +124,18 @@ namespace Layout.Shapes
             int work = 0;
             for (int ix = min16X; ix <= max16X; ix += scale)
             {
-                double lox = ix / 16.0;
+                double lox = ix / VoxelGrid.UnitsPerBlock;
                 double nx = Nearest(c.X, lox, lox + cell);
                 for (int iy = min16Y; iy <= max16Y; iy += scale)
                 {
-                    double loy = iy / 16.0;
+                    double loy = iy / VoxelGrid.UnitsPerBlock;
                     double ny = Nearest(c.Y, loy, loy + cell);
                     double nxy2 = nx * nx + ny * ny;
                     if (nxy2 > r2) continue;                     // whole row is outside the ball
                     for (int iz = min16Z; iz <= max16Z; iz += scale)
                     {
                         VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
-                        double loz = iz / 16.0;
+                        double loz = iz / VoxelGrid.UnitsPerBlock;
                         double nz = Nearest(c.Z, loz, loz + cell);
                         double dmin2 = nxy2 + nz * nz;
                         if (dmin2 > r2) continue;                // cell entirely outside
@@ -184,7 +184,7 @@ namespace Layout.Shapes
             if (ScanTooBig(scale, c, r)) return GuideShapeVoxelCounting.Exceeded(stopAfter);
 
             stopAfter = Math.Max(0, stopAfter);
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             double r2 = r * r;
             int count = 0;
             int work = 0;
@@ -195,18 +195,18 @@ namespace Layout.Shapes
 
             for (int ix = min16X; ix <= max16X; ix += scale)
             {
-                double lox = ix / 16.0;
+                double lox = ix / VoxelGrid.UnitsPerBlock;
                 double nx = Nearest(c.X, lox, lox + cell);
                 for (int iy = min16Y; iy <= max16Y; iy += scale)
                 {
-                    double loy = iy / 16.0;
+                    double loy = iy / VoxelGrid.UnitsPerBlock;
                     double ny = Nearest(c.Y, loy, loy + cell);
                     double nxy2 = nx * nx + ny * ny;
                     if (nxy2 > r2) continue;
                     for (int iz = min16Z; iz <= max16Z; iz += scale)
                     {
                         VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
-                        double loz = iz / 16.0;
+                        double loz = iz / VoxelGrid.UnitsPerBlock;
                         double nz = Nearest(c.Z, loz, loz + cell);
                         if (nxy2 + nz * nz > r2) continue;
                         count++;
@@ -230,7 +230,7 @@ namespace Layout.Shapes
         }
 
         private static int AlignDown(double world, int scale) =>
-            (int)Math.Floor(world * 16.0 / scale) * scale;
+            (int)Math.Floor(world * VoxelGrid.UnitsPerBlock / scale) * scale;
 
         // Signed-distance helpers: offset from the centre coordinate to the nearest / farthest point of
         // the cell's [lo, hi] span on that axis.

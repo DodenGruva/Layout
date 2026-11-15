@@ -137,7 +137,7 @@ namespace Layout.Shapes
         /// types are uniform here so the dedup is purely by coordinate; the owning shape assigns real
         /// types afterward on this already-unique set. Never null.
         /// </summary>
-        /// <param name="scale">Voxel edge length in 1/16-block units; one of 1, 2, 4, 8, 16.</param>
+        /// <param name="scale">Voxel edge length in guide grid units.</param>
         public List<VoxelPosition> SampleVoxelPositions(int scale)
         {
             HashSet<(int, int, int)> cells = MarchCells(scale);
@@ -177,7 +177,7 @@ namespace Layout.Shapes
             var cells = new HashSet<(int, int, int)>();
             if (!_hasCurve || scale <= 0) return cells;
 
-            double worldVoxel = scale / 16.0;                 // voxel edge in blocks
+            double worldVoxel = scale / VoxelGrid.UnitsPerBlock;                 // voxel edge in blocks
             double length = Math.Max(_arcLength, worldVoxel); // guard tiny/zero length
 
             // Sample count sized to arc length so step ≈ MarchStepFraction of a voxel everywhere on
@@ -202,13 +202,13 @@ namespace Layout.Shapes
             return cells;
         }
 
-        // Lower-corner voxel cell containing worldPos, in 1/16-block units, snapped to a multiple of
+        // Lower-corner voxel cell containing worldPos, in guide grid units, snapped to a multiple of
         // scale. Math.Floor (not truncation) keeps negative coordinates correct.
         private static (int, int, int) Quantize(Vec3d worldPos, int scale)
         {
-            int x = (int)Math.Floor(worldPos.X * 16.0 / scale) * scale;
-            int y = (int)Math.Floor(worldPos.Y * 16.0 / scale) * scale;
-            int z = (int)Math.Floor(worldPos.Z * 16.0 / scale) * scale;
+            int x = (int)Math.Floor(worldPos.X * VoxelGrid.UnitsPerBlock / scale) * scale;
+            int y = (int)Math.Floor(worldPos.Y * VoxelGrid.UnitsPerBlock / scale) * scale;
+            int z = (int)Math.Floor(worldPos.Z * VoxelGrid.UnitsPerBlock / scale) * scale;
             return (x, y, z);
         }
 

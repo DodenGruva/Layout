@@ -17,6 +17,8 @@ namespace Layout.Shapes
     {
         private readonly List<ControlPoint> _controlPoints;
 
+        internal OutlineStyle Outline { get; set; }
+
         public List<ControlPoint> ControlPoints => _controlPoints;
 
         public ShapeConstraint Constraint => ShapeConstraint.None;
@@ -52,7 +54,7 @@ namespace Layout.Shapes
             if (!TryGetEnds(out Vec3d a, out Vec3d b)) return result;
 
             var seen = new HashSet<(int, int, int)>();
-            VoxelMarch.MarchSegmentInto(result, seen, a, b, scale);
+            OutlineVoxelizer.Segment(result, seen, a, b, scale, Outline);
 
             for (int i = 0; i < 2 && i < _controlPoints.Count; i++)
             {

@@ -241,7 +241,7 @@ authoritative copy. Listed here because they are genuinely open work:
 - **1.22.x support is declared, not tested.** Built against 1.22.3; smoke-test a 1.22.0/1.22.1 install.
 - The **Players list's scroll container** rests on reasoning rather than a test (`GOTCHAS` G18).
 - Session-29 **block-occupancy verification items** — the diagnostic commands are hidden behind
-  `"diagnosticCommands": true` in `layout-client.json`, not deleted, precisely for this.
+  `"diagnosticCommands": true` in `layout-client-grid64.json`, not deleted, precisely for this.
 - *(**`GOTCHAS` G4's general case — SETTLED, Session 39.** Every early return in `OnGuideAddedOrUpdated` was
   traced, not just one: each is pose-matched by `RenderFingerprint` or ends in `RebuildGuide`, and the
   `ScaffoldFingerprint` guard fails closed. G4 is annotated closed and kept for the pattern.)*

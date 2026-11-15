@@ -34,6 +34,7 @@ namespace Layout.Systems
 
         /// <summary>The placement point currently controlled by the crosshair for this draft stage.</summary>
         public Vec3d ActiveAim { get; }
+        public bool SymmetricCircleRaster { get; }
 
         public DraftPreviewSpec(
             int generation,
@@ -47,7 +48,8 @@ namespace Layout.Systems
             bool inverted = false,
             Vec3d apex = null,
             Vec3d rim = null,
-            bool flatSideAligned = false)
+            bool flatSideAligned = false,
+            bool symmetricCircleRaster = true)
         {
             Generation = generation;
             Settings = settings;
@@ -57,6 +59,8 @@ namespace Layout.Systems
             Sides = sides;
             Inverted = inverted;
             FlatSideAligned = flatSideAligned;
+            SymmetricCircleRaster = shapeType == GuideShapeType.Ellipse
+                && constraint == ShapeConstraint.Circle && symmetricCircleRaster;
             Start = Copy(start);
             End = Copy(end);
             Apex = Copy(apex);
@@ -153,7 +157,7 @@ namespace Layout.Systems
                 return new DraftPreviewSpec(
                     generation, Settings, ShapeType, Chain, null, ChainClosing, PlaneAxis);
             return new DraftPreviewSpec(generation, Settings, ShapeType, Constraint, PlaneAxis,
-                Start, End, Sides, Inverted, Apex, Rim, FlatSideAligned);
+                Start, End, Sides, Inverted, Apex, Rim, FlatSideAligned, SymmetricCircleRaster);
         }
 
         public IGuideShape CreateShape()
@@ -162,10 +166,11 @@ namespace Layout.Systems
                 return ShapeType == GuideShapeType.Roundover
                     ? new RoundoverShape(new List<Vec3d>(Chain),
                         hasTwoProfileHandles: RoundoverProfileSecond != null)
-                    : new FreeShape(new List<Vec3d>(Chain), ChainClosing);
+                    : new FreeShape(new List<Vec3d>(Chain), ChainClosing) { Outline = Settings.Outline };
 
             IGuideShape shape = ShapeFactory.Create(ShapeType, Constraint, PlaneAxis, Start, End,
-                Inverted, Sides, flatSideAligned: FlatSideAligned);
+                Inverted, Sides, flatSideAligned: FlatSideAligned, symmetricCircleRaster: SymmetricCircleRaster,
+                outline: Settings.Outline);
             DraftManager.ApplyPlacementPoints(shape, ShapeType, Constraint, Apex, Rim);
             return shape;
         }
@@ -180,9 +185,11 @@ namespace Layout.Systems
             Mix(ref h, (long)ShapeType); Mix(ref h, (long)Constraint); Mix(ref h, (long)PlaneAxis);
             Mix(ref h, Settings.Scale); Mix(ref h, (long)Settings.Mode); Mix(ref h, Settings.Filled ? 1 : 0);
             Mix(ref h, Settings.Wireframe ? 1 : 0);
+            Mix(ref h, (int)Settings.Outline);
             Mix(ref h, (long)Settings.Plane.FlattenedAxis); Mix(ref h, Settings.Plane.PlaneOffset);
             Mix(ref h, Settings.Divisions); Mix(ref h, Sides); Mix(ref h, Inverted ? 1 : 0);
             Mix(ref h, FlatSideAligned ? 1 : 0); Mix(ref h, IsChain ? 1 : 0); Mix(ref h, ChainClosing ? 1 : 0);
+            Mix(ref h, SymmetricCircleRaster ? 1 : 0);
             MixPoint(ref h, Start); MixPoint(ref h, End); MixPoint(ref h, Apex); MixPoint(ref h, Rim);
             if (IsChain)
                 for (int i = 0; i < Chain.Count; i++) MixPoint(ref h, Chain[i]);
@@ -202,6 +209,7 @@ namespace Layout.Systems
                 || guide.ShapePlaneAxis != PlaneAxis || guide.VoxelScale != Settings.Scale)
                 return false;
             if (ShapeType == GuideShapeType.Arch && !guide.ArchUsesShapePlaneAxis) return false;
+            if (guide.CircleUsesSymmetricRaster != SymmetricCircleRaster || guide.Outline != Settings.Outline) return false;
 
             bool volume = GuideShapeTypes.IsVolume(ShapeType);
             ProjectionMode expectedMode = volume ? ProjectionMode.Volumetric : Settings.Mode;
@@ -270,9 +278,9 @@ namespace Layout.Systems
         private static void MixPoint(ref ulong h, Vec3d p)
         {
             if (p == null) { Mix(ref h, long.MinValue); return; }
-            Mix(ref h, (long)Math.Floor(p.X * 16.0));
-            Mix(ref h, (long)Math.Floor(p.Y * 16.0));
-            Mix(ref h, (long)Math.Floor(p.Z * 16.0));
+            Mix(ref h, (long)Math.Floor(p.X * VoxelGrid.UnitsPerBlock));
+            Mix(ref h, (long)Math.Floor(p.Y * VoxelGrid.UnitsPerBlock));
+            Mix(ref h, (long)Math.Floor(p.Z * VoxelGrid.UnitsPerBlock));
         }
 
         private static void Mix(ref ulong h, long value)

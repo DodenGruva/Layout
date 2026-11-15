@@ -233,7 +233,8 @@ namespace Layout.Systems
     public class GuideManager
     {
         /// <summary>Save-blob key under which all guides are stored.</summary>
-        public const string StorageKey = "layout:guidedata";
+        internal const string LegacyStorageKey = "layout:guidedata";
+        public const string StorageKey = "layout:guidedata-grid64";
 
         /// <summary>
         /// Hard voxel ceiling enforced INDEPENDENT of the configurable caps (v0.1.26). A shape whose voxel
@@ -517,7 +518,7 @@ namespace Layout.Systems
                     settings.Plane, false, 0, settings.Wireframe);
             else if (!GuideShapeTypes.IsVolume(shapeType) && settings.Wireframe)
                 settings = new GuideRenderSettings(settings.Scale, settings.Mode,
-                    settings.Plane, settings.Filled, settings.Divisions, false);
+                    settings.Plane, settings.Filled, settings.Divisions, false, settings.Outline);
 
             // Guide-COUNT caps first — cheap, and nothing has been built yet (Guide is null in the result).
             if (_maxGuidesWorldWide > 0 && _guides.Count >= _maxGuidesWorldWide)
@@ -527,7 +528,7 @@ namespace Layout.Systems
                 return GuideOperationResult.OverGuideCount(null, CountGuidesBy(creatorUid), playerGuideLimit);
 
             IGuideShape shape = ShapeFactory.Create(shapeType, constraint, shapePlaneAxis, start, end,
-                inverted, sides, chain, closed, flatSideAligned);
+                inverted, sides, chain, closed, flatSideAligned, outline: settings.Outline);
 
             // Three-click shapes (Session 11 triangle; 0.1.21 cylinder/cone/box): the third click sets the
             // apex/height, stored at control point index 2 — and the four-click Tapered Cylinder's fourth
@@ -548,7 +549,7 @@ namespace Layout.Systems
                 GuideShapeTypes.UsesSides(shapeType) ? Shapes.PolygonShape.ClampSides(sides) : 0,
                 shape is Shapes.FreeShape fs && fs.IsClosed,
                 GuideShapeTypes.UsesSides(shapeType) && flatSideAligned,
-                GuideShapeTypes.IsVolume(shapeType) && settings.Wireframe);
+                GuideShapeTypes.IsVolume(shapeType) && settings.Wireframe, settings.Outline);
             data.ArchUsesShapePlaneAxis = shape is ArchShape;
             data.CreatorUid = creatorUid;
             data.CreatorName = CleanPlayerName(creatorName);
@@ -612,7 +613,7 @@ namespace Layout.Systems
                     settings.Plane, false, 0, settings.Wireframe);
             else if (!volume && settings.Wireframe)
                 settings = new GuideRenderSettings(settings.Scale, settings.Mode,
-                    settings.Plane, settings.Filled, settings.Divisions, false);
+                    settings.Plane, settings.Filled, settings.Divisions, false, settings.Outline);
 
             GuideOperationResult countLimit = CheckCreateGuideCountLimits(creatorUid);
             if (countLimit.Status == GuideOpStatus.RejectedOverGuideCount)
@@ -625,7 +626,7 @@ namespace Layout.Systems
             try
             {
                 shape = ShapeFactory.Create(shapeType, constraint, shapePlaneAxis, start, end,
-                    inverted, sides, chain, closed, flatSideAligned);
+                    inverted, sides, chain, closed, flatSideAligned, outline: settings.Outline);
                 DraftManager.ApplyPlacementPoints(
                     shape, shapeType, shape.Constraint, thirdPoint, fourthPoint);
             }
@@ -648,7 +649,7 @@ namespace Layout.Systems
                 GuideShapeTypes.UsesSides(shapeType) ? Shapes.PolygonShape.ClampSides(sides) : 0,
                 shape is Shapes.FreeShape fs && fs.IsClosed,
                 GuideShapeTypes.UsesSides(shapeType) && flatSideAligned,
-                volume && settings.Wireframe);
+                volume && settings.Wireframe, settings.Outline);
             data.ArchUsesShapePlaneAxis = shape is ArchShape;
             data.CreatorUid = creatorUid;
             data.CreatorName = CleanPlayerName(creatorName);
@@ -1043,9 +1044,9 @@ namespace Layout.Systems
             if (oldMode == ProjectionMode.Surface && mode == ProjectionMode.Volumetric)
             {
                 bakeRollback = SnapshotPoints(g);
-                double planeCoord = oldPlane.PlaneOffset / 16.0;
+                double planeCoord = oldPlane.PlaneOffset / VoxelGrid.UnitsPerBlock;
                 double bakeCoord = planeCoord
-                    + ProbeAirSide(g, oldPlane) * (g.VoxelScale / 16.0) * 0.5;
+                    + ProbeAirSide(g, oldPlane) * (g.VoxelScale / VoxelGrid.UnitsPerBlock) * 0.5;
                 foreach (ControlPoint cp in g.ControlPoints)
                 {
                     if (cp == null || cp.IsPhantom) continue;
@@ -1091,7 +1092,7 @@ namespace Layout.Systems
         // This is the server-side mirror of the renderer's CountSolidProbes decal-side vote (B-S10-2).
         private int ProbeAirSide(GuideData g, ProjectionPlane plane)
         {
-            double planeCoord = plane.PlaneOffset / 16.0;
+            double planeCoord = plane.PlaneOffset / VoxelGrid.UnitsPerBlock;
             int solidsPos = 0, solidsNeg = 0;
             foreach (ControlPoint cp in g.ControlPoints)
             {
@@ -1288,7 +1289,7 @@ namespace Layout.Systems
             return GuideOperationResult.Success(g, cached);
         }
 
-        // Expresses a translation in whole 1/16 units and verifies each axis is a whole number of the guide's
+        // Expresses a translation in whole guide grid units and verifies each axis is a whole number of the guide's
         // own voxels. Returns false for anything finer, so a malformed or stale packet cannot deform a shell.
         private static bool TryQuantiseTranslation(Vec3d delta, int scale, out int sx, out int sy, out int sz)
         {
@@ -1298,18 +1299,18 @@ namespace Layout.Systems
                 && TryAxis(delta.Y, scale, out sy)
                 && TryAxis(delta.Z, scale, out sz);
 
-            static bool TryAxis(double world, int scale, out int sixteenths)
+            static bool TryAxis(double world, int scale, out int cells)
             {
-                double exact = world * 16.0;
+                double exact = world * VoxelGrid.UnitsPerBlock;
                 double rounded = Math.Round(exact);
                 if (double.IsNaN(rounded) || double.IsInfinity(rounded)
                     || rounded < int.MinValue || rounded > int.MaxValue)
                 {
-                    sixteenths = 0;
+                    cells = 0;
                     return false;
                 }
-                sixteenths = (int)rounded;
-                return Math.Abs(exact - rounded) <= 1e-6 && sixteenths % scale == 0;
+                cells = (int)rounded;
+                return Math.Abs(exact - rounded) <= 1e-6 && cells % scale == 0;
             }
         }
 
@@ -1470,7 +1471,7 @@ namespace Layout.Systems
             }
             if (seen == 0) return new Vec3d();
 
-            double cell = Math.Max(1, g.VoxelScale) / 16.0;
+            double cell = Math.Max(1, g.VoxelScale) / VoxelGrid.UnitsPerBlock;
             return new Vec3d(
                 Math.Round((minX + maxX) * 0.5 / cell) * cell,
                 Math.Round((minY + maxY) * 0.5 / cell) * cell,
@@ -1533,7 +1534,7 @@ namespace Layout.Systems
                     PlaneAxis.Z => w.Z,
                     _ => w.Y
                 };
-                return new ProjectionPlane(flattened, (int)Math.Floor(coordinate * 16.0));
+                return new ProjectionPlane(flattened, (int)Math.Floor(coordinate * VoxelGrid.UnitsPerBlock));
             }
             return new ProjectionPlane(flattened, before.PlaneOffset);
         }
@@ -1751,12 +1752,12 @@ namespace Layout.Systems
                     PlaneAxis.Z => w.Z,
                     _ => w.Y
                 };
-                return new ProjectionPlane(flattened, (int)Math.Floor(coordinate * 16.0));
+                return new ProjectionPlane(flattened, (int)Math.Floor(coordinate * VoxelGrid.UnitsPerBlock));
             }
             return new ProjectionPlane(flattened, fallback.PlaneOffset);
         }
 
-        /// <summary>The guide's extent along one world axis in 1/16 units — the "span" step distance.</summary>
+        /// <summary>The guide's extent along one world axis in guide grid units — the "span" step distance.</summary>
         public int SpanAlong(Guid id, PlaneAxis axis) =>
             _guides.TryGetValue(id, out GuideData g) ? SpanAlong(g, axis) : 0;
 
@@ -1775,7 +1776,7 @@ namespace Layout.Systems
             int scale = Math.Max(1, g.VoxelScale);
             // Rounded UP to a whole number of the guide's own voxels, so a copy lands flush rather than
             // overlapping by the fraction of a cell the control points happen to span.
-            int span = (int)Math.Ceiling((max - min) * 16.0 / scale) * scale;
+            int span = (int)Math.Ceiling((max - min) * VoxelGrid.UnitsPerBlock / scale) * scale;
             return Math.Max(scale, span);
         }
 
@@ -2462,18 +2463,33 @@ namespace Layout.Systems
         // defaults (missing Projection/Plane/IsFilled fall to Volumetric / default plane / hollow).
         public void Load()
         {
-            Exception primaryError = null;
+            Exception primaryError;
+            string key = StorageKey;
+            var recoverable = _persistence as IRecoverableGuidePersistence;
             try
             {
-                byte[] bytes = _persistence.Load(StorageKey);
+                byte[] bytes = _persistence.Load(key);
+                if (bytes == null || bytes.Length == 0)
+                {
+                    bytes = recoverable?.LoadBackup(key);
+                    if (bytes == null || bytes.Length == 0)
+                    {
+                        key = LegacyStorageKey;
+                        bytes = _persistence.Load(key);
+                        if (bytes == null || bytes.Length == 0)
+                            bytes = recoverable?.LoadBackup(key);
+                    }
+                }
                 if (bytes == null || bytes.Length == 0)
                 {
                     _logger.Notification("[Layout] No saved guides found.");
                     return;
                 }
 
-                LoadPayload(bytes);
-                _logger.Notification("[Layout] Loaded {0} guide(s).", _guides.Count);
+                LoadPayload(bytes, legacyGrid: key == LegacyStorageKey);
+                _logger.Notification(key == LegacyStorageKey
+                    ? "[Layout] Imported {0} guide(s) from the 16-cell grid."
+                    : "[Layout] Loaded {0} guide(s).", _guides.Count);
                 return;
             }
             catch (Exception e)
@@ -2482,15 +2498,15 @@ namespace Layout.Systems
                 ClearLoadedState();
             }
 
-            if (_persistence is IRecoverableGuidePersistence recoverable)
+            if (recoverable != null)
             {
                 try
                 {
-                    byte[] backup = recoverable.LoadBackup(StorageKey);
+                    byte[] backup = recoverable.LoadBackup(key);
                     if (backup != null && backup.Length > 0)
                     {
-                        LoadPayload(backup);
-                        recoverable.RejectPrimary(StorageKey);
+                        LoadPayload(backup, legacyGrid: key == LegacyStorageKey);
+                        if (key == StorageKey) recoverable.RejectPrimary(StorageKey);
                         _logger.Warning(
                             "[Layout] Primary guide file was unreadable; recovered {0} guide(s) from its backup.",
                             _guides.Count);
@@ -2510,7 +2526,7 @@ namespace Layout.Systems
             _logger.Error("[Layout] Failed to load guides; starting with none: {0}", primaryError);
         }
 
-        private void LoadPayload(byte[] bytes)
+        private void LoadPayload(byte[] bytes, bool legacyGrid = false)
         {
             string json = Encoding.UTF8.GetString(bytes);
             var root = JsonConvert.DeserializeObject<PersistedRoot>(json, _jsonSettings);
@@ -2521,6 +2537,18 @@ namespace Layout.Systems
             foreach (var g in root.Guides)
             {
                 if (g == null) continue;
+                if (legacyGrid)
+                {
+                    long planeOffset = (long)g.Plane.PlaneOffset * VoxelGrid.ChiselScale;
+                    if (g.VoxelScale is not (1 or 2 or 4 or 8 or 16)
+                        || planeOffset is < int.MinValue or > int.MaxValue)
+                    {
+                        _logger.Warning("[Layout] Skipped guide {0}: invalid legacy scale or plane offset.", g.Id);
+                        continue;
+                    }
+                    g.VoxelScale *= VoxelGrid.ChiselScale;
+                    g.Plane = new ProjectionPlane(g.Plane.FlattenedAxis, (int)planeOffset);
+                }
                 if (g.ControlPoints == null) g.ControlPoints = new List<ControlPoint>();
                 RemoveInactiveLockMarkers(g.ControlPoints);
 
@@ -2531,12 +2559,13 @@ namespace Layout.Systems
                 // Layout/ClientOnlyGuides/*.json (a hand-edited private file would hang the player's own
                 // client on world load). Neither needs an attacker. Logged per guide because silently
                 // losing someone's work would be the worse surprise.
-                if (!GuideBounds.AllUsable(g.ControlPoints)
+                if (!GuideData.IsValidVoxelScale(g.VoxelScale)
+                    || !GuideBounds.AllUsable(g.ControlPoints)
                     || !GuideBounds.AllUsable(g.OriginalControlPoints)
                     || !GuideBounds.IsUsableProjection(g.Projection, g.Plane))
                 {
                     _logger?.Warning(
-                        "[Layout] Skipped guide {0}: coordinates or projection are invalid or outside the "
+                        "[Layout] Skipped guide {0}: scale, coordinates or projection are invalid or outside the "
                         + "world. The record is corrupt or hand-edited and is unsafe to load.", g.Id);
                     continue;
                 }

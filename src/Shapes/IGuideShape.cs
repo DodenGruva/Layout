@@ -44,7 +44,7 @@ namespace Layout.Shapes
         /// contribute to the curve's shape but are themselves never emitted.
         /// </summary>
         /// <param name="scale">
-        /// Voxel edge length in 1/16-block units; one of 1, 2, 4, 8, 16. Callers must pass a valid scale.
+        /// Voxel edge length in guide grid units. Callers must pass a valid scale.
         /// </param>
         /// <returns>
         /// A deduplicated list (never null; empty if the shape is not yet fully formed). Ordering is

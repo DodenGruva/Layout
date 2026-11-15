@@ -79,6 +79,11 @@ namespace Layout.Network
         /// <summary>Profile-first Roundover needs the protocol-28 chain meaning on a public authority.</summary>
         public bool RoundoverPlacementSupported => AuthorityMode == ClientAuthorityMode.Local
             || (AuthorityMode == ClientAuthorityMode.Networked && _serverProtocolVersion >= 28);
+        public bool SymmetricCirclePlacementSupported => AuthorityMode == ClientAuthorityMode.Local
+            || (AuthorityMode == ClientAuthorityMode.Networked && SupportsSymmetricCircleServer);
+        public bool OutlinePlacementSupported => AuthorityMode == ClientAuthorityMode.Local
+            || (AuthorityMode == ClientAuthorityMode.Networked && _serverProtocolVersion >= LayoutChannel.OutlineStyleProtocol);
+        private bool SupportsSymmetricCircleServer => _serverProtocolVersion >= LayoutChannel.SymmetricCircleProtocol;
         public bool PublicGuideAccessJailed { get; private set; }
 
         // -- Read-only views for the renderer / HUD / tool ----------------------------------------
@@ -766,6 +771,8 @@ namespace Layout.Network
 
                 Mix((long)guide.ShapeType); Mix((long)guide.Constraint); Mix((long)guide.ShapePlaneAxis);
                 Mix(guide.ArchUsesShapePlaneAxis ? 1 : 0);
+                Mix(guide.CircleUsesSymmetricRaster ? 1 : 0);
+                Mix((int)guide.Outline);
                 Mix(guide.VoxelScale); Mix(guide.IsHidden ? 1 : 0); Mix((long)guide.Projection);
                 Mix((long)guide.Plane.FlattenedAxis); Mix(guide.Plane.PlaneOffset);
                 Mix(guide.IsFilled ? 1 : 0); Mix(guide.Divisions); Mix(guide.Sides);
@@ -1202,7 +1209,7 @@ namespace Layout.Network
         }
 
         /// <summary>
-        /// F6 Move: slide a whole guide by a delta given in 1/16-block units. The authority validates that
+        /// F6 Move: slide a whole guide by a delta given in guide grid units. The authority validates that
         /// the delta is a whole number of the guide's own voxels and refuses anything finer, so callers must
         /// step by the guide's scale — see <c>GuideManager.TranslateGuide</c>. Nothing is applied optimistically:
         /// both authorities answer with a full-state upsert, and a move can be refused by a land claim.
@@ -1213,7 +1220,7 @@ namespace Layout.Network
             _lastMutationWasLocal = localMutation;
             if (localMutation)
             {
-                _local.Translate(guideId, new Vec3d(deltaX / 16.0, deltaY / 16.0, deltaZ / 16.0));
+                _local.Translate(guideId, new Vec3d(deltaX / VoxelGrid.UnitsPerBlock, deltaY / VoxelGrid.UnitsPerBlock, deltaZ / VoxelGrid.UnitsPerBlock));
                 return;
             }
             _channel.SendPacket(new GuideTranslatePacket(guideId, deltaX, deltaY, deltaZ));
@@ -1246,7 +1253,7 @@ namespace Layout.Network
             if (localMutation)
             {
                 GuideData copied = _local.Transform(
-                    guideId, new Vec3d(deltaX / 16.0, deltaY / 16.0, deltaZ / 16.0),
+                    guideId, new Vec3d(deltaX / VoxelGrid.UnitsPerBlock, deltaY / VoxelGrid.UnitsPerBlock, deltaZ / VoxelGrid.UnitsPerBlock),
                     mirrorAxis, rotateAxis, quarterTurns, asCopy);
                 // A private COPY is still a placement, so it charges chalk the same way a fresh private
                 // placement does: the server owns the inventory but cannot see private guides, so the

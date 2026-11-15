@@ -138,10 +138,12 @@ namespace Layout.UI
             "Sphere", "Dome", "Cylinder", "Tapered Cylinder",
             "Polygonal Prism", "Tapered Polygonal Prism", "Cone", "Box" };
 
-        // Voxel-edge scale, ascending: the NxN icon IS the voxel count (1x1 smallest ... 16x16 = full block),
-        // exactly like the game's native scale icons. Names are voxel counts, not fractions (human-requested).
-        private static readonly string[] ScaleCodes = { "1", "2", "4", "8", "16" };
+        private static readonly string[] ScaleCodes = Array.ConvertAll(
+            Array.FindAll(GuideData.ValidVoxelScales, scale => scale >= VoxelGrid.ChiselScale),
+            scale => scale.ToString());
         private static readonly string[] ScaleNames = { "1×1", "2×2", "4×4", "8×8", "16×16 (full block)" };
+        private static readonly string[] ExpandedScaleCodes = [.. ScaleCodes, "2", "1"];
+        private static readonly string[] ExpandedScaleNames = [.. ScaleNames, "1/32 block", "1/64 block"];
 
         private static readonly string[] ProjCodes  = { "vol", "surf" };
         private static readonly string[] ProjNames  = { "Volumetric", "Surface" };
@@ -197,7 +199,17 @@ namespace Layout.UI
         private static readonly string[] PlaneEditIcons =
             { LayoutToolIcons.PlaneFloor, LayoutToolIcons.PlaneNS, LayoutToolIcons.PlaneEW };
         private static readonly string[] ScaleIcons =
-            { LayoutToolIcons.Scale1, LayoutToolIcons.Scale2, LayoutToolIcons.Scale4, LayoutToolIcons.Scale8, LayoutToolIcons.Scale16 };
+            { LayoutToolIcons.Scale1, LayoutToolIcons.Scale2, LayoutToolIcons.Scale4,
+                LayoutToolIcons.Scale8, LayoutToolIcons.Scale16 };
+        private static readonly string[] ExpandedScaleIcons =
+            [.. ScaleIcons, LayoutToolIcons.ScaleThirtySecond, LayoutToolIcons.ScaleSixtyFourth];
+
+        private (string[] Codes, string[] Names, string[] Icons) VisibleScaleChoices()
+        {
+            if (_config.EnableHighResolution)
+                return (ExpandedScaleCodes, ExpandedScaleNames, ExpandedScaleIcons);
+            return (ScaleCodes, ScaleNames, ScaleIcons);
+        }
 
         // Active number-fields registered for scroll-wheel adjustment (repopulated each compose): the
         // field key, the change handler, and the field's own clamp range (Divisions 0..256, Sides 3..24).
@@ -414,7 +426,7 @@ namespace Layout.UI
             const double tileGap    = 4;
             const double rowGap     = 5;
             const double headerH    = 20;
-            const double controlW   = 5 * tile + 4 * tileGap; // widest tile row = 5 tiles (Scale)
+            double controlW = ScaleCodes.Length * (tile + tileGap) - tileGap;
 
             double contentW = labelW + pad + controlW;
             // 0.1.17 (human-requested): the child area is ALREADY inset from the dialog edge by
@@ -578,10 +590,12 @@ namespace Layout.UI
             // Edit → the selected guide (guide senders, "g" values); Create/Delete → the tool defaults.
             CairoFont rowFont = editMode ? settingLabelFont : mainLabelFont;
 
+            var (scaleCodes, scaleNames, scaleIcons) = VisibleScaleChoices();
+            int scale = editMode ? (selected?.VoxelScale ?? _tool.Scale) : _tool.Scale;
             AddIconRow(c, rowFont, ref y, labelW, pad, tile, tileGap, rowGap,
-                "Scale", ScaleCodes, ScaleNames, ScaleIcons,
-                IndexOfScale(editMode ? (selected?.VoxelScale ?? _tool.Scale) : _tool.Scale),
-                editMode ? OnGuideScaleTile : OnScaleTile, "scale", editMode ? settingsInert : deleteMode);
+                "Scale", scaleCodes, scaleNames, scaleIcons, Array.IndexOf(scaleCodes, scale.ToString()),
+                editMode ? OnGuideScaleTile : OnScaleTile, "scale", editMode ? settingsInert : deleteMode,
+                standardScaleTiles: ScaleCodes.Length);
 
             // Projection + Fill share ONE row (0.1.17, human-requested — the two-tile Projection row left
             // three empty slots; Fill's two tiles slot into them with a compact second label). Fill greys
@@ -980,13 +994,21 @@ namespace Layout.UI
         // Plain-language "how far is one click", from the guide's own scale times the chosen multiplier.
         private static string StepDescription(int voxelScale, int multiplier)
         {
-            int sixteenths = voxelScale * multiplier;
-            string distance = sixteenths % 16 == 0
-                ? (sixteenths / 16) + (sixteenths / 16 == 1 ? " block" : " blocks")
-                : sixteenths + "/16 of a block";
+            int cells = voxelScale * multiplier;
+            int blocks = cells / VoxelGrid.CellsPerBlock;
+            string distance = cells % VoxelGrid.CellsPerBlock == 0
+                ? blocks + (blocks == 1 ? " block" : " blocks")
+                : CellFraction(cells) + " of a block";
             return "One step moves " + distance + " - " + multiplier
                 + (multiplier == 1 ? " voxel" : " voxels") + " at this guide's scale ("
-                + voxelScale + "/16 each).";
+                + CellFraction(voxelScale) + " each).";
+        }
+
+        private static string CellFraction(int cells)
+        {
+            if (cells % VoxelGrid.ChiselScale == 0)
+                return (cells / VoxelGrid.ChiselScale) + "/" + VoxelGrid.ChiselCellsPerBlock;
+            return "1/" + (VoxelGrid.CellsPerBlock / cells);
         }
 
         // Every direction button now runs through the Move/Copy/Mirror toggles, so one pad covers five
@@ -1066,7 +1088,7 @@ namespace Layout.UI
                 _tool.Placement == DraftManager.TransformPlacement.Copy);
         }
 
-        // The guide's own extent along the pressed axis, in 1/16 units — the "span" step, which lands a
+        // The guide's own extent along the pressed axis, in guide grid units — the "span" step, which lands a
         // copy flush against the original instead of overlapping it.
         private int SpanStep(GuideData g, PlaneAxis axis)
         {
@@ -1074,7 +1096,7 @@ namespace Layout.UI
             return span > 0 ? span : g.VoxelScale * _tool.MoveStep;
         }
 
-        // Resolves a pad direction to a world offset in 1/16-block units. Up/Down are world vertical; the
+        // Resolves a pad direction to a world offset in guide grid units. Up/Down are world vertical; the
         // other four are read from the player's facing, snapped to whichever horizontal axis they are
         // closest to. Vintage Story is Y-up with +X east and +Z south, so for a forward of (fx, fz) the
         // player's left is (fz, -fx) and their right is (-fz, fx).
@@ -1247,6 +1269,12 @@ namespace Layout.UI
                 "Chiseling Highlight", "occupancy", OnOccupancyToggled,
                 "Draws the parts of a guide that already hold material in a different color, so you can "
                 + "see how much of the plan is built. Updates as you chisel. Local to you.");
+            AddSettingSwitch(c, font, ref y, contentW, rowGap,
+                "Display Voxel Grid", "displayvoxelgrid", OnDisplayVoxelGridToggled,
+                "Show the selected voxel scale on the block face you aim at while holding the Layout tool.");
+            AddSettingSwitch(c, font, ref y, contentW, rowGap,
+                "Outline Targeted Voxel", "outlinetargetedvoxel", OnOutlineTargetedVoxelToggled,
+                "Draw the vanilla chisel outline around the targeted voxel at the selected scale.");
 
             // ==================== Behaviour ====================
             AddSettingsHeader(c, ref y, contentW, "Behaviour");
@@ -1306,6 +1334,13 @@ namespace Layout.UI
                 "Refill in inventory", "refillinv", OnInventoryRefillToggled,
                 "Lets you refill a Chalking Kit by dropping a held stack of Chalking Powder onto its "
                 + "inventory slot. Off by default. The ground refill always works regardless of this.");
+
+            AddSettingSwitch(c, font, ref y, contentW, rowGap,
+                "Enable Thin Shapes", "thinshapes", OnThinShapesToggled,
+                "Let diagonal steps in new guide outlines touch at the corners.");
+            AddSettingSwitch(c, font, ref y, contentW, rowGap,
+                "Enable 1/32 and 1/64 Resolutions", "highres", OnHighResolutionToggled,
+                "Show the 1/32 and 1/64 block scales beside the 1-voxel tile.");
 
             // ==================== Admin ====================
             BuildAdminSection(c, font, ref y, contentW, rowGap);
@@ -1838,6 +1873,10 @@ namespace Layout.UI
                     OpacityPercent(_config.OpacityBody), 5, 100, 1, "%");
                 SingleComposer.GetSwitch("showguides")?.SetValue(_config.GuideRenderingEnabled);
                 SingleComposer.GetSwitch("occupancy")?.SetValue(_config.OccupancyRecolour);
+                SingleComposer.GetSwitch("displayvoxelgrid")?.SetValue(_config.DisplayVoxelGrid);
+                SingleComposer.GetSwitch("thinshapes")?.SetValue(_config.EnableThinShapes);
+                SingleComposer.GetSwitch("outlinetargetedvoxel")?.SetValue(_config.OutlineTargetedVoxel);
+                SingleComposer.GetSwitch("highres")?.SetValue(_config.EnableHighResolution);
                 // "clientonly" is deliberately absent: SlidingChoiceElement takes its state through its
                 // constructor and then owns it, so pushing a value here would fight its animation.
                 SingleComposer.GetSwitch("refillhotbar")?.SetValue(_config.AllowHotbarChalkRefill);
@@ -1979,6 +2018,36 @@ namespace Layout.UI
         {
             if (_suppress) return;
             _applyOccupancy?.Invoke(on);
+        }
+
+        private void OnThinShapesToggled(bool on)
+        {
+            if (_suppress || _config.EnableThinShapes == on) return;
+            _config.EnableThinShapes = on;
+            _tool.EnableThinShapes = on;
+            _saveConfig?.Invoke();
+        }
+
+        private void OnDisplayVoxelGridToggled(bool on)
+        {
+            if (_suppress || _config.DisplayVoxelGrid == on) return;
+            _config.DisplayVoxelGrid = on;
+            _saveConfig?.Invoke();
+        }
+
+        private void OnOutlineTargetedVoxelToggled(bool on)
+        {
+            if (_suppress || _config.OutlineTargetedVoxel == on) return;
+            _config.OutlineTargetedVoxel = on;
+            _saveConfig?.Invoke();
+        }
+
+        private void OnHighResolutionToggled(bool on)
+        {
+            if (_suppress || _config.EnableHighResolution == on) return;
+            _config.EnableHighResolution = on;
+            _tool.SetScale(_config.NormalizeToolScale(_tool.Scale));
+            _saveConfig?.Invoke();
         }
 
         // The master visibility switch — the same setter as /layout on|off, which persists it itself.
@@ -2721,26 +2790,33 @@ namespace Layout.UI
             }
         }
 
-        // Label + one row of exclusive SQUARE icon tiles, left-aligned.
+        // Left-aligned exclusive square tiles. The fine scale tiles stack beside the first tile.
         private void AddIconRow(
             GuiComposer c, CairoFont labelFont, ref double y,
             double labelW, double pad, double tile, double tileGap, double rowGap,
             string label, string[] codes, string[] names, string[] icons, int selectedIndex,
-            Action<string, string> onTile, string key, bool inert)
+            Action<string, string> onTile, string key, bool inert, int standardScaleTiles = 0)
         {
-            ElementBounds labelBounds = ElementBounds.Fixed(0, y + (tile - 16) / 2, labelW, 20);
+            bool showFineTiles = standardScaleTiles > 0 && codes.Length > standardScaleTiles;
+            const double fineGap = 2;
+            double fineTile = (tile - fineGap) / 2;
+            double titleWidth = showFineTiles ? labelW - fineTile : labelW;
+            ElementBounds labelBounds = ElementBounds.Fixed(0, y + (tile - 16) / 2, titleWidth, 20);
             c.AddStaticText(label, Centered(labelFont), labelBounds);
 
-            int sel = ClampIndex(selectedIndex, codes.Length);
             for (int i = 0; i < codes.Length; i++)
             {
                 string tileKey = key + ":" + i;
-                ElementBounds tb = ElementBounds.Fixed(labelW + pad + i * (tile + tileGap), y, tile, tile);
+                ElementBounds tb = showFineTiles && i >= standardScaleTiles
+                    ? ElementBounds.Fixed(labelW + pad - fineTile - fineGap,
+                        y + (i - standardScaleTiles) * (fineTile + fineGap), fineTile, fineTile)
+                    : ElementBounds.Fixed(labelW + pad + i * (tile + tileGap), y, tile, tile);
                 AddIconTile(c, icons[i], names[i], tb, key, codes[i], tileKey, onTile, !inert);
             }
             if (inert) _inertRows.Add(key);
             y += tile + rowGap;
-            if (!inert) _initialLight.Add((key, sel));
+            if (!inert && selectedIndex >= 0)
+                _initialLight.Add((key, ClampIndex(selectedIndex, codes.Length)));
         }
 
         // TWO short exclusive tile groups sharing one row (0.1.17): the left group exactly like
@@ -3374,7 +3450,8 @@ namespace Layout.UI
             _suppress = true;
             try
             {
-                RelightRow("scale", ScaleCodes, IndexOfScale(g.VoxelScale));
+                string[] scaleCodes = VisibleScaleChoices().Codes;
+                RelightRow("scale", scaleCodes, Array.IndexOf(scaleCodes, g.VoxelScale.ToString()));
                 RelightRow("proj", ProjCodes, surfaceNow ? 1 : 0);
                 if (surfaceNow) RelightRow("plane", PlaneEditCodes, AxisToEditIndex(g.Plane.FlattenedAxis));
                 RelightRow("fill", FillCodes,
@@ -3401,7 +3478,7 @@ namespace Layout.UI
             // _inertRows is rebuilt by every compose, so it always describes what is on screen now.
             if (_inertRows.Contains(key)) return;
 
-            int sel = ClampIndex(selectedIndex, codes.Length);
+            int sel = Math.Min(selectedIndex, codes.Length - 1);
             for (int i = 0; i < codes.Length; i++)
                 SingleComposer?.GetToggleButton(key + ":" + i)?.SetValue(i == sel);
         }
@@ -3477,16 +3554,16 @@ namespace Layout.UI
         }
 
         // Builds a ProjectionPlane on the requested axis, offset to pass through the guide's
-        // first real anchor on that axis. Offsets are in 1/16-block units (world coord * 16).
+        // first real anchor on that axis. Offsets are in guide grid units.
         private ProjectionPlane PlaneFromAxisForGuide(PlaneAxis axis, GuideData g)
         {
             Vec3d a = StartAnchorOf(g);
             switch (axis)
             {
-                case PlaneAxis.X: return ProjectionPlane.VerticalEastWest((int)Math.Floor(a.X * 16.0));
-                case PlaneAxis.Z: return ProjectionPlane.VerticalNorthSouth((int)Math.Floor(a.Z * 16.0));
+                case PlaneAxis.X: return ProjectionPlane.VerticalEastWest((int)Math.Floor(a.X * VoxelGrid.UnitsPerBlock));
+                case PlaneAxis.Z: return ProjectionPlane.VerticalNorthSouth((int)Math.Floor(a.Z * VoxelGrid.UnitsPerBlock));
                 case PlaneAxis.Y:
-                default:          return ProjectionPlane.Horizontal((int)Math.Floor(a.Y * 16.0));
+                default:          return ProjectionPlane.Horizontal((int)Math.Floor(a.Y * VoxelGrid.UnitsPerBlock));
             }
         }
 
@@ -3607,13 +3684,6 @@ namespace Layout.UI
                 PlaneAxis.X => 3,
                 _           => 0
             };
-        }
-
-        private static int IndexOfScale(int scale)
-        {
-            for (int i = 0; i < ScaleCodes.Length; i++)
-                if (ScaleCodes[i] == scale.ToString()) return i;
-            return 0; // default to finest if a stored scale is somehow off-table
         }
 
         private static int ClampIndex(int index, int length)

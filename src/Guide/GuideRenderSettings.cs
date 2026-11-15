@@ -29,7 +29,7 @@ namespace Layout.Guide
     /// </remarks>
     public readonly struct GuideRenderSettings : IEquatable<GuideRenderSettings>
     {
-        /// <summary>Voxel edge length in 1/16-block units; one of 1, 2, 4, 8, 16.</summary>
+        /// <summary>Voxel edge length in guide grid units.</summary>
         public int Scale { get; }
 
         /// <summary>Volumetric (cubes) or Surface (flat tiles on <see cref="Plane"/>).</summary>
@@ -45,7 +45,7 @@ namespace Layout.Guide
         public int Divisions { get; }
 
         public GuideRenderSettings(int scale, ProjectionMode mode, ProjectionPlane plane, bool filled,
-            int divisions = 0, bool wireframe = false)
+            int divisions = 0, bool wireframe = false, OutlineStyle outline = OutlineStyle.Legacy)
         {
             Scale = scale;
             Mode = mode;
@@ -53,10 +53,13 @@ namespace Layout.Guide
             Filled = filled;
             Divisions = divisions;
             Wireframe = wireframe;
+            Outline = outline is OutlineStyle.FaceConnected or OutlineStyle.Thin ? outline : OutlineStyle.Legacy;
         }
 
         /// <summary>For 3D volumes, use structural wires instead of the complete shell.</summary>
         public bool Wireframe { get; }
+
+        public OutlineStyle Outline { get; }
 
         /// <summary>Volumetric settings at the given scale. The plane is irrelevant and left at default.</summary>
         public static GuideRenderSettings Volumetric(int scale, bool filled = false) =>
@@ -68,12 +71,12 @@ namespace Layout.Guide
 
         public bool Equals(GuideRenderSettings other) =>
             Scale == other.Scale && Mode == other.Mode && Plane == other.Plane && Filled == other.Filled
-            && Divisions == other.Divisions && Wireframe == other.Wireframe;
+            && Divisions == other.Divisions && Wireframe == other.Wireframe && Outline == other.Outline;
 
         public override bool Equals(object obj) => obj is GuideRenderSettings other && Equals(other);
 
         public override int GetHashCode() =>
-            HashCode.Combine(Scale, (int)Mode, Plane, Filled, Divisions, Wireframe);
+            HashCode.Combine(Scale, (int)Mode, Plane, Filled, Divisions, Wireframe, Outline);
 
         public static bool operator ==(GuideRenderSettings a, GuideRenderSettings b) => a.Equals(b);
 

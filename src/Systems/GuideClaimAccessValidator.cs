@@ -300,7 +300,7 @@ namespace Layout.Systems
                 }
                 Add(bx, by, bz);
 
-                if (plane % 16 == 0)
+                if (plane % VoxelGrid.CellsPerBlock == 0)
                 {
                     int adjacent = BlockCoordinate(plane - 1);
                     switch (guide.Plane.FlattenedAxis)
@@ -319,7 +319,6 @@ namespace Layout.Systems
             _sapi.World.Claims.TestAccess(_player, position, EnumBlockAccessFlags.BuildOrBreak)
                 == EnumWorldAccessResponse.Granted;
 
-        private static int BlockCoordinate(int sixteenths) =>
-            (int)Math.Floor(sixteenths / 16.0);
+        private static int BlockCoordinate(int cell) => VoxelGrid.ToBlock(cell);
     }
 }

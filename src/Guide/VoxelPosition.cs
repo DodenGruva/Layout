@@ -26,16 +26,16 @@ namespace Layout.Guide
     /// A single occupied cell in the voxel guide grid, together with how it should be coloured.
     /// </summary>
     /// <remarks>
-    /// COORDINATE SPACE — X/Y/Z are integer coordinates in 1/16-block units, i.e.
-    /// (world coordinate × 16) floored. This space is absolute and independent of the
+    /// COORDINATE SPACE — X/Y/Z are integer coordinates on the guide grid, i.e.
+    /// (world coordinate × grid resolution) floored. This space is absolute and independent of the
     /// guide's VoxelScale: a given position denotes the same world location at every scale.
     ///
     /// The coordinate is the LOWER CORNER of the voxel cube (its minimum-X/Y/Z corner),
     /// matching the convention for building a cube mesh from a corner origin.
     ///
     /// The cube's EDGE LENGTH is NOT stored here — it is the guide's VoxelScale expressed in
-    /// those same 1/16-block units (scale 1 → a 1/16-block cube, scale 16 → a full 1-block
-    /// cube). Scale is always supplied separately by the caller (e.g. the mesh builder),
+    /// those same grid units (scale 1 → the finest available cube). Scale is always
+    /// supplied separately by the caller (e.g. the mesh builder),
     /// never embedded in the position. Consequently every emitted position at scale N is a
     /// multiple of N on each axis.
     ///

@@ -109,7 +109,7 @@ namespace Layout.Systems
         private int _perGuideVoxelCap;                  // mutable: re-seeded from the server's join-time cap sync
 
         // --- live tool state ---
-        private int _scale = 1;                         // 1/16-block voxels by default — matches VS chisel resolution
+        private int _scale = VoxelGrid.ChiselScale;
         private ProjectionMode _projection = ProjectionMode.Volumetric;
         private PlaneAxis? _planeOverride;              // null => auto-select the plane from the clicked face
         private bool _filled;
@@ -161,6 +161,7 @@ namespace Layout.Systems
         // --- Tool state: scale ------------------------------------------------------------------
 
         public int Scale => _scale;
+        public bool EnableThinShapes { get; set; }
 
         /// <summary>Sets the placement/body scale. Returns false and leaves it unchanged if not a valid scale.</summary>
         public bool SetScale(int scale)
@@ -185,7 +186,7 @@ namespace Layout.Systems
             if (_hasDraft)
             {
                 double direction = _draftPlaneNegative ? -1.0 : 1.0;
-                double offset = direction * _scale / 32.0;
+                double offset = direction * _scale / (2 * VoxelGrid.UnitsPerBlock);
                 if (projection == ProjectionMode.Surface) offset = -offset;
 
                 ShiftDraftPoint(_draftStart, offset);
@@ -493,14 +494,15 @@ namespace Layout.Systems
         /// The held item resolves the plane (from the clicked face or the override) and calls this at send time; in
         /// Volumetric mode the plane is ignored, so any value (e.g. <see cref="ProjectionPlane.Default"/>) is fine.
         /// </summary>
-        public GuideRenderSettings BuildRenderSettings(ProjectionPlane plane) =>
+        public GuideRenderSettings BuildRenderSettings(ProjectionPlane plane, OutlineStyle outline = OutlineStyle.Legacy) =>
             new GuideRenderSettings(_scale, _projection, plane, _filled, _divisions,
-                GuideShapeTypes.IsVolume(_shape) && _wireframe);
+                GuideShapeTypes.IsVolume(_shape) && _wireframe, outline);
 
         // --- Draft lifecycle --------------------------------------------------------------------
 
         public bool HasActiveDraft => _hasDraft;
         public bool DraftEmbedded => _hasDraft && _draftEmbedded;
+        public bool DraftStartedOnChisel { get; private set; }
 
         /// <summary>The draft's start point as a deep copy, or null if no draft is active.</summary>
         public Vec3d DraftStart => _hasDraft ? new Vec3d(_draftStart.X, _draftStart.Y, _draftStart.Z) : null;
@@ -619,12 +621,12 @@ namespace Layout.Systems
         /// per-guide cap. Same contract as <see cref="TryCompleteDraft"/>: pure check, caller clears.
         /// Start/End in the result are the chain's first and last corners (the wire's legacy fields).
         /// </summary>
-        public DraftCompletion TryCompleteChain(bool closed)
+        public DraftCompletion TryCompleteChain(bool closed, OutlineStyle outline = OutlineStyle.Legacy)
         {
             if (!_hasDraft || _draftChain.Count < 2 || (closed && _draftChain.Count < 3))
                 return new DraftCompletion(DraftCompletionStatus.NoActiveDraft, null, null, 0, 0);
 
-            IGuideShape preview = new Shapes.FreeShape(_draftChain, closed);
+            IGuideShape preview = new Shapes.FreeShape(_draftChain, closed) { Outline = outline };
             int count = CountDraftVoxels(preview);
 
             DraftCompletionStatus status = _perGuideVoxelCap > 0 && count > _perGuideVoxelCap
@@ -640,7 +642,7 @@ namespace Layout.Systems
         /// Starting a new draft replaces any existing one.
         /// </summary>
         public void StartDraft(Vec3d startPoint, PlaneAxis shapePlaneAxis = PlaneAxis.Y,
-            bool planeNegative = false, bool embedded = false)
+            bool planeNegative = false, bool embedded = false, bool chiseled = false)
         {
             if (startPoint == null) throw new ArgumentNullException(nameof(startPoint));
             _draftStart = new Vec3d(startPoint.X, startPoint.Y, startPoint.Z);
@@ -648,6 +650,7 @@ namespace Layout.Systems
             _draftThird = null;
             _draftFlatSideAligned = false;
             _draftEmbedded = embedded;
+            DraftStartedOnChisel = chiseled;
             _roundoverProfileFirst = null;
             _roundoverProfileSecond = null;
             _draftChain.Clear();
@@ -731,12 +734,14 @@ namespace Layout.Systems
         /// </summary>
         public DraftCompletion TryCompleteDraft(Vec3d endPoint, Vec3d apexPoint = null, bool inverted = false,
             Vec3d rimPoint = null, bool flatSideAligned = false,
-            int knownVoxelCount = -1, bool deferCapCheckToAuthority = false)
+            int knownVoxelCount = -1, bool deferCapCheckToAuthority = false,
+            bool symmetricCircleRaster = true, Vec3d startOverride = null, OutlineStyle outline = OutlineStyle.Legacy)
         {
             if (!_hasDraft || endPoint == null)
                 return new DraftCompletion(DraftCompletionStatus.NoActiveDraft, null, null, 0, 0);
 
-            var start = new Vec3d(_draftStart.X, _draftStart.Y, _draftStart.Z);
+            Vec3d startPoint = startOverride ?? _draftStart;
+            var start = new Vec3d(startPoint.X, startPoint.Y, startPoint.Z);
             var end = new Vec3d(endPoint.X, endPoint.Y, endPoint.Z);
             Vec3d apex = apexPoint == null ? null : new Vec3d(apexPoint.X, apexPoint.Y, apexPoint.Z);
             Vec3d rim = rimPoint == null ? null : new Vec3d(rimPoint.X, rimPoint.Y, rimPoint.Z);
@@ -745,7 +750,7 @@ namespace Layout.Systems
             if (count < 0 && !deferCapCheckToAuthority)
             {
                 IGuideShape preview = ShapeFactory.Create(_shape, _constraint, _draftPlaneAxis, start, end,
-                    inverted, _sides, flatSideAligned: flatSideAligned);
+                    inverted, _sides, flatSideAligned: flatSideAligned, symmetricCircleRaster: symmetricCircleRaster, outline: outline);
                 ApplyPlacementPoints(preview, _shape, _constraint, apex, rim);
                 count = CountDraftVoxels(preview);
             }
@@ -796,6 +801,7 @@ namespace Layout.Systems
             _draftThird = null;
             _draftFlatSideAligned = false;
             _draftEmbedded = false;
+            DraftStartedOnChisel = false;
             _roundoverProfileFirst = null;
             _roundoverProfileSecond = null;
             _draftChain.Clear();

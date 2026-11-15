@@ -39,6 +39,8 @@ namespace Layout.Shapes
         private readonly int _sides;
         private readonly bool _flatSideAligned;
 
+        internal OutlineStyle Outline { get; set; }
+
         public List<ControlPoint> ControlPoints => _controlPoints;
 
         public ShapeConstraint Constraint => ShapeConstraint.None;
@@ -147,20 +149,22 @@ namespace Layout.Shapes
             if (!TryVertices(out Vec3d[] verts)) return result;
 
             var seen = new HashSet<(int, int, int)>();
+            var centre = new Vec3d();
             for (int k = 0; k < verts.Length; k++)
-                VoxelMarch.MarchSegmentInto(result, seen, verts[k], verts[(k + 1) % verts.Length], scale);
+            {
+                centre.X += verts[k].X; centre.Y += verts[k].Y; centre.Z += verts[k].Z;
+            }
+            centre.X /= verts.Length; centre.Y /= verts.Length; centre.Z /= verts.Length;
+
+            for (int k = 0; k < verts.Length; k++)
+                OutlineVoxelizer.Segment(result, seen, verts[k], verts[(k + 1) % verts.Length],
+                    scale, filled ? OutlineStyle.Legacy : Outline, centre);
 
             if (filled && TryPerimeter(out Vec3d[] corners, out double[] cum))
             {
                 // Centroid fan to a dense perimeter (angular AND radial steps ≤ half a cell — no holes).
-                var centre = new Vec3d();
-                for (int k = 0; k < verts.Length; k++)
-                {
-                    centre.X += verts[k].X; centre.Y += verts[k].Y; centre.Z += verts[k].Z;
-                }
-                centre.X /= verts.Length; centre.Y /= verts.Length; centre.Z /= verts.Length;
 
-                double cell = scale / 16.0;
+                double cell = scale / VoxelGrid.UnitsPerBlock;
                 int steps = Math.Max(24, Math.Min(8192, (int)Math.Ceiling(cum[cum.Length - 1] / (cell * 0.5))));
                 for (int i = 0; i < steps; i++)
                     VoxelMarch.MarchSegmentInto(result, seen, centre,

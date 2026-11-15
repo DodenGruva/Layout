@@ -118,7 +118,7 @@ namespace Layout.Shapes
                 return result;
             }
 
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             double hd = cell * 0.866;
             double lo = Math.Min(0, h), hi = Math.Max(0, h);
 
@@ -131,14 +131,14 @@ namespace Layout.Shapes
             int work = 0;
             for (int ix = AlignDown(x0, scale); ix <= AlignDown(x1, scale); ix += scale)
             {
-                double px = ix / 16.0 + cell * 0.5 - c.X;
+                double px = ix / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.X;
                 for (int iy = AlignDown(y0, scale); iy <= AlignDown(y1, scale); iy += scale)
                 {
-                    double py = iy / 16.0 + cell * 0.5 - c.Y;
+                    double py = iy / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.Y;
                     for (int iz = AlignDown(z0, scale); iz <= AlignDown(z1, scale); iz += scale)
                     {
                         VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
-                        double pz = iz / 16.0 + cell * 0.5 - c.Z;
+                        double pz = iz / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.Z;
                         double a = px * n.X + py * n.Y + pz * n.Z;
                         if (a < lo || a > hi) continue;
                         double localR = r * (1.0 - a / h);        // shrinks linearly toward the tip
@@ -171,7 +171,7 @@ namespace Layout.Shapes
                 return collector.Result;
             }
 
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             double hd = cell * 0.866;
             double lo = Math.Min(0, h), hi = Math.Max(0, h);
             double ex = c.X + n.X * h, ey = c.Y + n.Y * h, ez = c.Z + n.Z * h;
@@ -193,15 +193,15 @@ namespace Layout.Shapes
                 for (int xi = tile.X0; xi < tile.X1; xi++)
                 {
                     int ix = minX + xi * scale;
-                    double px = ix / 16.0 + cell * 0.5 - c.X;
+                    double px = ix / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.X;
                     for (int yi = tile.Y0; yi < tile.Y1; yi++)
                     {
                         int iy = minY + yi * scale;
-                        double py = iy / 16.0 + cell * 0.5 - c.Y;
+                        double py = iy / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.Y;
                         for (int zi = tile.Z0; zi < tile.Z1; zi++)
                         {
                             int iz = minZ + zi * scale;
-                            double pz = iz / 16.0 + cell * 0.5 - c.Z;
+                            double pz = iz / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.Z;
                             double axial = px * n.X + py * n.Y + pz * n.Z;
                             if (axial < lo || axial > hi) continue;
                             double localR = r * (1.0 - axial / h);
@@ -247,7 +247,7 @@ namespace Layout.Shapes
             }
 
             stopAfter = Math.Max(0, stopAfter);
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             double hd = cell * 0.866;
             double lo = Math.Min(0, h), hi = Math.Max(0, h);
 
@@ -261,14 +261,14 @@ namespace Layout.Shapes
 
             for (int ix = AlignDown(x0, scale); ix <= AlignDown(x1, scale); ix += scale)
             {
-                double px = ix / 16.0 + cell * 0.5 - c.X;
+                double px = ix / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.X;
                 for (int iy = AlignDown(y0, scale); iy <= AlignDown(y1, scale); iy += scale)
                 {
-                    double py = iy / 16.0 + cell * 0.5 - c.Y;
+                    double py = iy / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.Y;
                     for (int iz = AlignDown(z0, scale); iz <= AlignDown(z1, scale); iz += scale)
                     {
                         VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
-                        double pz = iz / 16.0 + cell * 0.5 - c.Z;
+                        double pz = iz / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.Z;
                         double a = px * n.X + py * n.Y + pz * n.Z;
                         if (a < lo || a > hi) continue;
                         double localR = r * (1.0 - a / h);
@@ -287,7 +287,7 @@ namespace Layout.Shapes
         // Measured off the REAL scan box, like the cylinder's (v0.2.25) — see CylinderShape.ScanTooBig.
         private static bool ScanTooBig(int scale, Vec3d c, Vec3d n, double r, double h)
         {
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             double ex = c.X + n.X * h, ey = c.Y + n.Y * h, ez = c.Z + n.Z * h;
             double pad = r + cell;
             return CylinderShape.ScanCells(scale,
@@ -296,7 +296,7 @@ namespace Layout.Shapes
         }
 
         private static int AlignDown(double world, int scale) =>
-            (int)Math.Floor(world * 16.0 / scale) * scale;
+            (int)Math.Floor(world * VoxelGrid.UnitsPerBlock / scale) * scale;
 
         private void ClaimMarkers(
             List<VoxelPosition> result, int scale, Func<bool> cancellationRequested = null)

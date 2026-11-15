@@ -45,7 +45,8 @@ namespace Layout
         public const string ServerConfigFile = "layout.json";
 
         /// <summary>Client config filename inside the game's ModConfig folder.</summary>
-        public const string ClientConfigFile = "layout-client.json";
+        public const string ClientConfigFile = "layout-client-grid64.json";
+        private const string LegacyClientConfigFile = "layout-client.json";
 
         // --- Server-side shared instances (null on the client) ------------------------------------
         private ICoreServerAPI _sapi;
@@ -71,6 +72,7 @@ namespace Layout
         public GuidePlayersDialog PlayersGui { get; private set; }
         public GuideHud Hud { get; private set; }
         public GuideToolController Controller { get; private set; }
+        private TargetVoxelGridRenderer _targetVoxelGrid;
 
         /// <summary>
         /// F5 hotbar refill-channel preference (v0.2.22: a CLIENT setting, was server config in 0.2.21).
@@ -285,6 +287,7 @@ namespace Layout
             // the baked default until the server's bulk sync replaces it below.
             Draft = new DraftManager();
             Draft.SetScale(ClientConfig.DefaultScale);
+            Draft.EnableThinShapes = ClientConfig.EnableThinShapes;
             Draft.SetProjection((ProjectionMode)ClientConfig.DefaultProjection);
             Draft.SetFilled(ClientConfig.DefaultFill);
             Draft.SetWireframe(ClientConfig.DefaultWireframe);
@@ -344,6 +347,7 @@ namespace Layout
             // The aim-controller: per-tick raycast + click routing while the tool is held. It (not the
             // ModSystem, not the item) owns all interaction state, including comatose grab sessions.
             Controller = new GuideToolController(capi, Draft, ClientNet, Renderer, ToolGui, Hud);
+            _targetVoxelGrid = new TargetVoxelGridRenderer(capi, ClientConfig, ActiveVoxelGridScale);
             Controller.OnRenderingChanged(Renderer.RenderingEnabled);
             // The send-to-ground tile's contact rule (v0.4.28). Handed over rather than passed in, because
             // the controller takes the GUI and so cannot be constructed before it.
@@ -799,6 +803,11 @@ namespace Layout
             try
             {
                 cfg = capi.LoadModConfig<LayoutClientConfig>(ClientConfigFile);
+                if (cfg == null)
+                {
+                    cfg = capi.LoadModConfig<LayoutClientConfig>(LegacyClientConfigFile);
+                    if (cfg != null) cfg.UpgradeLegacyScale();
+                }
             }
             catch (Exception e)
             {
@@ -1090,6 +1099,16 @@ namespace Layout
             Renderer?.RebuildAllForDiagnostics();
         }
 
+        private int? ActiveVoxelGridScale()
+        {
+            if (!Renderer.RenderingEnabled || ToolGui.IsOpened() || !Controller.IsToolActive()) return null;
+
+            if (Draft.Mode is ToolMode.Edit or ToolMode.Transform
+                && Draft.SelectedGuideId is Guid id && ClientNet.Guides.TryGetValue(id, out GuideData guide))
+                return guide.VoxelScale;
+            return Draft.Scale;
+        }
+
         // Write the player's current tool settings back as the new defaults — "come up the way I left it".
         private void SaveClientConfig()
         {
@@ -1158,6 +1177,7 @@ namespace Layout
                 }
 
                 try { Controller?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] Controller dispose: {0}", e.Message); }
+                try { _targetVoxelGrid?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] Voxel grid dispose: {0}", e.Message); }
                 Controller = null;
 
                 try { Renderer?.Dispose(); } catch (Exception e) { _capi.Logger.Warning("[Layout] Renderer dispose: {0}", e.Message); }

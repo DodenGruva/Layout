@@ -50,6 +50,8 @@ namespace Layout.Shapes
         private readonly PlaneAxis _planeAxis;
         private ShapeConstraint _constraint;
 
+        internal OutlineStyle Outline { get; set; }
+
         public List<ControlPoint> ControlPoints => _controlPoints;
 
         public ShapeConstraint Constraint => _constraint;
@@ -193,15 +195,17 @@ namespace Layout.Shapes
             if (!TryCorners(out Vec3d a, out Vec3d b, out Vec3d c, out Vec3d d)) return result;
 
             var seen = new HashSet<(int, int, int)>();
-            VoxelMarch.MarchSegmentInto(result, seen, a, b, scale);
-            VoxelMarch.MarchSegmentInto(result, seen, b, c, scale);
-            VoxelMarch.MarchSegmentInto(result, seen, c, d, scale);
-            VoxelMarch.MarchSegmentInto(result, seen, d, a, scale);
+            OutlineStyle style = filled ? OutlineStyle.Legacy : Outline;
+            Vec3d center = (a + c) * 0.5;
+            OutlineVoxelizer.Segment(result, seen, a, b, scale, style, center);
+            OutlineVoxelizer.Segment(result, seen, b, c, scale, style, center);
+            OutlineVoxelizer.Segment(result, seen, c, d, scale, style, center);
+            OutlineVoxelizer.Segment(result, seen, d, a, scale, style, center);
 
             if (filled)
             {
                 // In-plane scanlines: chords parallel to A→B marched across the D-direction at ≤ half-cell.
-                double cell = scale / 16.0;
+                double cell = scale / VoxelGrid.UnitsPerBlock;
                 double span = ShapeGeometry.Dist(a, d);
                 int lines = Math.Max(2, Math.Min(8192, (int)Math.Ceiling(span / (cell * 0.5))));
                 for (int i = 0; i <= lines; i++)

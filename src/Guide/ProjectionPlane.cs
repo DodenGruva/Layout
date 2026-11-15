@@ -33,7 +33,7 @@ namespace Layout.Guide
     /// <see cref="VerticalEastWest"/>) at call sites for readability instead of remembering this table.
     ///
     /// OFFSET — <see cref="PlaneOffset"/> is the coordinate on the flattened axis, expressed in the same
-    /// 1/16-block units as <see cref="VoxelPosition"/> (world × 16). It is the only place the plane's
+    /// guide grid units as <see cref="VoxelPosition"/>. It is the only place the plane's
     /// world location is recorded; the kept axes are free.
     ///
     /// VALUE TYPE — this is a small immutable <c>readonly struct</c> with value semantics, mirroring
@@ -51,7 +51,7 @@ namespace Layout.Guide
         /// <summary>The dropped axis. See the axis-mapping table in the type remarks.</summary>
         public PlaneAxis FlattenedAxis { get; }
 
-        /// <summary>Coordinate on the flattened axis, in 1/16-block units (world × 16).</summary>
+        /// <summary>Coordinate on the flattened axis, in guide grid units.</summary>
         public int PlaneOffset { get; }
 
         public ProjectionPlane(PlaneAxis flattenedAxis, int planeOffset)

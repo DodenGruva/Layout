@@ -71,10 +71,12 @@ namespace Layout.Guide
         /// Version 14 makes the Arch family consume its stored <see cref="ShapePlaneAxis"/>. The
         /// <see cref="ArchUsesShapePlaneAxis"/> bit preserves older arches without reinterpreting their
         /// stored, possibly hand-edited control points.
-        public const int CurrentDataVersion = 14;
+        /// Version 16 adds the symmetric circle raster.
+        /// Version 17 adds the saved outline style. Version 18 promotes the 64-cell grid to release.
+        public const int CurrentDataVersion = 18;
 
-        /// <summary>The voxel edge lengths a guide may use, in 1/16-block units (1 → 1/16 block, 16 → 1 block).</summary>
-        public static readonly int[] ValidVoxelScales = { 1, 2, 4, 8, 16 };
+        /// <summary>The voxel edge lengths a guide may use, in guide grid units.</summary>
+        public static readonly int[] ValidVoxelScales = { 1, 2, 4, 8, 16, 32, 64 };
 
         /// <summary>Unique identity, assigned by the server on creation. Stable for the guide's lifetime.</summary>
         public Guid Id { get; set; }
@@ -136,6 +138,15 @@ namespace Layout.Guide
         /// </summary>
         public bool ArchUsesShapePlaneAxis { get; set; }
 
+        /// <summary>Use cell coverage for grid-aligned circles. False preserves the sampled outline.</summary>
+        public bool CircleUsesSymmetricRaster { get; set; }
+
+        public OutlineStyle Outline
+        {
+            get;
+            set => field = value is OutlineStyle.FaceConnected or OutlineStyle.Thin ? value : OutlineStyle.Legacy;
+        }
+
         /// <summary>
         /// UID of the player who created this guide, or null when unknown (guides from saves that predate the
         /// field, or created without an acting player). PURELY BOOKKEEPING for the server-config per-player
@@ -161,7 +172,7 @@ namespace Layout.Guide
         /// </summary>
         public List<ControlPoint> ControlPoints { get; set; }
 
-        /// <summary>Voxel edge length in 1/16-block units; one of <see cref="ValidVoxelScales"/>.</summary>
+        /// <summary>Voxel edge length in guide grid units; one of <see cref="ValidVoxelScales"/>.</summary>
         public int VoxelScale { get; set; }
 
         /// <summary>When true, the guide renders as anchors-only at reduced opacity rather than its full body.</summary>
@@ -257,12 +268,13 @@ namespace Layout.Guide
             int sides = 0,
             bool isClosed = false,
             bool flatSideAligned = false,
-            bool isWireframe = false)
+            bool isWireframe = false,
+            OutlineStyle outline = OutlineStyle.Legacy)
         {
             if (controlPoints == null) throw new ArgumentNullException(nameof(controlPoints));
             if (!IsValidVoxelScale(voxelScale))
                 throw new ArgumentOutOfRangeException(
-                    nameof(voxelScale), voxelScale, "Voxel scale must be one of 1, 2, 4, 8, 16.");
+                    nameof(voxelScale), voxelScale, $"Voxel scale must be one of {string.Join(", ", ValidVoxelScales)}.");
 
             // The as-placed snapshot for SHIFT spring-back: taken at the ONE moment a guide is born, from
             // the fully-derived spine (the caller applies any third-click apex BEFORE building the record).
@@ -277,6 +289,7 @@ namespace Layout.Guide
                 Constraint = constraint,
                 ShapePlaneAxis = shapePlaneAxis,
                 ArchUsesShapePlaneAxis = shapeType == GuideShapeType.Arch,
+                CircleUsesSymmetricRaster = shapeType == GuideShapeType.Ellipse && constraint == ShapeConstraint.Circle,
                 Divisions = divisions,
                 Sides = sides,
                 FlatSideAligned = flatSideAligned,
@@ -290,6 +303,7 @@ namespace Layout.Guide
                 Plane = plane ?? ProjectionPlane.Default,
                 IsFilled = isFilled,
                 IsWireframe = isWireframe,
+                Outline = GuideShapeTypes.IsVolume(shapeType) ? OutlineStyle.Legacy : outline,
                 DataVersion = CurrentDataVersion
             };
         }
@@ -300,7 +314,7 @@ namespace Layout.Guide
         /// cap checks) never hand the shape a <see cref="GuideData"/> directly.
         /// </summary>
         public GuideRenderSettings GetRenderSettings() =>
-            new GuideRenderSettings(VoxelScale, Projection, Plane, IsFilled, wireframe: IsWireframe);
+            new GuideRenderSettings(VoxelScale, Projection, Plane, IsFilled, wireframe: IsWireframe, outline: Outline);
 
         /// <summary>
         /// Produces a fully INDEPENDENT deep copy for undo snapshots: a new control-point list whose
@@ -331,6 +345,8 @@ namespace Layout.Guide
                 Constraint = Constraint,
                 ShapePlaneAxis = ShapePlaneAxis,
                 ArchUsesShapePlaneAxis = ArchUsesShapePlaneAxis,
+                CircleUsesSymmetricRaster = CircleUsesSymmetricRaster,
+                Outline = Outline,
                 Divisions = Divisions,
                 Sides = Sides,
                 FlatSideAligned = FlatSideAligned,

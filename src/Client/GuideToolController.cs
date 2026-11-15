@@ -5,6 +5,7 @@ using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
+using BlockMicroBlock = Vintagestory.GameContent.BlockMicroBlock;
 using Layout.Guide;
 using Layout.Network;
 using Layout.Shapes;
@@ -28,7 +29,8 @@ namespace Layout.Client
         ShiftAllowFlare = 1 << 8,
         RoundoverRoute = 1 << 9,
         ShiftEmbedGuide = 1 << 10,
-        CtrlBypassGrab = 1 << 11
+        CtrlBypassGrab = 1 << 11,
+        CtrlCircleDiameter = 1 << 12
     }
 
     /// <summary>
@@ -82,6 +84,7 @@ namespace Layout.Client
         // v0.3 motion-sensitive drafting. Cheap movement keeps the selected-scale shell; expensive movement
         // uses an adaptive precision wireframe, then materializes the final selected-scale shell when still.
         private const int DraftSettleDelayMs = 180;
+        private const int MaxLiveCircleDiameterVoxels = 2048;
         private const int DraftMinimumRefineIntervalMs = 120;
         private ulong _draftPoseFingerprint;
         private ulong _draftRawAimFingerprint;
@@ -152,7 +155,7 @@ namespace Layout.Client
             public Guid GuideId;
             public double Depth;          // held distance along the view ray, as an interior grab does
             public Vec3d Anchor;          // where the ray-at-depth sat when the drag began
-            public int OffsetX, OffsetY, OffsetZ;   // current snapped offset, in 1/16-block units
+            public int OffsetX, OffsetY, OffsetZ;   // current snapped offset, in guide grid units
         }
         private MoveSession _move;
 
@@ -201,7 +204,8 @@ namespace Layout.Client
                         return _draft.Shape == GuideShapeType.Triangle
                             ? ShapeModifierHelp.ShiftCenterApex : ShapeModifierHelp.None;
 
-                    ShapeModifierHelp help = ShapeModifierHelp.CtrlCardinal;
+                    ShapeModifierHelp help = CanSnapCircleDiameter
+                        ? ShapeModifierHelp.CtrlCircleDiameter : ShapeModifierHelp.CtrlCardinal;
                     if (_draft.Shape == GuideShapeType.Line) help |= ShapeModifierHelp.ShiftVertical;
                     if (_draft.Shape == GuideShapeType.Line) help |= ShapeModifierHelp.CtrlShiftDiagonal;
                     if (GuideShapeTypes.UsesSides(_draft.Shape)) help |= ShapeModifierHelp.ShiftFlatSide;
@@ -637,7 +641,7 @@ namespace Layout.Client
             // T1 (v0.4.15): CTRL sets the guide DOWN on the surface under the crosshair instead of riding
             // the held view-ray depth — the same idea as CTRL's level/cardinal snap while drafting. The aim
             // point becomes the real face hit, and the vertical offset is then solved so the guide's LOWEST
-            // VOXEL PLANE meets that face (see TryGuideFloorSixteenths). With no block under the crosshair
+            // VOXEL PLANE meets that face (see TryGuideFloorCell). With no block under the crosshair
             // there is no surface to meet, so the ordinary held-depth drag simply continues.
             BlockSelection surface = CtrlHeld() ? _capi.World.Player.CurrentBlockSelection : null;
 
@@ -659,29 +663,29 @@ namespace Layout.Client
             // Snap to whole voxels of THIS guide — the authority refuses anything finer, and a sub-voxel
             // offset would move cells by a whole cell wherever it happened to cross a quantise boundary.
             int step = Math.Max(1, g.VoxelScale);
-            int ox = SnapSixteenths(px - _move.Anchor.X, step);
-            int oz = SnapSixteenths(pz - _move.Anchor.Z, step);
+            int ox = SnapGridDelta(px - _move.Anchor.X, step);
+            int oz = SnapGridDelta(pz - _move.Anchor.Z, step);
 
             // Solve the contact FIRST and snap the result, never the other way round: rounding the hit
             // height to the voxel grid before subtracting the guide's underside would leave the guide a
             // voxel proud of — or sunk into — the very face it is supposed to be resting on.
-            int oy = surface != null && TryGuideFloorSixteenths(g, out int floor16)
-                ? SnapSixteenths(py - floor16 / 16.0, step)
-                : SnapSixteenths(py - _move.Anchor.Y, step);
+            int oy = surface != null && TryGuideFloorCell(g, out int floorCell)
+                ? SnapGridDelta(py - floorCell / VoxelGrid.UnitsPerBlock, step)
+                : SnapGridDelta(py - _move.Anchor.Y, step);
 
             if (ox == _move.OffsetX && oy == _move.OffsetY && oz == _move.OffsetZ) return;
 
             _move.OffsetX = ox;
             _move.OffsetY = oy;
             _move.OffsetZ = oz;
-            _renderer.SetMoveOffset(guideId, ox / 16.0, oy / 16.0, oz / 16.0);
+            _renderer.SetMoveOffset(guideId, ox / VoxelGrid.UnitsPerBlock, oy / VoxelGrid.UnitsPerBlock, oz / VoxelGrid.UnitsPerBlock);
         }
 
-        private static int SnapSixteenths(double worldDelta, int step) =>
-            (int)Math.Round(worldDelta * 16.0 / step) * step;
+        private static int SnapGridDelta(double worldDelta, int step) =>
+            (int)Math.Round(worldDelta * VoxelGrid.UnitsPerBlock / step) * step;
 
         /// <summary>
-        /// The bottom of the guide's LOWEST voxel plane, in 1/16 units — the plane T1's CTRL surface-snap
+        /// The bottom of the guide's LOWEST voxel plane, in guide grid units — the plane T1's CTRL surface-snap
         /// brings down onto the targeted face. False when the guide has no usable geometry yet.
         /// </summary>
         /// <remarks>
@@ -694,7 +698,7 @@ namespace Layout.Client
         /// Measured from the shape's own sampled outline (the cached targeting polyline) plus its real
         /// control points, and never from the voxel set: this runs every tick of a drag, and voxelising a
         /// behemoth merely to find its underside is exactly the cost free-move exists to avoid. Cells
-        /// quantise to Floor(world*16/scale)*scale, so flooring the outline's lowest point onto that grid
+        /// quantise to floor(world × grid resolution / scale) × scale, so flooring the outline's lowest point onto that grid
         /// IS the cell the shell's underside occupies.
         ///
         /// Phantom points are excluded. They steer end tangents and are never emitted as voxels, and an
@@ -703,14 +707,14 @@ namespace Layout.Client
         /// A Surface guide is drawn FLATTENED onto its plane, so when that plane is the horizontal one its
         /// stored points say nothing about where the decal actually lies; the plane offset is the answer.
         /// </remarks>
-        private bool TryGuideFloorSixteenths(GuideData g, out int floor16)
+        private bool TryGuideFloorCell(GuideData g, out int floorCell)
         {
-            floor16 = 0;
+            floorCell = 0;
             int scale = Math.Max(1, g.VoxelScale);
 
             if (g.Projection == ProjectionMode.Surface && g.Plane.FlattenedAxis == PlaneAxis.Y)
             {
-                floor16 = FloorToStep(g.Plane.PlaneOffset, scale);
+                floorCell = FloorToStep(g.Plane.PlaneOffset, scale);
                 return true;
             }
 
@@ -730,14 +734,14 @@ namespace Layout.Client
                 }
 
             if (minY == double.MaxValue) return false;
-            floor16 = (int)Math.Floor(minY * 16.0 / scale) * scale;
+            floorCell = (int)Math.Floor(minY * VoxelGrid.UnitsPerBlock / scale) * scale;
             return true;
         }
 
-        // Floors a 1/16-unit coordinate onto the guide's own voxel grid. Negative-safe by construction:
+        // Floors a guide grid coordinate onto the guide's own voxel grid. Negative-safe by construction:
         // integer division truncates toward zero, which would lift a below-sea-level plane by a voxel.
-        private static int FloorToStep(int sixteenths, int step) =>
-            (int)Math.Floor((double)sixteenths / step) * step;
+        private static int FloorToStep(int cell, int step) =>
+            (int)Math.Floor((double)cell / step) * step;
 
         // ---------------------------------------------------------------------------------
         //  Send to ground (v0.4.28)
@@ -750,13 +754,13 @@ namespace Layout.Client
         private const int GroundSamplesPerAxis = 32;
 
         /// <summary>
-        /// How far DOWN, in 1/16 units, the selected guide must travel for its underside to come to rest on
+        /// How far DOWN, in guide grid units, the selected guide must travel for its underside to come to rest on
         /// the ground beneath it. Always zero or negative; zero means it is already resting, is buried, or
         /// has nothing under it within <see cref="GroundSearchBlocks"/>.
         /// </summary>
         /// <remarks>
         /// THE SAME CONTACT RULE AS T1, APPLIED DOWNWARD. The guide's LOWEST VOXEL PLANE meets the surface,
-        /// and it is <see cref="TryGuideFloorSixteenths"/> that says where that plane is — deliberately the
+        /// and it is <see cref="TryGuideFloorCell"/> that says where that plane is — deliberately the
         /// same method rather than a second derivation of the same idea, so the CTRL free-move snap and this
         /// button can never come to disagree about where the bottom of a guide is.
         ///
@@ -779,7 +783,7 @@ namespace Layout.Client
         {
             IBlockAccessor accessor = _capi?.World?.BlockAccessor;
             if (g == null || accessor == null) return 0;
-            if (!TryGuideFloorSixteenths(g, out int floor16)) return 0;
+            if (!TryGuideFloorCell(g, out int floorCell)) return 0;
             if (!TryGuideFootprint(g, out double minX, out double maxX, out double minZ, out double maxZ))
                 return 0;
 
@@ -789,15 +793,15 @@ namespace Layout.Client
             int nx = SampleCount(minX, maxX), nz = SampleCount(minZ, maxZ);
             for (int ix = 0; ix < nx; ix++)
             {
-                int x16 = SampleSixteenths(minX, maxX, ix, nx);
+                int x16 = SampleChiselCell(minX, maxX, ix, nx);
                 for (int iz = 0; iz < nz; iz++)
                 {
-                    int z16 = SampleSixteenths(minZ, maxZ, iz, nz);
-                    int top16 = ColumnSurfaceSixteenths(occupancy, accessor, x16, z16, floor16);
-                    if (top16 > best) best = top16;
+                    int z16 = SampleChiselCell(minZ, maxZ, iz, nz);
+                    int top = ColumnSurfaceCell(occupancy, accessor, x16, z16, floorCell);
+                    if (top > best) best = top;
 
                     // Nothing can beat contact — the guide is already touching down somewhere.
-                    if (best == floor16) return 0;
+                    if (best == floorCell) return 0;
                 }
             }
 
@@ -805,14 +809,14 @@ namespace Layout.Client
 
             // The surface sits on the WORLD's 1/16 grid; the guide may only move in whole voxels of its own
             // scale. Rounding toward zero rather than away leaves the guide resting on, or up to one voxel
-            // proud of, the surface — never sunk into it. Only bites on scale-2 and coarser guides, whose
+            // proud of, the surface — never sunk into it. Only affects coarser guides whose
             // cells cannot land flush on a half-block face in the first place.
             int scale = Math.Max(1, g.VoxelScale);
-            int drop = best - floor16;
+            int drop = best - floorCell;
             return -((-drop) / scale) * scale;
         }
 
-        // The guide's horizontal extent, from the same two sources TryGuideFloorSixteenths measures its
+        // The guide's horizontal extent, from the same two sources TryGuideFloorCell measures its
         // underside from: the sampled outline and the real (non-phantom) control points.
         private bool TryGuideFootprint(
             GuideData g, out double minX, out double maxX, out double minZ, out double maxZ)
@@ -852,16 +856,16 @@ namespace Layout.Client
         private static int SampleCount(double min, double max) =>
             Math.Max(1, Math.Min(GroundSamplesPerAxis, (int)Math.Ceiling(max - min) + 1));
 
-        // Sample i of n, spread across [min, max] with the ends included, in absolute 1/16 units.
-        private static int SampleSixteenths(double min, double max, int i, int n)
+        // Sample i of n, spread across [min, max] with the ends included, in absolute chisel cells.
+        private static int SampleChiselCell(double min, double max, int i, int n)
         {
             double t = n <= 1 ? 0.5 : (double)i / (n - 1);
-            return (int)Math.Floor((min + (max - min) * t) * 16.0);
+            return (int)Math.Floor((min + (max - min) * t) * VoxelGrid.ChiselCellsPerBlock);
         }
 
         /// <summary>
-        /// The top of the first material found straight down from <paramref name="floor16"/> in this one
-        /// 1/16 column, or <see cref="int.MinValue"/> if there is none within reach.
+        /// The top of the first material below <paramref name="floorCell"/>, in guide grid units,
+        /// or <see cref="int.MinValue"/> if there is none within reach.
         /// </summary>
         /// <remarks>
         /// TWO RESOLUTIONS, and that is what keeps this cheap. Falling a cell at a time through open sky
@@ -870,11 +874,12 @@ namespace Layout.Client
         /// that happens to be hollow at this column — the gap between two fence posts — correctly does not
         /// stop it, and the walk continues below.
         /// </remarks>
-        private static int ColumnSurfaceSixteenths(
-            BlockOccupancy occupancy, IBlockAccessor accessor, int x16, int z16, int floor16)
+        private static int ColumnSurfaceCell(
+            BlockOccupancy occupancy, IBlockAccessor accessor, int x16, int z16, int floorCell)
         {
-            int bx = x16 >> 4, bz = z16 >> 4;
-            int startBlockY = (floor16 - 1) >> 4;      // the first block strictly below the underside
+            int bx = x16 >> VoxelGrid.ChiselShift, bz = z16 >> VoxelGrid.ChiselShift;
+            int lastMaterialCell = VoxelGrid.ToChiselCell(floorCell - 1);
+            int startBlockY = lastMaterialCell >> VoxelGrid.ChiselShift;
             var pos = new BlockPos(bx, 0, bz);
 
             for (int i = 0; i < GroundSearchBlocks; i++)
@@ -885,11 +890,13 @@ namespace Layout.Client
                 if (fill == BlockFill.Empty) continue;
 
                 // The topmost cell of this block that is both material and below the guide, +1 for its top
-                // face. Capped at floor16 so the block the underside sits inside cannot report a surface
+                // face. Capped at floorCell so the block the underside sits inside cannot report a surface
                 // above the guide itself.
-                int highest = Math.Min(by * 16 + 15, floor16 - 1);
-                for (int y16 = highest; y16 >= by * 16; y16--)
-                    if (occupancy.IsMaterialAt(accessor, x16, y16, z16)) return y16 + 1;
+                int blockBase = by * VoxelGrid.ChiselCellsPerBlock;
+                int highest = Math.Min(blockBase + VoxelGrid.ChiselCellsPerBlock - 1, lastMaterialCell);
+                for (int y16 = highest; y16 >= blockBase; y16--)
+                    if (occupancy.IsMaterialAt(accessor, x16, y16, z16))
+                        return Math.Min(floorCell, (y16 + 1) * VoxelGrid.ChiselScale);
             }
 
             return int.MinValue;
@@ -988,10 +995,9 @@ namespace Layout.Client
                 // none the height handle follows the view ray. Every other stage still needs a block.
                 if (blockSel != null || AwaitingVolumeHeight)
                 {
-                    bool embedAim = _draft.DraftEmbedded
-                        || (_draft.Shape == GuideShapeType.Roundover && ShiftHeld());
+                    Cuboidf chiselBox = ChiselSelectionBox(blockSel);
                     Vec3d aim = blockSel != null
-                        ? ResolveGuidePoint(blockSel, embedAim) : FreeAirAim();
+                        ? ResolveGuidePoint(blockSel, chiselBox) : FreeAirAim();
                     if (DraftManager.IsChainShape(_draft.Shape))
                     {
                         if (_draft.Shape == GuideShapeType.Roundover)
@@ -1032,7 +1038,7 @@ namespace Layout.Client
                         aim = ConstrainChainAim(aim);
                         bool closing = _draft.Shape == GuideShapeType.FreeShape
                             && _draft.ChainCount >= 3
-                            && Dist(aim, _draft.ChainFirst) <= ChainSnapRadius();
+                            && Dist(aim, _draft.ChainFirst) <= ChainSnapRadius(chiselBox != null);
                         if (closing) aim = _draft.ChainFirst;
                         ObserveDraftMotion(aim, flatSideAligned: false);
                         PresentDraft(new DraftPreviewSpec(0, BuildSettings(blockSel, aim),
@@ -1081,13 +1087,16 @@ namespace Layout.Client
                         bool flatSideAligned = GuideShapeTypes.UsesSides(_draft.Shape) && ShiftHeld();
                         ObserveDraftMotion(aim, flatSideAligned);
                         aim = ClampDraftAimToPerGuideCap(aim);   // 0.2.19: ghost stops at the cap
+                        Vec3d start = _draft.DraftStart;
+                        SnapDraftCircle(ref start, ref aim);
                         PresentDraft(new DraftPreviewSpec(0, BuildSettings(blockSel, aim),
                             _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
-                            _draft.DraftStart, aim,
+                            start, aim,
                             sides: _draft.Sides,
                             // Shift belongs exclusively to flat-side alignment for polygonal guides.
                             inverted: !GuideShapeTypes.UsesSides(_draft.Shape) && EffectiveInverted(),
-                            flatSideAligned: flatSideAligned), aim, flatSideAligned);
+                            flatSideAligned: flatSideAligned,
+                            symmetricCircleRaster: _net.SymmetricCirclePlacementSupported), aim, flatSideAligned);
                     }
                 }
                 else
@@ -1119,7 +1128,8 @@ namespace Layout.Client
             Vec3d target;
             if (blockSel != null)
             {
-                target = ResolveAnchorPoint(blockSel);
+                target = ResolveBlockPlacement(blockSel, _draft.Scale, _draft.Projection,
+                    embed: false, chiselBox: ChiselSelectionBox(blockSel));
 
                 // CTRL re-grab constraint (Session-8 playtest fix; moved from SHIFT to CTRL in Session 11,
                 // freeing SHIFT for invert/spring-back): dragging an ANCHOR with ctrl held constrains it
@@ -1243,7 +1253,7 @@ namespace Layout.Client
             // context key. Coarse on purpose: fine buckets would reset the bracket on every small cursor
             // jitter and make the ghost hunt, while coarse ones keep a normal drag in one context.
             private const double DirectionBuckets = 8.0;
-            private const double Tolerance = 1.0 / 32.0;    // sub-voxel: tighter than this is not visible
+            private const double Tolerance = 1.0 / (2 * VoxelGrid.UnitsPerBlock);    // sub-voxel: tighter than this is not visible
 
             private long _key = long.MinValue;
             private double _lo;                             // largest reach known to FIT (0 = degenerate)
@@ -1365,7 +1375,8 @@ namespace Layout.Client
 
             IGuideShape shape = ShapeFactory.Adopt(
                 guide.ShapeType, guide.Constraint, guide.ShapePlaneAxis, points,
-                guide.Sides, guide.IsClosed, guide.FlatSideAligned, guide.ArchUsesShapePlaneAxis);
+                guide.Sides, guide.IsClosed, guide.FlatSideAligned, guide.ArchUsesShapePlaneAxis,
+                guide.CircleUsesSymmetricRaster, guide.Outline);
 
             if (guide.Constraint != ShapeConstraint.None && shape.WouldBreakOnMove(_grab.PointIndex))
                 shape.BreakConstraint();
@@ -1426,6 +1437,8 @@ namespace Layout.Client
                 : _draft.AwaitingApex && _draft.DraftSecond != null ? _draft.DraftSecond
                 : _draft.DraftStart;
 
+            bool liveCount = CanCountDraftCircleWhileMoving(aim) || CanCountDraftOutlineWhileMoving(aim);
+
             // The stage is part of the key: advancing base → height → rim restarts the search, since the
             // reach learned for one stage means nothing for the next.
             long key = ClampKeyOf(anchorRef)
@@ -1433,11 +1446,40 @@ namespace Layout.Client
                 ^ (_draft.Scale * 2654435761L) ^ (_draft.Sides * 40503L)
                 ^ (_draft.Divisions * 22801763L) ^ (_draft.Filled ? 3298534883L : 0L)
                 ^ (_draft.Wireframe ? 1099511628211L : 0L)
+                ^ (CanSnapCircleDiameter && CtrlHeld() ? 73856093L : 0L)
+                ^ (liveCount ? 1099511628217L : 0L) ^ ((long)DraftOutline * 1099511628273L)
                 ^ (_draft.AwaitingApex ? 5915587277L : 0L) ^ (_draft.AwaitingRim ? 1500450271L : 0L)
                 ^ (cap * 51539607551L);
 
-            return _draftClamp.Clamp(key, anchorRef, aim, c => DraftCandidateFits(c, cap),
-                allowScheduledCheck ? DraftClampStepBudget() : 0);
+            int steps = liveCount ? 2 : allowScheduledCheck ? DraftClampStepBudget() : 0;
+            return _draftClamp.Clamp(key, anchorRef, aim, c => DraftCandidateFits(c, cap), steps);
+        }
+
+        private bool CanCountDraftCircleWhileMoving(Vec3d aim)
+        {
+            if (!CanSnapCircleDiameter) return false;
+
+            // A bounded row count is cheap enough to keep the rim following the aim, including on the
+            // completing click. Use the same snapped endpoints as cap validation and the preview.
+            Vec3d start = _draft.DraftStart;
+            SnapDraftCircle(ref start, ref aim);
+            var circle = new EllipseShape(start, aim, _draft.DraftPlaneAxis, ShapeConstraint.Circle);
+            return circle.CanCountCircleByRows(_draft.Scale, MaxLiveCircleDiameterVoxels);
+        }
+
+        private bool CanCountDraftOutlineWhileMoving(Vec3d aim)
+        {
+            if (GuideShapeTypes.IsVolume(_draft.Shape)
+                || (_draft.Filled && _draft.Shape != GuideShapeType.Line)) return false;
+
+            // Bound the span in cells so spline samples and polygon edge marches stay short.
+            const int maxSpan = 256;
+            double cell = _draft.Scale / VoxelGrid.UnitsPerBlock;
+            Vec3d start = _draft.DraftStart;
+            Vec3d second = _draft.DraftSecond;
+            double length = Dist(start, aim);
+            if (second != null) length += Dist(start, second);
+            return length <= maxSpan * cell;
         }
 
         private void ObserveDraftMotion(Vec3d aim, bool flatSideAligned)
@@ -1445,9 +1487,9 @@ namespace Layout.Client
             if (aim == null) return;
             ulong h = 1469598103934665603UL;
             void Mix(long value) { unchecked { h ^= (ulong)value; h *= 1099511628211UL; } }
-            Mix((long)Math.Floor(aim.X * 16.0));
-            Mix((long)Math.Floor(aim.Y * 16.0));
-            Mix((long)Math.Floor(aim.Z * 16.0));
+            Mix((long)Math.Floor(aim.X * VoxelGrid.UnitsPerBlock));
+            Mix((long)Math.Floor(aim.Y * VoxelGrid.UnitsPerBlock));
+            Mix((long)Math.Floor(aim.Z * VoxelGrid.UnitsPerBlock));
             Mix((long)_draft.Shape); Mix((long)_draft.Constraint); Mix(_draft.Scale); Mix(_draft.Sides);
             Mix(_draft.AwaitingApex ? 1 : 0); Mix(_draft.AwaitingRim ? 1 : 0);
             Mix(flatSideAligned ? 1 : 0); Mix(ShiftHeld() ? 1 : 0); Mix(CtrlHeld() ? 1 : 0);
@@ -1622,8 +1664,8 @@ namespace Layout.Client
         private int DraftClampStepBudget()
         {
             long now = _capi.World.ElapsedMilliseconds;
-            // Never perform exact cap scans while the cursor is moving. The last safe ghost remains visible,
-            // and exact client/server completion validation is unchanged. Once still, converge gradually.
+            // For expensive shapes, keep the last safe ghost while the cursor moves. Once still,
+            // converge gradually so cap checks cannot monopolise the input tick.
             if (_draftLastMotionMs != 0 && now - _draftLastMotionMs < DraftSettleDelayMs) return 0;
             long interval = Math.Max(120L, Math.Min(1000L,
                 Math.Max(1L, _lastDraftWorkMilliseconds) * 4L));
@@ -1640,12 +1682,14 @@ namespace Layout.Client
             {
                 Vec3d start = _draft.DraftStart;
                 Vec3d end = _draft.AwaitingApex ? _draft.DraftSecond : candidate;
+                SnapDraftCircle(ref start, ref end);
                 IGuideShape shape = ShapeFactory.Create(
                     _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis, start, end,
                     sides: _draft.Sides,
                     flatSideAligned: _draft.AwaitingApex
                         ? _draft.DraftFlatSideAligned
-                        : GuideShapeTypes.UsesSides(_draft.Shape) && ShiftHeld());
+                        : GuideShapeTypes.UsesSides(_draft.Shape) && ShiftHeld(),
+                    symmetricCircleRaster: _net.SymmetricCirclePlacementSupported, outline: DraftOutline);
                 Vec3d apex = _draft.AwaitingRim ? _draft.DraftThird
                     : _draft.AwaitingApex ? candidate : null;
                 Vec3d rim = _draft.AwaitingRim ? candidate : null;
@@ -1960,7 +2004,7 @@ namespace Layout.Client
             double py = pos.Y - centre.Y;
             double pz = pos.Z - centre.Z;
             double planeDistance = Math.Abs(px * nx + py * ny + pz * nz) / normalLength;
-            double cell = Math.Max(1, g.VoxelScale) / 16.0;
+            double cell = Math.Max(1, g.VoxelScale) / VoxelGrid.UnitsPerBlock;
             if (planeDistance > cell * 1.5) return -1;
 
             double daX = pos.X - a.X, daY = pos.Y - a.Y, daZ = pos.Z - a.Z;
@@ -2014,12 +2058,9 @@ namespace Layout.Client
             // it may complete in free air (0.1.23), the view ray standing in for the click point.
             if (blockSel == null && !AwaitingVolumeHeight) return;
 
-            bool embedPoint = !_draft.HasActiveDraft
-                ? ShiftHeld()
-                : _draft.DraftEmbedded
-                    || (_draft.Shape == GuideShapeType.Roundover && ShiftHeld());
+            Cuboidf chiselBox = ChiselSelectionBox(blockSel);
             Vec3d anchor = blockSel != null
-                ? ResolveGuidePoint(blockSel, embedPoint) : FreeAirAim();
+                ? ResolveGuidePoint(blockSel, chiselBox) : FreeAirAim();
             // Base-stage modifiers: SHIFT makes a Line vertical; CTRL supplies the normal cardinal snap.
             // SHIFT wins if both are held. Multi-corner Free-Shape segments use their own equivalent helper.
             if (_draft.HasActiveDraft && !_draft.AwaitingApex
@@ -2056,7 +2097,7 @@ namespace Layout.Client
                 // The first click also fixes the INTRINSIC plane for planar shapes: click the ground for a
                 // horizontal guide (normal Y), or click a wall for a guide on that wall (normal X/Z).
                 _draft.StartDraft(anchor, AxisFromFace(blockSel), FaceIsNegative(blockSel),
-                    embedded: embedPoint);
+                    embedded: ShiftHeld(), chiseled: chiselBox != null);
                 _rimAimArmed = false;
                 _rimAwaitingRelease = false;
                 ResetDraftVisualState();
@@ -2071,9 +2112,7 @@ namespace Layout.Client
             // finishes it open. CTRL snaps each new segment relative to the PREVIOUS corner.
             if (DraftManager.IsChainShape(_draft.Shape))
             {
-                Vec3d corner = _draft.Shape == GuideShapeType.Roundover
-                    ? ResolveGuidePoint(blockSel, _draft.DraftEmbedded || ShiftHeld())
-                    : ResolveGuidePoint(blockSel, _draft.DraftEmbedded);
+                Vec3d corner = anchor;
 
                 if (_draft.Shape == GuideShapeType.Roundover)
                 {
@@ -2113,7 +2152,7 @@ namespace Layout.Client
 
                 corner = ConstrainChainAim(corner);
 
-                double snap = ChainSnapRadius();
+                double snap = ChainSnapRadius(chiselBox != null);
                 bool onFirst = _draft.ChainFirst != null && Dist(corner, _draft.ChainFirst) <= snap;
                 bool onLast = _draft.ChainLast != null && Dist(corner, _draft.ChainLast) <= snap;
 
@@ -2194,6 +2233,8 @@ namespace Layout.Client
             if (_draft.AwaitingRim) rim = ClampDraftAimToPerGuideCap(rim, allowScheduledCheck: false);
             else if (_draft.AwaitingApex) apex = ClampDraftAimToPerGuideCap(apex, allowScheduledCheck: false);
             else end = ClampDraftAimToPerGuideCap(end, allowScheduledCheck: false);
+            Vec3d draftStart = _draft.DraftStart;
+            SnapDraftCircle(ref draftStart, ref end);
 
             // SHIFT at the completing click bakes the inverted (upside-down) form — only meaningful for
             // the shapes that derive an "up" (arch family, equilateral triangle, Dome); apex-clicked
@@ -2207,9 +2248,10 @@ namespace Layout.Client
             var candidateSpec = new DraftPreviewSpec(
                 _draftGeneration, placementSettings,
                 _draft.Shape, _draft.Constraint, _draft.DraftPlaneAxis,
-                _draft.DraftStart, end,
+                draftStart, end,
                 sides: _draft.Sides, inverted: inverted,
-                apex: apex, rim: rim, flatSideAligned: flatSideAligned);
+                apex: apex, rim: rim, flatSideAligned: flatSideAligned,
+                symmetricCircleRaster: _net.SymmetricCirclePlacementSupported);
             bool candidateMatchesPreview = candidateSpec.Fingerprint() == _draftPoseFingerprint;
             int knownVoxelCount = candidateMatchesPreview
                 && _acceptedDraftScale == placementSettings.Scale
@@ -2220,7 +2262,7 @@ namespace Layout.Client
                 && !_draft.Wireframe;
             DraftCompletion completion = _draft.TryCompleteDraft(
                 end, apex, inverted, rim, flatSideAligned,
-                knownVoxelCount, deferCapCheck);
+                knownVoxelCount, deferCapCheck, _net.SymmetricCirclePlacementSupported, draftStart, DraftOutline);
             if (completion.IsReady)
             {
                 DraftPreviewSpec placementSpec = candidateSpec;
@@ -2256,7 +2298,7 @@ namespace Layout.Client
         // corner list + closed flag; the draft clears on a successful send like every other completion.
         private void CompleteChain(bool closed, BlockSelection blockSel, Vec3d lastAim)
         {
-            DraftCompletion completion = _draft.TryCompleteChain(closed);
+            DraftCompletion completion = _draft.TryCompleteChain(closed, DraftOutline);
             if (completion.IsReady)
             {
                 _net.SendCreateRequest(completion.Start, completion.End, BuildSettings(blockSel, lastAim),
@@ -2324,7 +2366,12 @@ namespace Layout.Client
         // The click-forgiveness radius for finishing a Free-Shape on an existing corner: the lock-snap
         // formula, floored a touch higher (clicked cells resolve to identical snapped coords, so this only
         // has to absorb an adjacent-cell miss).
-        private double ChainSnapRadius() => Math.Max(0.25, _draft.Scale / 16.0 * 1.5);
+        private double ChainSnapRadius(bool chiseledTarget)
+        {
+            double cell = _draft.Scale / VoxelGrid.UnitsPerBlock;
+            // Adjacent cells in a carving can be distinct corners.
+            return chiseledTarget ? cell * 0.5 : Math.Max(0.25, cell * 1.5);
+        }
 
         // The Free-Shape's segment constraints, keyed off the LAST placed corner: SHIFT (0.1.16,
         // human-requested) pins the next segment VERTICAL — same X/Z as that corner, height from the aim;
@@ -2350,7 +2397,56 @@ namespace Layout.Client
                 return ConstrainDiagonal(start, aim);
             if (_draft.Shape == GuideShapeType.Line && ShiftHeld())
                 return new Vec3d(start.X, aim.Y, start.Z);
-            return CtrlHeld() ? ConstrainTo(start, aim) : aim;
+            return CtrlHeld() && !CanSnapCircleDiameter ? ConstrainTo(start, aim) : aim;
+        }
+
+        private bool CanSnapCircleDiameter => _draft.Shape == GuideShapeType.Ellipse
+            && _draft.Constraint == ShapeConstraint.Circle && _net.SymmetricCirclePlacementSupported;
+
+        private void SnapDraftCircle(ref Vec3d start, ref Vec3d end)
+        {
+            if (CanSnapCircleDiameter && CtrlHeld())
+                (start, end) = SnapCircleDiameter(start, end, _draft.DraftPlaneAxis, _draft.Scale);
+        }
+
+        internal static (Vec3d Start, Vec3d End) SnapCircleDiameter(
+            Vec3d start, Vec3d end, PlaneAxis plane, int scale)
+        {
+            double cell = scale / VoxelGrid.UnitsPerBlock;
+            PlaneAxis u = plane == PlaneAxis.X ? PlaneAxis.Y : PlaneAxis.X;
+            PlaneAxis v = plane == PlaneAxis.Z ? PlaneAxis.Y : PlaneAxis.Z;
+            double su = CircleRaster.Coordinate(start, u) / cell, sv = CircleRaster.Coordinate(start, v) / cell;
+            double eu = CircleRaster.Coordinate(end, u) / cell, ev = CircleRaster.Coordinate(end, v) / cell;
+            bool alongU = Math.Abs(eu - su) >= Math.Abs(ev - sv);
+            double first = alongU ? su : sv;
+            double last = alongU ? eu : ev;
+            double firstCentre = Math.Floor(first) + 0.5;
+            double oppositeCentre = Math.Floor(last) + 0.5;
+            if (firstCentre == oppositeCentre) return (start, start);
+
+            // The aimed diameter determines whether both centerlines fall on seams or voxel centers.
+            double midpoint = (firstCentre + oppositeCentre) * 0.5;
+            bool evenDiameter = midpoint == Math.Floor(midpoint);
+
+            double across = alongU ? sv : su;
+            double aimedAcross = alongU ? ev : eu;
+            double low = Math.Floor(across);
+            double acrossSeam = across == low || aimedAcross < across ? low : low + 1;
+            double acrossCentre = evenDiameter ? acrossSeam : low + 0.5;
+            double normal = CircleRaster.Coordinate(start, plane);
+            return (Point(firstCentre), Point(oppositeCentre));
+
+            Vec3d Point(double along)
+            {
+                double a = (alongU ? along : acrossCentre) * cell;
+                double b = (alongU ? acrossCentre : along) * cell;
+                return plane switch
+                {
+                    PlaneAxis.X => new Vec3d(normal, a, b),
+                    PlaneAxis.Z => new Vec3d(a, b, normal),
+                    _ => new Vec3d(a, normal, b)
+                };
+            }
         }
 
         // The final tapered-rim stage is safe by default: its radius cannot pass the existing base.
@@ -2846,7 +2942,7 @@ namespace Layout.Client
 
             foreach (GuideData g in _net.Guides.Values)
             {
-                double voxel = g.VoxelScale / 16.0;
+                double voxel = g.VoxelScale / VoxelGrid.UnitsPerBlock;
                 // This is a cheap candidate test for the 33 Hz HUD loop, not permission to grab. Bound its
                 // halo to one physical guide cell: a cube's centre-to-corner distance is sqrt(3)/2 of its
                 // edge. The exact click path still ray-tests the rendered voxel before acting. Fixed 0.10 /
@@ -2968,11 +3064,11 @@ namespace Layout.Client
 
             Vec3d origin = EyePos();
             Vec3d dir = ViewDir();
-            double edge = guide.VoxelScale / 16.0;
+            double edge = guide.VoxelScale / VoxelGrid.UnitsPerBlock;
             double half = edge * 0.5;
             bool surface = guide.Projection == ProjectionMode.Surface;
             PlaneAxis flatAxis = guide.Plane.FlattenedAxis;
-            double plane = guide.Plane.PlaneOffset / 16.0;
+            double plane = guide.Plane.PlaneOffset / VoxelGrid.UnitsPerBlock;
             double surfaceHalfThickness = Math.Min(half, 0.02);
 
             // Raw outline cells can collapse onto one Surface slab, so test each visible tangential cell once.
@@ -2984,9 +3080,9 @@ namespace Layout.Client
 
             foreach (VoxelPosition voxel in voxels)
             {
-                double minX = voxel.X / 16.0;
-                double minY = voxel.Y / 16.0;
-                double minZ = voxel.Z / 16.0;
+                double minX = voxel.X / VoxelGrid.UnitsPerBlock;
+                double minY = voxel.Y / VoxelGrid.UnitsPerBlock;
+                double minZ = voxel.Z / VoxelGrid.UnitsPerBlock;
                 double maxX = minX + edge;
                 double maxY = minY + edge;
                 double maxZ = minZ + edge;
@@ -3032,6 +3128,8 @@ namespace Layout.Client
             }
 
             if (!found) return false;
+            if (shape is EllipseShape ellipse && ellipse.TryGetCircleMarkerOwner(voxels, guide.VoxelScale,
+                cell => SameVisibleCell(cell, hitVoxel, surface, flatAxis), out pointIndex)) return true;
             pointIndex = FindPointOwningVoxel(guide, voxels, hitVoxel, surface, flatAxis, plane);
             return true;
         }
@@ -3055,9 +3153,9 @@ namespace Layout.Client
                     if (point == null || point.IsPhantom
                         || !roundover.TryGetMarkerPosition(i, guide.VoxelScale, out Vec3d marker))
                         continue;
-                    int x = (int)Math.Floor(marker.X * 16.0 / guide.VoxelScale) * guide.VoxelScale;
-                    int y = (int)Math.Floor(marker.Y * 16.0 / guide.VoxelScale) * guide.VoxelScale;
-                    int z = (int)Math.Floor(marker.Z * 16.0 / guide.VoxelScale) * guide.VoxelScale;
+                    int x = (int)Math.Floor(marker.X * VoxelGrid.UnitsPerBlock / guide.VoxelScale) * guide.VoxelScale;
+                    int y = (int)Math.Floor(marker.Y * VoxelGrid.UnitsPerBlock / guide.VoxelScale) * guide.VoxelScale;
+                    int z = (int)Math.Floor(marker.Z * VoxelGrid.UnitsPerBlock / guide.VoxelScale) * guide.VoxelScale;
                     if (x != clicked.X || y != clicked.Y || z != clicked.Z) continue;
                     int role = point.IsLocked ? 3 : point.IsPrimary ? 2 : point.IsAnchor ? 1 : 0;
                     if (role > fastOwnerRole) { fastOwner = i; fastOwnerRole = role; }
@@ -3065,7 +3163,7 @@ namespace Layout.Client
                 return fastOwner;
             }
 
-            double edge = guide.VoxelScale / 16.0;
+            double edge = guide.VoxelScale / VoxelGrid.UnitsPerBlock;
             double half = edge * 0.5;
             int owner = -1;
             int ownerRole = -1;
@@ -3085,9 +3183,9 @@ namespace Layout.Client
                 {
                     if (surface && !seenSurfaceCells.Add(VisibleCellKey(voxel, flatAxis))) continue;
 
-                    double cx = voxel.X / 16.0 + half;
-                    double cy = voxel.Y / 16.0 + half;
-                    double cz = voxel.Z / 16.0 + half;
+                    double cx = voxel.X / VoxelGrid.UnitsPerBlock + half;
+                    double cy = voxel.Y / VoxelGrid.UnitsPerBlock + half;
+                    double cz = voxel.Z / VoxelGrid.UnitsPerBlock + half;
                     if (surface)
                     {
                         if (flatAxis == PlaneAxis.X) cx = plane;
@@ -3246,52 +3344,57 @@ namespace Layout.Client
         //  Placement targeting (§5): face hit → voxel cell at the current scale
         // ==========================================================================================
 
-        // Resolves a block-face hit to an anchor position: tangential axes snap to the voxel grid at the
-        // current scale; the face-normal axis sits flush ON the face plane for Surface, and half a voxel
-        // into the empty cell adjacent to the face for Volumetric.
-        private Vec3d ResolveAnchorPoint(BlockSelection blockSel)
+        private Cuboidf ChiselSelectionBox(BlockSelection selection)
         {
-            double s = _draft.Scale / 16.0;
-            Vec3d hit = new Vec3d(
-                blockSel.Position.X + blockSel.HitPosition.X,
-                blockSel.Position.Y + blockSel.HitPosition.Y,
-                blockSel.Position.Z + blockSel.HitPosition.Z);
+            if (selection == null) return null;
 
-            Vec3i n = blockSel.Face.Normali;
-
-            // Snap the two tangential axes to voxel-cell CENTERS at the current scale.
-            double SnapCenter(double v) => (Math.Floor(v / s + 1e-6)) * s + s * 0.5;
-
-            double x = n.X != 0 ? hit.X : SnapCenter(hit.X);
-            double y = n.Y != 0 ? hit.Y : SnapCenter(hit.Y);
-            double z = n.Z != 0 ? hit.Z : SnapCenter(hit.Z);
-
-            // Face plane coordinate: the block-boundary the hit face lies on.
-            double PlaneCoord(int blockCoord, int normal) => normal > 0 ? blockCoord + 1 : blockCoord;
-
-            bool surface = _draft.Projection == ProjectionMode.Surface;
-            if (n.X != 0) x = PlaneCoord(blockSel.Position.X, n.X) + (surface ? 0 : n.X * s * 0.5);
-            if (n.Y != 0) y = PlaneCoord(blockSel.Position.Y, n.Y) + (surface ? 0 : n.Y * s * 0.5);
-            if (n.Z != 0) z = PlaneCoord(blockSel.Position.Z, n.Z) + (surface ? 0 : n.Z * s * 0.5);
-
-            return new Vec3d(x, y, z);
+            var accessor = _capi.World.BlockAccessor;
+            if (accessor.GetBlock(selection.Position) is not BlockMicroBlock microBlock) return null;
+            Cuboidf[] boxes = microBlock.GetSelectionBoxes(accessor, selection.Position);
+            return (uint)selection.SelectionBoxIndex < (uint)(boxes?.Length ?? 0)
+                ? boxes[selection.SelectionBoxIndex] : null;
         }
 
-        // Embedded placement chooses the material-side voxel without changing either tangential coordinate.
-        // Volumetric anchors move exactly one selected-scale cell from the ordinary outside-cell centre to
-        // the matching centre inside the targeted block. Surface mode starts on the face plane, so half a
-        // cell reaches that same material-side centre.
-        private Vec3d ResolveGuidePoint(BlockSelection blockSel, bool embed)
+        private Vec3d ResolveGuidePoint(BlockSelection blockSel, Cuboidf chiselBox)
         {
-            Vec3d point = ResolveAnchorPoint(blockSel);
-            if (!embed || blockSel?.Face == null) return point;
+            bool embed = _draft.DraftEmbedded
+                || ((!_draft.HasActiveDraft || _draft.Shape == GuideShapeType.Roundover) && ShiftHeld());
+            return ResolveBlockPlacement(blockSel, _draft.Scale, _draft.Projection, embed, chiselBox);
+        }
 
-            Vec3i normal = blockSel.Face.Normali;
-            double cell = _draft.Scale / 16.0;
-            double inward = _draft.Projection == ProjectionMode.Surface ? cell * 0.5 : cell;
-            return new Vec3d(point.X - normal.X * inward,
-                point.Y - normal.Y * inward,
-                point.Z - normal.Z * inward);
+        // The engine's raycast supplies the hit face and the index of the chiseled cuboid it struck.
+        // Snap just to the chosen side of that face, keeping tangential hits inside the selected cuboid
+        // at shared edges. At fine scales several Layout cells can fit against the same chisel voxel.
+        internal static Vec3d ResolveBlockPlacement(
+            BlockSelection selection, int scale, ProjectionMode projection, bool embed, Cuboidf chiselBox)
+        {
+            const double epsilon = 1e-6;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
+            Vec3i normal = selection.Face.Normali;
+            BlockPos block = selection.Position;
+            Vec3d hit = selection.HitPosition;
+
+            double ResolveAxis(int blockCoordinate, double hitCoordinate, int axisNormal, double min, double max)
+            {
+                double SnapCenter(double local) =>
+                    (Math.Floor(local / cell) + 0.5) * cell;
+
+                if (axisNormal == 0)
+                {
+                    double local = hitCoordinate + cell * epsilon;
+                    if (chiselBox != null) local = Math.Clamp(local, min + epsilon, max - epsilon);
+                    return blockCoordinate + SnapCenter(local);
+                }
+
+                double face = axisNormal > 0 ? max : min;
+                if (!embed && projection == ProjectionMode.Surface) return blockCoordinate + face;
+                return blockCoordinate + SnapCenter(face + axisNormal * (embed ? -epsilon : epsilon));
+            }
+
+            return new Vec3d(
+                ResolveAxis(block.X, hit.X, normal.X, chiselBox?.X1 ?? 0, chiselBox?.X2 ?? 1),
+                ResolveAxis(block.Y, hit.Y, normal.Y, chiselBox?.Y1 ?? 0, chiselBox?.Y2 ?? 1),
+                ResolveAxis(block.Z, hit.Z, normal.Z, chiselBox?.Z1 ?? 0, chiselBox?.Z2 ?? 1));
         }
 
         // True when the active draft is on a free-air-capable stage of a 3D volume: the HEIGHT stage
@@ -3399,7 +3502,7 @@ namespace Layout.Client
                 double rx = px - axis.X * axial, ry = py - axis.Y * axial, rz = pz - axis.Z * axial;
                 double requestedRadius = Math.Sqrt(rx * rx + ry * ry + rz * rz);
 
-                double cell = _draft.Scale / 16.0;
+                double cell = _draft.Scale / VoxelGrid.UnitsPerBlock;
                 double captureBand = Math.Max(0.25,
                     Math.Max(cell * 1.5, Math.Min(1.0, baseRadius * 0.1)));
                 if (Math.Abs(requestedRadius - heldRadius) <= captureBand)
@@ -3463,7 +3566,7 @@ namespace Layout.Client
         }
 
         // Live settings at send time (v2.1 rule): the plane comes from the clicked face unless the GUI
-        // override says otherwise; the offset is the anchor's coordinate on the flattened axis in 1/16ths.
+        // override says otherwise; the offset is the anchor's coordinate on the flattened axis in guide grid units.
         // The clicked face's normal axis — the ellipse family's intrinsic plane normal.
         private static PlaneAxis AxisFromFace(BlockSelection blockSel)
         {
@@ -3493,12 +3596,24 @@ namespace Layout.Client
             return inv;
         }
 
+        private OutlineStyle DraftOutline =>
+            _net?.OutlinePlacementSupported == true && !GuideShapeTypes.IsVolume(_draft.Shape)
+                ? (_draft.EnableThinShapes ? OutlineStyle.Thin : OutlineStyle.FaceConnected)
+                : OutlineStyle.Legacy;
+
         private GuideRenderSettings BuildSettings(BlockSelection blockSel, Vec3d anchor)
         {
+            bool useChiseledStart = _draft.DraftStartedOnChisel && _draft.Projection == ProjectionMode.Surface;
+            bool useDraftPlane = useChiseledStart || (_draft.HasActiveDraft && CanSnapCircleDiameter && CtrlHeld()
+                && _draft.Projection == ProjectionMode.Surface);
             PlaneAxis axis;
             if (_draft.PlaneOverride.HasValue)
             {
                 axis = _draft.PlaneOverride.Value;
+            }
+            else if (useDraftPlane)
+            {
+                axis = _draft.DraftPlaneAxis;
             }
             else if (blockSel != null)
             {
@@ -3512,10 +3627,16 @@ namespace Layout.Client
                 axis = _draft.DraftPlaneAxis;
             }
 
-            double coord = axis == PlaneAxis.X ? anchor.X : (axis == PlaneAxis.Y ? anchor.Y : anchor.Z);
-            var plane = new ProjectionPlane(axis, (int)Math.Round(coord * 16.0));
+            Vec3d planeAnchor = useDraftPlane ? _draft.DraftStart : anchor;
+            double coord = axis == PlaneAxis.X ? planeAnchor.X : (axis == PlaneAxis.Y ? planeAnchor.Y : planeAnchor.Z);
+            double offset = coord * VoxelGrid.UnitsPerBlock;
+            // At the finest scale, the embedded cell center is halfway between plane offsets.
+            // Round into the material so its plane does not snap back onto the clicked face.
+            if (useChiseledStart && _draft.DraftEmbedded && axis == _draft.DraftPlaneAxis)
+                offset = _draft.DraftPlaneNegative ? Math.Ceiling(offset) : Math.Floor(offset);
+            var plane = new ProjectionPlane(axis, (int)Math.Round(offset));
 
-            GuideRenderSettings settings = _draft.BuildRenderSettings(plane);
+            GuideRenderSettings settings = _draft.BuildRenderSettings(plane, DraftOutline);
 
             // 3D volumes are ALWAYS Volumetric and carry no division marks (0.1.20 sphere, 0.1.21 family):
             // flattening a volume onto a plane is meaningless, so a lingering Surface/Divisions tool

@@ -2,6 +2,7 @@
   "item-guidetool": "Chalking Kit",
   "itemdesc-guidetool": "Plan before you build: place translucent, world-shared voxel guides. Left-click acts by mode (create / edit / delete), F opens modes & settings, Ctrl+Z and Ctrl+Y undo and redo. Placing guides uses up chalk (flat guides 1, volumes 2); refill the kit with Chalking Powder. An empty kit can still edit and dispel — it just can't draw new guides.",
   "heldhelp-layout-cardinal": "Constrain Horizontally",
+  "heldhelp-layout-circlediameter": "Align Circle (Odd or Even)",
   "heldhelp-layout-vertical": "Constrain Vertically",
   "heldhelp-layout-centerapex": "Center Apex",
   "heldhelp-layout-invert": "Invert Guide",

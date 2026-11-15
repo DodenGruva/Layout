@@ -104,9 +104,9 @@ namespace Layout.Shapes
             for (int i = 0; i < cells.Count; i++)
             {
                 VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
-                double dx = (cells[i].X + half) / 16.0 - worldPos.X;
-                double dy = (cells[i].Y + half) / 16.0 - worldPos.Y;
-                double dz = (cells[i].Z + half) / 16.0 - worldPos.Z;
+                double dx = (cells[i].X + half) / VoxelGrid.UnitsPerBlock - worldPos.X;
+                double dy = (cells[i].Y + half) / VoxelGrid.UnitsPerBlock - worldPos.Y;
+                double dz = (cells[i].Z + half) / VoxelGrid.UnitsPerBlock - worldPos.Z;
                 double d2 = dx * dx + dy * dy + dz * dz;
                 if (d2 < bestD2) { bestD2 = d2; best = i; }
             }
@@ -138,9 +138,9 @@ namespace Layout.Shapes
             double bestD2 = double.MaxValue, secondD2 = double.MaxValue;
             for (int i = 0; i < cells.Count; i++)
             {
-                double dx = (cells[i].X + half) / 16.0 - worldPos.X;
-                double dy = (cells[i].Y + half) / 16.0 - worldPos.Y;
-                double dz = (cells[i].Z + half) / 16.0 - worldPos.Z;
+                double dx = (cells[i].X + half) / VoxelGrid.UnitsPerBlock - worldPos.X;
+                double dy = (cells[i].Y + half) / VoxelGrid.UnitsPerBlock - worldPos.Y;
+                double dz = (cells[i].Z + half) / VoxelGrid.UnitsPerBlock - worldPos.Z;
                 double d2 = dx * dx + dy * dy + dz * dz;
                 if (d2 < bestD2) { secondD2 = bestD2; second = best; bestD2 = d2; best = i; }
                 else if (d2 < secondD2) { secondD2 = d2; second = i; }
@@ -150,7 +150,7 @@ namespace Layout.Shapes
 
             // Runner-up only when it near-ties the winner (boundary between two cells). Odd/aligned boundaries
             // sit on a cell centre, so the winner is ~a full cell closer and the pair does not trigger.
-            double pairTol = (scale / 16.0) * pairToleranceCells;
+            double pairTol = (scale / VoxelGrid.UnitsPerBlock) * pairToleranceCells;
             if (second >= 0 && Math.Sqrt(secondD2) - Math.Sqrt(bestD2) <= pairTol
                 && Precedence(type) > Precedence(cells[second].Type))
                 cells[second] = cells[second].WithType(type);

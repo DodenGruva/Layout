@@ -57,6 +57,8 @@ namespace Layout.Shapes
         /// The live control-point list (see remarks on GuideData binding). Mutate only via this shape's
         /// methods; external mutation bypasses the arch's invariants.
         /// </summary>
+        internal OutlineStyle Outline { get; set; }
+
         public List<ControlPoint> ControlPoints => _controlPoints;
 
         /// <summary>
@@ -154,7 +156,7 @@ namespace Layout.Shapes
             // so the tolerance below (a fraction of a cell) cleanly separates the two cases. Anchors and
             // locked points stay strictly single — they mark exact endpoints, not midpoints.
             const double apexPairToleranceCells = 0.35;
-            double worldVoxel = scale / 16.0;
+            double worldVoxel = scale / VoxelGrid.UnitsPerBlock;
             double pairTol = worldVoxel * apexPairToleranceCells;
 
             var result = new List<VoxelPosition>(raw.Count);
@@ -167,9 +169,9 @@ namespace Layout.Shapes
                 for (int i = 0; i < result.Count; i++)
                 {
                     VoxelPosition v = result[i];
-                    double cx = (v.X + half) / 16.0;   // voxel centre in world space
-                    double cy = (v.Y + half) / 16.0;
-                    double cz = (v.Z + half) / 16.0;
+                    double cx = (v.X + half) / VoxelGrid.UnitsPerBlock;   // voxel centre in world space
+                    double cy = (v.Y + half) / VoxelGrid.UnitsPerBlock;
+                    double cz = (v.Z + half) / VoxelGrid.UnitsPerBlock;
                     double dx = cx - mx[m], dy = cy - my[m], dz = cz - mz[m];
                     double d2 = dx * dx + dy * dy + dz * dz;
                     if (d2 < bestD2)
@@ -205,7 +207,7 @@ namespace Layout.Shapes
 
         public int GetVoxelCount(int scale, bool filled = false)
         {
-            if (filled || _constraint == ShapeConstraint.SemiCircle)
+            if (filled || _constraint == ShapeConstraint.SemiCircle || Outline != OutlineStyle.Legacy)
                 return SampleBodyCells(scale, filled).Count;   // arc/fill paths share the marching sampler
 
             // 1:1 with GetVoxelPositions (typing neither adds nor removes voxels), so the spline's own
@@ -572,17 +574,28 @@ namespace Layout.Shapes
             if (arc)
             {
                 TryGetArcFrame(out c, out ua, out up, out r);
-                double cell = scale / 16.0;
+                double cell = scale / VoxelGrid.UnitsPerBlock;
                 int steps = Math.Max(32, Math.Min(8192, (int)Math.Ceiling(Math.PI * r / (cell * 0.5))));
                 var samples = new List<Vec3d>(steps + 1);
                 for (int i = 0; i <= steps; i++) samples.Add(ArcPoint(c, ua, up, r, (double)i / steps));
                 cells = new List<VoxelPosition>();
-                VoxelMarch.MarchInto(cells, seen, samples, scale);
+                if (filled || Outline == OutlineStyle.Legacy) VoxelMarch.MarchInto(cells, seen, samples, scale);
+                else OutlineVoxelizer.Path(cells, seen, samples, scale, Outline, closed: false, center: c);
             }
             else
             {
                 CatmullRomSpline spline = BuildSpline();
-                cells = spline.SampleVoxelPositions(scale);
+                if (!filled && Outline != OutlineStyle.Legacy && spline.HasCurve)
+                {
+                    double cell = scale / VoxelGrid.UnitsPerBlock;
+                    int steps = (int)Math.Clamp(Math.Ceiling(spline.GetArcLength() / (cell * 0.25)), 16, 32768);
+                    var samples = new List<Vec3d>(steps + 1);
+                    for (int i = 0; i <= steps; i++) samples.Add(spline.Evaluate((double)i / steps));
+                    cells = new List<VoxelPosition>();
+                    Vec3d center = TryGetAnchors(out Vec3d a, out Vec3d b) ? (a + b) * 0.5 : null;
+                    OutlineVoxelizer.Path(cells, seen, samples, scale, Outline, closed: false, center);
+                }
+                else cells = spline.SampleVoxelPositions(scale);
                 if (filled)
                     foreach (VoxelPosition v in cells) seen.Add((v.X, v.Y, v.Z));
             }
@@ -600,7 +613,7 @@ namespace Layout.Shapes
                 // — so hoisting is behaviour-preserving, not an approximation.
                 CatmullRomSpline ruleSpline = arc ? null : BuildSpline();
 
-                double cell = scale / 16.0;
+                double cell = scale / VoxelGrid.UnitsPerBlock;
                 // Rule density along t: at least one rule per half-cell of the LONGER of curve/chord.
                 double chordLen = Dist(footA, footB);
                 double curveLen = arc

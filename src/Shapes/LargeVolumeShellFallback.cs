@@ -50,7 +50,7 @@ namespace Layout.Shapes
             exceeded = false;
             if (centre == null || u == null || m == null || axis == null || scale <= 0) return result;
 
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             int axialSteps = Math.Max(1, (int)Math.Ceiling(Math.Abs(height) / (cell * 0.5)));
             for (int axial = 0; axial <= axialSteps; axial++)
             {
@@ -85,7 +85,7 @@ namespace Layout.Shapes
             if (collector == null) throw new ArgumentNullException(nameof(collector));
             if (centre == null || u == null || m == null || axis == null || scale <= 0) return;
             var seen = new HashSet<(int, int, int)>();
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             int axialSteps = Math.Max(1, (int)Math.Ceiling(Math.Abs(height) / (cell * 0.5)));
             var patches = new List<RadialPatch>();
             for (int axial = 0; axial <= axialSteps; axial++)
@@ -157,7 +157,7 @@ namespace Layout.Shapes
             if (collector == null) throw new ArgumentNullException(nameof(collector));
             if (origin == null || u == null || v == null || axis == null || scale <= 0) return;
             var seen = new HashSet<(int, int, int)>();
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             Vec3d du = Scale(u, uLength), dv = Scale(v, vLength), dh = Scale(axis, height);
             Vec3d[] origins =
             {
@@ -207,9 +207,9 @@ namespace Layout.Shapes
             for (int step = step0; step < step1; step++)
             {
                 double f = (double)step / steps;
-                int x = (int)Math.Floor((start.X + across.X * f) * 16.0 / scale) * scale;
-                int y = (int)Math.Floor((start.Y + across.Y * f) * 16.0 / scale) * scale;
-                int z = (int)Math.Floor((start.Z + across.Z * f) * 16.0 / scale) * scale;
+                int x = (int)Math.Floor((start.X + across.X * f) * VoxelGrid.UnitsPerBlock / scale) * scale;
+                int y = (int)Math.Floor((start.Y + across.Y * f) * VoxelGrid.UnitsPerBlock / scale) * scale;
+                int z = (int)Math.Floor((start.Z + across.Z * f) * VoxelGrid.UnitsPerBlock / scale) * scale;
                 if (seen.Add((x, y, z)))
                     collector.Add(new VoxelPosition(x, y, z, VoxelRenderType.Normal));
             }
@@ -219,7 +219,7 @@ namespace Layout.Shapes
             Vec3d origin, Vec3d across, Vec3d down, int scale, int stopAfter,
             ref int work, Func<bool> cancellationRequested)
         {
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             int rows = Math.Max(1, (int)Math.Ceiling(Length(down) / (cell * 0.5)));
             for (int row = 0; row <= rows; row++)
             {
@@ -237,15 +237,15 @@ namespace Layout.Shapes
         {
             double dx = b.X - a.X, dy = b.Y - a.Y, dz = b.Z - a.Z;
             double length = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             int steps = Math.Max(1, (int)Math.Ceiling(length / (cell * 0.5)));
             for (int step = 0; step <= steps; step++)
             {
                 VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
                 double f = (double)step / steps;
-                int x = (int)Math.Floor((a.X + dx * f) * 16.0 / scale) * scale;
-                int y = (int)Math.Floor((a.Y + dy * f) * 16.0 / scale) * scale;
-                int z = (int)Math.Floor((a.Z + dz * f) * 16.0 / scale) * scale;
+                int x = (int)Math.Floor((a.X + dx * f) * VoxelGrid.UnitsPerBlock / scale) * scale;
+                int y = (int)Math.Floor((a.Y + dy * f) * VoxelGrid.UnitsPerBlock / scale) * scale;
+                int z = (int)Math.Floor((a.Z + dz * f) * VoxelGrid.UnitsPerBlock / scale) * scale;
                 if (!seen.Add((x, y, z))) continue;
                 result.Add(new VoxelPosition(x, y, z, VoxelRenderType.Normal));
                 if (result.Count > stopAfter) return false;
@@ -259,14 +259,14 @@ namespace Layout.Shapes
         {
             double dx = b.X - a.X, dy = b.Y - a.Y, dz = b.Z - a.Z;
             double length = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             int steps = Math.Max(1, (int)Math.Ceiling(length / (cell * 0.5)));
             for (int step = 0; step <= steps; step++)
             {
                 double f = (double)step / steps;
-                int x = (int)Math.Floor((a.X + dx * f) * 16.0 / scale) * scale;
-                int y = (int)Math.Floor((a.Y + dy * f) * 16.0 / scale) * scale;
-                int z = (int)Math.Floor((a.Z + dz * f) * 16.0 / scale) * scale;
+                int x = (int)Math.Floor((a.X + dx * f) * VoxelGrid.UnitsPerBlock / scale) * scale;
+                int y = (int)Math.Floor((a.Y + dy * f) * VoxelGrid.UnitsPerBlock / scale) * scale;
+                int z = (int)Math.Floor((a.Z + dz * f) * VoxelGrid.UnitsPerBlock / scale) * scale;
                 if (seen.Add((x, y, z)))
                     collector.Add(new VoxelPosition(x, y, z, VoxelRenderType.Normal));
             }

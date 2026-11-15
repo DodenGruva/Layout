@@ -134,6 +134,14 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   geometry, all interaction gated to the held-item path.
 
 ### Data & wire
+
+The chisel's native 1/16 spacing is four Layout grid units. The resolution toggle exposes the one- and two-unit
+steps. Grid-aligned circles carry their raster choice. New hollow planar guides store a shared-side or thin
+outline style. The preview, voxel count, targeting and shared guide all consume that saved choice.
+
+The release imports older regular guide stores on first load. Integer steps and plane offsets convert to the finer
+grid. World-space control points and IDs are preserved. Public traffic uses the `layout-grid64` channel for the
+same units. See `dev/WIRE_HISTORY.md` for the field and protocol ledger.
 - **Pinned, append-only enums** everywhere a value crosses wire or disk; **default-driven migration** via
   `DataVersion`. **`GuideData.CurrentDataVersion` is the authority on which version is current** and
   `dev/WIRE_HISTORY.md` carries the ledger — this list records only what each bump ADDED, which is permanent:
@@ -151,7 +159,7 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   (`GetNearestControlPointIndex`, edits, commands). Inserts land interior; locks prevent reshuffling mid-grab.
 - **Vec3d is always deep-copied, never aliased** (mutable reference type). The one sanctioned mirror writer
   outside the network handler is the drag preview (plus its Session-8 sibling, the local constraint-clear).
-- **Voxel cells are 1/16-block, lower-corner, `Floor(world·16/scale)·scale`** — one quantise convention
+- **Voxel cells use lower corners in a 64-cell grid, `Floor(world·64/scale)·scale`** — one quantise convention
   everywhere (`VoxelMarch` mirrors `CatmullRomSpline.Quantize` exactly), or caps and visuals disagree.
 - **The authority builds shapes** from two/three/four clicks + settings (client never sends full GuideData);
   **tool state
@@ -327,7 +335,7 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   type opacities are client-configurable.
 - **Personal render control (protocol 16):** `/layout off` and `/layout on` (with `.layout off|on` for the
   local command path) disable/enable the entire Layout render pass for that player. The preference is saved
-  immediately in `layout-client.json` and restored across reconnects/restarts. Guide state, authority, and
+  immediately in `layout-client-grid64.json` and restored across reconnects/restarts. Guide state, authority, and
   other players are unaffected. A saved off-state produces a login reminder; Chalking Kit guide actions,
   settings, undo, and redo are blocked with matching HUD/warning guidance, and disabling cancels transient
   draft/grab state so invisible work cannot continue.
@@ -385,7 +393,7 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   allowance. `0` removes either override and restores its server default. Lowering a cumulative allowance
   never deletes existing guides; they may remain or shrink but cannot grow while still over cap.
   **The two chalk refill-channel flags left this file in v0.2.22** — they are player preferences now, in
-  `layout-client.json`; stale keys in an existing `layout.json` are ignored. **The running total is a `long`** (v0.1.27) so a
+  `layout-client-grid64.json`. Stale keys in an existing `layout.json` are ignored. **The running total is a `long`** (v0.1.27) so a
   caps-off server can't overflow it negative. A **hard voxel ceiling** (`GuideManager.HardVoxelCeiling`,
   10M) rejects giant guides ALWAYS, even with caps disabled. Remaining guarded 3D scans return a huge sentinel
   for over-size filled/volume paths; hollow Sphere/Dome now count exactly beyond the old guard. Do not raise
@@ -401,7 +409,7 @@ reason it won. Reversing any of these needs an explicit call from the human, not
   local guides after privilege/cap validation. `.layout dispel all|<chunk radius>` is intentionally a
   client command and deletes only private guides. Push is a committed ownership transfer and is not inserted
   into server undo history.
-- **Client `layout-client.json`:** remembers scale / projection / fill / **shape + constraint** (validated
+- **Client `layout-client-grid64.json`** remembers scale / projection / fill / **shape + constraint** (validated
   pairs) / divisions / **sides** plus the six opacities and (Session 11) the **pinned favorite shape codes
   (up to FOUR since 0.1.15; hard-kept — never auto-padded)**; client-retained, never synced. **Default
   scale 1** (chisel-matched). **`forceClientOnly` defaults false** and requests private placement when an
@@ -529,7 +537,7 @@ ControlPoint {
 ### VoxelPosition
 ```
 VoxelPosition {
-    int X, Y, Z            // 1/16-block units (world × 16), lower corner, scale-independent
+    int X, Y, Z            // 1/64-block units (world × 64), lower corner, scale-independent
     VoxelRenderType Type   // Normal | Locked | Primary | Anchor | Grabbed | Division (magenta, S9)
 }
 ```
@@ -558,7 +566,7 @@ Fillet = (Roundover, None) · Sphere = (Sphere, None) · Dome = (Dome, None) · 
 
 ### ProjectionMode / ProjectionPlane / GuideRenderSettings
 Unchanged since v2: `ProjectionMode { Volumetric, Surface }`; `ProjectionPlane` = a `PlaneAxis`
-(X = 0, Y = 1, Z = 2) + an offset in 1/16-block units, with `Horizontal` / `VerticalNorthSouth` /
+(X = 0, Y = 1, Z = 2) + an offset in 1/64-block units, with `Horizontal` / `VerticalNorthSouth` /
 `VerticalEastWest` factories and a `Default`; `GuideRenderSettings` bundles scale + projection + plane + fill
 + divisions (S9) for creation requests and the draft ghost.
 
@@ -677,7 +685,7 @@ here reshapes, so the mode adds no geometry verbs — the same argument that let
   validate the final bounds, caps and claims once; then commit once or restore exactly. Undo applies the
   inverse in reverse order under the same boundary. A failed compound action cannot leave only rotation
   committed or another client on stale geometry.
-- **The delta is whole voxels, as integers in 1/16 units.** A fractional nudge is not expressible by
+- **The delta is whole guide voxels, as integers in 1/64 units.** A fractional nudge is not expressible by
   construction, which is what lets a pure translation reuse the cached voxel count.
 - **The pivot never crosses the wire.** The authority derives it from the guide, so the two sides cannot
   disagree and a client cannot nominate one that would put the guide somewhere it should not go.
@@ -713,7 +721,7 @@ The ellipse's intrinsic plane is independent of the Surface projection plane and
   migrate v3-era records), factory-adopted, phantoms recalculated before first sync.
 - **Save format ≠ wire format:** JSON persists; protobuf DTOs travel. The paths are independent.
 - **Private client persistence:** `ClientWorldGuidePersistence` stores local guides under
-  `Layout/ClientOnlyGuides/<hash server-or-savegame>-<hash player UID>.json`. Writes use a temporary file
+  `Layout/ClientOnlyGuidesGrid64/<hash server-or-savegame>-<hash player UID>.json`. Writes use a temporary file
   and atomic replacement, retain one `.bak`, and quarantine unreadable primary files as `.corrupt-*` before
   attempting recovery. If the storage identity/path is unavailable, local authority remains usable with
   transient in-memory persistence for that session. This never touches the world's main save payload.

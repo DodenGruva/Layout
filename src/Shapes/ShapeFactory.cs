@@ -23,25 +23,26 @@ namespace Layout.Shapes
         public static IGuideShape Create(
             GuideShapeType type, ShapeConstraint constraint, PlaneAxis shapePlaneAxis, Vec3d start, Vec3d end,
             bool inverted = false, int sides = 0,
-            IReadOnlyList<Vec3d> chain = null, bool closed = false, bool flatSideAligned = false)
+            IReadOnlyList<Vec3d> chain = null, bool closed = false, bool flatSideAligned = false,
+            bool symmetricCircleRaster = true, OutlineStyle outline = OutlineStyle.Legacy)
         {
             switch (type)
             {
                 case GuideShapeType.Ellipse:
-                    return new EllipseShape(start, end, shapePlaneAxis, constraint);
+                    return new EllipseShape(start, end, shapePlaneAxis, constraint, symmetricCircleRaster) { Outline = outline };
                 case GuideShapeType.Line:
-                    return new LineShape(start, end);
+                    return new LineShape(start, end) { Outline = outline };
                 case GuideShapeType.Triangle:
-                    return new TriangleShape(start, end, shapePlaneAxis, constraint, inverted);
+                    return new TriangleShape(start, end, shapePlaneAxis, constraint, inverted) { Outline = outline };
                 case GuideShapeType.Rectangle:
                     // v0.4.15: `inverted` (SHIFT) picks which side of the clicked edge a SQUARE sits on.
                     // A free rectangle ignores it — its width click already chooses the side.
-                    return new RectangleShape(start, end, shapePlaneAxis, constraint, inverted);
+                    return new RectangleShape(start, end, shapePlaneAxis, constraint, inverted) { Outline = outline };
                 case GuideShapeType.Polygon:
-                    return new PolygonShape(start, end, shapePlaneAxis, sides, flatSideAligned);
+                    return new PolygonShape(start, end, shapePlaneAxis, sides, flatSideAligned) { Outline = outline };
                 case GuideShapeType.FreeShape:
                     return new FreeShape(chain != null && chain.Count >= 2 ? chain : new[] { start, end },
-                        closed && chain != null && chain.Count >= 3);
+                        closed && chain != null && chain.Count >= 3) { Outline = outline };
                 case GuideShapeType.Roundover:
                     // Roundover is always an open sweep. At this create-only seam `closed` is the protocol-28
                     // discriminator for two terminal profile handles; persisted guides identify that form
@@ -72,7 +73,7 @@ namespace Layout.Shapes
                     return new BoxShape(start, end, shapePlaneAxis, inverted);
                 default:
                     return new ArchShape(start, end, constraint: constraint, inverted: inverted,
-                        planeAxis: shapePlaneAxis, usesShapePlaneAxis: true);
+                        planeAxis: shapePlaneAxis, usesShapePlaneAxis: true) { Outline = outline };
             }
         }
 
@@ -80,68 +81,31 @@ namespace Layout.Shapes
         /// Rebuilds a shape as a behavioural view over an EXISTING list (load / restore / mirror path).
         /// The list is adopted by reference — the GuideData↔shape shared-list binding, unchanged.
         /// </summary>
-        public static IGuideShape Adopt(GuideData g)
-        {
-            switch (g.ShapeType)
-            {
-                case GuideShapeType.Ellipse:
-                    return new EllipseShape(g.ControlPoints, g.ShapePlaneAxis, g.Constraint);
-                case GuideShapeType.Line:
-                    return new LineShape(g.ControlPoints);
-                case GuideShapeType.Triangle:
-                    return new TriangleShape(g.ControlPoints, g.ShapePlaneAxis, g.Constraint);
-                case GuideShapeType.Rectangle:
-                    return new RectangleShape(g.ControlPoints, g.ShapePlaneAxis, g.Constraint);
-                case GuideShapeType.Polygon:
-                    return new PolygonShape(g.ControlPoints, g.ShapePlaneAxis, g.Sides, g.FlatSideAligned);
-                case GuideShapeType.FreeShape:
-                    return new FreeShape(g.ControlPoints, g.IsClosed);
-                case GuideShapeType.Roundover:
-                    return new RoundoverShape(g.ControlPoints);
-                case GuideShapeType.Sphere:
-                    return new SphereShape(g.ControlPoints);
-                case GuideShapeType.Dome:
-                    return new DomeShape(g.ControlPoints, g.ShapePlaneAxis);
-                case GuideShapeType.Cylinder:
-                    return new CylinderShape(g.ControlPoints, g.ShapePlaneAxis);
-                case GuideShapeType.TaperedCylinder:
-                    return new TaperedCylinderShape(g.ControlPoints, g.ShapePlaneAxis);
-                case GuideShapeType.PolygonalPrism:
-                    return new PolygonalPrismShape(g.ControlPoints, g.ShapePlaneAxis, g.Sides,
-                        tapered: false, flatSideAligned: g.FlatSideAligned);
-                case GuideShapeType.TaperedPolygonalPrism:
-                    return new PolygonalPrismShape(g.ControlPoints, g.ShapePlaneAxis, g.Sides,
-                        tapered: true, flatSideAligned: g.FlatSideAligned);
-                case GuideShapeType.Cone:
-                    return new ConeShape(g.ControlPoints, g.ShapePlaneAxis);
-                case GuideShapeType.Box:
-                    return new BoxShape(g.ControlPoints, g.ShapePlaneAxis);
-                default:
-                    return new ArchShape(g.ControlPoints, constraint: g.Constraint,
-                        planeAxis: g.ShapePlaneAxis, usesShapePlaneAxis: g.ArchUsesShapePlaneAxis);
-            }
-        }
+        public static IGuideShape Adopt(GuideData g) =>
+            Adopt(g.ShapeType, g.Constraint, g.ShapePlaneAxis, g.ControlPoints,
+                g.Sides, g.IsClosed, g.FlatSideAligned, g.ArchUsesShapePlaneAxis,
+                g.CircleUsesSymmetricRaster, g.Outline);
 
         /// <summary>Adopt for transient lists that have no GuideData (the renderer's draft ghost).</summary>
         public static IGuideShape Adopt(
             GuideShapeType type, ShapeConstraint constraint, PlaneAxis shapePlaneAxis, List<ControlPoint> points,
             int sides = 0, bool closed = false, bool flatSideAligned = false,
-            bool archUsesShapePlaneAxis = true)
+            bool archUsesShapePlaneAxis = true, bool symmetricCircleRaster = true, OutlineStyle outline = OutlineStyle.Legacy)
         {
             switch (type)
             {
                 case GuideShapeType.Ellipse:
-                    return new EllipseShape(points, shapePlaneAxis, constraint);
+                    return new EllipseShape(points, shapePlaneAxis, constraint, symmetricCircleRaster) { Outline = outline };
                 case GuideShapeType.Line:
-                    return new LineShape(points);
+                    return new LineShape(points) { Outline = outline };
                 case GuideShapeType.Triangle:
-                    return new TriangleShape(points, shapePlaneAxis, constraint);
+                    return new TriangleShape(points, shapePlaneAxis, constraint) { Outline = outline };
                 case GuideShapeType.Rectangle:
-                    return new RectangleShape(points, shapePlaneAxis, constraint);
+                    return new RectangleShape(points, shapePlaneAxis, constraint) { Outline = outline };
                 case GuideShapeType.Polygon:
-                    return new PolygonShape(points, shapePlaneAxis, sides, flatSideAligned);
+                    return new PolygonShape(points, shapePlaneAxis, sides, flatSideAligned) { Outline = outline };
                 case GuideShapeType.FreeShape:
-                    return new FreeShape(points, closed);
+                    return new FreeShape(points, closed) { Outline = outline };
                 case GuideShapeType.Roundover:
                     return new RoundoverShape(points);
                 case GuideShapeType.Sphere:
@@ -164,7 +128,7 @@ namespace Layout.Shapes
                     return new BoxShape(points, shapePlaneAxis);
                 default:
                     return new ArchShape(points, constraint: constraint,
-                        planeAxis: shapePlaneAxis, usesShapePlaneAxis: archUsesShapePlaneAxis);
+                        planeAxis: shapePlaneAxis, usesShapePlaneAxis: archUsesShapePlaneAxis) { Outline = outline };
             }
         }
     }

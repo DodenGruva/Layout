@@ -46,15 +46,18 @@ namespace Layout.Network
     public static class LayoutChannel
     {
         /// <summary>The network channel name. Must match on server and client.</summary>
-        public const string Name = "layout";
+        // Separate from the old 16-cell channel because scale, plane offsets and translations
+        // now use 64 cells per block.
+        public const string Name = "layout-grid64";
 
         /// <summary>
-        /// Bumped when the packet set or a field's meaning changes. Carried in the bulk sync so a client
-        /// can detect a mismatch; still INFORMATIONAL — nothing refuses to talk on a version difference,
-        /// because every change so far has been append-only and therefore back-compatible by construction.
+        /// Bumped when the packet set or a field's meaning changes. Shared in the bulk sync so a
+        /// client can gate features by server support. The channel separates incompatible coordinate units.
         /// <c>dev/WIRE_HISTORY.md</c> records what each number added.
         /// </summary>
-        public const int ProtocolVersion = 29;
+        public const int SymmetricCircleProtocol = 31;
+        public const int OutlineStyleProtocol = 32;
+        public const int ProtocolVersion = 33;
     }
 
     /// <summary>Guid &lt;-&gt; 16-byte wire form helpers.</summary>
@@ -155,6 +158,8 @@ namespace Layout.Network
         [ProtoMember(24)] public string CreatorName;
         [ProtoMember(25)] public string LastSculptorName;
         [ProtoMember(26)] public bool ArchUsesShapePlaneAxis; // protocol 29 / DataVersion 14
+        [ProtoMember(27)] public bool CircleUsesSymmetricRaster; // protocol 31 / DataVersion 16
+        [ProtoMember(28)] public int Outline;
         // (The as-placed spring-back snapshot deliberately does NOT cross the wire: the server executes
         //  spring-back; clients only ever request it by guide id.)
 
@@ -193,7 +198,9 @@ namespace Layout.Network
                 IsWireframe = g.IsWireframe,
                 CreatorName = g.CreatorName,
                 LastSculptorName = g.LastSculptorName,
-                ArchUsesShapePlaneAxis = g.ArchUsesShapePlaneAxis
+                ArchUsesShapePlaneAxis = g.ArchUsesShapePlaneAxis,
+                CircleUsesSymmetricRaster = g.CircleUsesSymmetricRaster,
+                Outline = (int)g.Outline
             };
         }
 
@@ -239,7 +246,9 @@ namespace Layout.Network
                 IsWireframe = IsWireframe,
                 CreatorName = CreatorName,
                 LastSculptorName = LastSculptorName,
-                ArchUsesShapePlaneAxis = ArchUsesShapePlaneAxis
+                ArchUsesShapePlaneAxis = ArchUsesShapePlaneAxis,
+                CircleUsesSymmetricRaster = CircleUsesSymmetricRaster,
+                Outline = (OutlineStyle)Outline
             };
         }
     }
@@ -285,6 +294,7 @@ namespace Layout.Network
         // Session-9 additive: visual division marks (absent = 0 = none).
         [ProtoMember(6)] public int Divisions;
         [ProtoMember(7)] public bool Wireframe;
+        [ProtoMember(8)] public int Outline;
 
         public RenderSettingsDto() { }
 
@@ -296,7 +306,8 @@ namespace Layout.Network
             PlaneOffset = s.Plane.PlaneOffset,
             Filled = s.Filled,
             Divisions = s.Divisions,
-            Wireframe = s.Wireframe
+            Wireframe = s.Wireframe,
+            Outline = (int)s.Outline
         };
 
         public GuideRenderSettings ToRenderSettings() => new GuideRenderSettings(
@@ -305,7 +316,8 @@ namespace Layout.Network
             new ProjectionPlane((PlaneAxis)PlaneAxis, PlaneOffset),
             Filled,
             Divisions,
-            Wireframe);
+            Wireframe,
+            (OutlineStyle)Outline);
     }
 
     /// <summary>One element of a control-point update: which point (by index) moves, and to where.</summary>
@@ -917,6 +929,7 @@ namespace Layout.Network
     {
         [ProtoMember(1)] public byte[] GuideIdBytes;
         [ProtoMember(2)] public int Scale;
+        // Field 3 was used for the retired circle conversion in v0.4.87.
 
         public GuideRescalePacket() { }
 
@@ -931,7 +944,7 @@ namespace Layout.Network
 
     /// <summary>
     /// Both directions (F6 Move, protocol 17). Slides a whole guide by a world delta, shape untouched.
-    /// The delta is carried in 1/16-block units as INTEGERS, not doubles: a move is only legal at a whole
+    /// The delta is carried in guide grid units as INTEGERS, not doubles: a move is only legal at a whole
     /// number of the guide's own voxels, so integers are both the exact representation and a free
     /// well-formedness check — a fractional nudge cannot even be expressed on the wire.
     /// </summary>
@@ -955,8 +968,8 @@ namespace Layout.Network
 
         public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
 
-        /// <summary>The delta as world units (sixteenths / 16). A fresh instance every call — never aliased.</summary>
-        public Vec3d ResolveDelta() => new Vec3d(DeltaX / 16.0, DeltaY / 16.0, DeltaZ / 16.0);
+        /// <summary>The delta in world blocks. A fresh instance every call — never aliased.</summary>
+        public Vec3d ResolveDelta() => new Vec3d(DeltaX / VoxelGrid.UnitsPerBlock, DeltaY / VoxelGrid.UnitsPerBlock, DeltaZ / VoxelGrid.UnitsPerBlock);
     }
 
     /// <summary>
@@ -993,7 +1006,7 @@ namespace Layout.Network
     /// one server operation, one validation and one undo step.
     /// </summary>
     /// <remarks>
-    /// The delta is in 1/16 units as INTEGERS — a move is only ever a whole number of the guide's own
+    /// The delta is in guide grid units as INTEGERS — a move is only ever a whole number of the guide's own
     /// voxels, so a fractional nudge cannot be expressed. The mirror and rotation PIVOT never crosses the
     /// wire: the authority derives it from the guide itself, so the two sides cannot disagree and a client
     /// cannot nominate one that would put the guide somewhere it should not go.
@@ -1029,7 +1042,7 @@ namespace Layout.Network
         public Guid GuideId() => NetIds.ToGuid(GuideIdBytes);
 
         /// <summary>The delta as world units. A fresh instance every call — never aliased.</summary>
-        public Vec3d ResolveDelta() => new Vec3d(DeltaX / 16.0, DeltaY / 16.0, DeltaZ / 16.0);
+        public Vec3d ResolveDelta() => new Vec3d(DeltaX / VoxelGrid.UnitsPerBlock, DeltaY / VoxelGrid.UnitsPerBlock, DeltaZ / VoxelGrid.UnitsPerBlock);
 
         public PlaneAxis ResolveRotateAxis() => (PlaneAxis)RotateAxis;
     }

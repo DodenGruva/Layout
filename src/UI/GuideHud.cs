@@ -795,15 +795,9 @@ namespace Layout.UI
         // ---------------------------------------------------------------------------------
         //  Small label helpers
         // ---------------------------------------------------------------------------------
-        private static string ScaleLabel(int scale) => scale switch
-        {
-            1  => "1/16 block",
-            2  => "1/8 block",
-            4  => "1/4 block",
-            8  => "1/2 block",
-            16 => "1 block",
-            _  => "1/" + (16 / Math.Max(1, scale)) + " block"
-        };
+        private static string ScaleLabel(int scale) => scale == VoxelGrid.CellsPerBlock
+            ? "1 block"
+            : "1/" + (VoxelGrid.CellsPerBlock / Math.Max(1, scale)) + " block";
 
         private string ProjectionLabel(GuideData guide = null)
         {

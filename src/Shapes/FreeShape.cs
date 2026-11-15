@@ -31,6 +31,8 @@ namespace Layout.Shapes
         private readonly List<ControlPoint> _controlPoints;
         private readonly bool _closed;
 
+        internal OutlineStyle Outline { get; set; }
+
         public List<ControlPoint> ControlPoints => _controlPoints;
 
         public ShapeConstraint Constraint => ShapeConstraint.None;
@@ -103,8 +105,8 @@ namespace Layout.Shapes
             var seen = new HashSet<(int, int, int)>();
             int segments = _closed ? n : n - 1;
             for (int i = 0; i < segments; i++)
-                VoxelMarch.MarchSegmentInto(result, seen,
-                    _controlPoints[i].WorldPosition, _controlPoints[(i + 1) % n].WorldPosition, scale);
+                OutlineVoxelizer.Segment(result, seen,
+                    _controlPoints[i].WorldPosition, _controlPoints[(i + 1) % n].WorldPosition, scale, Outline);
 
             foreach (ControlPoint cp in _controlPoints)
             {

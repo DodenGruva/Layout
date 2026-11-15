@@ -15,8 +15,8 @@ namespace Layout.Guide
     ///
     ///     for (int i = AlignDown(lo, scale); i &lt;= AlignDown(hi, scale); i += scale)
     ///
-    /// where <c>AlignDown</c> is <c>(int)Math.Floor(world * 16.0 / scale) * scale</c>. Past roughly
-    /// ±134 million the ×16 puts that bound beside <see cref="int.MaxValue"/>, <c>i += scale</c> wraps
+    /// where <c>AlignDown</c> converts the world position to grid units and snaps down to the scale.
+    /// If that bound sits beside <see cref="int.MaxValue"/>, <c>i += scale</c> wraps
     /// negative, the condition stays true, and the loop NEVER TERMINATES. The <c>count &gt; stopAfter</c>
     /// escape does not save it: the wrapped cells fail the range test, so nothing is ever counted.
     ///
@@ -28,9 +28,8 @@ namespace Layout.Guide
     /// So this is a corruption-robustness fix first and a hostile-client fix second.
     ///
     /// NO FALSE REJECTIONS. Every real placement is inside the map by construction, and the limit still
-    /// carries a generous margin past the map edge plus a hard ±33.5M backstop — the same figure
-    /// <c>BlockOccupancy.Key</c> already calls "far beyond any world", and four times inside the coordinate
-    /// that actually overflows.
+    /// carries a generous margin past the map edge. A grid-dependent hard backstop leaves headroom
+    /// for rasterizing geometry derived from the input points.
     ///
     /// Static because the call sites sit in layers that share no object: the server network handler,
     /// <c>GuideManager</c>'s mutation/load/restore paths (which hold no world API), and the client's private
@@ -40,10 +39,9 @@ namespace Layout.Guide
     public static class GuideBounds
     {
         /// <summary>
-        /// Absolute limit regardless of world size. 2^25 blocks — <c>BlockOccupancy</c>'s own "far beyond
-        /// any world" figure, and a quarter of the ~134M coordinate at which the scan loops overflow.
+        /// Absolute limit regardless of world size. Leave at least fourfold headroom in cell coordinates.
         /// </summary>
-        public const double HardExtent = 33_554_432.0;
+        public const double HardExtent = (1 << 29) / VoxelGrid.UnitsPerBlock;
 
         /// <summary>
         /// How far past the map edge a coordinate may still sit. Guides are placed by aiming at blocks, so
@@ -126,7 +124,7 @@ namespace Layout.Guide
             if (!Enum.IsDefined(typeof(ProjectionMode), mode)
                 || !Enum.IsDefined(typeof(PlaneAxis), plane.FlattenedAxis))
                 return false;
-            double coordinate = plane.PlaneOffset / 16.0;
+            double coordinate = plane.PlaneOffset / VoxelGrid.UnitsPerBlock;
             return plane.FlattenedAxis switch
             {
                 PlaneAxis.X => Within(coordinate, _limitX),

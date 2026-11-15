@@ -127,6 +127,8 @@ namespace Layout.UI
         public const string Scale4 = "layout-scale-4";
         public const string Scale8 = "layout-scale-8";
         public const string Scale16 = "layout-scale-16";
+        public const string ScaleSixtyFourth = "layout-scale-1-64";
+        public const string ScaleThirtySecond = "layout-scale-1-32";
 
         /// <summary>
         /// Registers every Layout glyph into the client's live icon dictionary. Idempotent (overwrites the
@@ -246,6 +248,8 @@ namespace Layout.UI
             reg[Scale4] = (ctx, x, y, w, h, rgba) => DrawScaleGrid(ctx, x, y, w, h, rgba, 4);
             reg[Scale8] = (ctx, x, y, w, h, rgba) => DrawScaleGrid(ctx, x, y, w, h, rgba, 8);
             reg[Scale16] = DrawScaleFullBlock;
+            reg[ScaleSixtyFourth] = (ctx, x, y, w, h, rgba) => DrawFineScaleNumber(ctx, x, y, w, h, rgba, "64");
+            reg[ScaleThirtySecond] = (ctx, x, y, w, h, rgba) => DrawFineScaleNumber(ctx, x, y, w, h, rgba, "32");
 
             // 0.1.16: a "-ghost" variant of EVERY layout glyph registered above (shapes, star/current
             // variants, toggles, planes, scale grids, chevrons) — the same drawing at ~a quarter alpha,
@@ -1293,7 +1297,21 @@ namespace Layout.UI
             ctx.Fill();                                        // one fill for the whole grid
         }
 
-        // Scale 16 (a whole block): ONE solid square filling the button — reads instantly, unlike a 16x16 mesh.
+        private static void DrawFineScaleNumber(Context ctx, int x, int y, float w, float h, double[] rgba, string label)
+        {
+            var c = new Canvas(x, y, w, h, 60, zoom: 1.0);
+            ctx.Save();
+            SetColor(ctx, rgba, 1.0);
+            ctx.SelectFontFace("sans-serif", FontSlant.Normal, FontWeight.Bold);
+            ctx.SetFontSize(c.L(42));
+            TextExtents extents = ctx.TextExtents(label);
+            ctx.MoveTo(c.X(30) - extents.XBearing - extents.Width / 2,
+                c.Y(30) - extents.YBearing - extents.Height / 2);
+            ctx.ShowText(label);
+            ctx.Restore();
+        }
+
+        // A whole block is shown as a solid square.
         private static void DrawScaleFullBlock(Context ctx, int x, int y, float w, float h, double[] rgba)
         {
             var c = new Canvas(x, y, w, h, 60, zoom: 1.0);

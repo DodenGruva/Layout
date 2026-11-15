@@ -204,7 +204,7 @@ namespace Layout.Shapes
             if (!TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n,
                 out double h, out double rTop)) return result;
 
-            double cell = scale / 16.0, hd = cell * 0.866;
+            double cell = scale / VoxelGrid.UnitsPerBlock, hd = cell * 0.866;
             double lo = Math.Min(0, h), hi = Math.Max(0, h);
             GetAabb(c, n, r, rTop, h, cell, out double x0, out double y0, out double z0,
                 out double x1, out double y1, out double z1);
@@ -212,14 +212,14 @@ namespace Layout.Shapes
             int work = 0;
             for (int ix = AlignDown(x0, scale); ix <= AlignDown(x1, scale); ix += scale)
             {
-                double px = ix / 16.0 + cell * 0.5 - c.X;
+                double px = ix / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.X;
                 for (int iy = AlignDown(y0, scale); iy <= AlignDown(y1, scale); iy += scale)
                 {
-                    double py = iy / 16.0 + cell * 0.5 - c.Y;
+                    double py = iy / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.Y;
                     for (int iz = AlignDown(z0, scale); iz <= AlignDown(z1, scale); iz += scale)
                     {
                         VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
-                        double pz = iz / 16.0 + cell * 0.5 - c.Z;
+                        double pz = iz / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.Z;
                         double axial = px * n.X + py * n.Y + pz * n.Z;
                         if (axial < lo || axial > hi) continue;
                         double localR = r + (rTop - r) * (axial / h);
@@ -245,7 +245,7 @@ namespace Layout.Shapes
             if (!TryGetFull(out Vec3d c, out double r, out Vec3d u, out Vec3d m, out Vec3d n,
                 out double h, out double rTop)) return collector.Result;
 
-            double cell = scale / 16.0, hd = cell * 0.866;
+            double cell = scale / VoxelGrid.UnitsPerBlock, hd = cell * 0.866;
             double lo = Math.Min(0, h), hi = Math.Max(0, h);
             GetAabb(c, n, r, rTop, h, cell,
                 out double x0, out double y0, out double z0,
@@ -264,15 +264,15 @@ namespace Layout.Shapes
                 for (int xi = tile.X0; xi < tile.X1; xi++)
                 {
                     int ix = minX + xi * scale;
-                    double px = ix / 16.0 + cell * 0.5 - c.X;
+                    double px = ix / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.X;
                     for (int yi = tile.Y0; yi < tile.Y1; yi++)
                     {
                         int iy = minY + yi * scale;
-                        double py = iy / 16.0 + cell * 0.5 - c.Y;
+                        double py = iy / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.Y;
                         for (int zi = tile.Z0; zi < tile.Z1; zi++)
                         {
                             int iz = minZ + zi * scale;
-                            double pz = iz / 16.0 + cell * 0.5 - c.Z;
+                            double pz = iz / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.Z;
                             double axial = px * n.X + py * n.Y + pz * n.Z;
                             if (axial < lo || axial > hi) continue;
                             double localR = r + (rTop - r) * (axial / h);
@@ -310,21 +310,21 @@ namespace Layout.Shapes
             stopAfter = Math.Max(0, stopAfter);
             int count = 0;
             int work = 0;
-            double cell = scale / 16.0, hd = cell * 0.866;
+            double cell = scale / VoxelGrid.UnitsPerBlock, hd = cell * 0.866;
             double lo = Math.Min(0, h), hi = Math.Max(0, h);
             GetAabb(c, n, r, rTop, h, cell, out double x0, out double y0, out double z0,
                 out double x1, out double y1, out double z1);
 
             for (int ix = AlignDown(x0, scale); ix <= AlignDown(x1, scale); ix += scale)
             {
-                double px = ix / 16.0 + cell * 0.5 - c.X;
+                double px = ix / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.X;
                 for (int iy = AlignDown(y0, scale); iy <= AlignDown(y1, scale); iy += scale)
                 {
-                    double py = iy / 16.0 + cell * 0.5 - c.Y;
+                    double py = iy / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.Y;
                     for (int iz = AlignDown(z0, scale); iz <= AlignDown(z1, scale); iz += scale)
                     {
                         VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
-                        double pz = iz / 16.0 + cell * 0.5 - c.Z;
+                        double pz = iz / VoxelGrid.UnitsPerBlock + cell * 0.5 - c.Z;
                         double axial = px * n.X + py * n.Y + pz * n.Z;
                         if (axial < lo || axial > hi) continue;
                         double localR = r + (rTop - r) * (axial / h);
@@ -351,7 +351,7 @@ namespace Layout.Shapes
         }
 
         private static int AlignDown(double world, int scale) =>
-            (int)Math.Floor(world * 16.0 / scale) * scale;
+            (int)Math.Floor(world * VoxelGrid.UnitsPerBlock / scale) * scale;
 
         private void ClaimMarkers(
             List<VoxelPosition> cells, int scale, Func<bool> cancellationRequested = null)

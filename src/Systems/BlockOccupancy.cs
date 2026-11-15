@@ -67,8 +67,8 @@ namespace Layout.Systems
     /// </remarks>
     public sealed class BlockOccupancy
     {
-        /// <summary>Cells along one block edge. A chisel voxel and a Layout scale-1 voxel are both 1/16.</summary>
-        public const int CellsPerBlock = 16;
+        /// <summary>World material cells along one block edge, at the game's chisel resolution.</summary>
+        public const int CellsPerBlock = Layout.Guide.VoxelGrid.ChiselCellsPerBlock;
 
         private const int CellsPerBrick = CellsPerBlock * CellsPerBlock * CellsPerBlock;   // 4096
         private const int BrickWords = CellsPerBrick / 64;                                  // 64 ulongs = 512 B
@@ -128,9 +128,7 @@ namespace Layout.Systems
         }
 
         /// <summary>
-        /// THE QUERY. Coordinates are absolute 1/16 cell units — the same space
-        /// <see cref="Layout.Guide.VoxelPosition"/> uses, so a scale-1 guide voxel maps 1:1 with no
-        /// approximation.
+        /// Coordinates are absolute 1/16-block material cells.
         /// </summary>
         public bool IsMaterialAt(IBlockAccessor accessor, int x16, int y16, int z16)
         {

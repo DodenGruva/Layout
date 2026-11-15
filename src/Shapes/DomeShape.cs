@@ -130,10 +130,10 @@ namespace Layout.Shapes
                 return result;
             }
 
-            long cellsPerAxis = (long)(2.0 * r * 16.0 / scale) + 3;
+            long cellsPerAxis = (long)(2.0 * r * VoxelGrid.UnitsPerBlock / scale) + 3;
             if (cellsPerAxis * cellsPerAxis * cellsPerAxis > MaxScanCells) return result;   // filled scan guard
 
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             double r2 = r * r;
             // Half of a cell's extent projected onto n̂ — the exact reach of its corners across the plane.
             double spread = (Math.Abs(n.X) + Math.Abs(n.Y) + Math.Abs(n.Z)) * cell * 0.5;
@@ -145,12 +145,12 @@ namespace Layout.Shapes
             int work = 0;
             for (int ix = min16X; ix <= max16X; ix += scale)
             {
-                double lox = ix / 16.0;
+                double lox = ix / VoxelGrid.UnitsPerBlock;
                 double nx = Nearest(c.X, lox, lox + cell);
                 double ccx = lox + cell * 0.5 - c.X;
                 for (int iy = min16Y; iy <= max16Y; iy += scale)
                 {
-                    double loy = iy / 16.0;
+                    double loy = iy / VoxelGrid.UnitsPerBlock;
                     double ny = Nearest(c.Y, loy, loy + cell);
                     double nxy2 = nx * nx + ny * ny;
                     if (nxy2 > r2) continue;
@@ -158,7 +158,7 @@ namespace Layout.Shapes
                     for (int iz = min16Z; iz <= max16Z; iz += scale)
                     {
                         VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
-                        double loz = iz / 16.0;
+                        double loz = iz / VoxelGrid.UnitsPerBlock;
                         double nz = Nearest(c.Z, loz, loz + cell);
                         double dmin2 = nxy2 + nz * nz;
                         if (dmin2 > r2) continue;
@@ -212,12 +212,12 @@ namespace Layout.Shapes
                 return SphericalShellScan.Scan(
                     c, r, scale, n, stopAfter, null, cancellationRequested);
 
-            long cellsPerAxis = (long)(2.0 * r * 16.0 / scale) + 3;
+            long cellsPerAxis = (long)(2.0 * r * VoxelGrid.UnitsPerBlock / scale) + 3;
             if (cellsPerAxis * cellsPerAxis * cellsPerAxis > MaxScanCells)
                 return GuideShapeVoxelCounting.Exceeded(stopAfter);
 
             stopAfter = Math.Max(0, stopAfter);
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             double r2 = r * r;
             double spread = (Math.Abs(n.X) + Math.Abs(n.Y) + Math.Abs(n.Z)) * cell * 0.5;
             int count = 0;
@@ -229,12 +229,12 @@ namespace Layout.Shapes
 
             for (int ix = min16X; ix <= max16X; ix += scale)
             {
-                double lox = ix / 16.0;
+                double lox = ix / VoxelGrid.UnitsPerBlock;
                 double nx = Nearest(c.X, lox, lox + cell);
                 double ccx = lox + cell * 0.5 - c.X;
                 for (int iy = min16Y; iy <= max16Y; iy += scale)
                 {
-                    double loy = iy / 16.0;
+                    double loy = iy / VoxelGrid.UnitsPerBlock;
                     double ny = Nearest(c.Y, loy, loy + cell);
                     double nxy2 = nx * nx + ny * ny;
                     if (nxy2 > r2) continue;
@@ -242,7 +242,7 @@ namespace Layout.Shapes
                     for (int iz = min16Z; iz <= max16Z; iz += scale)
                     {
                         VoxelScanCancellation.Checkpoint(ref work, cancellationRequested);
-                        double loz = iz / 16.0;
+                        double loz = iz / VoxelGrid.UnitsPerBlock;
                         double nz = Nearest(c.Z, loz, loz + cell);
                         if (nxy2 + nz * nz > r2) continue;
 
@@ -271,7 +271,7 @@ namespace Layout.Shapes
         }
 
         private static int AlignDown(double world, int scale) =>
-            (int)Math.Floor(world * 16.0 / scale) * scale;
+            (int)Math.Floor(world * VoxelGrid.UnitsPerBlock / scale) * scale;
 
         private static double Nearest(double centre, double lo, double hi) =>
             centre < lo ? lo - centre : centre > hi ? centre - hi : 0.0;

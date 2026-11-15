@@ -2,6 +2,71 @@
 
 All notable changes to Layout will be recorded in this file going forward.
 
+## 0.5.0 - 2026-11-15
+
+- **Fine guide resolutions.** Enable **1/32 and 1/64 Resolutions** in Settings to show two compact scale tiles beside the 1/16 tile.
+- **Placement inside chiseled blocks.** Guide anchors follow the chisel raycast to the voxel face you aim at. **Display Voxel Grid** follows the selected resolution. **Outline Targeted Voxel** defaults to On and adapts its contrast to the targeted block.
+- **Symmetric circles.** Ctrl aligns the diameter while allowing odd and even sizes. The rim shows paired markers across seams and green midpoints on opposite sides.
+- **Consistent 2D outlines.** New outlines share voxel sides by default. **Enable Thin Shapes** allows corner joins on diagonal steps. The choice is saved per guide and existing outlines retain their appearance.
+- **Smoother placement.** Bounded 2D outlines check the voxel cap while the cursor moves. Expensive fills retain deferred checks.
+- **Upgrade.** Regular guides and client preferences import to the finer grid while preserving their world-space placement and physical scale. Earlier regular and experimental stores remain separate. Update both server and client to 0.5.0 for public guides.
+
+## 0.4.96 - 2026-11-15
+
+- Moved **Enable Thin Shapes** directly above **Enable 1/32 and 1/64 Resolutions**, below the refill options.
+
+## 0.4.95 - 2026-11-15
+
+- Added per-guide shared-side and thin styles for new 2D outlines and extended live cap checks to bounded outlines.
+
+## 0.4.94 - 2026-11-15
+
+- Let grid-aligned circle previews use live voxel counts while the cursor moves.
+
+## 0.4.93 - 2026-11-15
+
+- Added green midpoint markers to the opposite rim and paired green voxels across even seams.
+
+## 0.4.92 - 2026-11-15
+
+- Let Ctrl constrain both odd and even circle diameters.
+
+## 0.4.91 - 2026-11-15
+
+- Added paired rim anchors at even seams and a first pass at Ctrl alignment for even circles.
+
+## 0.4.90 - 2026-11-15
+
+- Added contrasting target outlines and two quarter-size fine-resolution tiles.
+
+## 0.4.89 - 2026-11-15
+
+- Added **Outline Targeted Voxel** with the default set to On and moved the fine-resolution setting below the refill options.
+
+## 0.4.88 - 2026-11-15
+
+- Added the optional targeted-block voxel grid at the selected scale.
+
+## 0.4.87 - 2026-11-14
+
+- Introduced symmetric coverage for new grid-aligned circles.
+
+## 0.4.86 - 2026-11-14
+
+- Hid the experimental fine resolutions behind a Settings toggle and moved their buttons below the existing scale row.
+
+## 0.4.85 - 2026-11-14
+
+- Switched interior guide targeting to the chisel's existing voxel raycast.
+
+## 0.4.84 - 2026-11-14
+
+- Added an initial experimental interior placement adjustment.
+
+## 0.4.83 - 2026-11-14
+
+- Began isolated testing of 1/32 and 1/64 guide resolutions.
+
 ## 0.4.82 - 2026-08-14
 
 ### Fixed

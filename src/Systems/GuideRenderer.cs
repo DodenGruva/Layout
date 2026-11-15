@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
+using BlockMicroBlock = Vintagestory.GameContent.BlockMicroBlock;
 using Layout.Guide;
 using Layout.Shapes;
 using Layout.Network;
@@ -75,8 +76,8 @@ namespace Layout.Systems
         private const double FrustumCullPadding = 0.25;
 
         // Remote draft-anchor marker: a small blue cube (a fraction of a block) centred on the anchor.
-        private const int DraftMarkerScale = 4;                          // 1/16 units → 0.25-block cube
-        private const double DraftMarkerHalf = DraftMarkerScale / 32.0;  // half its edge, for centring
+        private const int DraftMarkerScale = VoxelGrid.CellsPerBlock / 4; // 0.25-block cube
+        private const double DraftMarkerHalf = DraftMarkerScale / (2 * VoxelGrid.UnitsPerBlock);  // half its edge, for centring
         private const double DraftMarkerCullRadius = DraftMarkerHalf * 1.7320508075688772;
 
         private readonly ICoreClientAPI _capi;
@@ -1146,14 +1147,12 @@ namespace Layout.Systems
                 ctx.Counts.Add(Math.Min(batchSize, ordered.Count - start));
             }
 
-            static int FloorDiv16(int cellX) =>
-                cellX >= 0 ? cellX / 16 : -((-cellX + 15) / 16);
             for (int slot = 0; slot < ctx.Starts.Count; slot++)
             {
                 int start = ctx.Starts[slot], end = start + ctx.Counts[slot];
                 for (int i = start; i < end; i++)
                 {
-                    int blockX = FloorDiv16(ordered[i].X);
+                    int blockX = VoxelGrid.ToBlock(ordered[i].X);
                     if (!ctx.SlotsByBlockX.TryGetValue(blockX, out List<int> slots))
                     {
                         slots = new List<int>();
@@ -1222,7 +1221,8 @@ namespace Layout.Systems
             if (!_occupancyEnabled || _occupancy == null) return null;
             IBlockAccessor accessor = _capi?.World?.BlockAccessor;
             if (accessor == null) return null;
-            return (x16, y16, z16) => _occupancy.IsMaterialAt(accessor, x16, y16, z16);
+            return (x, y, z) => _occupancy.IsMaterialAt(accessor,
+                VoxelGrid.ToChiselCell(x), VoxelGrid.ToChiselCell(y), VoxelGrid.ToChiselCell(z));
         }
 
         private float _shaderBrightness = 0.78f;
@@ -1597,7 +1597,7 @@ namespace Layout.Systems
                 return;
             }
 
-            double cell = scale / 16.0;
+            double cell = scale / VoxelGrid.UnitsPerBlock;
             _guideShader.Uniform("layoutVoxelSizeIn", (float)cell);
             _guideShader.Uniform("layoutGridOffsetIn", new Vec3f(
                 (float)(_frameOrigin.X - Math.Floor(_frameOrigin.X / cell) * cell),
@@ -1610,7 +1610,7 @@ namespace Layout.Systems
 
         private void SetModelMatrix(double dx, double dy, double dz)
         {
-            // Keep guide geometry registered to Vintage Story's exact 1/16 lattice. A former 0.003-block
+            // Keep guide geometry registered to Layout's voxel grid. A former 0.003-block
             // whole-mesh pull toward the camera caused the guide cells to visibly miss micro-block edges.
             // Z-fight clearance belongs on exposed faces in GuideMeshBuilder, never in this transform.
             Mat4f.Identity(_modelMat);
@@ -2093,13 +2093,13 @@ namespace Layout.Systems
                 if (movingScale > selectedScale && spec.ActiveAim != null)
                 {
                     Vec3d aim = spec.ActiveAim;
-                    double half = movingScale / 32.0;
+                    double half = movingScale / (2 * VoxelGrid.UnitsPerBlock);
                     double r2 = PrecisionTransitionRadius * PrecisionTransitionRadius;
                     voxels.RemoveAll(v =>
                     {
-                        double dx = (v.X / 16.0 + half) - aim.X;
-                        double dy = (v.Y / 16.0 + half) - aim.Y;
-                        double dz = (v.Z / 16.0 + half) - aim.Z;
+                        double dx = (v.X / VoxelGrid.UnitsPerBlock + half) - aim.X;
+                        double dy = (v.Y / VoxelGrid.UnitsPerBlock + half) - aim.Y;
+                        double dz = (v.Z / VoxelGrid.UnitsPerBlock + half) - aim.Z;
                         return dx * dx + dy * dy + dz * dz <= r2;
                     });
                 }
@@ -2139,7 +2139,7 @@ namespace Layout.Systems
                 int scale = scales[i];
                 if (scale < minimumScale) continue;
                 chosen = scale;
-                double estimatedWireCells = length * 16.0 / scale + (curve?.Count ?? 0);
+                double estimatedWireCells = length * VoxelGrid.UnitsPerBlock / scale + (curve?.Count ?? 0);
                 if (estimatedWireCells <= MovingWireframeVoxelTarget) return scale;
             }
             return chosen;
@@ -2181,7 +2181,7 @@ namespace Layout.Systems
             }
             if (scales.Count == 0) return;
 
-            double innerRadius = Math.Max(selectedScale * 4.0 / 16.0, selectedScale / 16.0);
+            double innerRadius = Math.Max(selectedScale * 4.0 / VoxelGrid.UnitsPerBlock, selectedScale / VoxelGrid.UnitsPerBlock);
             double outerRadius = Math.Max(PrecisionTransitionRadius, innerRadius);
             if (outerRadius <= innerRadius + 1e-6 && scales.Count > 1)
                 scales.RemoveRange(1, scales.Count - 1);
@@ -2224,17 +2224,17 @@ namespace Layout.Systems
                 }
             }
 
-            double half = scale / 32.0;
-            double overlap = scale / 32.0;
+            double half = scale / (2 * VoxelGrid.UnitsPerBlock);
+            double overlap = scale / (2 * VoxelGrid.UnitsPerBlock);
             double low2 = Math.Max(0.0, lowerRadius - overlap);
             low2 *= low2;
             double high2 = upperRadius + overlap;
             high2 *= high2;
             marched.RemoveAll(v =>
             {
-                double dx = v.X / 16.0 + half - aim.X;
-                double dy = v.Y / 16.0 + half - aim.Y;
-                double dz = v.Z / 16.0 + half - aim.Z;
+                double dx = v.X / VoxelGrid.UnitsPerBlock + half - aim.X;
+                double dy = v.Y / VoxelGrid.UnitsPerBlock + half - aim.Y;
+                double dz = v.Z / VoxelGrid.UnitsPerBlock + half - aim.Z;
                 double d2 = dx * dx + dy * dy + dz * dz;
                 return d2 < low2 || d2 > high2;
             });
@@ -2307,7 +2307,7 @@ namespace Layout.Systems
                     Include(shape.ControlPoints[i]?.WorldPosition);
 
             if (minX == double.MaxValue) return 0.0;
-            double cell = Math.Max(1, scale) / 16.0;
+            double cell = Math.Max(1, scale) / VoxelGrid.UnitsPerBlock;
             double curveCells = length / cell + (curve?.Count ?? 0);
             if (spec.Settings.Wireframe
                 || (!GuideShapeTypes.IsVolume(spec.ShapeType) && !spec.Settings.Filled))
@@ -3357,7 +3357,7 @@ namespace Layout.Systems
             _previewSides = sides; _previewInverted = inverted;
             _previewFlatSideAligned = flatSideAligned;
             IGuideShape shape = ShapeFactory.Create(shapeType, constraint, shapePlaneAxis, start, end,
-                inverted, sides, flatSideAligned: flatSideAligned);
+                inverted, sides, flatSideAligned: flatSideAligned, outline: settings.Outline);
             // A three-click shape mid-draft (triangle apex, or cylinder/cone/box height — 0.1.21): the
             // ghost's index-2 handle tracks the crosshair. A four-click Tapered Cylinder on its LAST stage
             // (0.2.24) also tracks the rim at index 3, so the taper opens and closes live.
@@ -3402,7 +3402,7 @@ namespace Layout.Systems
             _previewChainFp = fp;
             _previewStart = _previewEnd = _previewApex = _previewRim = null;   // the chain fp is this ghost's whole key
 
-            IGuideShape shape = new FreeShape(corners, closing);
+            IGuideShape shape = new FreeShape(corners, closing) { Outline = settings.Outline };
             if (!UploadPreviewMesh(shape, settings)) return;
 
             _previewSettings = settings;
@@ -3545,10 +3545,14 @@ namespace Layout.Systems
                 else
                 {
                     // Free-floating (or fully buried) plane: fall back to the sampled majority.
+                    // A sub-block slice must stay within its two candidate layers even when the
+                    // later control points are on different layers.
+                    bool subBlockPlane = plane.PlaneOffset % VoxelGrid.CellsPerBlock != 0;
                     var counts = new Dictionary<int, int>();
                     foreach (VoxelPosition v in voxels)
                     {
                         int layer = FloorDiv(AxisCoord(v, axis), scale);
+                        if (subBlockPlane && layer != layerPos && layer != layerNeg) continue;
                         counts.TryGetValue(layer, out int n);
                         counts[layer] = n + 1;
                     }
@@ -3585,12 +3589,11 @@ namespace Layout.Systems
             return result;
         }
 
-        // Samples up to five voxels spread along the guide and counts solid world blocks at their
-        // positions projected into the given layer. Air has block id 0; anything else counts as solid —
-        // plants slightly over-count, but the vote is averaged over several probes.
+        // Samples up to five voxels projected into the layer. A chiseled block can contain both
+        // candidate layers, so probe the actual material in the block at each sample.
         //
         // RETIRED v0.3.70 — `NeighborSolidProbe` and its unloaded-chunk-aware wrapper `TrackedSolidProbe`,
-        // the cell-space (1/16) world probes behind the mesh builder's z-fight clearances since 0.2.16.
+        // the grid-coordinate world probes behind the mesh builder's z-fight clearances since 0.2.16.
         // The volumetric face offset is now derived from the guide's own voxel set and asks the world
         // nothing, so both are gone along with the millions of per-face block lookups a large guide used
         // to make at build time. `CountSolidProbes` below stays: Surface guides still need the world to
@@ -3598,7 +3601,7 @@ namespace Layout.Systems
         private int CountSolidProbes(List<VoxelPosition> voxels, PlaneAxis axis, int layer, int scale, ref bool reliable)
         {
             var accessor = _capi.World.BlockAccessor;
-            double planeCentre = (layer * scale + scale * 0.5) / 16.0;
+            double planeCentre = (layer * scale + scale * 0.5) / VoxelGrid.UnitsPerBlock;
             double half = scale * 0.5;
 
             int probes = Math.Min(5, voxels.Count);
@@ -3606,16 +3609,27 @@ namespace Layout.Systems
             for (int k = 0; k < probes; k++)
             {
                 VoxelPosition v = voxels[(int)((long)k * (voxels.Count - 1) / Math.Max(1, probes - 1))];
-                double wx = axis == PlaneAxis.X ? planeCentre : (v.X + half) / 16.0;
-                double wy = axis == PlaneAxis.Y ? planeCentre : (v.Y + half) / 16.0;
-                double wz = axis == PlaneAxis.Z ? planeCentre : (v.Z + half) / 16.0;
+                double wx = axis == PlaneAxis.X ? planeCentre : (v.X + half) / VoxelGrid.UnitsPerBlock;
+                double wy = axis == PlaneAxis.Y ? planeCentre : (v.Y + half) / VoxelGrid.UnitsPerBlock;
+                double wz = axis == PlaneAxis.Z ? planeCentre : (v.Z + half) / VoxelGrid.UnitsPerBlock;
 
                 var pos = new BlockPos((int)Math.Floor(wx), (int)Math.Floor(wy), (int)Math.Floor(wz));
                 if (accessor.GetChunkAtBlockPos(pos) == null) { reliable = false; continue; } // world not loaded here yet
                 var block = accessor.GetBlock(pos);
-                if (block != null && block.Id != 0) solids++;
+                if (block != null && block.Id != 0
+                    && (block is not BlockMicroBlock || HasChiseledMaterial(
+                        block.GetCollisionBoxes(accessor, pos), wx - pos.X, wy - pos.Y, wz - pos.Z)))
+                    solids++;
             }
             return solids;
+        }
+
+        private static bool HasChiseledMaterial(Cuboidf[] boxes, double x, double y, double z)
+        {
+            if (boxes == null) return false;
+            foreach (Cuboidf box in boxes)
+                if (box?.Contains(x, y, z) == true) return true;
+            return false;
         }
 
         // -- Mesh build pipeline -------------------------------------------------------------------
@@ -4246,8 +4260,8 @@ namespace Layout.Systems
                     curve, points, guide.VoxelScale, scaffoldScale, out double bandTop);
                 if (floorLayers.Count > 0)
                 {
-                    double halfCoarse = scaffoldScale / 32.0;
-                    coarse.RemoveAll(v => v.Y / 16.0 + halfCoarse <= bandTop);
+                    double halfCoarse = scaffoldScale / (2 * VoxelGrid.UnitsPerBlock);
+                    coarse.RemoveAll(v => v.Y / VoxelGrid.UnitsPerBlock + halfCoarse <= bandTop);
                 }
             }
 
@@ -4334,7 +4348,7 @@ namespace Layout.Systems
 
             // A solid core of four selected voxels at the true scale, then the transition above it — the
             // same shape of rule the dragged-point bands use for their inner radius.
-            double inner = Math.Max(fineScale * 4.0 / 16.0, fineScale / 16.0);
+            double inner = Math.Max(fineScale * 4.0 / VoxelGrid.UnitsPerBlock, fineScale / VoxelGrid.UnitsPerBlock);
             double outer = Math.Max(MoveWireframeFloorBandBlocks, inner);
             double extra = Math.Max(0.0, outer - inner);
             if (extra <= 1e-6 && scales.Count > 1) scales.RemoveRange(1, scales.Count - 1);
@@ -4396,14 +4410,14 @@ namespace Layout.Systems
 
             // Trim to the slice by CELL CENTRE, with half a cell of overlap at each edge so neighbouring
             // layers meet without a seam of missing wire between them.
-            double half = scale / 32.0;
-            double overlap = scale / 32.0;
+            double half = scale / (2 * VoxelGrid.UnitsPerBlock);
+            double overlap = scale / (2 * VoxelGrid.UnitsPerBlock);
             double low = double.IsNegativeInfinity(lowerHeight)
                 ? double.NegativeInfinity : minY + lowerHeight - overlap;
             double high = minY + upperHeight + overlap;
             marched.RemoveAll(v =>
             {
-                double centreY = v.Y / 16.0 + half;
+                double centreY = v.Y / VoxelGrid.UnitsPerBlock + half;
                 return centreY < low || centreY > high;
             });
             return marched;
@@ -4455,13 +4469,13 @@ namespace Layout.Systems
             Vec3d aim = ResolveGrabbedPoint(guide, points);
             if (movingScale > selectedScale && aim != null)
             {
-                double half = movingScale / 32.0;
+                double half = movingScale / (2 * VoxelGrid.UnitsPerBlock);
                 double radius2 = PrecisionTransitionRadius * PrecisionTransitionRadius;
                 coarse.RemoveAll(v =>
                 {
-                    double dx = v.X / 16.0 + half - aim.X;
-                    double dy = v.Y / 16.0 + half - aim.Y;
-                    double dz = v.Z / 16.0 + half - aim.Z;
+                    double dx = v.X / VoxelGrid.UnitsPerBlock + half - aim.X;
+                    double dy = v.Y / VoxelGrid.UnitsPerBlock + half - aim.Y;
+                    double dz = v.Z / VoxelGrid.UnitsPerBlock + half - aim.Z;
                     return dx * dx + dy * dy + dz * dz <= radius2;
                 });
             }
@@ -4483,7 +4497,7 @@ namespace Layout.Systems
                     int scale = GuideData.ValidVoxelScales[i];
                     if (scale >= selectedScale && scale < movingScale) scales.Add(scale);
                 }
-                double innerRadius = selectedScale * 4.0 / 16.0;
+                double innerRadius = selectedScale * 4.0 / VoxelGrid.UnitsPerBlock;
                 double outerRadius = Math.Max(PrecisionTransitionRadius, innerRadius);
                 if (outerRadius <= innerRadius + 1e-6 && scales.Count > 1)
                     scales.RemoveRange(1, scales.Count - 1);
@@ -5121,7 +5135,7 @@ namespace Layout.Systems
             double hy = (maxY - minY) * 0.5;
             double hz = (maxZ - minZ) * 0.5;
             radius = Math.Sqrt(hx * hx + hy * hy + hz * hz)
-                + Math.Max(1, scale) / 16.0;
+                + Math.Max(1, scale) / VoxelGrid.UnitsPerBlock;
         }
 
         private void SetGuideCullBounds(Guid id, Vec3d centre, double radius)
@@ -5137,7 +5151,7 @@ namespace Layout.Systems
         }
 
         // Smallest valid scale >= the guide's own scale whose voxel count fits the preview cap; the coarsest
-        // (16) if even that exceeds it. Coarsening only ever makes the preview cheaper, never finer.
+        // (one full block) if even that exceeds it. Coarsening only ever makes the preview cheaper, never finer.
         private static int ChooseRenderScale(IGuideShape shape, int guideScale, bool filled = false)
         {
             int[] scales = GuideData.ValidVoxelScales;
@@ -5307,6 +5321,8 @@ namespace Layout.Systems
 
                 Mix((long)guide.ShapeType); Mix((long)guide.Constraint); Mix((long)guide.ShapePlaneAxis);
                 Mix(guide.ArchUsesShapePlaneAxis ? 1 : 0);
+                Mix(guide.CircleUsesSymmetricRaster ? 1 : 0);
+                Mix((int)guide.Outline);
                 Mix(guide.VoxelScale); Mix(guide.IsHidden ? 1 : 0); Mix((long)guide.Projection);
                 Mix((long)guide.Plane.FlattenedAxis); Mix(guide.Plane.PlaneOffset);
                 Mix(guide.IsFilled ? 1 : 0); Mix(guide.Divisions); Mix(guide.Sides);
